@@ -2401,6 +2401,45 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(facts["device_model"], "Pixel 6")
         self.assertEqual(facts["device_codename"], "oriole")
 
+    def test_kagemusha_slot_assembler_zero_adb_getprop_timeout_disables_timeout(
+        self,
+    ) -> None:
+        outputs = {
+            "ro.build.fingerprint": "google/oriole/oriole:16/test:user/release-keys\n",
+            "ro.build.id": "CP1A.260405.005\n",
+            "ro.product.model": "Pixel 6\n",
+            "ro.product.device": "oriole\n",
+        }
+        timeouts: list[object] = []
+
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+            timeouts.append(kwargs["timeout"])
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=outputs[command[-1]],
+                stderr="",
+            )
+
+        errors: list[str] = []
+        with mock.patch.object(slot_assembler.subprocess, "run", side_effect=fake_run):
+            facts = slot_assembler.read_device_identity(
+                adb="adb",
+                serial="ABC123",
+                device_fingerprint=None,
+                os_build_id=None,
+                device_model=None,
+                device_codename=None,
+                adb_timeout_seconds=0,
+                identity_hints={},
+                errors=errors,
+            )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(timeouts, [None, None, None, None])
+        self.assertEqual(facts["device_model"], "Pixel 6")
+        self.assertEqual(facts["device_codename"], "oriole")
+
     def test_kagemusha_slot_assembler_reports_adb_getprop_timeout(self) -> None:
         calls: list[list[str]] = []
 
@@ -2500,7 +2539,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("getprop-secret", rendered)
         self.assertNotIn("\x1b", rendered)
 
-    def test_kagemusha_slot_assembler_rejects_nonpositive_adb_timeout_before_root_classify(
+    def test_kagemusha_slot_assembler_rejects_negative_adb_timeout_before_root_classify(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -2513,7 +2552,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                         source_slot=temp_path / "source",
                     ),
                     "--adb-timeout-seconds",
-                    "0",
+                    "-1",
                 ]
             )
 
@@ -2526,7 +2565,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertEqual(status, 1)
         self.assertIsNone(slot_path)
-        self.assertEqual(errors, ["--adb-timeout-seconds must be positive"])
+        self.assertEqual(errors, ["--adb-timeout-seconds must be non-negative"])
         self.assertFalse(slot_root.exists())
 
     def test_kagemusha_slot_assembler_rejects_padded_adb_identity(self) -> None:
@@ -6367,6 +6406,40 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 self.assertNotIn("\x00", rendered)
                 self.assertNotIn("\x1b", rendered)
                 self.assertEqual(runner.calls, [])  # type: ignore[attr-defined]
+
+    def test_kagemusha_android_raw_puller_zero_adb_timeout_disables_timeout(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            args = raw_pull_args(out_root)
+            args.adb_timeout_seconds = 0
+            tar_bytes = raw_slot_tar_bytes("pixel6")
+            timeouts: list[object] = []
+
+            def runner(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+                timeouts.append(kwargs["timeout"])
+                if "cat" in command:
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        stdout="pixel6\n",
+                        stderr="",
+                    )
+                if "exec-out" in command:
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        stdout=tar_bytes,
+                        stderr=b"",
+                    )
+                return subprocess.CompletedProcess(command, 1, stdout=b"", stderr=b"")
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(args, runner=runner)
+
+        self.assertEqual(status, 0, errors)
+        self.assertIsNotNone(slot_path)
+        self.assertEqual(timeouts, [None, None])
 
     def test_kagemusha_android_raw_puller_rejects_disruptive_latest_query_before_runner(
         self,
@@ -26258,6 +26331,12 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             rendered = stdout.getvalue() + stderr.getvalue()
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
 
+        expected_missing_pairs = [
+            {"device_family": family, "transport": transport}
+            for family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+            for transport in sorted(device_lab.D2D_PAYMENT_TRANSPORTS)
+            if transport != "nfc_hce"
+        ]
         self.assertEqual(status, 1)
         self.assertIn(
             "missing Kagemusha production evidence for standard-family D2D payment transports:",
@@ -26273,9 +26352,71 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             summary["kagemusha"]["missing_d2d_payment_transports"],
             ["nearby_offline", "qr"],
         )
-        self.assertGreater(
-            len(summary["kagemusha"]["missing_d2d_payment_transport_pairs"]),
-            0,
+        self.assertEqual(
+            summary["kagemusha"]["missing_d2d_payment_transport_pairs"],
+            expected_missing_pairs,
+        )
+
+    def test_standard_matrix_rejects_aggregate_d2d_transport_without_family_pairs(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            summary_path = Path(temp) / "summary.json"
+            signer = create_test_signer(Path(temp) / "keys")
+            transports = tuple(sorted(device_lab.D2D_PAYMENT_TRANSPORTS))
+            for index, family in enumerate(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES):
+                create_slot(
+                    root,
+                    f"slot-{index}",
+                    family,
+                    signer,
+                    d2d_payment_transport=transports[index % len(transports)],
+                )
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = device_lab.main(
+                    [
+                        "--root",
+                        str(root),
+                        "--require-slot",
+                        "--require-kagemusha-standard-matrix",
+                        "--trusted-signer-public-key",
+                        str(signer["public_key"]),
+                        "--json-out",
+                        str(summary_path),
+                    ]
+                )
+            rendered = stdout.getvalue() + stderr.getvalue()
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        first_family = device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
+        expected_missing_pairs = [
+            {"device_family": family, "transport": transport}
+            for index, family in enumerate(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES)
+            for transport in transports
+            if transport != transports[index % len(transports)]
+        ]
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "missing Kagemusha production evidence for standard-family D2D payment transports:",
+            rendered,
+        )
+        self.assertIn(f"{first_family}={transports[1]}", rendered)
+        self.assertEqual(
+            summary["kagemusha"]["covered_device_families"],
+            sorted(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
+        )
+        self.assertEqual(
+            summary["kagemusha"]["covered_d2d_payment_transports"],
+            list(transports),
+        )
+        self.assertEqual(summary["kagemusha"]["missing_d2d_payment_transports"], [])
+        self.assertEqual(
+            summary["kagemusha"]["missing_d2d_payment_transport_pairs"],
+            expected_missing_pairs,
         )
 
     def test_standard_matrix_rejects_duplicate_device_fingerprint(self) -> None:
@@ -29176,6 +29317,77 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
 
         self.assertIn("--adb-timeout-seconds", command)
         self.assertEqual(command[command.index("--adb-timeout-seconds") + 1], "17")
+
+    def test_android_capture_zero_adb_timeout_disables_preflight_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(temp, ["--adb-timeout-seconds", "0"])
+            timeouts: list[object] = []
+
+            def fake_run(command, **kwargs):
+                timeouts.append(kwargs["timeout"])
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    stdout="device\n",
+                    stderr="",
+                )
+
+            errors = capture_runner._run_adb_visibility_preflight(
+                args,
+                env=capture_runner._capture_env(args),
+                runner=fake_run,
+            )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(timeouts, [None])
+
+    def test_android_capture_zero_step_timeout_disables_subprocess_timeout(self) -> None:
+        timeouts: list[object] = []
+
+        def fake_run(command, **kwargs):
+            timeouts.append(kwargs["timeout"])
+            return subprocess.CompletedProcess(command, 0)
+
+        errors = capture_runner._run_step(
+            label="Android helper",
+            command=["python3", "-m", "kagemusha.helper"],
+            cwd=None,
+            env=None,
+            timeout_seconds=0,
+            runner=fake_run,
+        )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(timeouts, [None])
+
+    def test_android_capture_rejects_negative_timeouts_before_adb(self) -> None:
+        cases = (
+            ("--gradle-timeout-seconds", "gradle"),
+            ("--instrumentation-timeout-seconds", "instrumentation"),
+            ("--adb-timeout-seconds", "adb"),
+            ("--helper-timeout-seconds", "helper"),
+        )
+        for flag, name in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as temp_text:
+                    temp = Path(temp_text)
+                    args = self.capture_args(temp, [flag, "-1"])
+                    commands: list[list[str]] = []
+
+                    def forbidden_run(command, **_kwargs):
+                        commands.append(list(command))
+                        return subprocess.CompletedProcess(command, 0)
+
+                    status, summary, errors = capture_runner.capture_device_lab_slot(
+                        args,
+                        runner=forbidden_run,
+                    )
+
+                self.assertEqual(status, 1)
+                self.assertIsNone(summary)
+                self.assertEqual(commands, [])
+                self.assertEqual(errors, [f"{flag} must be non-negative"])
 
     def test_android_capture_expected_family_preflight_runs_before_build(self) -> None:
         with tempfile.TemporaryDirectory() as temp_text:

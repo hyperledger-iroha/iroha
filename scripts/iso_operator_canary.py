@@ -143,6 +143,7 @@ class StagePlan:
     argv: list[str]
     receipt_dir: Path | None = None
     dry_run: bool = False
+    artifact_paths: tuple[tuple[str, Path, bool], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -442,20 +443,79 @@ def _preflight_numeric_cli_values(
             index += 1
 
 
-def _ensure_text_output_target(path: Path, *, display_label: str | None = None) -> None:
+def _same_existing_file(left: Path, right: Path) -> bool:
+    try:
+        left_stat = left.stat()
+        right_stat = right.stat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+    return os.path.samestat(left_stat, right_stat)
+
+
+def _same_existing_path(left: Path, right: Path) -> bool:
+    try:
+        left_stat = left.stat()
+        right_stat = right.stat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+    return os.path.samestat(left_stat, right_stat)
+
+
+def _reject_summary_output_input_alias(
+    summary_out: Path | None,
+    input_label: str,
+    input_path: Path,
+) -> None:
+    if summary_out is None:
+        return
+    if str(summary_out) == str(input_path) or _same_existing_file(summary_out, input_path):
+        raise CanaryError(f"summary_out must not reuse {input_label} path")
+
+
+def _reject_summary_output_artifact_alias(
+    summary_out: Path | None,
+    artifact_paths: tuple[tuple[str, Path, bool], ...],
+) -> None:
+    if summary_out is None:
+        return
+    summary_resolved = summary_out.resolve()
+    for label, path, is_directory in artifact_paths:
+        if str(summary_out) == str(path) or _same_existing_path(summary_out, path):
+            raise CanaryError(f"summary_out must not reuse {label} path")
+        if is_directory:
+            artifact_root = path.resolve()
+            if summary_resolved == artifact_root or artifact_root in summary_resolved.parents:
+                raise CanaryError(f"summary_out must not be written under {label}")
+
+
+def _ensure_text_output_target(
+    path: Path,
+    *,
+    display_label: str | None = None,
+    create_parent: bool = True,
+) -> None:
     label = display_label if display_label is not None else "output path"
     _reject_output_path_smuggling(path, label)
     _reject_repository_iso_fixture_path(path, label)
-    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-    except FileExistsError as error:
+        _reject_symlinked_existing_ancestors(path.parent, display_label=label)
+    except NotADirectoryError as error:
         raise CanaryError(f"{label} must be a directory") from error
-    parent_mode = path.parent.lstat().st_mode
-    if stat.S_ISLNK(parent_mode):
-        raise CanaryError(f"{label} must not be a symlink")
-    if not stat.S_ISDIR(parent_mode):
-        raise CanaryError(f"{label} must be a directory")
+    if create_parent:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except FileExistsError as error:
+            raise CanaryError(f"{label} must be a directory") from error
+    if path.parent.exists() or path.parent.is_symlink():
+        parent_mode = path.parent.lstat().st_mode
+        if stat.S_ISLNK(parent_mode):
+            raise CanaryError(f"{label} must not be a symlink")
+        if not stat.S_ISDIR(parent_mode):
+            raise CanaryError(f"{label} must be a directory")
     if path.exists() or path.is_symlink():
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode):
@@ -775,6 +835,31 @@ def _require_positive_finite_number(value: float, label: str) -> float:
     return parsed
 
 
+def _required_cli_bool(value: Any, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise CanaryError(f"{label} must be a boolean")
+    return value
+
+
+def _optional_cli_path(value: Any, label: str) -> Path | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        raise CanaryError(f"{label} must be a path")
+    try:
+        return Path(value)
+    except TypeError as error:
+        raise CanaryError(f"{label} must be a path") from error
+
+
+def _require_policy_booleans(args: argparse.Namespace) -> None:
+    for attr, label in (
+        ("plan_only", "--plan-only"),
+        ("require_explicit_policy", "--require-explicit-policy"),
+    ):
+        setattr(args, attr, _required_cli_bool(getattr(args, attr, None), label))
+
+
 def _string_list(
     value: dict[str, Any],
     key: str,
@@ -825,6 +910,22 @@ def _reject_duplicate_paths(paths: list[Path], label: str) -> None:
         if key in seen:
             raise CanaryError(f"{label}[{offset}] duplicates {label}[{seen[key]}]")
         seen[key] = offset
+
+
+def _reject_overlapping_paths(
+    left: Path,
+    left_label: str,
+    right: Path,
+    right_label: str,
+) -> None:
+    left_resolved = left.resolve()
+    right_resolved = right.resolve()
+    if (
+        left_resolved == right_resolved
+        or right_resolved in left_resolved.parents
+        or left_resolved in right_resolved.parents
+    ):
+        raise CanaryError(f"{left_label} must not overlap {right_label}")
 
 
 def _reject_receipts_covered_by_dirs(
@@ -1251,11 +1352,18 @@ def _build_rail_stage(
         allow_template_canary=allow_template_canary_endpoints,
     )
     receipt_dir_raw = _optional_string(rail, "receipt_dir", "rail")
+    if require_explicit_policy and receipt_dir_raw is None:
+        raise CanaryError(
+            "rail.receipt_dir must be explicitly recorded when "
+            "--require-explicit-policy is used"
+        )
     receipt_dir = (
         _path_from_config(config_dir, receipt_dir_raw, "rail.receipt_dir")
         if receipt_dir_raw is not None
         else inbox_dir / "receipts"
     )
+    if require_explicit_policy:
+        _reject_overlapping_paths(receipt_dir, "rail.receipt_dir", inbox_dir, "rail.inbox_dir")
     if not allow_repository_fixture_paths:
         _reject_repository_iso_fixture_path(inbox_dir, "rail.inbox_dir")
         if message_path is not None:
@@ -1272,6 +1380,19 @@ def _build_rail_stage(
         if bearer_raw is not None
         else None
     )
+    if bearer_token_file is not None:
+        _reject_overlapping_paths(
+            bearer_token_file,
+            "rail.bearer_token_file",
+            inbox_dir,
+            "rail.inbox_dir",
+        )
+        _reject_overlapping_paths(
+            receipt_dir,
+            "rail.receipt_dir",
+            bearer_token_file,
+            "rail.bearer_token_file",
+        )
     dry_run = _policy_bool(
         rail,
         "dry_run",
@@ -1307,7 +1428,21 @@ def _build_rail_stage(
         "--response-limit-bytes",
         _optional_positive_int(rail, "response_limit_bytes", "rail"),
     )
-    return StagePlan("rail", argv, receipt_dir=receipt_dir, dry_run=dry_run)
+    artifact_paths: list[tuple[str, Path, bool]] = [
+        ("rail.inbox_dir", inbox_dir, True),
+        ("rail.receipt_dir", receipt_dir, True),
+    ]
+    if message_path is not None:
+        artifact_paths.append(("rail.message", message_path, False))
+    if bearer_token_file is not None:
+        artifact_paths.append(("rail.bearer_token_file", bearer_token_file, False))
+    return StagePlan(
+        "rail",
+        argv,
+        receipt_dir=receipt_dir,
+        dry_run=dry_run,
+        artifact_paths=tuple(artifact_paths),
+    )
 
 
 def _build_notary_stage(
@@ -1354,11 +1489,23 @@ def _build_notary_stage(
             allow_template_canary=allow_template_canary_endpoints,
         )
     receipt_dir_raw = _optional_string(notary, "receipt_dir", "notary")
+    if require_explicit_policy and receipt_dir_raw is None:
+        raise CanaryError(
+            "notary.receipt_dir must be explicitly recorded when "
+            "--require-explicit-policy is used"
+        )
     receipt_dir = (
         _path_from_config(config_dir, receipt_dir_raw, "notary.receipt_dir")
         if receipt_dir_raw is not None
         else export_dir / "receipts"
     )
+    if require_explicit_policy:
+        _reject_overlapping_paths(
+            receipt_dir,
+            "notary.receipt_dir",
+            export_dir,
+            "notary.export_dir",
+        )
     if not allow_repository_fixture_paths:
         _reject_repository_iso_fixture_path(export_dir, "notary.export_dir")
         _reject_repository_iso_fixture_path(receipt_dir, "notary.receipt_dir")
@@ -1373,6 +1520,19 @@ def _build_notary_stage(
         if bearer_raw is not None
         else None
     )
+    if bearer_token_file is not None:
+        _reject_overlapping_paths(
+            bearer_token_file,
+            "notary.bearer_token_file",
+            export_dir,
+            "notary.export_dir",
+        )
+        _reject_overlapping_paths(
+            receipt_dir,
+            "notary.receipt_dir",
+            bearer_token_file,
+            "notary.bearer_token_file",
+        )
 
     argv = [
         sys.executable,
@@ -1407,7 +1567,19 @@ def _build_notary_stage(
         "--response-limit-bytes",
         _optional_positive_int(notary, "response_limit_bytes", "notary"),
     )
-    return StagePlan("notary", argv, receipt_dir=receipt_dir, dry_run=dry_run)
+    artifact_paths: list[tuple[str, Path, bool]] = [
+        ("notary.export_dir", export_dir, True),
+        ("notary.receipt_dir", receipt_dir, True),
+    ]
+    if bearer_token_file is not None:
+        artifact_paths.append(("notary.bearer_token_file", bearer_token_file, False))
+    return StagePlan(
+        "notary",
+        argv,
+        receipt_dir=receipt_dir,
+        dry_run=dry_run,
+        artifact_paths=tuple(artifact_paths),
+    )
 
 
 def _build_verify_stage(
@@ -1974,6 +2146,41 @@ def _plan_to_json(stage: StagePlan) -> dict[str, Any]:
     }
 
 
+def _configured_verify_artifact_paths(
+    config_dir: Path,
+    raw_verify: Any,
+) -> tuple[tuple[str, Path, bool], ...]:
+    if raw_verify is None:
+        return ()
+    verify = _require_object(raw_verify, "verify")
+    artifact_paths: list[tuple[str, Path, bool]] = []
+    for offset, raw in enumerate(_string_list(verify, "receipt_dirs", "verify")):
+        artifact_paths.append(
+            (
+                f"verify.receipt_dirs[{offset}]",
+                _path_from_config(
+                    config_dir,
+                    raw,
+                    f"verify.receipt_dirs[{offset}]",
+                ),
+                True,
+            )
+        )
+    for offset, raw in enumerate(_string_list(verify, "receipts", "verify")):
+        artifact_paths.append(
+            (
+                f"verify.receipts[{offset}]",
+                _path_from_config(
+                    config_dir,
+                    raw,
+                    f"verify.receipts[{offset}]",
+                ),
+                False,
+            )
+        )
+    return tuple(artifact_paths)
+
+
 def build_stage_plans(
     config_path: Path,
     config: dict[str, Any],
@@ -2028,15 +2235,25 @@ def build_stage_plans(
 
 
 def run(args: argparse.Namespace) -> int:
-    if args.config is None:
+    if getattr(args, "config", None) is None:
         raise CanaryError("provide --config")
+    args.config = _optional_cli_path(args.config, "--config")
+    args.summary_out = _optional_cli_path(getattr(args, "summary_out", None), "summary_out")
     if args.summary_out is not None:
         _reject_output_path_smuggling(args.summary_out, "summary_out")
         _reject_repository_iso_fixture_path(args.summary_out, "summary_out")
     config_path = args.config
     _reject_output_path_smuggling(config_path, "--config")
+    _require_policy_booleans(args)
     if not args.plan_only:
         _reject_repository_iso_fixture_path(config_path, "config path")
+    _reject_summary_output_input_alias(args.summary_out, "--config", config_path)
+    if args.summary_out is not None:
+        _ensure_text_output_target(
+            args.summary_out,
+            display_label="summary_out",
+            create_parent=False,
+        )
     config = _require_object(_load_json(config_path, display_label="config"), "config")
     resolved_config_path = config_path.resolve()
     provider, environment, stages, verify_config = build_stage_plans(
@@ -2046,17 +2263,27 @@ def run(args: argparse.Namespace) -> int:
         allow_template_canary_endpoints=args.plan_only,
         allow_repository_fixture_paths=args.plan_only,
     )
+    artifact_paths = tuple(
+        artifact
+        for stage in stages
+        for artifact in stage.artifact_paths
+    ) + _configured_verify_artifact_paths(
+        resolved_config_path.parent,
+        verify_config,
+    )
+    _reject_summary_output_artifact_alias(args.summary_out, artifact_paths)
+    output_limit_bytes = getattr(args, "output_limit_bytes", None)
     if (
-        isinstance(args.output_limit_bytes, bool)
-        or not isinstance(args.output_limit_bytes, int)
-        or args.output_limit_bytes <= 0
+        isinstance(output_limit_bytes, bool)
+        or not isinstance(output_limit_bytes, int)
+        or output_limit_bytes <= 0
     ):
         raise CanaryError("--output-limit-bytes must be positive")
     stage_timeout_secs = _require_positive_finite_number(
-        args.stage_timeout_secs, "--stage-timeout-secs"
+        getattr(args, "stage_timeout_secs", None), "--stage-timeout-secs"
     )
     if args.summary_out is not None:
-        _ensure_text_output_target(args.summary_out)
+        _ensure_text_output_target(args.summary_out, display_label="summary_out")
 
     started_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat()
     if args.plan_only:
@@ -2101,7 +2328,7 @@ def run(args: argparse.Namespace) -> int:
     stage_receipt_dirs: list[Path] = []
     prior_failure = False
     for stage in stages:
-        result = _run_stage(stage, args.output_limit_bytes, stage_timeout_secs)
+        result = _run_stage(stage, output_limit_bytes, stage_timeout_secs)
         results.append(result)
         if stage.receipt_dir is not None and not stage.dry_run:
             stage_receipt_dirs.append(stage.receipt_dir)
@@ -2122,7 +2349,7 @@ def run(args: argparse.Namespace) -> int:
         else:
             verify_result = _run_stage(
                 verify_stage,
-                args.output_limit_bytes,
+                output_limit_bytes,
                 stage_timeout_secs,
             )
             results.append(verify_result)

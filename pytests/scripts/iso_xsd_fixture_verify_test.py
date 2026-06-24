@@ -4,6 +4,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -75,6 +76,20 @@ def blocked_schema_source(message_id="barr.001.001.01"):
             "swift-copyright-header",
             "licensed-product-redistribution-agreement",
         ],
+    }
+
+
+def pending_schema_source(message_id="barr.001.001.01"):
+    return {
+        "message_def_id": message_id,
+        "source": {
+            "catalogue_url": "https://www.iso20022.org/iso-20022-message-definitions",
+            "download_url": "https://www.iso20022.org/message/12345/download",
+            "download_type": "XSD",
+            "message_name": "BarPayloadV01",
+            "submitting_organisation": "SWIFT",
+        },
+        "reason": "Official ISO catalogue lists an XSD download.",
     }
 
 
@@ -163,6 +178,7 @@ def minimal_manifest():
             }
         ],
         "blocked_schema_sources": [],
+        "pending_schema_sources": [],
     }
 
 
@@ -175,6 +191,75 @@ def run_verify(argv):
 
 
 class IsoXsdFixtureVerifyTest(unittest.TestCase):
+    def test_direct_run_policy_flags_must_be_booleans_before_manifest_loading(self):
+        cases = (
+            (
+                "require_schema_backed_fixtures",
+                "--require-schema-backed-fixtures",
+                "true",
+            ),
+            ("require_fixture_for_schema", "--require-fixture-for-schema", 1),
+            (
+                "require_profile_schema_backed_versions",
+                "--require-profile-schema-backed-versions",
+                None,
+            ),
+            ("validate_xml_schema", "--validate-xml-schema", []),
+        )
+        for attr, label, value in cases:
+            with self.subTest(flag=label):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        manifest=root / "missing-fixture-manifest.json",
+                        summary_out=None,
+                        require_schema_backed_fixtures=False,
+                        require_fixture_for_schema=False,
+                        profile_catalog=None,
+                        require_profile_schema_backed_versions=False,
+                        validate_xml_schema=False,
+                        xmllint_timeout_secs=1.0,
+                    )
+                    setattr(args, attr, value)
+
+                    with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                        VERIFIER.run(args)
+
+                    message = str(caught.exception)
+                    self.assertIn(f"{label} must be a boolean", message)
+                    self.assertNotIn("does not exist", message)
+                    self.assertNotIn(str(root), message)
+
+    def test_direct_run_scalar_paths_must_be_paths_before_manifest_loading(self):
+        cases = (
+            ("manifest", "manifest", object(), "--manifest"),
+            ("summary", "summary_out", object(), "summary_out"),
+            ("profile catalog", "profile_catalog", object(), "--profile-catalog"),
+        )
+        for name, field, value, label in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        manifest=root / "missing-fixture-manifest.json",
+                        summary_out=None,
+                        require_schema_backed_fixtures=False,
+                        require_fixture_for_schema=False,
+                        profile_catalog=None,
+                        require_profile_schema_backed_versions=False,
+                        validate_xml_schema=False,
+                        xmllint_timeout_secs=1.0,
+                    )
+                    setattr(args, field, value)
+
+                    with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                        VERIFIER.run(args)
+
+                    message = str(caught.exception)
+                    self.assertIn(f"{label} must be a path", message)
+                    self.assertNotIn("does not exist", message)
+                    self.assertNotIn(str(root), message)
+
     def test_text_output_symlink_ancestor_diagnostic_does_not_echo_path(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -500,6 +585,163 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             )
             self.assertNotIn("does not exist", stderr)
             self.assertFalse((root / "fixtures").exists())
+
+    def test_missing_summary_output_parent_is_not_created_before_manifest_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = root / "fixture_manifest.json"
+            manifest_path.write_text("{not valid manifest json\n", encoding="utf-8")
+            summary_parent = root / "summary" / "new"
+            summary_out = summary_parent / "xsd-summary.json"
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--summary-out",
+                    str(summary_out),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("not valid JSON", stderr)
+            self.assertFalse(summary_parent.exists())
+
+    def test_summary_output_cannot_reuse_manifest_or_profile_catalog_paths(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root / "xsd", minimal_manifest())
+            original_manifest = manifest_path.read_text(encoding="utf-8")
+            profile_catalog = root / "profiles.rs"
+            profile_catalog.write_text("not a profile catalog\n", encoding="utf-8")
+
+            cases = (
+                (
+                    "manifest",
+                    str(manifest_path),
+                    ["--manifest", str(manifest_path), "--summary-out", str(manifest_path)],
+                    "summary_out must not reuse --manifest path",
+                ),
+                (
+                    "profile-catalog",
+                    str(profile_catalog),
+                    [
+                        "--manifest",
+                        str(manifest_path),
+                        "--profile-catalog",
+                        str(profile_catalog),
+                        "--summary-out",
+                        str(profile_catalog),
+                    ],
+                    "summary_out must not reuse --profile-catalog path",
+                ),
+            )
+            for name, hidden_path, argv, message in cases:
+                with self.subTest(name=name):
+                    rc, stdout, stderr = run_verify(argv)
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden_path, stderr)
+                    self.assertEqual(manifest_path.read_text(encoding="utf-8"), original_manifest)
+                    self.assertEqual(
+                        profile_catalog.read_text(encoding="utf-8"),
+                        "not a profile catalog\n",
+                    )
+
+    def test_summary_output_cannot_hardlink_manifest(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root / "xsd", minimal_manifest())
+            summary_out = root / "manifest-hardlink.summary.json"
+            try:
+                os.link(manifest_path, summary_out)
+            except OSError as error:
+                self.skipTest(f"hardlink creation unavailable: {error}")
+            original_manifest = manifest_path.read_text(encoding="utf-8")
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--summary-out",
+                    str(summary_out),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("summary_out must not reuse --manifest path", stderr)
+            self.assertNotIn(str(manifest_path), stderr)
+            self.assertNotIn(str(summary_out), stderr)
+            self.assertEqual(manifest_path.read_text(encoding="utf-8"), original_manifest)
+
+    def test_summary_output_cannot_reuse_discovered_schema_or_fixture_paths(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root / "xsd", minimal_manifest())
+            schema_path = root / "xsd" / "xsd" / "iso" / "fooo.001.001.01.xsd"
+            fixture_path = root / "xsd" / "foo_fixture.xml"
+            cases = (
+                (
+                    "schema",
+                    schema_path,
+                    "summary_out must not reuse manifest.schemas[0].path path",
+                ),
+                (
+                    "fixture",
+                    fixture_path,
+                    "summary_out must not reuse manifest.fixtures[0].path path",
+                ),
+            )
+            for name, output_path, message in cases:
+                with self.subTest(name=name):
+                    original = output_path.read_text(encoding="utf-8")
+
+                    rc, stdout, stderr = run_verify(
+                        [
+                            "--manifest",
+                            str(manifest_path),
+                            "--summary-out",
+                            str(output_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertEqual(output_path.read_text(encoding="utf-8"), original)
+
+    def test_summary_output_cannot_hardlink_discovered_schema(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root / "xsd", minimal_manifest())
+            schema_path = root / "xsd" / "xsd" / "iso" / "fooo.001.001.01.xsd"
+            summary_out = root / "schema-hardlink.summary.json"
+            try:
+                os.link(schema_path, summary_out)
+            except OSError as error:
+                self.skipTest(f"hardlink creation unavailable: {error}")
+            original_schema = schema_path.read_text(encoding="utf-8")
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--summary-out",
+                    str(summary_out),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("summary_out must not be hard-linked", stderr)
+            self.assertNotIn(str(schema_path), stderr)
+            self.assertNotIn(str(summary_out), stderr)
+            self.assertEqual(schema_path.read_text(encoding="utf-8"), original_schema)
+            self.assertEqual(summary_out.read_text(encoding="utf-8"), original_schema)
 
     def test_profile_catalog_rejects_repository_fixture_before_manifest_loading(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1625,6 +1867,22 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 ),
                 ["pacs.002.001.12", "pacs.008.001.10", "pacs.009.001.10"],
             )
+            self.assertEqual(summary["pending_schema_source_count"], 8)
+            self.assertEqual(
+                sorted(
+                    entry["message_def_id"] for entry in summary["pending_schema_sources"]
+                ),
+                [
+                    "colr.012.001.05",
+                    "sese.023.001.09",
+                    "sese.023.001.11",
+                    "sese.024.001.09",
+                    "sese.024.001.10",
+                    "sese.025.001.08",
+                    "sese.025.001.10",
+                    "sese.025.001.11",
+                ],
+            )
             self.assertEqual(summary["schema_only_entries"], [])
             self.assertEqual(json.loads(summary_out.read_text(encoding="utf-8")), summary)
             self.assertEqual(summary_out.stat().st_mode & 0o077, 0)
@@ -1943,6 +2201,48 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertIn("must not be a symlink", stderr)
             self.assertFalse((target_dir / "nested").exists())
 
+    def test_symlinked_summary_output_ancestor_is_rejected_before_xmllint(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            target_dir = root / "xsd-target"
+            target_dir.mkdir()
+            ancestor = root / "xsd-ancestor-link"
+            try:
+                ancestor.symlink_to(target_dir, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            summary_out = ancestor / "nested" / "xsd.summary.json"
+            marker = root / "xmllint-called"
+
+            def fake_run(*_args, **_kwargs):
+                marker.write_text("called\n", encoding="utf-8")
+                return (0, "", False, "", False, False)
+
+            original_which = VERIFIER.shutil.which
+            original_run = VERIFIER._run_command_bounded
+            VERIFIER.shutil.which = lambda command: "/usr/bin/xmllint"
+            VERIFIER._run_command_bounded = fake_run
+            try:
+                rc, stdout, stderr = run_verify(
+                    [
+                        "--manifest",
+                        str(manifest_path),
+                        "--validate-xml-schema",
+                        "--summary-out",
+                        str(summary_out),
+                    ]
+                )
+            finally:
+                VERIFIER.shutil.which = original_which
+                VERIFIER._run_command_bounded = original_run
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("must not be a symlink", stderr)
+            self.assertFalse(marker.exists())
+            self.assertFalse((target_dir / "nested").exists())
+
     def test_cli_input_paths_reject_raw_smuggling_before_read(self):
         cases = (
             ("manifest semicolon", "--manifest", "fixture;debug.json", "semicolon path"),
@@ -2119,12 +2419,19 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             root = Path(raw_root)
             missing_reason = "Reviewed missing schema package: internal-ticket-xsd-713."
             missing_manifest = minimal_manifest()
-            missing_manifest["schemas"][0][
-                "schema_only_reason"
-            ] = "Reviewed schema-only companion for unbacked fixture."
-            missing_manifest["fixtures"][0].pop("schema")
-            missing_manifest["fixtures"][0]["missing_schema_reason"] = missing_reason
+            missing_manifest["fixtures"].append(
+                {
+                    "path": "../barr_fixture.xml",
+                    "message_def_id": "barr.001.001.01",
+                    "payload_root": "BarPayload",
+                    "missing_schema_reason": missing_reason,
+                }
+            )
             missing_manifest_path = write_minimal_tree(root / "missing", missing_manifest)
+            (root / "missing" / "barr_fixture.xml").write_text(
+                fixture_xml("barr.001.001.01", "BarPayload"),
+                encoding="utf-8",
+            )
 
             rc, stdout, stderr = run_verify(
                 [
@@ -2268,6 +2575,8 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertEqual(summary["profile_schema_backed_versions"], 1)
             self.assertEqual(summary["missing_profile_schema_versions"], [])
             self.assertEqual(summary["missing_profile_schema_message_ids"], [])
+            self.assertEqual(summary["unreviewed_profile_schema_message_id_count"], 0)
+            self.assertEqual(summary["unreviewed_profile_schema_message_ids"], [])
             self.assertEqual(summary["profile_catalog"]["profiles"], 1)
             self.assertEqual(
                 summary["profile_catalog"]["sha256"],
@@ -2309,6 +2618,8 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertEqual(summary["profile_schema_backed_versions"], 1)
             self.assertEqual(summary["missing_profile_schema_versions"], [])
             self.assertEqual(summary["missing_profile_schema_message_ids"], [])
+            self.assertEqual(summary["unreviewed_profile_schema_message_id_count"], 0)
+            self.assertEqual(summary["unreviewed_profile_schema_message_ids"], [])
 
     def test_profile_catalog_loader_ignores_commented_or_string_spoofs(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -2466,6 +2777,17 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                         "reviewed_missing_schema_fixture": False,
                         "reviewed_schema_only": False,
                         "blocked_source": False,
+                        "pending_source": False,
+                    }
+                ],
+            )
+            self.assertEqual(summary["unreviewed_profile_schema_message_id_count"], 1)
+            self.assertEqual(
+                summary["unreviewed_profile_schema_message_ids"],
+                [
+                    {
+                        "message_def_id": "fooo.001.001.02",
+                        "profile_version_count": 1,
                     }
                 ],
             )
@@ -3404,6 +3726,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                         "reviewed_missing_schema_fixture": True,
                         "reviewed_schema_only": False,
                         "blocked_source": False,
+                        "pending_source": True,
                     },
                     {
                         "message_def_id": "pacs.002.001.12",
@@ -3411,6 +3734,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                         "reviewed_missing_schema_fixture": False,
                         "reviewed_schema_only": False,
                         "blocked_source": True,
+                        "pending_source": False,
                     },
                     {
                         "message_def_id": "pacs.008.001.10",
@@ -3418,6 +3742,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                         "reviewed_missing_schema_fixture": False,
                         "reviewed_schema_only": False,
                         "blocked_source": True,
+                        "pending_source": False,
                     },
                     {
                         "message_def_id": "pacs.009.001.10",
@@ -3425,6 +3750,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                         "reviewed_missing_schema_fixture": False,
                         "reviewed_schema_only": False,
                         "blocked_source": True,
+                        "pending_source": False,
                     },
                     {
                         "message_def_id": "sese.023.001.09",
@@ -3432,6 +3758,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                         "reviewed_missing_schema_fixture": False,
                         "reviewed_schema_only": False,
                         "blocked_source": False,
+                        "pending_source": True,
                     },
                     {
                         "message_def_id": "sese.023.001.11",
@@ -3439,6 +3766,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                         "reviewed_missing_schema_fixture": True,
                         "reviewed_schema_only": False,
                         "blocked_source": False,
+                        "pending_source": True,
                     },
                     {
                         "message_def_id": "sese.024.001.09",
@@ -3446,6 +3774,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                         "reviewed_missing_schema_fixture": False,
                         "reviewed_schema_only": False,
                         "blocked_source": False,
+                        "pending_source": True,
                     },
                     {
                         "message_def_id": "sese.024.001.10",
@@ -3453,6 +3782,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                         "reviewed_missing_schema_fixture": True,
                         "reviewed_schema_only": False,
                         "blocked_source": False,
+                        "pending_source": True,
                     },
                     {
                         "message_def_id": "sese.025.001.08",
@@ -3460,6 +3790,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                         "reviewed_missing_schema_fixture": False,
                         "reviewed_schema_only": False,
                         "blocked_source": False,
+                        "pending_source": True,
                     },
                     {
                         "message_def_id": "sese.025.001.10",
@@ -3467,9 +3798,12 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                         "reviewed_missing_schema_fixture": False,
                         "reviewed_schema_only": False,
                         "blocked_source": False,
+                        "pending_source": True,
                     },
                 ],
             )
+            self.assertEqual(summary["unreviewed_profile_schema_message_id_count"], 0)
+            self.assertEqual(summary["unreviewed_profile_schema_message_ids"], [])
 
     def test_xml_schema_validation_bounds_xmllint_output(self):
         cases = [
@@ -5373,6 +5707,27 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         )
         cases.append((duplicate_candidate_digest, "duplicate candidate SHA-256 values"))
 
+        duplicate_blocked_message_id = minimal_manifest()
+        duplicate_blocked_message_id["blocked_schema_sources"] = [
+            blocked_schema_source("barr.001.001.01"),
+            blocked_schema_source("barr.001.001.01"),
+        ]
+        duplicate_blocked_message_id["blocked_schema_sources"][1]["source"][
+            "repository"
+        ] = "https://github.com/moov-io/iso20022"
+        duplicate_blocked_message_id["blocked_schema_sources"][1]["source"][
+            "path"
+        ] = "alternate/barr.001.001.01.xsd"
+        duplicate_blocked_message_id["blocked_schema_sources"][1]["source"][
+            "sha256"
+        ] = "2" * 64
+        cases.append(
+            (
+                duplicate_blocked_message_id,
+                "duplicate message_def_id values",
+            )
+        )
+
         checked_in_schema_digest_candidate = minimal_manifest()
         checked_in_schema_digest_candidate["blocked_schema_sources"] = [
             blocked_schema_source()
@@ -5425,6 +5780,270 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("blocked_schema_sources must be recorded as an array", stderr)
+
+    def test_pending_schema_sources_must_be_explicit(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest = minimal_manifest()
+            manifest.pop("pending_schema_sources")
+            manifest_path = write_minimal_tree(root, manifest)
+
+            rc, _stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("pending_schema_sources must be recorded as an array", stderr)
+
+    def test_pending_schema_sources_record_official_catalogue_gaps(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest = minimal_manifest()
+            manifest["fixtures"].append(
+                {
+                    "path": "../barr_fixture.xml",
+                    "message_def_id": "barr.001.001.01",
+                    "payload_root": "BarPayload",
+                    "missing_schema_reason": "Official schema package pending.",
+                }
+            )
+            manifest["pending_schema_sources"] = [pending_schema_source()]
+            manifest_path = write_minimal_tree(root, manifest)
+            (root / "barr_fixture.xml").write_text(
+                fixture_xml("barr.001.001.01", "BarPayload"),
+                encoding="utf-8",
+            )
+
+            rc, stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+            self.assertEqual(rc, 0, stderr)
+            summary = json.loads(stdout)
+            self.assertEqual(summary["pending_schema_source_count"], 1)
+            self.assertEqual(
+                summary["pending_schema_sources"][0]["message_def_id"],
+                "barr.001.001.01",
+            )
+
+    def test_pending_schema_sources_validate_official_catalogue_shape(self):
+        cases = (
+            (
+                lambda manifest: manifest["pending_schema_sources"].append(
+                    pending_schema_source("fooo.001.001.01")
+                ),
+                "pending_schema_sources includes an already checked-in schema",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"][0]["source"].pop(
+                        "download_url"
+                    ),
+                ),
+                "source.download_url must be a non-empty string",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"][0]["source"].__setitem__(
+                        "download_url",
+                        "https://example.com/message/12345/download",
+                    ),
+                ),
+                "source.download_url must be an official ISO 20022 XSD download URL",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"][0]["source"].__setitem__(
+                        "download_url",
+                        "https://www.iso20022.org/message/not-a-number/download",
+                    ),
+                ),
+                "source.download_url must be an official ISO 20022 XSD download URL",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"][0]["source"].__setitem__(
+                        "download_url",
+                        "https://www.iso20022.org/message/%31345/download",
+                    ),
+                ),
+                "source.download_url must not contain percent escapes",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"][0]["source"].__setitem__(
+                        "download_url",
+                        "https://www.iso20022.org/message/12345/download?token=xsd-secret",
+                    ),
+                ),
+                "source.download_url must not contain secret-looking material",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"][0]["source"].__setitem__(
+                        "catalogue_url",
+                        "https://example.com/iso-20022-message-definitions",
+                    ),
+                ),
+                "source.catalogue_url must be an official ISO 20022 catalogue URL",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"][0]["source"].__setitem__(
+                        "catalogue_url",
+                        "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=%38",
+                    ),
+                ),
+                "source.catalogue_url must not contain percent escapes",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"][0]["source"].__setitem__(
+                        "catalogue_url",
+                        "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8&",
+                    ),
+                ),
+                "source.catalogue_url archive URL must set one numeric page",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"][0]["source"].__setitem__(
+                        "catalogue_url",
+                        "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=08",
+                    ),
+                ),
+                "source.catalogue_url archive URL must set one numeric page",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"][0]["source"].__setitem__(
+                        "catalogue_url",
+                        "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=x",
+                    ),
+                ),
+                "source.catalogue_url archive URL must set one numeric page",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"][0]["source"].__setitem__(
+                        "download_type",
+                        "PDF",
+                    ),
+                ),
+                "source.download_type must be one of XSD",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"][0]["source"].__setitem__(
+                        "message_name",
+                        "Bar PayloadV01",
+                    ),
+                ),
+                "source.message_name must be a canonical ISO message name ending in VNN",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"][0]["source"].__setitem__(
+                        "message_name",
+                        "BarPayloadV02",
+                    ),
+                ),
+                "source.message_name version suffix must match message_def_id version",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"][0]["source"].__setitem__(
+                        "submitting_organisation",
+                        "SWIFT; FPL",
+                    ),
+                ),
+                "source.submitting_organisation must not contain semicolon path parameters",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"][0]["source"].__setitem__(
+                        "submitting_organisation",
+                        "https://www.iso20022.org/SWIFT",
+                    ),
+                ),
+                "source.submitting_organisation must not contain URI or contact delimiters",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"][0]["source"].__setitem__(
+                        "submitting_organisation",
+                        "SWIFT//FPL",
+                    ),
+                ),
+                "source.submitting_organisation must use slash only inside organization tokens",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"][0]["source"].__setitem__(
+                        "submitting_organisation",
+                        "SWIFT,",
+                    ),
+                ),
+                "source.submitting_organisation must be a comma-space separated list of organization names",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"][0]["source"].__setitem__(
+                        "submitting_organisation",
+                        "Example Org",
+                    ),
+                ),
+                "source.submitting_organisation must not use placeholder organization metadata",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"].append(
+                        pending_schema_source("bazz.001.001.01")
+                    ),
+                ),
+                "pending_schema_sources contains duplicate source provenance",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"].append(
+                        pending_schema_source("barr.001.001.02")
+                    ),
+                    manifest["pending_schema_sources"][1]["source"].__setitem__(
+                        "message_name",
+                        "DifferentBarPayloadV02",
+                    ),
+                ),
+                "pending_schema_sources contains duplicate download_url values",
+            ),
+        )
+        for mutate, message in cases:
+            with self.subTest(message=message):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    manifest = minimal_manifest()
+                    mutate(manifest)
+                    manifest_path = write_minimal_tree(root, manifest)
+
+                    rc, _stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
 
     def test_reviewed_xsd_gap_reasons_reject_non_ascii_without_echo(self):
         hidden_schema_reason = "reviewed standal\u043ene fixture gap"
@@ -5589,6 +6208,29 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 [entry["message_def_id"] for entry in summary["blocked_schema_sources"]],
                 ["barr.001.001.01"],
             )
+
+    def test_unbacked_fixture_cannot_claim_checked_in_schema_gap(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            hidden = "fooo.001.001.01"
+            manifest = minimal_manifest()
+            manifest["schemas"][0]["schema_only_reason"] = (
+                "Reviewed standalone fixture gap."
+            )
+            manifest["fixtures"][0].pop("schema")
+            manifest["fixtures"][0]["missing_schema_reason"] = (
+                "Reviewed missing schema package."
+            )
+            manifest_path = write_minimal_tree(root, manifest)
+
+            rc, stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "missing-schema fixture for an already checked-in schema", stderr
+            )
+            self.assertNotIn(hidden, stderr)
 
     def test_fixture_namespace_payload_root_and_document_root_drift_are_rejected(self):
         for xml, message in [
@@ -5796,6 +6438,25 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     if message == "must stay under":
                         self.assertIn("manifest root", stderr)
                         self.assertNotIn(str(root), stderr)
+
+    def test_fixture_message_id_cannot_be_reused_with_distinct_fixture_material(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest = minimal_manifest()
+            copied_fixture = dict(manifest["fixtures"][0])
+            copied_fixture["path"] = "../foo_fixture_copy.xml"
+            manifest["fixtures"].append(copied_fixture)
+            manifest_path = write_minimal_tree(root, manifest)
+            (root / "foo_fixture_copy.xml").write_text(
+                fixture_xml("fooo.001.001.01", "FooPayload")
+                + "<!-- duplicate fixture material with distinct bytes -->\n",
+                encoding="utf-8",
+            )
+
+            rc, _stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("fixtures contains duplicate message_def_id values", stderr)
 
     def test_duplicate_manifest_json_keys_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -6315,7 +6976,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             rc, _stdout, stderr = run_verify(["--manifest", str(manifest_path)])
 
             self.assertEqual(rc, 2)
-            self.assertIn("duplicate fixture SHA-256", stderr)
+            self.assertIn("duplicate message_def_id values", stderr)
 
 
 if __name__ == "__main__":

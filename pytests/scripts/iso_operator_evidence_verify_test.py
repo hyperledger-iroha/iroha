@@ -1,3 +1,4 @@
+import argparse
 import base64
 import contextlib
 import importlib.util
@@ -833,6 +834,225 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertNotIn("does not exist", stderr)
             self.assertFalse((root / "fixtures").exists())
 
+    def test_missing_summary_output_parent_is_not_created_before_input_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = root / "canary.summary.json"
+            trust_path = root / "trust.summary.json"
+            canary_path.write_text("{not valid canary json\n", encoding="utf-8")
+            trust_path.write_text("{not valid trust json\n", encoding="utf-8")
+            summary_parent = root / "summary" / "new"
+            summary_out = summary_parent / "evidence.summary.json"
+
+            rc, stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(canary_path),
+                    "--trust-summary",
+                    str(trust_path),
+                    "--allow-canary-stage-receipts-only",
+                    "--summary-out",
+                    str(summary_out),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("not valid JSON", stderr)
+            self.assertFalse(summary_parent.exists())
+
+    def test_summary_output_cannot_reuse_summary_input_paths_before_loading(self):
+        cases = (
+            ("canary", "--canary-summary[0]"),
+            ("trust", "--trust-summary[0]"),
+        )
+        for output_kind, expected_label in cases:
+            with self.subTest(output_kind=output_kind):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    canary_path = root / "canary.summary.json"
+                    trust_path = root / "trust.summary.json"
+                    canary_path.write_text("{not valid canary json\n", encoding="utf-8")
+                    trust_path.write_text("{not valid trust json\n", encoding="utf-8")
+                    summary_out = (
+                        canary_path if output_kind == "canary" else trust_path
+                    )
+                    original_text = summary_out.read_text(encoding="utf-8")
+
+                    rc, stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
+                            "--allow-canary-stage-receipts-only",
+                            "--summary-out",
+                            str(summary_out),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(
+                        f"summary_out must not reuse {expected_label} path",
+                        stderr,
+                    )
+                    self.assertNotIn("not valid JSON", stderr)
+                    self.assertEqual(
+                        summary_out.read_text(encoding="utf-8"),
+                        original_text,
+                    )
+
+    def test_summary_output_cannot_hardlink_summary_input_paths_before_loading(self):
+        cases = (
+            ("canary", "--canary-summary[0]"),
+            ("trust", "--trust-summary[0]"),
+        )
+        for output_kind, expected_label in cases:
+            with self.subTest(output_kind=output_kind):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    canary_path = root / "canary.summary.json"
+                    trust_path = root / "trust.summary.json"
+                    canary_path.write_text("{not valid canary json\n", encoding="utf-8")
+                    trust_path.write_text("{not valid trust json\n", encoding="utf-8")
+                    input_path = (
+                        canary_path if output_kind == "canary" else trust_path
+                    )
+                    summary_out = root / f"{output_kind}-alias.summary.json"
+                    try:
+                        summary_out.hardlink_to(input_path)
+                    except OSError as error:
+                        self.skipTest(f"hard link creation unavailable: {error}")
+                    original_text = input_path.read_text(encoding="utf-8")
+
+                    rc, stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
+                            "--allow-canary-stage-receipts-only",
+                            "--summary-out",
+                            str(summary_out),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(
+                        f"summary_out must not reuse {expected_label} path",
+                        stderr,
+                    )
+                    self.assertNotIn("not valid JSON", stderr)
+                    self.assertEqual(
+                        input_path.read_text(encoding="utf-8"),
+                        original_text,
+                    )
+                    self.assertEqual(
+                        summary_out.read_text(encoding="utf-8"),
+                        original_text,
+                    )
+
+    def test_summary_output_cannot_reuse_direct_receipt_inputs_before_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = root / "canary.summary.json"
+            trust_path = root / "trust.summary.json"
+            canary_path.write_text("{not valid canary json\n", encoding="utf-8")
+            trust_path.write_text("{not valid trust json\n", encoding="utf-8")
+            receipt_path = root / "rail.receipt.json"
+            receipt_path.write_text("{not valid receipt json\n", encoding="utf-8")
+            original_text = receipt_path.read_text(encoding="utf-8")
+
+            rc, stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(canary_path),
+                    "--trust-summary",
+                    str(trust_path),
+                    "--receipt",
+                    str(receipt_path),
+                    "--summary-out",
+                    str(receipt_path),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("summary_out must not reuse --receipt[0] path", stderr)
+            self.assertNotIn("not valid JSON", stderr)
+            self.assertEqual(receipt_path.read_text(encoding="utf-8"), original_text)
+
+    def test_summary_output_cannot_hardlink_direct_receipt_inputs_before_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = root / "canary.summary.json"
+            trust_path = root / "trust.summary.json"
+            canary_path.write_text("{not valid canary json\n", encoding="utf-8")
+            trust_path.write_text("{not valid trust json\n", encoding="utf-8")
+            receipt_path = root / "rail.receipt.json"
+            receipt_path.write_text("{not valid receipt json\n", encoding="utf-8")
+            summary_out = root / "evidence.summary.json"
+            try:
+                summary_out.hardlink_to(receipt_path)
+            except OSError as error:
+                self.skipTest(f"hard link creation unavailable: {error}")
+            original_text = receipt_path.read_text(encoding="utf-8")
+
+            rc, stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(canary_path),
+                    "--trust-summary",
+                    str(trust_path),
+                    "--receipt",
+                    str(receipt_path),
+                    "--summary-out",
+                    str(summary_out),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("summary_out must not reuse --receipt[0] path", stderr)
+            self.assertNotIn("not valid JSON", stderr)
+            self.assertEqual(receipt_path.read_text(encoding="utf-8"), original_text)
+            self.assertEqual(summary_out.read_text(encoding="utf-8"), original_text)
+
+    def test_summary_output_cannot_be_written_under_receipt_dir_before_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = root / "canary.summary.json"
+            trust_path = root / "trust.summary.json"
+            canary_path.write_text("{not valid canary json\n", encoding="utf-8")
+            trust_path.write_text("{not valid trust json\n", encoding="utf-8")
+            receipt_dir = root / "receipts"
+            receipt_dir.mkdir()
+            summary_out = receipt_dir / "evidence.summary.json"
+
+            rc, stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(canary_path),
+                    "--trust-summary",
+                    str(trust_path),
+                    "--receipt-dir",
+                    str(receipt_dir),
+                    "--summary-out",
+                    str(summary_out),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "summary_out must not be written under --receipt-dir[0]",
+                stderr,
+            )
+            self.assertNotIn("not valid JSON", stderr)
+            self.assertFalse(summary_out.exists())
+
     def test_direct_receipt_selectors_reject_repository_fixture_artifacts(self):
         cases = (
             (
@@ -881,6 +1101,311 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     )
                     self.assertNotIn("provide at least one --canary-summary", stderr)
                     self.assertFalse((root / "fixtures").exists())
+
+    def test_direct_run_policy_flags_must_be_booleans_before_input_loading(self):
+        missing = object()
+        cases = (
+            ("allow_plan_only", missing, "--allow-plan-only must be a boolean"),
+            ("allow_plan_only", "false", "--allow-plan-only must be a boolean"),
+            ("allow_dry_run", "true", "--allow-dry-run must be a boolean"),
+            ("allow_insecure_http", 1, "--allow-insecure-http must be a boolean"),
+            ("allow_legacy_colr007", "yes", "--allow-legacy-colr007 must be a boolean"),
+            ("allow_default_profile", None, "--allow-default-profile must be a boolean"),
+            ("allow_failed_receipts", "false", "--allow-failed-receipts must be a boolean"),
+            ("allow_partial_canary", "false", "--allow-partial-canary must be a boolean"),
+            (
+                "allow_canary_stage_receipts_only",
+                "false",
+                "--allow-canary-stage-receipts-only must be a boolean",
+            ),
+            (
+                "allow_receipt_source_missing",
+                "false",
+                "--allow-receipt-source-missing must be a boolean",
+            ),
+            (
+                "allow_record_only_trust",
+                "false",
+                "--allow-record-only-trust must be a boolean",
+            ),
+            ("allow_synthetic_trust", "false", "--allow-synthetic-trust must be a boolean"),
+            (
+                "allow_missing_trust_source",
+                "false",
+                "--allow-missing-trust-source must be a boolean",
+            ),
+            (
+                "allow_profile_json_not_emitted",
+                "false",
+                "--allow-profile-json-not-emitted must be a boolean",
+            ),
+        )
+        for field, value, message in cases:
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        canary_summary=[root / "missing-canary.summary.json"],
+                        trust_summary=[root / "missing-trust.summary.json"],
+                        receipt=[],
+                        receipt_dir=[],
+                        provider="local-bank",
+                        environment="preprod",
+                        default_rail_profile=None,
+                        summary_out=None,
+                        max_canary_age_days=36500,
+                        max_trust_age_days=36500,
+                        max_trust_source_age_days=36500,
+                        receipt_verifier_timeout_secs=30.0,
+                        allow_plan_only=False,
+                        allow_dry_run=False,
+                        allow_insecure_http=False,
+                        allow_legacy_colr007=False,
+                        allow_default_profile=False,
+                        allow_failed_receipts=False,
+                        allow_partial_canary=False,
+                        allow_canary_stage_receipts_only=False,
+                        allow_receipt_source_missing=False,
+                        allow_record_only_trust=False,
+                        allow_synthetic_trust=False,
+                        allow_missing_trust_source=False,
+                        allow_profile_json_not_emitted=False,
+                    )
+                    if value is missing:
+                        delattr(args, field)
+                    else:
+                        setattr(args, field, value)
+
+                    stdout = io.StringIO()
+                    with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                        with contextlib.redirect_stdout(stdout):
+                            EVIDENCE.run(args)
+
+                    self.assertEqual(stdout.getvalue(), "")
+                    error = str(caught.exception)
+                    self.assertIn(message, error)
+                    self.assertNotIn("does not exist", error)
+                    self.assertNotIn(str(root), error)
+
+    def test_direct_run_scalar_paths_must_be_paths_before_input_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            args = argparse.Namespace(
+                canary_summary=[root / "missing-canary.summary.json"],
+                trust_summary=[root / "missing-trust.summary.json"],
+                receipt=[],
+                receipt_dir=[],
+                provider="local-bank",
+                environment="preprod",
+                default_rail_profile=None,
+                summary_out=object(),
+                max_canary_age_days=36500,
+                max_trust_age_days=36500,
+                max_trust_source_age_days=36500,
+                receipt_verifier_timeout_secs=30.0,
+                allow_plan_only=False,
+                allow_dry_run=False,
+                allow_insecure_http=False,
+                allow_legacy_colr007=False,
+                allow_default_profile=False,
+                allow_failed_receipts=False,
+                allow_partial_canary=False,
+                allow_canary_stage_receipts_only=False,
+                allow_receipt_source_missing=False,
+                allow_record_only_trust=False,
+                allow_synthetic_trust=False,
+                allow_missing_trust_source=False,
+                allow_profile_json_not_emitted=False,
+            )
+
+            stdout = io.StringIO()
+            with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                with contextlib.redirect_stdout(stdout):
+                    EVIDENCE.run(args)
+
+            self.assertEqual(stdout.getvalue(), "")
+            message = str(caught.exception)
+            self.assertIn("summary_out must be a path", message)
+            self.assertNotIn("does not exist", message)
+            self.assertNotIn(str(root), message)
+
+    def test_direct_run_scalar_context_must_be_strings_before_input_loading(self):
+        missing = object()
+        cases = (
+            ("missing provider", "provider", missing, "provide --provider"),
+            ("provider", "provider", object(), "--provider must be a string"),
+            ("missing environment", "environment", missing, "provide --environment"),
+            ("environment", "environment", object(), "--environment must be a string"),
+            (
+                "default profile",
+                "default_rail_profile",
+                object(),
+                "--default-rail-profile must be a string",
+            ),
+        )
+        for name, field, value, expected in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        canary_summary=[root / "missing-canary.summary.json"],
+                        trust_summary=[root / "missing-trust.summary.json"],
+                        receipt=[],
+                        receipt_dir=[],
+                        provider="local-bank",
+                        environment="preprod",
+                        default_rail_profile=None,
+                        summary_out=None,
+                        max_canary_age_days=36500,
+                        max_trust_age_days=36500,
+                        max_trust_source_age_days=36500,
+                        receipt_verifier_timeout_secs=30.0,
+                        allow_plan_only=False,
+                        allow_dry_run=False,
+                        allow_insecure_http=False,
+                        allow_legacy_colr007=False,
+                        allow_default_profile=True,
+                        allow_failed_receipts=False,
+                        allow_partial_canary=False,
+                        allow_canary_stage_receipts_only=False,
+                        allow_receipt_source_missing=False,
+                        allow_record_only_trust=False,
+                        allow_synthetic_trust=False,
+                        allow_missing_trust_source=False,
+                        allow_profile_json_not_emitted=False,
+                    )
+                    if value is missing:
+                        delattr(args, field)
+                    else:
+                        setattr(args, field, value)
+
+                    stdout = io.StringIO()
+                    with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                        with contextlib.redirect_stdout(stdout):
+                            EVIDENCE.run(args)
+
+                    self.assertEqual(stdout.getvalue(), "")
+                    message = str(caught.exception)
+                    self.assertIn(expected, message)
+                    self.assertNotIn("does not exist", message)
+                    self.assertNotIn(str(root), message)
+
+    def test_direct_run_freshness_limits_must_exist_before_input_loading(self):
+        cases = (
+            ("max_canary_age_days", "--max-canary-age-days", "provide --max-canary-age-days"),
+            ("max_trust_age_days", "--max-trust-age-days", "provide --max-trust-age-days"),
+            (
+                "max_trust_source_age_days",
+                "--max-trust-source-age-days",
+                "provide --max-trust-source-age-days",
+            ),
+            (
+                "receipt_verifier_timeout_secs",
+                "--receipt-verifier-timeout-secs",
+                "--receipt-verifier-timeout-secs must be a positive finite number",
+            ),
+        )
+        for field, _label, expected in cases:
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        canary_summary=[root / "missing-canary.summary.json"],
+                        trust_summary=[root / "missing-trust.summary.json"],
+                        receipt=[],
+                        receipt_dir=[],
+                        provider="local-bank",
+                        environment="preprod",
+                        default_rail_profile=None,
+                        summary_out=None,
+                        max_canary_age_days=36500,
+                        max_trust_age_days=36500,
+                        max_trust_source_age_days=36500,
+                        receipt_verifier_timeout_secs=30.0,
+                        allow_plan_only=False,
+                        allow_dry_run=False,
+                        allow_insecure_http=False,
+                        allow_legacy_colr007=False,
+                        allow_default_profile=False,
+                        allow_failed_receipts=False,
+                        allow_partial_canary=False,
+                        allow_canary_stage_receipts_only=False,
+                        allow_receipt_source_missing=False,
+                        allow_record_only_trust=False,
+                        allow_synthetic_trust=False,
+                        allow_missing_trust_source=False,
+                        allow_profile_json_not_emitted=False,
+                    )
+                    delattr(args, field)
+
+                    stdout = io.StringIO()
+                    with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                        with contextlib.redirect_stdout(stdout):
+                            EVIDENCE.run(args)
+
+                    self.assertEqual(stdout.getvalue(), "")
+                    message = str(caught.exception)
+                    self.assertIn(expected, message)
+                    self.assertNotIn("does not exist", message)
+                    self.assertNotIn(str(root), message)
+
+    def test_direct_run_repeatable_paths_must_be_lists_before_input_loading(self):
+        cases = (
+            ("canary bare string", "canary_summary", "canary.summary.json", "--canary-summary"),
+            ("canary bad entry", "canary_summary", [object()], "--canary-summary[0]"),
+            ("trust bare string", "trust_summary", "trust.summary.json", "--trust-summary"),
+            ("trust bad entry", "trust_summary", [object()], "--trust-summary[0]"),
+            ("receipt bare string", "receipt", "receipt.json", "--receipt"),
+            ("receipt bad entry", "receipt", [object()], "--receipt[0]"),
+            ("receipt-dir bare string", "receipt_dir", "receipts", "--receipt-dir"),
+            ("receipt-dir bad entry", "receipt_dir", [object()], "--receipt-dir[0]"),
+        )
+        for name, field, value, label in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        canary_summary=[root / "missing-canary.summary.json"],
+                        trust_summary=[root / "missing-trust.summary.json"],
+                        receipt=[],
+                        receipt_dir=[],
+                        provider="local-bank",
+                        environment="preprod",
+                        default_rail_profile=None,
+                        summary_out=None,
+                        max_canary_age_days=36500,
+                        max_trust_age_days=36500,
+                        max_trust_source_age_days=36500,
+                        receipt_verifier_timeout_secs=30.0,
+                        allow_plan_only=False,
+                        allow_dry_run=False,
+                        allow_insecure_http=False,
+                        allow_legacy_colr007=False,
+                        allow_default_profile=False,
+                        allow_failed_receipts=False,
+                        allow_partial_canary=False,
+                        allow_canary_stage_receipts_only=False,
+                        allow_receipt_source_missing=False,
+                        allow_record_only_trust=False,
+                        allow_synthetic_trust=False,
+                        allow_missing_trust_source=False,
+                        allow_profile_json_not_emitted=False,
+                    )
+                    setattr(args, field, value)
+
+                    stdout = io.StringIO()
+                    with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                        with contextlib.redirect_stdout(stdout):
+                            EVIDENCE.run(args)
+
+                    self.assertEqual(stdout.getvalue(), "")
+                    error = str(caught.exception)
+                    if "bare string" in name:
+                        self.assertIn(f"{label} must be a repeatable path list", error)
+                    else:
+                        self.assertIn(f"{label} must be a path", error)
+                    self.assertNotIn("does not exist", error)
+                    self.assertNotIn(str(root), error)
 
     def test_local_path_validators_reject_percent_encoded_smuggling(self):
         overlong_path = "out/" + ("a" * (EVIDENCE.MAX_LOCAL_PATH_CHARS + 1))
@@ -2344,6 +2869,69 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertIn("must not be a symlink", stderr)
             self.assertFalse((target_dir / "nested").exists())
 
+    def test_symlinked_summary_output_ancestor_is_rejected_before_receipt_verifier(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            notary_receipts, rail_receipts = write_https_receipt_dirs(root)
+            canary_path = write_canary(
+                root,
+                valid_canary_summary(
+                    receipt_entries=receipt_entries_from_dirs(notary_receipts, rail_receipts)
+                ),
+            )
+            trust_path = write_trust_summary(root / "trust")
+            target_dir = root / "evidence-target"
+            target_dir.mkdir()
+            ancestor = root / "evidence-ancestor-link"
+            try:
+                ancestor.symlink_to(target_dir, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            summary_out = ancestor / "nested" / "evidence.summary.json"
+            marker = root / "receipt-verifier-called"
+            script_dir = root / "scripts"
+            script_dir.mkdir()
+            fake_receipt_verify = script_dir / "iso_operator_receipt_verify.py"
+            fake_receipt_verify.write_text(
+                "\n".join(
+                    [
+                        "import pathlib",
+                        "import sys",
+                        f"pathlib.Path({str(marker)!r}).write_text('called\\n', encoding='utf-8')",
+                        "sys.stderr.write('receipt verifier should not run')",
+                        "sys.exit(7)",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            original_script_dir = EVIDENCE.SCRIPT_DIR
+            EVIDENCE.SCRIPT_DIR = script_dir
+            try:
+                rc, stdout, stderr = run_evidence(
+                    [
+                        "--canary-summary",
+                        str(canary_path),
+                        "--trust-summary",
+                        str(trust_path),
+                        "--receipt-dir",
+                        str(notary_receipts),
+                        "--receipt-dir",
+                        str(rail_receipts),
+                        "--summary-out",
+                        str(summary_out),
+                    ]
+                )
+            finally:
+                EVIDENCE.SCRIPT_DIR = original_script_dir
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("must not be a symlink", stderr)
+            self.assertNotIn("receipt verification failed", stderr)
+            self.assertFalse(marker.exists())
+            self.assertFalse((target_dir / "nested").exists())
+
     def test_cli_input_paths_reject_raw_smuggling_before_read(self):
         cases = (
             ("canary semicolon", "--canary-summary", "canary;debug.summary.json", "semicolon path"),
@@ -2852,6 +3440,178 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn("checked-in trust-bundle templates", stderr)
+
+    def test_compact_summary_paths_must_not_reuse_json_material_paths(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+
+            trust_path = write_trust_summary(root / "trust")
+            canary_path = root / "canary.summary.json"
+            body = valid_canary_summary()
+            body["config_path"] = str(canary_path)
+            write_json(canary_path, digest_summary(body))
+
+            rc, _stdout, stderr = run_evidence(
+                ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("canary_summaries[0].path duplicates", stderr)
+            self.assertIn("canary_summaries[0].config_path", stderr)
+
+            canary_path = write_canary(root, valid_canary_summary())
+            trust_path = write_trust_summary(root / "trust-summary-path")
+            rewrite_trust_summary(
+                trust_path,
+                lambda summary: summary["bundles"][0].__setitem__(
+                    "path",
+                    str(trust_path),
+                ),
+            )
+
+            rc, _stdout, stderr = run_evidence(
+                ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("trust_summaries[0].path duplicates", stderr)
+            self.assertIn("trust_summaries[0].profiles[0].path", stderr)
+
+            shared_canary_path = root / "shared-canary.summary.json"
+            write_json(shared_canary_path, valid_canary_summary())
+            trust_path = write_trust_summary(root / "trust-reuses-canary")
+            rewrite_trust_summary(
+                trust_path,
+                lambda summary: summary["bundles"][0].__setitem__(
+                    "path",
+                    str(shared_canary_path),
+                ),
+            )
+
+            rc, _stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(shared_canary_path),
+                    "--trust-summary",
+                    str(trust_path),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("canary_summaries[0].path duplicates", stderr)
+            self.assertIn("trust_summaries[0].profiles[0].path", stderr)
+
+            trust_path = write_trust_summary(root / "trust-config-target")
+            canary_path = root / "canary-config-reuses-trust.summary.json"
+            body = valid_canary_summary()
+            body["config_path"] = str(trust_path)
+            write_json(canary_path, digest_summary(body))
+
+            rc, _stdout, stderr = run_evidence(
+                ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("trust_summaries[0].path duplicates", stderr)
+            self.assertIn("canary_summaries[0].config_path", stderr)
+
+    def test_trust_bundle_paths_must_be_unique(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = write_canary(root, valid_canary_summary())
+            trust_path = write_trust_summary(root / "trust")
+            rewrite_trust_summary(
+                trust_path,
+                lambda summary: (
+                    summary["bundles"].append(json.loads(json.dumps(summary["bundles"][0]))),
+                    summary["bundles"][1].__setitem__("profile_id", "fedwire-funds"),
+                    summary["bundles"][1].__setitem__("rail", "fedwire-funds"),
+                    summary["bundles"][1].__setitem__("bundle_sha256", "b" * 64),
+                    summary["bundles"][1]["profile_overrides"].__setitem__(
+                        "id",
+                        "fedwire-funds",
+                    ),
+                    summary["bundles"][1]["profile_overrides"].__setitem__(
+                        "rail",
+                        "fedwire-funds",
+                    ),
+                    summary.__setitem__("verified_bundles", 2),
+                    refresh_profile_json_sha256(summary),
+                ),
+            )
+
+            rc, _stdout, stderr = run_evidence(
+                ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("trust_summaries[0].bundles[1].path duplicates", stderr)
+            self.assertIn("trust_summaries[0].bundles[0].path", stderr)
+
+    def test_trust_bundle_paths_cannot_be_reused_across_relabelled_summaries(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = write_canary(root)
+            trust_one_path = write_trust_summary(root / "trust-one")
+            trust_two_path = write_trust_summary(root / "trust-two")
+            first_trust = json.loads(trust_one_path.read_text(encoding="utf-8"))
+            trust_two = json.loads(trust_two_path.read_text(encoding="utf-8"))
+            trust_two["verified_at"] = "2026-06-04T00:00:01Z"
+            bundle = trust_two["bundles"][0]
+            bundle["path"] = first_trust["bundles"][0]["path"]
+            bundle["profile_id"] = "fedwire-funds"
+            bundle["rail"] = "fedwire-funds"
+            bundle["bundle_sha256"] = "b" * 64
+            bundle["profile_overrides"]["id"] = "fedwire-funds"
+            bundle["profile_overrides"]["rail"] = "fedwire-funds"
+            refresh_profile_json_sha256(trust_two)
+            write_json(trust_two_path, digest_summary(trust_two))
+
+            rc, _stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(canary_path),
+                    "--trust-summary",
+                    str(trust_one_path),
+                    "--trust-summary",
+                    str(trust_two_path),
+                    "--allow-canary-stage-receipts-only",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("trust_summaries[1].profiles[0].path duplicates", stderr)
+            self.assertIn("trust_summaries[0].profiles[0].path", stderr)
+
+    def test_compact_summary_paths_cannot_reuse_canary_receipt_paths(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = root / "canary.receipt.json"
+            receipt_summary = json.loads(receipt_stdout())
+            receipt_summary["receipts"][0]["path"] = str(canary_path)
+            write_json(
+                canary_path,
+                valid_canary_summary(receipt_entries=receipt_summary["receipts"]),
+            )
+            trust_path = write_trust_summary(root / "trust")
+
+            rc, _stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(canary_path),
+                    "--trust-summary",
+                    str(trust_path),
+                    "--allow-canary-stage-receipts-only",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn(
+                "canary_summaries[0].path duplicates "
+                "canary_summaries[0].receipt_summary.receipts[0].path",
+                stderr,
+            )
+            self.assertNotIn(str(canary_path), stderr)
 
     def test_summary_input_paths_reject_checked_in_iso_fixture_artifacts(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -3705,6 +4465,12 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             trust_two_path = write_trust_summary(root / "trust-two")
             trust_two = json.loads(trust_two_path.read_text(encoding="utf-8"))
             trust_two["verified_at"] = "2026-06-04T00:00:01Z"
+            replace_profile_der(
+                trust_two,
+                "x509_crl_der_base64",
+                "x509_crls",
+                ALT_CRL_B64,
+            )
             duplicate_profile_id = trust_two["bundles"][0]["profile_id"]
             write_json(trust_two_path, digest_summary(trust_two))
 
@@ -3723,6 +4489,36 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("trust_summaries[1].profiles[0].profile_id duplicates", stderr)
             self.assertNotIn(duplicate_profile_id, stderr)
+
+    def test_trust_profile_json_digest_cannot_be_reused_across_summaries(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = write_canary(root)
+            trust_one_path = write_trust_summary(root / "trust-one")
+            trust_two_path = write_trust_summary(root / "trust-two")
+            trust_two = json.loads(trust_two_path.read_text(encoding="utf-8"))
+            trust_two["verified_at"] = "2026-06-04T00:00:01Z"
+            duplicate_profile_json_sha256 = trust_two["profile_json_sha256"]
+            write_json(trust_two_path, digest_summary(trust_two))
+
+            rc, _stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(canary_path),
+                    "--trust-summary",
+                    str(trust_one_path),
+                    "--trust-summary",
+                    str(trust_two_path),
+                    "--allow-canary-stage-receipts-only",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn(
+                "trust_summaries[1].profile_json_sha256 duplicates",
+                stderr,
+            )
+            self.assertNotIn(duplicate_profile_json_sha256, stderr)
 
     def test_canary_rail_receipts_require_matching_trust_profile(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -3835,6 +4631,58 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 summary["trust_summaries"][0]["profiles"][0]["profile_id"],
                 custom_profile,
             )
+
+    def test_custom_canary_profile_message_type_must_match_trust_rail(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            custom_profile = "swift-cbpr-plus-alt"
+            hidden_message_type = "pacs.008"
+            hidden_rail = "securities-csd"
+            canary = valid_canary_summary()
+            verify_stage = canary["stages"][2]
+            receipt_summary = json.loads(verify_stage["stdout_preview"])
+            rail_receipt = receipt_summary["receipts"][1]
+            rail_receipt["profile"] = custom_profile
+            rail_receipt["message_type"] = hidden_message_type
+            verify_stage["stdout_preview"] = (
+                json.dumps(digest_receipt_summary(receipt_summary), sort_keys=True)
+                + "\n"
+            )
+            canary_path = write_canary(root, digest_summary(canary))
+
+            trust_path = write_trust_summary(root / "trust")
+            trust = json.loads(trust_path.read_text(encoding="utf-8"))
+            bundle = trust["bundles"][0]
+            bundle["profile_id"] = custom_profile
+            bundle["rail"] = hidden_rail
+            bundle["profile_overrides"]["id"] = custom_profile
+            bundle["profile_overrides"]["rail"] = hidden_rail
+            refresh_profile_json_sha256(trust)
+            custom_trust_path = write_json(
+                root / "custom-profile-wrong-rail-trust.summary.json",
+                digest_summary(trust),
+            )
+
+            rc, stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(canary_path),
+                    "--trust-summary",
+                    str(custom_trust_path),
+                    "--allow-canary-stage-receipts-only",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "canary_summaries[0].receipt_summary.receipts[1].message_type "
+                "has no matching trust profile rail coverage",
+                stderr,
+            )
+            self.assertNotIn(custom_profile, stderr)
+            self.assertNotIn(hidden_message_type, stderr)
+            self.assertNotIn(hidden_rail, stderr)
 
     def test_custom_canary_profile_id_without_trust_profile_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -4615,6 +5463,48 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertIn("receipt_summary.receipts[0].anchor_path duplicates", stderr)
             self.assertNotIn("latest.notary.json", stderr)
             self.assertNotIn("rail-status.xml", stderr)
+
+    def test_receipt_source_material_cannot_be_reused_within_summary(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            receipt_summary = json.loads(receipt_stdout())
+            base_receipts = json.loads(json.dumps(receipt_summary["receipts"]))
+            for offset, receipt in enumerate(base_receipts):
+                copied = json.loads(json.dumps(receipt))
+                copied["path"] = (
+                    f"/ops/iso/relabelled-within/"
+                    f"{copied['receipt_kind']}.{offset}.receipt.json"
+                )
+                copied["receipt_sha256"] = f"{offset + 900:064x}"
+                copied["response_body_sha256"] = f"{offset + 950:064x}"
+                receipt_summary["receipts"].append(copied)
+            receipt_summary["verified_receipts"] = len(receipt_summary["receipts"])
+            body = valid_canary_summary()
+            body["stages"][2]["stdout_preview"] = (
+                json.dumps(
+                    digest_receipt_summary(receipt_summary),
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            body.pop("summary_sha256")
+            canary_path = write_canary(root, digest_summary(body))
+            trust_path = write_trust_summary(root / "trust")
+
+            rc, _stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(canary_path),
+                    "--trust-summary",
+                    str(trust_path),
+                    "--allow-canary-stage-receipts-only",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("stdout_preview.receipts[3].source_path duplicates", stderr)
+            self.assertNotIn("latest.notary.json", stderr)
+            self.assertNotIn("rail-drop-1.xml", stderr)
 
     def test_cross_canary_source_material_replay_rejects_each_compact_field(self):
         source_fields = (
@@ -10485,6 +11375,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                         trust["bundles"].append(
                             {
                                 **trust["bundles"][0],
+                                "path": "/ops/iso/trust/fedwire-funds.bundle.json",
                                 "profile_id": "fedwire-funds",
                                 "rail": "fedwire-funds",
                                 "profile_overrides": {

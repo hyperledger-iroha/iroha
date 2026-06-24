@@ -838,6 +838,83 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             self.assertNotIn("does not exist", stderr)
             self.assertFalse((root / "fixtures").exists())
 
+    def test_receipt_dir_cannot_reuse_export_dir_before_export_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            export_dir = root / "missing-export"
+
+            rc, stdout, stderr = run_main(
+                [
+                    "--export-dir",
+                    str(export_dir),
+                    "--receipt-dir",
+                    str(export_dir),
+                    "--endpoint",
+                    "https://notary.example.internal",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("receipt_dir must not reuse export_dir path", stderr)
+            self.assertNotIn("does not exist", stderr)
+
+    def test_receipt_dir_cannot_symlink_to_export_dir_before_export_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            export_dir = root / "export"
+            export_dir.mkdir()
+            receipt_dir = root / "receipt-link"
+            try:
+                receipt_dir.symlink_to(export_dir, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            rc, stdout, stderr = run_main(
+                [
+                    "--export-dir",
+                    str(export_dir),
+                    "--receipt-dir",
+                    str(receipt_dir),
+                    "--endpoint",
+                    "https://notary.example.internal",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("receipt_dir must not reuse export_dir path", stderr)
+            self.assertNotIn("latest.notary.json", stderr)
+
+    def test_symlinked_receipt_dir_ancestor_is_rejected_before_export_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            target_dir = root / "receipt-target"
+            target_dir.mkdir()
+            ancestor = root / "receipt-ancestor-link"
+            try:
+                ancestor.symlink_to(target_dir, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            receipt_dir = ancestor / "nested" / "receipts"
+
+            rc, stdout, stderr = run_main(
+                [
+                    "--export-dir",
+                    str(root / "missing-export"),
+                    "--receipt-dir",
+                    str(receipt_dir),
+                    "--endpoint",
+                    "https://notary.example.internal",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("receipt_dir must not be a symlink", stderr)
+            self.assertNotIn("does not exist", stderr)
+            self.assertFalse((target_dir / "nested").exists())
+
     def test_local_path_validators_reject_percent_encoded_smuggling(self):
         overlong_path = "out/" + ("a" * (ADAPTER.MAX_LOCAL_PATH_CHARS + 1))
         cases = (
@@ -1803,10 +1880,13 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                     self.assertEqual(requests, [])
 
     def test_bearer_token_file_adds_authorization_without_persisting_token(self):
-        with tempfile.TemporaryDirectory() as raw_export:
-            export_dir = Path(raw_export)
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            export_dir = root / "export"
             write_export(export_dir)
-            token_file = export_dir / "token.txt"
+            token_dir = root / "runtime"
+            token_dir.mkdir()
+            token_file = token_dir / "token.txt"
             token_file.write_text("notary-token-123", encoding="utf-8")
             with capture_server() as (endpoint, requests):
                 rc, _stdout, stderr = run_main(
@@ -1851,12 +1931,15 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 "exceeds",
             ),
         ]
-        with tempfile.TemporaryDirectory() as raw_export:
-            export_dir = Path(raw_export)
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            export_dir = root / "export"
             write_export(export_dir)
+            token_dir = root / "runtime"
+            token_dir.mkdir()
             for name, token_bytes, message in cases:
                 with self.subTest(name=name):
-                    token_file = export_dir / f"{name}.token"
+                    token_file = token_dir / f"{name}.token"
                     token_file.write_bytes(token_bytes)
                     with capture_server() as (endpoint, requests):
                         rc, _stdout, stderr = run_main(
@@ -1930,17 +2013,20 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                     self.assertNotIn(str(token_file), error)
 
     def test_non_regular_bearer_token_files_are_rejected_before_network_delivery(self):
-        with tempfile.TemporaryDirectory() as raw_export:
-            export_dir = Path(raw_export)
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            export_dir = root / "export"
             write_export(export_dir)
-            token_target = export_dir / "token-target.txt"
+            token_dir = root / "runtime"
+            token_dir.mkdir()
+            token_target = token_dir / "token-target.txt"
             token_target.write_text("notary-token-123", encoding="utf-8")
-            symlink_token = export_dir / "symlink-token.txt"
+            symlink_token = token_dir / "symlink-token.txt"
             try:
                 symlink_token.symlink_to(token_target)
             except OSError as error:
                 self.skipTest(f"symlink creation unavailable: {error}")
-            directory_token = export_dir / "token-dir"
+            directory_token = token_dir / "token-dir"
             directory_token.mkdir()
             cases = [
                 (symlink_token, "must not be a symlink"),
@@ -1966,14 +2052,15 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                     self.assertIn(message, stderr)
 
     def test_bearer_token_file_symlinked_ancestor_is_rejected_before_network_delivery(self):
-        with tempfile.TemporaryDirectory() as raw_export:
-            export_dir = Path(raw_export)
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            export_dir = root / "export"
             write_export(export_dir)
-            target_dir = export_dir / "token-target"
+            target_dir = root / "token-target"
             target_dir.mkdir()
             token_target = target_dir / "token.txt"
             token_target.write_text("notary-token-123", encoding="utf-8")
-            ancestor = export_dir / "token-ancestor-link"
+            ancestor = root / "token-ancestor-link"
             try:
                 ancestor.symlink_to(target_dir, target_is_directory=True)
             except OSError as error:
@@ -1996,6 +2083,64 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
             self.assertIn("must not be a symlink", stderr)
+
+    def test_bearer_token_file_cannot_overlap_export_dir_before_loading(self):
+        cases = (
+            (
+                "same-as-export",
+                lambda root, export_dir: export_dir,
+                "notary-token-source-same",
+            ),
+            (
+                "inside-export",
+                lambda root, export_dir: export_dir / "runtime-auth.txt",
+                "notary-token-source-nested",
+            ),
+            (
+                "ancestor-of-export",
+                lambda root, export_dir: export_dir.parent,
+                "notary-token-source-ancestor",
+            ),
+        )
+        for name, token_path_for, hidden in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    if name == "ancestor-of-export":
+                        source_root = root / "notary-token-source-ancestor"
+                        export_dir = source_root / "export"
+                    else:
+                        export_dir = root / "export"
+                    write_export(export_dir)
+                    token_file = token_path_for(root, export_dir)
+                    if token_file.suffix:
+                        token_file.write_text("notary-token-123\n", encoding="utf-8")
+                    receipt_dir = root / "receipts"
+
+                    with capture_server() as (endpoint, requests):
+                        rc, stdout, stderr = run_main(
+                            [
+                                "--export-dir",
+                                str(export_dir),
+                                "--endpoint",
+                                endpoint,
+                                "--allow-insecure-http",
+                                "--bearer-token-file",
+                                str(token_file),
+                                "--receipt-dir",
+                                str(receipt_dir),
+                            ]
+                        )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertEqual(requests, [])
+                    self.assertIn(
+                        "bearer_token_file must not overlap export_dir path",
+                        stderr,
+                    )
+                    self.assertNotIn("notary-token-123", stderr)
+                    self.assertNotIn(hidden, stderr)
 
     def test_input_cli_paths_reject_raw_smuggling_before_read(self):
         cases = (
@@ -2138,6 +2283,142 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             root = Path(raw_root)
             with self.assertRaisesRegex(ADAPTER.AdapterError, "provide --export-dir"):
                 ADAPTER.run(args_for(root, export_dir=None))
+            args = args_for(root)
+            delattr(args, "export_dir")
+            with self.assertRaisesRegex(ADAPTER.AdapterError, "provide --export-dir"):
+                ADAPTER.run(args)
+
+    def test_direct_run_scalar_paths_must_be_paths_before_export_loading(self):
+        cases = (
+            ("export", "export_dir", object(), "export_dir"),
+            ("receipt", "receipt_dir", object(), "receipt_dir"),
+            ("token", "bearer_token_file", object(), "bearer_token_file"),
+        )
+        for name, field, value, label in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        export_dir=root / "missing-export",
+                        endpoint=[],
+                        receipt_dir=root / "receipts",
+                        bearer_token_file=None,
+                        timeout_secs=1.0,
+                        response_limit_bytes=1024,
+                        allow_insecure_http=False,
+                        allow_missing_record_sources=False,
+                        all=False,
+                        dry_run=True,
+                    )
+                    setattr(args, field, value)
+
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER.run(args)
+
+                    message = str(caught.exception)
+                    self.assertIn(f"{label} must be a path", message)
+                    self.assertNotIn("does not exist", message)
+                    self.assertNotIn(str(root), message)
+
+    def test_direct_run_policy_flags_must_be_booleans_before_export_loading(self):
+        cases = (
+            ("dry_run", "--dry-run", "true"),
+            ("all", "--all", 1),
+            ("allow_insecure_http", "--allow-insecure-http", None),
+            ("allow_missing_record_sources", "--allow-missing-record-sources", []),
+        )
+        for attr, label, value in cases:
+            with self.subTest(flag=label):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        export_dir=root / "missing-export",
+                        endpoint=[],
+                        receipt_dir=root / "receipts",
+                        bearer_token_file=None,
+                        timeout_secs=1.0,
+                        response_limit_bytes=1024,
+                        allow_insecure_http=False,
+                        allow_missing_record_sources=False,
+                        all=False,
+                        dry_run=True,
+                    )
+                    setattr(args, attr, value)
+
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER.run(args)
+
+                    message = str(caught.exception)
+                    self.assertIn(f"{label} must be a boolean", message)
+                    self.assertNotIn("does not exist", message)
+                    self.assertNotIn(str(root), message)
+
+    def test_direct_run_numeric_limits_must_exist_before_export_loading(self):
+        cases = (
+            ("timeout_secs", "--timeout-secs must be a positive finite number"),
+            ("response_limit_bytes", "--response-limit-bytes must be a positive integer"),
+        )
+        for field, expected in cases:
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        export_dir=root / "missing-export",
+                        endpoint=[],
+                        receipt_dir=root / "receipts",
+                        bearer_token_file=None,
+                        timeout_secs=1.0,
+                        response_limit_bytes=1024,
+                        allow_insecure_http=False,
+                        allow_missing_record_sources=False,
+                        all=False,
+                        dry_run=True,
+                    )
+                    delattr(args, field)
+
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER.run(args)
+
+                    message = str(caught.exception)
+                    self.assertIn(expected, message)
+                    self.assertNotIn("does not exist", message)
+                    self.assertNotIn(str(root), message)
+
+    def test_direct_run_endpoints_must_be_repeatable_string_list_before_export_loading(self):
+        cases = (
+            ("bare string", "https://notary.example.invalid", "--endpoint"),
+            ("bad entry", [object()], "--endpoint[0]"),
+        )
+        for name, endpoint, label in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        export_dir=root / "missing-export",
+                        endpoint=endpoint,
+                        receipt_dir=root / "receipts",
+                        bearer_token_file=None,
+                        timeout_secs=1.0,
+                        response_limit_bytes=1024,
+                        allow_insecure_http=False,
+                        allow_missing_record_sources=False,
+                        all=False,
+                        dry_run=True,
+                    )
+
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER.run(args)
+
+                    message = str(caught.exception)
+                    if name == "bare string":
+                        self.assertIn(
+                            f"{label} must be a repeatable string list",
+                            message,
+                        )
+                    else:
+                        self.assertIn(f"{label} must be a string", message)
+                    self.assertNotIn("does not exist", message)
+                    self.assertNotIn(str(root), message)
 
     def test_numeric_cli_limits_reject_nonpositive_and_nonfinite_before_network_delivery(self):
         cases = (
@@ -2198,6 +2479,133 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             self.assertIn("must be a directory", stderr)
             self.assertNotIn(str(receipt_file), stderr)
             self.assertNotIn(receipt_file.name, stderr)
+
+    def test_receipt_dir_cannot_reuse_notary_source_paths_before_loading(self):
+        cases = (
+            (
+                "latest",
+                lambda export_dir: export_dir / ADAPTER.LATEST_ANCHOR_FILE,
+                [],
+                "receipt_dir must not overlap export_dir.latest_anchor",
+            ),
+            (
+                "anchors",
+                lambda export_dir: export_dir / ADAPTER.ANCHOR_DIR,
+                ["--all"],
+                "receipt_dir must not overlap export_dir.anchors",
+            ),
+            (
+                "index",
+                lambda export_dir: export_dir / ADAPTER.INDEX_FILE,
+                [],
+                "receipt_dir must not overlap export_dir.index",
+            ),
+        )
+        for name, receipt_dir_for, extra_args, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_export:
+                    export_dir = Path(raw_export)
+                    write_export(export_dir)
+                    if name == "latest":
+                        (export_dir / ADAPTER.LATEST_ANCHOR_FILE).write_text(
+                            "{",
+                            encoding="utf-8",
+                        )
+                    elif name == "index":
+                        (export_dir / ADAPTER.INDEX_FILE).write_text(
+                            "{",
+                            encoding="utf-8",
+                        )
+                    receipt_dir = receipt_dir_for(export_dir)
+
+                    with capture_server() as (endpoint, requests):
+                        rc, stdout, stderr = run_main(
+                            [
+                                "--export-dir",
+                                str(export_dir),
+                                "--endpoint",
+                                endpoint,
+                                "--allow-insecure-http",
+                                "--receipt-dir",
+                                str(receipt_dir),
+                                *extra_args,
+                            ]
+                        )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertEqual(requests, [])
+                    self.assertIn(message, stderr)
+                    self.assertNotIn("is not valid JSON", stderr)
+                    self.assertNotIn(str(receipt_dir), stderr)
+
+    def test_receipt_dir_cannot_reuse_bearer_token_file_before_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            export_dir = root / "export"
+            write_export(export_dir)
+            bearer_token_file = root / "adapter-auth.txt"
+            bearer_token_file.write_text("notary-token-123\n", encoding="utf-8")
+
+            with capture_server() as (endpoint, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                        "--bearer-token-file",
+                        str(bearer_token_file),
+                        "--receipt-dir",
+                        str(bearer_token_file),
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertEqual(requests, [])
+            self.assertIn("receipt_dir must not overlap bearer_token_file path", stderr)
+            self.assertNotIn("notary-token-123", stderr)
+            self.assertEqual(
+                bearer_token_file.read_text(encoding="utf-8"),
+                "notary-token-123\n",
+            )
+
+    def test_receipt_dir_cannot_contain_bearer_token_file_before_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            export_dir = root / "export"
+            write_export(export_dir)
+            token_dir = root / "runtime-auth"
+            token_dir.mkdir()
+            bearer_token_file = token_dir / "adapter-auth.txt"
+            bearer_token_file.write_text("notary-token-123\n", encoding="utf-8")
+
+            with capture_server() as (endpoint, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                        "--bearer-token-file",
+                        str(bearer_token_file),
+                        "--receipt-dir",
+                        str(token_dir),
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertEqual(requests, [])
+            self.assertIn("receipt_dir must not overlap bearer_token_file path", stderr)
+            self.assertNotIn("notary-token-123", stderr)
+            self.assertEqual(
+                bearer_token_file.read_text(encoding="utf-8"),
+                "notary-token-123\n",
+            )
 
     def test_symlinked_receipt_output_paths_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_export:

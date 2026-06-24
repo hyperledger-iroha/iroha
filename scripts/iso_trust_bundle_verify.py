@@ -538,20 +538,70 @@ def _reject_repository_output_path(path: Path, label: str) -> None:
         )
 
 
-def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+def _same_existing_file(left: Path, right: Path) -> bool:
+    try:
+        left_stat = left.stat()
+        right_stat = right.stat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+    return os.path.samestat(left_stat, right_stat)
+
+
+def _reject_output_input_alias(
+    output_path: Path | None,
+    output_label: str,
+    inputs: tuple[tuple[str, Path], ...],
+) -> None:
+    if output_path is None:
+        return
+    for input_label, input_path in inputs:
+        if str(output_path) == str(input_path) or _same_existing_file(
+            output_path,
+            input_path,
+        ):
+            raise TrustBundleError(
+                f"{output_label} must not reuse {input_label} path"
+            )
+
+
+def _reject_output_output_alias(
+    left: Path | None,
+    left_label: str,
+    right: Path | None,
+    right_label: str,
+) -> None:
+    if left is None or right is None:
+        return
+    if str(left) == str(right) or _same_existing_file(left, right):
+        raise TrustBundleError(f"{left_label} and {right_label} must be different paths")
+
+
+def _ensure_text_output_target(
+    path: Path,
+    *,
+    display_label: str | None = None,
+    create_parent: bool = True,
+) -> None:
     label = display_label if display_label is not None else "output path"
     _reject_output_path_smuggling(path, label)
     _reject_repository_output_path(path, label)
-    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-    except FileExistsError as error:
+        _reject_symlinked_existing_ancestors(path.parent, display_label=label)
+    except NotADirectoryError as error:
         raise TrustBundleError(f"{label} must be a directory") from error
-    parent_mode = path.parent.lstat().st_mode
-    if stat.S_ISLNK(parent_mode):
-        raise TrustBundleError(f"{label} must not be a symlink")
-    if not stat.S_ISDIR(parent_mode):
-        raise TrustBundleError(f"{label} must be a directory")
+    if create_parent:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except FileExistsError as error:
+            raise TrustBundleError(f"{label} must be a directory") from error
+    if path.parent.exists() or path.parent.is_symlink():
+        parent_mode = path.parent.lstat().st_mode
+        if stat.S_ISLNK(parent_mode):
+            raise TrustBundleError(f"{label} must not be a symlink")
+        if not stat.S_ISDIR(parent_mode):
+            raise TrustBundleError(f"{label} must be a directory")
     if path.exists() or path.is_symlink():
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode):
@@ -560,6 +610,11 @@ def _write_text_output(path: Path, text: str, *, display_label: str | None = Non
             raise TrustBundleError(f"{label} must be a regular file")
         if metadata.st_nlink > 1:
             raise TrustBundleError(f"{label} must not be hard-linked")
+
+
+def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else "output path"
+    _ensure_text_output_target(path, display_label=label)
     parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -943,6 +998,48 @@ def _optional_positive_cli_int(value: Any, label: str) -> int | None:
     if parsed <= 0:
         raise TrustBundleError(f"{label} must be a positive integer")
     return parsed
+
+
+def _required_cli_bool(value: Any, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise TrustBundleError(f"{label} must be a boolean")
+    return value
+
+
+def _optional_cli_path(value: Any, label: str) -> Path | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        raise TrustBundleError(f"{label} must be a path")
+    try:
+        return Path(value)
+    except TypeError as error:
+        raise TrustBundleError(f"{label} must be a path") from error
+
+
+def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+        raise TrustBundleError(f"{label} must be a repeatable path list")
+    paths: list[Path] = []
+    for offset, entry in enumerate(value):
+        if isinstance(entry, bytes):
+            raise TrustBundleError(f"{label}[{offset}] must be a path")
+        try:
+            paths.append(Path(entry))
+        except TypeError as error:
+            raise TrustBundleError(f"{label}[{offset}] must be a path") from error
+    return paths
+
+
+def _require_policy_booleans(args: argparse.Namespace) -> None:
+    for attr, label in (
+        ("allow_record_only", "--allow-record-only"),
+        ("allow_insecure_source_url", "--allow-insecure-source-url"),
+        ("allow_synthetic_der", "--allow-synthetic-der"),
+    ):
+        setattr(args, attr, _required_cli_bool(getattr(args, attr, None), label))
 
 
 def _required_bool(bundle: dict[str, Any], key: str, label: str) -> bool:
@@ -1959,32 +2056,55 @@ def verify_bundle(
 
 
 def run(args: argparse.Namespace) -> int:
+    args.summary_out = _optional_cli_path(getattr(args, "summary_out", None), "summary_out")
+    args.emit_profile_json = _optional_cli_path(
+        getattr(args, "emit_profile_json", None),
+        "emit_profile_json",
+    )
     if args.summary_out is not None:
         _reject_output_path_smuggling(args.summary_out, "summary_out")
         _reject_repository_output_path(args.summary_out, "summary_out")
     if args.emit_profile_json is not None:
         _reject_output_path_smuggling(args.emit_profile_json, "emit_profile_json")
         _reject_repository_output_path(args.emit_profile_json, "emit_profile_json")
-    bundle_paths = list(args.bundle or [])
+    bundle_paths = _required_cli_path_sequence(getattr(args, "bundle", None), "--bundle")
     for offset, path in enumerate(bundle_paths):
         _reject_output_path_smuggling(path, f"--bundle[{offset}]")
+    _require_policy_booleans(args)
     if not bundle_paths:
         raise TrustBundleError("provide at least one --bundle")
     args.max_source_age_days = _optional_positive_cli_int(
-        args.max_source_age_days,
+        getattr(args, "max_source_age_days", None),
         "--max-source-age-days",
     )
     if args.allow_synthetic_der and args.emit_profile_json is not None:
         raise TrustBundleError(
             "--allow-synthetic-der cannot be combined with --emit-profile-json; "
             "replace template DER with real rail material before emitting profile overrides"
+    )
+    bundle_inputs = tuple(
+        (f"--bundle[{offset}]", path) for offset, path in enumerate(bundle_paths)
+    )
+    _reject_output_output_alias(
+        args.summary_out,
+        "--summary-out",
+        args.emit_profile_json,
+        "--emit-profile-json",
+    )
+    _reject_output_input_alias(args.summary_out, "summary_out", bundle_inputs)
+    _reject_output_input_alias(args.emit_profile_json, "emit_profile_json", bundle_inputs)
+    if args.summary_out is not None:
+        _ensure_text_output_target(
+            args.summary_out,
+            display_label="summary_out",
+            create_parent=False,
         )
-    if (
-        args.summary_out is not None
-        and args.emit_profile_json is not None
-        and args.summary_out.resolve() == args.emit_profile_json.resolve()
-    ):
-        raise TrustBundleError("--summary-out and --emit-profile-json must be different paths")
+    if args.emit_profile_json is not None:
+        _ensure_text_output_target(
+            args.emit_profile_json,
+            display_label="emit_profile_json",
+            create_parent=False,
+        )
     _reject_duplicate_paths([path.resolve() for path in bundle_paths], "--bundle")
     summaries = []
     for offset, path in enumerate(bundle_paths):

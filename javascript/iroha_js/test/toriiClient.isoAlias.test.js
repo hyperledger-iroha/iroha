@@ -270,3 +270,38 @@ test("lookupAliasesByAccount validates options before issuing requests", async (
   );
   assert.equal(fetchCalls, 0);
 });
+
+test("lookupRetailRecipient posts canonical account and alias payloads", async () => {
+  let lastRequest = null;
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl: async (input, init) => {
+      lastRequest = { input, init };
+      const parsed = JSON.parse(init.body);
+      assert.equal(parsed.account_id, ToriiClient._requireAccountId(VALID_ACCOUNT_ID));
+      assert.equal(parsed.alias_fqn, "payee@hbl.sbp");
+      return jsonResponse(200, {
+        resolved: true,
+        account_id: VALID_ACCOUNT_ID,
+        alias_fqn: "payee@hbl.sbp",
+        fi_id: "hbl.sbp",
+        full_name: "Ayesha Khan",
+      });
+    },
+  });
+
+  const result = await client.lookupRetailRecipient({
+    accountId: VALID_ACCOUNT_ID,
+    aliasFqn: "payee@hbl.sbp",
+  });
+
+  assert.deepEqual(result, {
+    resolved: true,
+    account_id: ToriiClient._requireAccountId(VALID_ACCOUNT_ID),
+    alias_fqn: "payee@hbl.sbp",
+    fi_id: "hbl.sbp",
+    full_name: "Ayesha Khan",
+  });
+  const url = new URL(lastRequest.input);
+  assert.equal(url.pathname, "/v1/retail/recipients/lookup");
+  assert.equal(lastRequest.init.method, "POST");
+});

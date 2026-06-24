@@ -63,6 +63,16 @@ EXTRA_D2D_TRANSCRIPTS: tuple[tuple[str, Path], ...] = (
 Runner = Callable[..., subprocess.CompletedProcess[Any]]
 
 
+def _timeout_arg(timeout_seconds: int) -> int | None:
+    return None if timeout_seconds == 0 else timeout_seconds
+
+
+def _timeout_error(label: str, timeout_seconds: int) -> str:
+    if timeout_seconds == 0:
+        return f"{label} timed out"
+    return f"{label} timed out after {timeout_seconds} seconds"
+
+
 def _json_dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
 
@@ -544,11 +554,11 @@ def _run_step(
             list(command),
             cwd=str(cwd) if cwd is not None else None,
             env=env,
-            timeout=timeout_seconds,
+            timeout=_timeout_arg(timeout_seconds),
             check=False,
         )
     except subprocess.TimeoutExpired:
-        return [f"{label} timed out after {timeout_seconds} seconds"]
+        return [_timeout_error(label, timeout_seconds)]
     except OSError:
         return [f"{label} could not be started"]
     if result.returncode != 0:
@@ -869,14 +879,14 @@ def _run_adb_devices_diagnostic(
             command,
             cwd=str(args.repo_root),
             env=env,
-            timeout=args.adb_timeout_seconds,
+            timeout=_timeout_arg(args.adb_timeout_seconds),
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
     except subprocess.TimeoutExpired:
-        return f"{label} timed out after {args.adb_timeout_seconds} seconds"
+        return _timeout_error(label, args.adb_timeout_seconds)
     except OSError:
         return f"{label} could not be started"
     if result.returncode != 0:
@@ -907,14 +917,14 @@ def _run_adb_visibility_preflight(
             command,
             cwd=str(args.repo_root),
             env=env,
-            timeout=args.adb_timeout_seconds,
+            timeout=_timeout_arg(args.adb_timeout_seconds),
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
     except subprocess.TimeoutExpired:
-        return [f"{label} timed out after {args.adb_timeout_seconds} seconds"]
+        return [_timeout_error(label, args.adb_timeout_seconds)]
     except OSError:
         return [f"{label} could not be started"]
     if result.returncode != 0:
@@ -960,14 +970,14 @@ def _read_adb_identity_property(
             command,
             cwd=str(args.repo_root),
             env=env,
-            timeout=args.adb_timeout_seconds,
+            timeout=_timeout_arg(args.adb_timeout_seconds),
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
     except subprocess.TimeoutExpired:
-        return None, [f"{label} timed out after {args.adb_timeout_seconds} seconds"]
+        return None, [_timeout_error(label, args.adb_timeout_seconds)]
     except OSError:
         return None, [f"{label} could not be started"]
     if result.returncode != 0:
@@ -1252,8 +1262,8 @@ def _validate_preflight(args: argparse.Namespace) -> list[str]:
         (args.adb_timeout_seconds, "--adb-timeout-seconds"),
         (args.helper_timeout_seconds, "--helper-timeout-seconds"),
     ):
-        if seconds <= 0:
-            errors.append(f"{label} must be positive")
+        if seconds < 0:
+            errors.append(f"{label} must be non-negative")
     return errors
 
 
@@ -1661,10 +1671,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--skip-build-install", action="store_true")
     parser.add_argument("--skip-instrumentation", action="store_true")
-    parser.add_argument("--gradle-timeout-seconds", type=int, default=1200)
-    parser.add_argument("--instrumentation-timeout-seconds", type=int, default=300)
-    parser.add_argument("--adb-timeout-seconds", type=int, default=120)
-    parser.add_argument("--helper-timeout-seconds", type=int, default=300)
+    parser.add_argument(
+        "--gradle-timeout-seconds",
+        type=int,
+        default=1200,
+        help="Gradle subprocess timeout in seconds; 0 disables the timeout.",
+    )
+    parser.add_argument(
+        "--instrumentation-timeout-seconds",
+        type=int,
+        default=300,
+        help="Instrumentation subprocess timeout in seconds; 0 disables the timeout.",
+    )
+    parser.add_argument(
+        "--adb-timeout-seconds",
+        type=int,
+        default=120,
+        help="ADB subprocess timeout in seconds; 0 disables the timeout.",
+    )
+    parser.add_argument(
+        "--helper-timeout-seconds",
+        type=int,
+        default=300,
+        help="Helper subprocess timeout in seconds; 0 disables the timeout.",
+    )
     return parser.parse_args(argv)
 
 

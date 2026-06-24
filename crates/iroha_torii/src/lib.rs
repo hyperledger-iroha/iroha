@@ -1593,6 +1593,8 @@ struct AppState {
     torii_proxy_bridge_signer: KeyPair,
     #[cfg(feature = "app_api")]
     public_dataspace_upstreams: Arc<BTreeMap<DataSpaceId, String>>,
+    #[cfg(feature = "app_api")]
+    recipient_lookup: Arc<iroha_config::parameters::actual::ToriiRecipientLookup>,
     da_ingest: iroha_config::parameters::actual::DaIngest,
     da_spooler: Option<Arc<da::DaSpooler>>,
     sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
@@ -34327,6 +34329,240 @@ async fn handler_alias_lookup_by_account(
 }
 
 #[cfg(feature = "app_api")]
+fn recipient_lookup_normalize_fi_id(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "hbl.sbp" => Some("hbl.sbp"),
+        "ubl.sbp" => Some("ubl.sbp"),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn recipient_lookup_fi_id_from_alias(alias_fqn: &str) -> Option<&'static str> {
+    alias_fqn
+        .rsplit_once('@')
+        .and_then(|(_, scope)| recipient_lookup_normalize_fi_id(scope))
+}
+
+#[cfg(feature = "app_api")]
+fn recipient_lookup_response(
+    resolved: bool,
+    account_id: String,
+    alias_fqn: String,
+    fi_id: String,
+    full_name: Option<String>,
+) -> Value {
+    let mut object = Map::new();
+    object.insert("resolved".to_owned(), Value::Bool(resolved));
+    object.insert("account_id".to_owned(), Value::String(account_id));
+    object.insert("alias_fqn".to_owned(), Value::String(alias_fqn));
+    object.insert("fi_id".to_owned(), Value::String(fi_id));
+    if resolved {
+        if let Some(full_name) = full_name {
+            object.insert("full_name".to_owned(), Value::String(full_name));
+        }
+    }
+    Value::Object(object)
+}
+
+#[cfg(feature = "app_api")]
+fn recipient_lookup_unresolved_response(
+    account_id: &str,
+    alias_fqn: &str,
+    fi_id: &str,
+) -> Result<AxResponse, Error> {
+    alias_json_response(
+        StatusCode::OK,
+        recipient_lookup_response(
+            false,
+            account_id.to_owned(),
+            alias_fqn.to_owned(),
+            fi_id.to_owned(),
+            None,
+        ),
+    )
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_retail_recipient_lookup(
+    State(app): State<SharedAppState>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    let request: routing::RetailRecipientLookupRequestDto = norito::json::from_slice(body.as_ref())
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+            ))
+        })?;
+    if request.account_id.trim().is_empty() {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_recipient_lookup",
+            "account_id must not be empty",
+        ));
+    }
+    if request.alias_fqn.trim().is_empty() {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_recipient_lookup",
+            "alias_fqn must not be empty",
+        ));
+    }
+
+    let (account_id, canonical_account_id, _) = AccountId::parse_encoded(request.account_id.trim())
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                    "invalid account_id: {err}"
+                )),
+            ))
+        })?
+        .into_parts();
+    let nexus = app.state.nexus_snapshot();
+    let (canonical_alias, alias_label) = parse_account_alias_label_with_catalog(
+        request.alias_fqn.as_str(),
+        &nexus.dataspace_catalog,
+    )?;
+    let Some(fi_id) = recipient_lookup_fi_id_from_alias(&canonical_alias) else {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "unsupported_recipient_lookup_fi",
+            "recipient lookup is only available for hbl.sbp and ubl.sbp aliases",
+        ));
+    };
+
+    match resolve_alias_label_on_chain(&app, canonical_alias.clone(), &alias_label)? {
+        Some((_, bound_account_id, _)) if bound_account_id == account_id => {}
+        _ => {
+            return recipient_lookup_unresolved_response(
+                &canonical_account_id,
+                &canonical_alias,
+                fi_id,
+            );
+        }
+    }
+
+    let Some(route) = app
+        .recipient_lookup
+        .routes
+        .iter()
+        .find(|route| route.fi_id == fi_id)
+        .cloned()
+    else {
+        return Ok(torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "recipient_lookup_not_configured",
+            format!("recipient lookup route is not configured for {fi_id}"),
+        ));
+    };
+
+    let endpoint = format!(
+        "{}/v1/retail/recipients/lookup",
+        route.base_url.as_str().trim_end_matches('/')
+    );
+    let body = norito::json::to_vec(&routing::RetailRecipientLookupRequestDto {
+        account_id: canonical_account_id.clone(),
+        alias_fqn: canonical_alias.clone(),
+    })
+    .map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            err.to_string(),
+        ))
+    })?;
+    let upstream = match reqwest::Client::new()
+        .post(endpoint)
+        .header("accept", "application/json")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", route.bearer_token))
+        .body(body)
+        .timeout(app.recipient_lookup.request_timeout)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(err) => {
+            let status = if err.is_timeout() {
+                StatusCode::GATEWAY_TIMEOUT
+            } else {
+                StatusCode::SERVICE_UNAVAILABLE
+            };
+            return Ok(torii_proxy_error_response(
+                status,
+                "recipient_lookup_unavailable",
+                format!("recipient lookup upstream request failed: {err}"),
+            ));
+        }
+    };
+    if !upstream.status().is_success() {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_GATEWAY,
+            "recipient_lookup_rejected",
+            format!(
+                "recipient lookup upstream returned HTTP {}",
+                upstream.status().as_u16()
+            ),
+        ));
+    }
+    let upstream_body = match upstream.bytes().await {
+        Ok(body) => body,
+        Err(err) => {
+            return Ok(torii_proxy_error_response(
+                StatusCode::BAD_GATEWAY,
+                "recipient_lookup_invalid_response",
+                format!("recipient lookup upstream response body failed: {err}"),
+            ));
+        }
+    };
+    let upstream_payload: Value = match norito::json::from_slice(upstream_body.as_ref()) {
+        Ok(payload) => payload,
+        Err(err) => {
+            return Ok(torii_proxy_error_response(
+                StatusCode::BAD_GATEWAY,
+                "recipient_lookup_invalid_response",
+                format!("recipient lookup upstream response was not valid JSON: {err}"),
+            ));
+        }
+    };
+    let Some(upstream_object) = upstream_payload.as_object() else {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_GATEWAY,
+            "recipient_lookup_invalid_response",
+            "recipient lookup upstream response was not a JSON object",
+        ));
+    };
+
+    let full_name = upstream_object
+        .get("full_name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .map(str::to_owned)
+        .filter(|name| !name.is_empty());
+    let confirmed_fi_id = upstream_object
+        .get("fi_id")
+        .and_then(Value::as_str)
+        .and_then(recipient_lookup_normalize_fi_id);
+    let confirmed = upstream_object.get("resolved") == Some(&Value::Bool(true))
+        && upstream_object.get("account_id").and_then(Value::as_str)
+            == Some(canonical_account_id.as_str())
+        && upstream_object
+            .get("alias_fqn")
+            .and_then(Value::as_str)
+            .is_some_and(|alias| alias.eq_ignore_ascii_case(&canonical_alias))
+        && confirmed_fi_id == Some(fi_id)
+        && full_name.is_some();
+    alias_json_response(
+        StatusCode::OK,
+        recipient_lookup_response(
+            confirmed,
+            canonical_account_id,
+            canonical_alias,
+            fi_id.to_owned(),
+            full_name,
+        ),
+    )
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_asset_alias_resolve(
     State(app): State<SharedAppState>,
     NoritoJson(request): NoritoJson<routing::AssetAliasResolveRequestDto>,
@@ -35839,6 +36075,8 @@ pub struct Torii {
     torii_proxy_bridge_signer: KeyPair,
     #[cfg(feature = "app_api")]
     public_dataspace_upstreams: Arc<BTreeMap<DataSpaceId, String>>,
+    #[cfg(feature = "app_api")]
+    recipient_lookup: Arc<iroha_config::parameters::actual::ToriiRecipientLookup>,
     da_ingest: iroha_config::parameters::actual::DaIngest,
     #[cfg(feature = "app_api")]
     sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
@@ -36362,6 +36600,10 @@ impl Torii {
                 .route(
                     "/v1/aliases/by_account",
                     post(handler_alias_lookup_by_account),
+                )
+                .route(
+                    "/v1/retail/recipients/lookup",
+                    post(handler_retail_recipient_lookup),
                 )
                 .route(
                     "/v1/assets/aliases/resolve",
@@ -38963,6 +39205,8 @@ impl Torii {
             Arc::new(load_tx_history_access_policy(config.tx_history.as_ref()));
         #[cfg(feature = "app_api")]
         let public_dataspace_upstreams = Arc::new(load_public_dataspace_upstreams(state.as_ref()));
+        #[cfg(feature = "app_api")]
+        let recipient_lookup = Arc::new(config.recipient_lookup.clone());
         let pipeline_status_cache = Arc::new(PipelineStatusCache::new());
 
         Self {
@@ -39072,6 +39316,8 @@ impl Torii {
             torii_proxy_bridge_signer,
             #[cfg(feature = "app_api")]
             public_dataspace_upstreams,
+            #[cfg(feature = "app_api")]
+            recipient_lookup,
             da_ingest: config.da_ingest.clone(),
             #[cfg(feature = "connect")]
             connect_bus: connect::Bus::from_config(&config.connect),
@@ -39495,6 +39741,8 @@ impl Torii {
             torii_proxy_bridge_signer: self.torii_proxy_bridge_signer.clone(),
             #[cfg(feature = "app_api")]
             public_dataspace_upstreams: self.public_dataspace_upstreams.clone(),
+            #[cfg(feature = "app_api")]
+            recipient_lookup: self.recipient_lookup.clone(),
             da_ingest: self.da_ingest.clone(),
             da_spooler: da_runtime.spooler,
             sumeragi: self.sumeragi.clone(),
@@ -43518,6 +43766,8 @@ pub(crate) mod tests_runtime_handlers {
             ),
             #[cfg(feature = "app_api")]
             public_dataspace_upstreams: Arc::new(BTreeMap::new()),
+            #[cfg(feature = "app_api")]
+            recipient_lookup: Arc::new(Default::default()),
             da_ingest,
             da_spooler: None,
             #[cfg(feature = "app_api")]

@@ -16,6 +16,8 @@ import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
 
+private const val KAGEMUSHA_FOLD_STEP_MAX_INPUTS = 2
+
 /** Spendable note descriptor carried by recursive Kagemusha spend requests and bundles. */
 class SpendableNoteDescriptor(
     noteCommitment: ByteArray,
@@ -425,6 +427,7 @@ class RedeemSpendRequest @JvmOverloads constructor(
             bundleSummary.currentNote.amount,
             changeOutputBytes != null,
         )
+        changeOutputBytes?.let { requireRedeemChangeOutputNotReserved(it, bundleSummary) }
         val finalIsLineage =
             KagemushaRecursiveSpendProver.isLineageProofCircuitId(bundleSummary.proofCircuitId)
         val witnessHasReservedPrevious =
@@ -490,14 +493,20 @@ class SpendBundleSummary(
     val chainId: String,
     initialRoot: ByteArray,
     finalRoot: ByteArray,
+    topupAnchorNullifiers: List<ByteArray>,
     val currentNote: SpendableNoteDescriptor,
 ) {
     private val initialRootBytes = fixed32(initialRoot, "initialRoot")
     private val finalRootBytes = fixed32(finalRoot, "finalRoot")
+    private val topupAnchorNullifierBytes = topupAnchorNullifiers.map {
+        fixed32(it, "topupAnchorNullifier")
+    }
 
     val initialRoot: ByteArray get() = initialRootBytes.copyOf()
 
     val finalRoot: ByteArray get() = finalRootBytes.copyOf()
+
+    val topupAnchorNullifiers: List<ByteArray> get() = topupAnchorNullifierBytes.map { it.copyOf() }
 }
 
 /** Norito request builders and result decoders for recursive Kagemusha spend ABI v1. */
@@ -1025,6 +1034,7 @@ object KagemushaRecursiveSpendRequestCodecs {
             chainId = accumulator.chainId,
             initialRoot = accumulator.initialRoot,
             finalRoot = accumulator.finalRoot,
+            topupAnchorNullifiers = accumulator.topupAnchorNullifiers,
             currentNote = accumulator.currentNote,
         )
     }
@@ -1060,17 +1070,11 @@ object KagemushaRecursiveSpendRequestCodecs {
     }
 
     private fun readPreviousRecursiveProofCircuitId(payload: ByteArray, flags: Int): String {
-        val decoder = NoritoDecoder(payload, flags)
-        val verifierKeyIdPayload = readField(decoder) { it.readRemainingBytes() }
-        skipFields(decoder, 3)
-        require(decoder.remaining() == 0) {
-            "Trailing bytes after lineageWitness.previousRecursiveProofs"
-        }
-        val verifierKeyId = readVerifyingKeyId(verifierKeyIdPayload, flags)
-        require(KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(verifierKeyId.name)) {
+        val circuitId = readRecursiveProofCircuitId(payload, flags, RecursiveProofDecodeContext.lineagePreviousProof)
+        require(KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(circuitId)) {
             "lineageWitness.previousRecursiveProofs verifierKeyId unsupported recursive proof circuit id"
         }
-        return verifierKeyId.name
+        return circuitId
     }
 
     internal fun requirePayloadArchive(
@@ -1357,6 +1361,7 @@ object KagemushaRecursiveSpendRequestCodecs {
         val asset: String,
         val initialRoot: ByteArray,
         val finalRoot: ByteArray,
+        val topupAnchorNullifiers: List<ByteArray>,
         val hopCount: Int,
         val currentNote: SpendableNoteDescriptor,
     )
@@ -1371,24 +1376,47 @@ object KagemushaRecursiveSpendRequestCodecs {
         val asset = readField(decoder) { readAssetDefinitionId(it) }
         val initialRoot = readField(decoder) { it.readFixed32("initial_root") }
         val finalRoot = readField(decoder) { it.readFixed32("final_root") }
-        skipFields(decoder, 1) // topup_anchor_nullifiers
+        requireAccumulatorRoots(initialRoot, finalRoot)
+        val topupAnchorNullifiers = readField(decoder) {
+            readFixed32Sequence(it, "bundle.accumulator.topup_anchor_nullifiers")
+        }
         val hopCount = readField(decoder) { checkedInt(it.readUInt(32), "hop_count") }
         require(hopCount in 1..KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1) {
             "bundle.accumulator.hop_count must be in 1..${KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1}"
         }
-        skipFields(decoder, 15)
+        requireAccumulatorCorridor(decoder, hopCount)
         val currentNote = readField(decoder) { readSpendableNote(it) }
+        requireTopupAnchorNullifiers(topupAnchorNullifiers, currentNote)
         require(decoder.remaining() == 0) { "Trailing bytes after accumulator" }
-        return AccumulatorSummary(chainId, asset, initialRoot, finalRoot, hopCount, currentNote)
+        return AccumulatorSummary(
+            chainId,
+            asset,
+            initialRoot,
+            finalRoot,
+            topupAnchorNullifiers,
+            hopCount,
+            currentNote,
+        )
     }
 
-    private fun readRecursiveProofCircuitId(payload: ByteArray, flags: Int): String {
+    private fun readRecursiveProofCircuitId(payload: ByteArray, flags: Int): String =
+        readRecursiveProofCircuitId(payload, flags, RecursiveProofDecodeContext.bundle)
+
+    private fun readRecursiveProofCircuitId(
+        payload: ByteArray,
+        flags: Int,
+        context: RecursiveProofDecodeContext,
+    ): String {
         val decoder = NoritoDecoder(payload, flags)
         val verifierKeyIdPayload = readField(decoder) { it.readRemainingBytes() }
         val publicInputsPayload = readField(decoder) { it.readRemainingBytes() }
-        require(publicInputsPayload.isNotEmpty()) { "bundle.proof_public_inputs empty recursive proof inputs" }
-        val publicInputsHash = readField(decoder) { it.readFixed32("proof_public_inputs_hash") }
-        require(!isZero32(publicInputsHash)) { "bundle.proof_public_inputs_hash must be non-zero" }
+        require(publicInputsPayload.isNotEmpty()) {
+            "${context.proofPublicInputsField} empty recursive proof inputs"
+        }
+        val publicInputsHash = readField(decoder) { it.readFixed32(context.proofPublicInputsHashField) }
+        require(!isZero32(publicInputsHash)) {
+            "${context.proofPublicInputsHashField} must be non-zero"
+        }
         val publicInputsArchive = NoritoCodec.encode(
             publicInputsPayload,
             SCHEMA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS,
@@ -1396,14 +1424,14 @@ object KagemushaRecursiveSpendRequestCodecs {
             NoritoHeader.COMPACT_LEN,
         )
         require(publicInputsHash.contentEquals(irohaHash(publicInputsArchive))) {
-            "bundle.proof_public_inputs_hash mismatch"
+            "${context.proofPublicInputsHashField} mismatch"
         }
         val proofPayload = readField(decoder) { it.readRemainingBytes() }
-        require(decoder.remaining() == 0) { "Trailing bytes after recursive proof" }
-        val verifierKeyId = readVerifyingKeyId(verifierKeyIdPayload, flags)
-        val proofBackend = readProofBoxBackend(proofPayload, flags)
+        require(decoder.remaining() == 0) { "Trailing bytes after ${context.trailingField}" }
+        val verifierKeyId = readVerifyingKeyId(verifierKeyIdPayload, flags, context)
+        val proofBackend = readProofBoxBackend(proofPayload, flags, context)
         require(proofBackend == verifierKeyId.backend) {
-            "bundle.proof_backend recursive proof backend mismatch"
+            "${context.proofBackendField} recursive proof backend mismatch"
         }
         return verifierKeyId.name
     }
@@ -1994,7 +2022,10 @@ private fun validatePallasOpenEnvelopePayload(payload: ByteArray, flags: Int, fi
     readField(decoder) { readPallasIpaProof(it, paramsN, "$field.proof") }
     val transcriptLabel = readField(decoder) { readString(it) }
     require(transcriptLabel.isNotEmpty()) { "$field transcript_label must be non-empty" }
-    require(transcriptLabel.length <= KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES) {
+    require(
+        transcriptLabel.toByteArray(StandardCharsets.UTF_8).size <=
+            KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES,
+    ) {
         "$field transcript_label exceeds " +
             "$KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES bytes"
     }
@@ -2052,22 +2083,25 @@ private fun readPallasIpaProof(decoder: NoritoDecoder, n: Int, field: String) {
 }
 
 private fun readFixed32SequenceCount(decoder: NoritoDecoder, field: String): Int {
+    return readFixed32Sequence(decoder, field).size
+}
+
+private fun readFixed32Sequence(decoder: NoritoDecoder, field: String): List<ByteArray> {
     val count = checkedInt(decoder.readUInt(64), "$field count")
-    repeat(count) { index ->
+    return List(count) { index ->
         val itemLength = checkedInt(decoder.readLength(compact(decoder)), "$field item length")
         val item = NoritoDecoder(decoder.readBytes(itemLength), decoder.flags, decoder.flagsHint)
-        item.readFixed32("$field[$index]")
+        val value = item.readFixed32("$field[$index]")
         require(item.remaining() == 0) { "Trailing bytes after $field[$index]" }
+        value
     }
-    return count
 }
 
 private fun readRequiredMetadataOption(decoder: NoritoDecoder, field: String): ByteArray {
     val payload = readOptionRawPayload(decoder)
         ?: throw IllegalArgumentException("$field is required")
-    val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
-    val value = child.readFixed32(field)
-    require(child.remaining() == 0) { "Trailing bytes after $field" }
+    require(payload.size == 32) { "$field must be exactly 32 bytes" }
+    val value = payload.copyOf()
     require(!isZero32(value)) { "$field must be non-zero" }
     return value
 }
@@ -2156,6 +2190,94 @@ private fun requireRedeemChangeBinding(
         require(comparison == 0) {
             "publicAmount must not exceed current note amount"
         }
+    }
+}
+
+private fun requireRedeemChangeOutputNotReserved(
+    changeOutput: ByteArray,
+    bundleSummary: SpendBundleSummary,
+) {
+    val reserved = listOf(
+        bundleSummary.currentNote.noteCommitment,
+        bundleSummary.currentNote.spendNullifier,
+    ) + bundleSummary.topupAnchorNullifiers
+    require(reserved.none { changeOutput.contentEquals(it) }) {
+        "changeOutput must not reuse the current note commitment, redeem nullifier, or top-up anchor nullifier"
+    }
+}
+
+private fun requireTopupAnchorNullifiers(
+    nullifiers: List<ByteArray>,
+    currentNote: SpendableNoteDescriptor,
+) {
+    require(nullifiers.isNotEmpty() && nullifiers.size <= KAGEMUSHA_FOLD_STEP_MAX_INPUTS) {
+        "bundle.accumulator.topup_anchor_nullifiers"
+    }
+    for (index in nullifiers.indices) {
+        require(!isZero32(nullifiers[index])) { "bundle.accumulator.topup_anchor_nullifiers" }
+        if (index > 0) {
+            require(compareUnsigned(nullifiers[index - 1], nullifiers[index]) < 0) {
+                "bundle.accumulator.topup_anchor_nullifiers"
+            }
+        }
+    }
+    require(nullifiers.none { it.contentEquals(currentNote.noteCommitment) || it.contentEquals(currentNote.spendNullifier) }) {
+        "bundle.accumulator.topup_anchor_nullifiers"
+    }
+}
+
+private fun requireAccumulatorRoots(initialRoot: ByteArray, finalRoot: ByteArray) {
+    require(!isZero32(initialRoot)) { "bundle.accumulator.initial_root" }
+    require(!isZero32(finalRoot) && !finalRoot.contentEquals(initialRoot)) {
+        "bundle.accumulator.final_root"
+    }
+}
+
+private fun requireAccumulatorCorridor(decoder: NoritoDecoder, hopCount: Int) {
+    fun readFixed32(field: String): ByteArray =
+        readField(decoder) { it.readFixed32(field) }
+
+    fun requireNonzero(field: String): ByteArray {
+        val value = readFixed32(field)
+        require(!isZero32(value)) { "bundle.accumulator.$field" }
+        return value
+    }
+
+    val lineageDigest = requireNonzero("lineage_digest")
+    val aggregationTranscriptDigest = readFixed32("aggregation_transcript_digest")
+    require(!isZero32(aggregationTranscriptDigest) && aggregationTranscriptDigest.contentEquals(lineageDigest)) {
+        "bundle.accumulator.aggregation_transcript_digest"
+    }
+    listOf(
+        "nullifier_digest",
+        "output_commitment_digest",
+        "fold_digest",
+        "recursive_proof_chain_digest",
+        "transition_profile_binding_digest",
+    ).forEach(::requireNonzero)
+    val appendOpeningPreflightDigest = readFixed32("append_opening_preflight_digest")
+    require(isZero32(appendOpeningPreflightDigest) || hopCount > 1) {
+        "bundle.accumulator.append_opening_preflight_digest"
+    }
+    val appendBoundaryDigest = readFixed32("append_boundary_digest")
+    require(
+        isZero32(appendBoundaryDigest) ||
+            (!isZero32(appendOpeningPreflightDigest) && hopCount > 1),
+    ) {
+        "bundle.accumulator.append_boundary_digest"
+    }
+    listOf(
+        "verifier_params_fingerprint",
+        "fixed_window_table_schedule_digest",
+        "fixed_window_shared_table_manifest_digest",
+        "fixed_window_table_base_digest",
+        "verifier_witness_batch_digest",
+    ).forEach(::requireNonzero)
+    val verifierOpeningLen = readField(decoder) {
+        checkedInt(it.readUInt(32), "verifier_opening_len")
+    }
+    require(verifierOpeningLen in setOf(2, 4, 8, 16, 32, 64, 128)) {
+        "bundle.accumulator.verifier_opening_len"
     }
 }
 
@@ -2440,16 +2562,58 @@ private fun ByteArray.toHex(): String =
 
 private data class VerifyingKeyIdParts(val backend: String, val name: String)
 
-private fun readVerifyingKeyId(payload: ByteArray, flags: Int): VerifyingKeyIdParts {
+private data class RecursiveProofDecodeContext(
+    val trailingField: String,
+    val verifierTrailingField: String,
+    val verifierBackendField: String,
+    val verifierNameField: String,
+    val proofPublicInputsField: String,
+    val proofPublicInputsHashField: String,
+    val proofBackendField: String,
+    val proofBytesField: String,
+) {
+    companion object {
+        val bundle = RecursiveProofDecodeContext(
+            trailingField = "recursive proof",
+            verifierTrailingField = "verifier key id",
+            verifierBackendField = "verifierKeyId.backend",
+            verifierNameField = "verifierKeyId",
+            proofPublicInputsField = "bundle.proof_public_inputs",
+            proofPublicInputsHashField = "bundle.proof_public_inputs_hash",
+            proofBackendField = "bundle.proof_backend",
+            proofBytesField = "bundle.proof_bytes",
+        )
+
+        val lineagePreviousProof = RecursiveProofDecodeContext(
+            trailingField = "lineageWitness.previousRecursiveProofs",
+            verifierTrailingField = "lineageWitness.previousRecursiveProofs.verifierKeyId",
+            verifierBackendField = "lineageWitness.previousRecursiveProofs.verifierKeyId.backend",
+            verifierNameField = "lineageWitness.previousRecursiveProofs.verifierKeyId.name",
+            proofPublicInputsField = "lineageWitness.previousRecursiveProofs.proof_public_inputs",
+            proofPublicInputsHashField = "lineageWitness.previousRecursiveProofs.proof_public_inputs_hash",
+            proofBackendField = "lineageWitness.previousRecursiveProofs.proof_backend",
+            proofBytesField = "lineageWitness.previousRecursiveProofs.proof_bytes",
+        )
+    }
+}
+
+private fun readVerifyingKeyId(payload: ByteArray, flags: Int): VerifyingKeyIdParts =
+    readVerifyingKeyId(payload, flags, RecursiveProofDecodeContext.bundle)
+
+private fun readVerifyingKeyId(
+    payload: ByteArray,
+    flags: Int,
+    context: RecursiveProofDecodeContext,
+): VerifyingKeyIdParts {
     val decoder = NoritoDecoder(payload, flags)
     val backend = readField(decoder) { readString(it) }
     val name = readField(decoder) { readString(it) }
-    require(decoder.remaining() == 0) { "Trailing bytes after verifier key id" }
-    requirePortableId(backend, "verifierKeyId.backend")
+    require(decoder.remaining() == 0) { "Trailing bytes after ${context.verifierTrailingField}" }
+    requirePortableId(backend, context.verifierBackendField)
     require(backend == KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND) {
-        "bundle.proof_backend unsupported recursive proof backend"
+        "${context.proofBackendField} unsupported recursive proof backend"
     }
-    requirePortableId(name, "verifierKeyId")
+    requirePortableId(name, context.verifierNameField)
     return VerifyingKeyIdParts(backend, name)
 }
 
@@ -2457,16 +2621,23 @@ private fun readVerifyingKeyIdName(payload: ByteArray, flags: Int): String {
     return readVerifyingKeyId(payload, flags).name
 }
 
-private fun readProofBoxBackend(payload: ByteArray, flags: Int): String {
+private fun readProofBoxBackend(payload: ByteArray, flags: Int): String =
+    readProofBoxBackend(payload, flags, RecursiveProofDecodeContext.bundle)
+
+private fun readProofBoxBackend(
+    payload: ByteArray,
+    flags: Int,
+    context: RecursiveProofDecodeContext,
+): String {
     val decoder = NoritoDecoder(payload, flags)
     val backend = readField(decoder) { readString(it) }
     val proofBytes = readField(decoder) { readBytesVec(it) }
-    require(decoder.remaining() == 0) { "Trailing bytes after proof" }
+    require(decoder.remaining() == 0) { "Trailing bytes after ${context.trailingField}" }
     requirePortableId(backend, "proof.backend")
     require(backend == KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND) {
-        "bundle.proof_backend unsupported recursive proof backend"
+        "${context.proofBackendField} unsupported recursive proof backend"
     }
-    require(proofBytes.isNotEmpty()) { "bundle.proof_bytes empty recursive proof" }
+    require(proofBytes.isNotEmpty()) { "${context.proofBytesField} empty recursive proof" }
     return backend
 }
 

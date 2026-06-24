@@ -2241,13 +2241,49 @@ def _reject_unused_local_overrides(args: argparse.Namespace, receipts: list[dict
         )
 
 
+def _require_policy_booleans(args: argparse.Namespace) -> None:
+    for attr in (
+        "allow_failed",
+        "allow_insecure_http",
+        "allow_legacy_colr007",
+        "allow_default_profile",
+        "require_source_files",
+    ):
+        flag = f"--{attr.replace('_', '-')}"
+        setattr(args, attr, _require_bool(getattr(args, attr, None), flag))
+
+
+def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+        raise ReceiptError(f"{label} must be a repeatable path list")
+    paths: list[Path] = []
+    for offset, entry in enumerate(value):
+        if isinstance(entry, bytes):
+            raise ReceiptError(f"{label}[{offset}] must be a path")
+        try:
+            paths.append(Path(entry))
+        except TypeError as error:
+            raise ReceiptError(f"{label}[{offset}] must be a path") from error
+    return paths
+
+
 def run(args: argparse.Namespace) -> int:
-    for offset, path in enumerate(args.receipt):
+    _require_policy_booleans(args)
+    receipt_paths = _required_cli_path_sequence(getattr(args, "receipt", None), "--receipt")
+    receipt_dir_paths = _required_cli_path_sequence(
+        getattr(args, "receipt_dir", None),
+        "--receipt-dir",
+    )
+    for offset, path in enumerate(receipt_paths):
+        _reject_raw_cli_path_smuggling(str(path), f"receipt[{offset}]")
         _reject_repository_iso_fixture_path(path, f"receipt[{offset}]")
-    for offset, receipt_dir in enumerate(args.receipt_dir):
+    for offset, receipt_dir in enumerate(receipt_dir_paths):
+        _reject_raw_cli_path_smuggling(str(receipt_dir), f"receipt_dir[{offset}]")
         _reject_repository_iso_fixture_path(receipt_dir, f"receipt_dir[{offset}]")
-    paths = list(args.receipt)
-    for offset, receipt_dir in enumerate(args.receipt_dir):
+    paths = list(receipt_paths)
+    for offset, receipt_dir in enumerate(receipt_dir_paths):
         paths.extend(discover_receipts(receipt_dir, display_label=f"receipt_dir[{offset}]"))
     if not paths:
         raise ReceiptError("provide at least one --receipt or --receipt-dir")

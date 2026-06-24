@@ -10213,6 +10213,21 @@ export interface AliasLookupByAccountOptions extends CanonicalRequestOptions {
   domain?: string;
 }
 
+export interface RetailRecipientLookupRequest {
+  accountId?: string;
+  account_id?: string;
+  aliasFqn?: string;
+  alias_fqn?: string;
+}
+
+export interface RetailRecipientLookupResponse {
+  resolved: boolean;
+  account_id?: string;
+  alias_fqn?: string;
+  fi_id?: string;
+  full_name?: string;
+}
+
 export interface AliasVoprfEvaluateResponse {
   evaluated_element_hex: string;
   backend: string;
@@ -17278,6 +17293,10 @@ export declare class ToriiClient {
     accountId: string,
     options?: AliasLookupByAccountOptions,
   ): Promise<AliasLookupByAccountResponse | null>;
+  lookupRetailRecipient(
+    request: RetailRecipientLookupRequest,
+    options?: CanonicalRequestOptions,
+  ): Promise<RetailRecipientLookupResponse>;
   listRamLfeProgramPolicies(options?: {
     signal?: AbortSignal;
   }): Promise<{ total: number; items: Array<Record<string, unknown>> }>;
@@ -18746,6 +18765,8 @@ export interface KagemushaRecursiveSpendBundleSummary {
   readonly final_root: Buffer;
   readonly currentNote: KagemushaRecursiveSpendableNoteDescriptor;
   readonly current_note: KagemushaRecursiveSpendableNoteDescriptor;
+  readonly topupAnchorNullifiers: readonly Buffer[];
+  readonly topup_anchor_nullifiers: readonly Buffer[];
 }
 export function buildKagemushaRecursiveSpendableNoteDescriptor(
   input: KagemushaRecursiveSpendableNoteDescriptorInput,

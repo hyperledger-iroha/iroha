@@ -23,6 +23,10 @@ enum AssetDefinitionAddress {
         guard uuidBytes.count == 16 else {
             return nil
         }
+        let bytes = [UInt8](uuidBytes)
+        guard bytes[6] >> 4 == 0x4, (bytes[8] & 0xC0) == 0x80 else {
+            return nil
+        }
         var body = Data([version])
         body.append(uuidBytes)
         guard let digest = blake3Hash(data: body),

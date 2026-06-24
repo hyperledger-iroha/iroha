@@ -155,6 +155,109 @@ def run_verify(argv):
 
 
 class IsoTrustBundleVerifyTest(unittest.TestCase):
+    def test_direct_run_policy_flags_must_be_booleans_before_bundle_loading(self):
+        cases = (
+            ("allow_record_only", "--allow-record-only", "true"),
+            ("allow_insecure_source_url", "--allow-insecure-source-url", 1),
+            ("allow_synthetic_der", "--allow-synthetic-der", None),
+        )
+        for attr, label, value in cases:
+            with self.subTest(flag=label):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        bundle=[root / "missing-bundle.json"],
+                        summary_out=None,
+                        emit_profile_json=None,
+                        allow_record_only=False,
+                        allow_insecure_source_url=False,
+                        allow_synthetic_der=False,
+                        max_source_age_days=None,
+                    )
+                    setattr(args, attr, value)
+
+                    with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                        VERIFIER.run(args)
+
+                    message = str(caught.exception)
+                    self.assertIn(f"{label} must be a boolean", message)
+                    self.assertNotIn("does not exist", message)
+                    self.assertNotIn(str(root), message)
+
+    def test_direct_run_bundle_must_be_repeatable_path_list_before_loading(self):
+        cases = (
+            ("bare string", "missing-bundle.json", "--bundle must be a repeatable path list"),
+            ("bad entry", [object()], "--bundle[0] must be a path"),
+        )
+        for name, bundle, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        bundle=bundle,
+                        summary_out=None,
+                        emit_profile_json=None,
+                        allow_record_only=False,
+                        allow_insecure_source_url=False,
+                        allow_synthetic_der=False,
+                        max_source_age_days=None,
+                    )
+
+                    with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                        VERIFIER.run(args)
+
+                    error = str(caught.exception)
+                    self.assertIn(message, error)
+                    self.assertNotIn("does not exist", error)
+                    self.assertNotIn(str(root), error)
+
+    def test_direct_run_scalar_paths_must_be_paths_before_bundle_loading(self):
+        cases = (
+            ("summary", "summary_out", object(), "summary_out"),
+            ("profile", "emit_profile_json", object(), "emit_profile_json"),
+        )
+        for name, field, value, label in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        bundle=[root / "missing-bundle.json"],
+                        summary_out=None,
+                        emit_profile_json=None,
+                        allow_record_only=False,
+                        allow_insecure_source_url=False,
+                        allow_synthetic_der=False,
+                        max_source_age_days=None,
+                    )
+                    setattr(args, field, value)
+
+                    with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                        VERIFIER.run(args)
+
+                    message = str(caught.exception)
+                    self.assertIn(f"{label} must be a path", message)
+                    self.assertNotIn("does not exist", message)
+                    self.assertNotIn(str(root), message)
+
+    def test_direct_run_missing_optional_freshness_budget_does_not_mask_bundle_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            args = argparse.Namespace(
+                bundle=[root / "missing-bundle.json"],
+                summary_out=None,
+                emit_profile_json=None,
+                allow_record_only=False,
+                allow_insecure_source_url=False,
+                allow_synthetic_der=False,
+            )
+
+            with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                VERIFIER.run(args)
+
+            message = str(caught.exception)
+            self.assertIn("bundle[0] does not exist", message)
+            self.assertNotIn(str(root), message)
+
     def test_text_output_symlink_ancestor_diagnostic_does_not_echo_path(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -1118,6 +1221,96 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertNotIn("does not exist", stderr)
                     self.assertFalse((root / "fixtures").exists())
 
+    def test_outputs_cannot_reuse_bundle_input_paths_before_loading(self):
+        cases = (
+            ("summary", "--summary-out", "summary_out"),
+            ("profile", "--emit-profile-json", "emit_profile_json"),
+        )
+        for name, flag, label in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    bundle_path = root / "trust-bundle.json"
+                    bundle_path.write_text("{not valid bundle json\n", encoding="utf-8")
+                    original_text = bundle_path.read_text(encoding="utf-8")
+
+                    rc, stdout, stderr = run_verify(
+                        ["--bundle", str(bundle_path), flag, str(bundle_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(
+                        f"{label} must not reuse --bundle[0] path",
+                        stderr,
+                    )
+                    self.assertNotIn("not valid JSON", stderr)
+                    self.assertEqual(
+                        bundle_path.read_text(encoding="utf-8"),
+                        original_text,
+                    )
+
+    def test_missing_output_parents_are_not_created_before_bundle_loading(self):
+        cases = (
+            ("summary", "--summary-out"),
+            ("profile", "--emit-profile-json"),
+        )
+        for name, flag in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    bundle_path = root / "trust-bundle.json"
+                    bundle_path.write_text("{not valid bundle json\n", encoding="utf-8")
+                    output_parent = root / "outputs" / name
+                    output_path = output_parent / f"{name}.json"
+
+                    rc, stdout, stderr = run_verify(
+                        ["--bundle", str(bundle_path), flag, str(output_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("not valid JSON", stderr)
+                    self.assertFalse(output_parent.exists())
+
+    def test_outputs_cannot_hardlink_bundle_input_paths_before_loading(self):
+        cases = (
+            ("summary", "--summary-out", "summary_out"),
+            ("profile", "--emit-profile-json", "emit_profile_json"),
+        )
+        for name, flag, label in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    bundle_path = root / "trust-bundle.json"
+                    bundle_path.write_text("{not valid bundle json\n", encoding="utf-8")
+                    output_path = root / f"{name}-alias.json"
+                    try:
+                        output_path.hardlink_to(bundle_path)
+                    except OSError as error:
+                        self.skipTest(f"hard link creation unavailable: {error}")
+                    original_text = bundle_path.read_text(encoding="utf-8")
+
+                    rc, stdout, stderr = run_verify(
+                        ["--bundle", str(bundle_path), flag, str(output_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(
+                        f"{label} must not reuse --bundle[0] path",
+                        stderr,
+                    )
+                    self.assertNotIn("not valid JSON", stderr)
+                    self.assertEqual(
+                        bundle_path.read_text(encoding="utf-8"),
+                        original_text,
+                    )
+                    self.assertEqual(
+                        output_path.read_text(encoding="utf-8"),
+                        original_text,
+                    )
+
     def test_hardlinked_output_files_are_rejected(self):
         cases = (
             ("summary", "--summary-out"),
@@ -1175,6 +1368,37 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertIn("must not be a symlink", stderr)
                     self.assertFalse((target_dir / "nested").exists())
 
+    def test_symlinked_output_ancestors_are_rejected_before_bundle_loading(self):
+        cases = (
+            ("summary", "--summary-out"),
+            ("profile", "--emit-profile-json"),
+        )
+        for name, flag in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    bundle_path = root / "trust-bundle.json"
+                    bundle_path.write_text("{not valid bundle json\n", encoding="utf-8")
+                    target_dir = root / f"{name}-target"
+                    target_dir.mkdir()
+                    ancestor = root / f"{name}-ancestor-link"
+                    try:
+                        ancestor.symlink_to(target_dir, target_is_directory=True)
+                    except OSError as error:
+                        self.skipTest(f"symlink creation unavailable: {error}")
+                    output_path = ancestor / "nested" / f"{name}.json"
+
+                    argv = ["--bundle", str(bundle_path), flag, str(output_path)]
+                    if flag == "--emit-profile-json":
+                        argv.extend(PROFILE_FRESHNESS_ARGS)
+                    rc, stdout, stderr = run_verify(argv)
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("must not be a symlink", stderr)
+                    self.assertNotIn("not valid JSON", stderr)
+                    self.assertFalse((target_dir / "nested").exists())
+
     def test_profile_output_failure_does_not_emit_summary(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -1227,6 +1451,37 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertEqual(stdout, "")
             self.assertFalse(output_path.exists())
             self.assertIn("must be different paths", stderr)
+
+    def test_summary_and_profile_hardlinked_outputs_must_be_distinct_before_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            bundle_path = root / "trust-bundle.json"
+            bundle_path.write_text("{not valid bundle json\n", encoding="utf-8")
+            summary_path = root / "summary.json"
+            summary_path.write_text("untouched\n", encoding="utf-8")
+            profile_path = root / "profile.json"
+            try:
+                profile_path.hardlink_to(summary_path)
+            except OSError as error:
+                self.skipTest(f"hard link creation unavailable: {error}")
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--bundle",
+                    str(bundle_path),
+                    "--summary-out",
+                    str(summary_path),
+                    "--emit-profile-json",
+                    str(profile_path),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("must be different paths", stderr)
+            self.assertNotIn("not valid JSON", stderr)
+            self.assertEqual(summary_path.read_text(encoding="utf-8"), "untouched\n")
+            self.assertEqual(profile_path.read_text(encoding="utf-8"), "untouched\n")
 
     def test_revocation_policy_flags_are_required(self):
         with tempfile.TemporaryDirectory() as raw_root:

@@ -8192,8 +8192,10 @@ fn kagemusha_verified_fold_step(
 /// This requires confidential-transfer-v2 proof envelopes and checks that the
 /// public root, nullifier, output, asset, and chain tags exposed by each proof
 /// match the folded hop metadata.
-/// TODO: Replace checked pre-fold verification with transparent in-circuit
-/// recursive aggregation once the recursive verifier is available in-tree.
+///
+/// Future mode-2 work can replace this checked pre-fold path with transparent
+/// in-circuit recursive aggregation once the full recursive verifier is the
+/// canonical compact-token verifier.
 ///
 /// # Errors
 ///
@@ -51002,8 +51004,9 @@ fn extract_pasta_fp_instances_impl(
 // Tiny pasta circuits used for dispatch verification across transparent IPA paths.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod pasta_tiny {
-    // TODO: Remove this once aggregation mode 2 wires the non-native Vesta/Fq
-    // verifier foundations into the in-circuit Halo2 IPA verifier gadget.
+    // Temporary dispatch-verification circuits remain until aggregation mode 2
+    // wires the non-native Vesta/Fq verifier foundations into the in-circuit
+    // Halo2 IPA verifier gadget.
     #![cfg_attr(not(test), allow(dead_code))]
 
     use halo2_proofs::{

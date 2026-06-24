@@ -557,6 +557,83 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertNotIn("does not exist", stderr)
             self.assertFalse((root / "fixtures").exists())
 
+    def test_receipt_dir_cannot_reuse_inbox_dir_before_inbox_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            inbox = root / "missing-inbox"
+
+            rc, stdout, stderr = run_main(
+                [
+                    "--inbox-dir",
+                    str(inbox),
+                    "--receipt-dir",
+                    str(inbox),
+                    "--torii-base-url",
+                    "https://torii.example.internal",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("receipt_dir must not reuse inbox_dir path", stderr)
+            self.assertNotIn("does not exist", stderr)
+
+    def test_receipt_dir_cannot_symlink_to_inbox_dir_before_inbox_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            inbox = root / "inbox"
+            inbox.mkdir()
+            receipt_dir = root / "receipt-link"
+            try:
+                receipt_dir.symlink_to(inbox, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            rc, stdout, stderr = run_main(
+                [
+                    "--inbox-dir",
+                    str(inbox),
+                    "--receipt-dir",
+                    str(receipt_dir),
+                    "--torii-base-url",
+                    "https://torii.example.internal",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("receipt_dir must not reuse inbox_dir path", stderr)
+            self.assertNotIn("has no XML messages", stderr)
+
+    def test_symlinked_receipt_dir_ancestor_is_rejected_before_inbox_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            target_dir = root / "receipt-target"
+            target_dir.mkdir()
+            ancestor = root / "receipt-ancestor-link"
+            try:
+                ancestor.symlink_to(target_dir, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            receipt_dir = ancestor / "nested" / "receipts"
+
+            rc, stdout, stderr = run_main(
+                [
+                    "--inbox-dir",
+                    str(root / "missing-inbox"),
+                    "--receipt-dir",
+                    str(receipt_dir),
+                    "--torii-base-url",
+                    "https://torii.example.internal",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("receipt_dir must not be a symlink", stderr)
+            self.assertNotIn("does not exist", stderr)
+            self.assertFalse((target_dir / "nested").exists())
+
     def test_local_path_validators_reject_percent_encoded_smuggling(self):
         overlong_path = "out/" + ("a" * (ADAPTER.MAX_LOCAL_PATH_CHARS + 1))
         cases = (
@@ -949,10 +1026,14 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertEqual(list(receipt_dir.glob(".iso-*.tmp")), [])
 
     def test_bearer_token_file_adds_authorization_without_persisting_token(self):
-        with tempfile.TemporaryDirectory() as raw_inbox:
-            inbox = Path(raw_inbox)
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            inbox = root / "inbox"
+            inbox.mkdir()
             write_message(inbox)
-            token_file = inbox / "token.txt"
+            token_dir = root / "runtime"
+            token_dir.mkdir()
+            token_file = token_dir / "token.txt"
             token_file.write_text("rail-token-123", encoding="utf-8")
             with capture_server() as (base_url, requests):
                 rc, _stdout, stderr = run_main(
@@ -1339,12 +1420,16 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 "exceeds",
             ),
         ]
-        with tempfile.TemporaryDirectory() as raw_inbox:
-            inbox = Path(raw_inbox)
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            inbox = root / "inbox"
+            inbox.mkdir()
             write_message(inbox)
+            token_dir = root / "runtime"
+            token_dir.mkdir()
             for name, token_bytes, message in cases:
                 with self.subTest(name=name):
-                    token_file = inbox / f"{name}.token"
+                    token_file = token_dir / f"{name}.token"
                     token_file.write_bytes(token_bytes)
                     with capture_server() as (base_url, requests):
                         rc, _stdout, stderr = run_main(
@@ -1418,17 +1503,21 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                     self.assertNotIn(str(token_file), error)
 
     def test_non_regular_bearer_token_files_are_rejected_before_network_delivery(self):
-        with tempfile.TemporaryDirectory() as raw_inbox:
-            inbox = Path(raw_inbox)
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            inbox = root / "inbox"
+            inbox.mkdir()
             write_message(inbox)
-            token_target = inbox / "token-target.txt"
+            token_dir = root / "runtime"
+            token_dir.mkdir()
+            token_target = token_dir / "token-target.txt"
             token_target.write_text("rail-token-123", encoding="utf-8")
-            symlink_token = inbox / "symlink-token.txt"
+            symlink_token = token_dir / "symlink-token.txt"
             try:
                 symlink_token.symlink_to(token_target)
             except OSError as error:
                 self.skipTest(f"symlink creation unavailable: {error}")
-            directory_token = inbox / "token-dir"
+            directory_token = token_dir / "token-dir"
             directory_token.mkdir()
             cases = [
                 (symlink_token, "must not be a symlink"),
@@ -1454,14 +1543,16 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                     self.assertIn(message, stderr)
 
     def test_bearer_token_file_symlinked_ancestor_is_rejected_before_network_delivery(self):
-        with tempfile.TemporaryDirectory() as raw_inbox:
-            inbox = Path(raw_inbox)
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            inbox = root / "inbox"
+            inbox.mkdir()
             write_message(inbox)
-            target_dir = inbox / "token-target"
+            target_dir = root / "token-target"
             target_dir.mkdir()
             token_target = target_dir / "token.txt"
             token_target.write_text("rail-token-123", encoding="utf-8")
-            ancestor = inbox / "token-ancestor-link"
+            ancestor = root / "token-ancestor-link"
             try:
                 ancestor.symlink_to(target_dir, target_is_directory=True)
             except OSError as error:
@@ -1484,6 +1575,65 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
             self.assertIn("must not be a symlink", stderr)
+
+    def test_bearer_token_file_cannot_overlap_inbox_before_loading(self):
+        cases = (
+            (
+                "same-as-inbox",
+                lambda root, inbox: inbox,
+                "rail-token-source-same",
+            ),
+            (
+                "inside-inbox",
+                lambda root, inbox: inbox / "runtime-auth.txt",
+                "rail-token-source-nested",
+            ),
+            (
+                "ancestor-of-inbox",
+                lambda root, inbox: inbox.parent,
+                "rail-token-source-ancestor",
+            ),
+        )
+        for name, token_path_for, hidden in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    if name == "ancestor-of-inbox":
+                        source_root = root / "rail-token-source-ancestor"
+                        inbox = source_root / "inbox"
+                    else:
+                        inbox = root / "inbox"
+                    inbox.mkdir(parents=True)
+                    write_message(inbox)
+                    token_file = token_path_for(root, inbox)
+                    if token_file.suffix:
+                        token_file.write_text("rail-token-123\n", encoding="utf-8")
+                    receipt_dir = root / "receipts"
+
+                    with capture_server() as (base_url, requests):
+                        rc, stdout, stderr = run_main(
+                            [
+                                "--inbox-dir",
+                                str(inbox),
+                                "--torii-base-url",
+                                base_url,
+                                "--allow-insecure-http",
+                                "--bearer-token-file",
+                                str(token_file),
+                                "--receipt-dir",
+                                str(receipt_dir),
+                            ]
+                        )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertEqual(requests, [])
+                    self.assertIn(
+                        "bearer_token_file must not overlap inbox_dir path",
+                        stderr,
+                    )
+                    self.assertNotIn("rail-token-123", stderr)
+                    self.assertNotIn(hidden, stderr)
 
     def test_input_cli_paths_reject_raw_smuggling_before_read(self):
         cases = (
@@ -1640,6 +1790,148 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             root = Path(raw_root)
             with self.assertRaisesRegex(ADAPTER.AdapterError, "provide --inbox-dir"):
                 ADAPTER.run(args_for(root, inbox_dir=None))
+            args = args_for(root)
+            delattr(args, "inbox_dir")
+            with self.assertRaisesRegex(ADAPTER.AdapterError, "provide --inbox-dir"):
+                ADAPTER.run(args)
+
+    def test_direct_run_scalar_paths_must_be_paths_before_inbox_loading(self):
+        cases = (
+            ("inbox", "inbox_dir", object(), "inbox_dir"),
+            ("receipt", "receipt_dir", object(), "receipt_dir"),
+            ("token", "bearer_token_file", object(), "bearer_token_file"),
+        )
+        for name, field, value, label in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        inbox_dir=root / "missing-inbox",
+                        message=None,
+                        torii_base_url="https://torii.example.invalid",
+                        receipt_dir=root / "receipts",
+                        bearer_token_file=None,
+                        timeout_secs=1.0,
+                        response_limit_bytes=1024,
+                        max_payload_bytes=1024,
+                        allow_insecure_http=False,
+                        allow_default_profile=False,
+                        allow_legacy_colr007=False,
+                        dry_run=True,
+                    )
+                    setattr(args, field, value)
+
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER.run(args)
+
+                    message = str(caught.exception)
+                    self.assertIn(f"{label} must be a path", message)
+                    self.assertNotIn("does not exist", message)
+                    self.assertNotIn(str(root), message)
+
+    def test_direct_run_torii_base_url_must_be_string_before_inbox_loading(self):
+        cases = (
+            ("missing", None),
+            ("object", object()),
+            ("message omitted", object()),
+        )
+        for name, value in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        inbox_dir=root / "missing-inbox",
+                        message=None,
+                        torii_base_url=value,
+                        receipt_dir=root / "receipts",
+                        bearer_token_file=None,
+                        timeout_secs=1.0,
+                        response_limit_bytes=1024,
+                        max_payload_bytes=1024,
+                        allow_insecure_http=False,
+                        allow_default_profile=False,
+                        allow_legacy_colr007=False,
+                        dry_run=True,
+                    )
+                    if name == "message omitted":
+                        delattr(args, "message")
+
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER.run(args)
+
+                    message = str(caught.exception)
+                    self.assertIn("--torii-base-url must be a string", message)
+                    self.assertNotIn("does not exist", message)
+                    self.assertNotIn(str(root), message)
+
+    def test_direct_run_policy_flags_must_be_booleans_before_inbox_loading(self):
+        cases = (
+            ("dry_run", "--dry-run", "true"),
+            ("allow_insecure_http", "--allow-insecure-http", 1),
+            ("allow_default_profile", "--allow-default-profile", None),
+            ("allow_legacy_colr007", "--allow-legacy-colr007", []),
+        )
+        for attr, label, value in cases:
+            with self.subTest(flag=label):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        inbox_dir=root / "missing-inbox",
+                        message=None,
+                        torii_base_url="https://torii.example.invalid",
+                        receipt_dir=root / "receipts",
+                        bearer_token_file=None,
+                        timeout_secs=1.0,
+                        response_limit_bytes=1024,
+                        max_payload_bytes=1024,
+                        allow_insecure_http=False,
+                        allow_default_profile=False,
+                        allow_legacy_colr007=False,
+                        dry_run=True,
+                    )
+                    setattr(args, attr, value)
+
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER.run(args)
+
+                    message = str(caught.exception)
+                    self.assertIn(f"{label} must be a boolean", message)
+                    self.assertNotIn("does not exist", message)
+                    self.assertNotIn(str(root), message)
+
+    def test_direct_run_numeric_limits_must_exist_before_inbox_loading(self):
+        cases = (
+            ("timeout_secs", "--timeout-secs must be a positive finite number"),
+            ("response_limit_bytes", "--response-limit-bytes must be a positive integer"),
+            ("max_payload_bytes", "--max-payload-bytes must be a positive integer"),
+        )
+        for field, expected in cases:
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        inbox_dir=root / "missing-inbox",
+                        message=None,
+                        torii_base_url="https://torii.example.invalid",
+                        receipt_dir=root / "receipts",
+                        bearer_token_file=None,
+                        timeout_secs=1.0,
+                        response_limit_bytes=1024,
+                        max_payload_bytes=1024,
+                        allow_insecure_http=False,
+                        allow_default_profile=False,
+                        allow_legacy_colr007=False,
+                        dry_run=True,
+                    )
+                    delattr(args, field)
+
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER.run(args)
+
+                    message = str(caught.exception)
+                    self.assertIn(expected, message)
+                    self.assertNotIn("does not exist", message)
+                    self.assertNotIn(str(root), message)
 
     def test_secret_looking_message_paths_are_rejected_before_receipt_output(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -2179,6 +2471,116 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 0, stderr)
             self.assertEqual(len(requests), 1)
+
+    def test_explicit_message_under_receipt_dir_is_rejected_before_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            receipt_dir = inbox / "receipts"
+            receipt_dir.mkdir()
+            write_message(receipt_dir)
+            with capture_server() as (base_url, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--message",
+                        "receipts/rail-status.xml",
+                        "--torii-base-url",
+                        base_url,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertEqual(requests, [])
+            self.assertIn("message[0] must not be read from receipt_dir", stderr)
+            self.assertEqual(list(receipt_dir.glob("*.receipt.json")), [])
+
+    def test_receipt_dir_cannot_reuse_message_sidecar_before_loading(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            write_message(inbox)
+            receipt_dir = inbox / "rail-status.xml.json"
+            with capture_server() as (base_url, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--torii-base-url",
+                        base_url,
+                        "--allow-insecure-http",
+                        "--receipt-dir",
+                        str(receipt_dir),
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertEqual(requests, [])
+            self.assertIn("message[0].sidecar must not be read from receipt_dir", stderr)
+
+    def test_receipt_dir_cannot_reuse_bearer_token_file_before_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            inbox = root / "inbox"
+            inbox.mkdir()
+            write_message(inbox)
+            bearer_token_file = root / "adapter-auth.txt"
+            bearer_token_file.write_text("rail-token-123\n", encoding="utf-8")
+            with capture_server() as (base_url, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--torii-base-url",
+                        base_url,
+                        "--allow-insecure-http",
+                        "--bearer-token-file",
+                        str(bearer_token_file),
+                        "--receipt-dir",
+                        str(bearer_token_file),
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertEqual(requests, [])
+            self.assertIn("receipt_dir must not overlap bearer_token_file path", stderr)
+            self.assertNotIn("rail-token-123", stderr)
+            self.assertEqual(bearer_token_file.read_text(encoding="utf-8"), "rail-token-123\n")
+
+    def test_receipt_dir_cannot_contain_bearer_token_file_before_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            inbox = root / "inbox"
+            inbox.mkdir()
+            write_message(inbox)
+            token_dir = root / "runtime-auth"
+            token_dir.mkdir()
+            bearer_token_file = token_dir / "adapter-auth.txt"
+            bearer_token_file.write_text("rail-token-123\n", encoding="utf-8")
+            with capture_server() as (base_url, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--torii-base-url",
+                        base_url,
+                        "--allow-insecure-http",
+                        "--bearer-token-file",
+                        str(bearer_token_file),
+                        "--receipt-dir",
+                        str(token_dir),
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertEqual(requests, [])
+            self.assertIn("receipt_dir must not overlap bearer_token_file path", stderr)
+            self.assertNotIn("rail-token-123", stderr)
+            self.assertEqual(bearer_token_file.read_text(encoding="utf-8"), "rail-token-123\n")
 
     def test_explicit_symlinked_message_is_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_inbox:

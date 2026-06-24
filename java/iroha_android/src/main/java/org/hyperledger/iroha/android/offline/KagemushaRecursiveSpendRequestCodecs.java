@@ -53,6 +53,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified";
 
   private static final int REQUEST_FLAGS = NoritoHeader.COMPACT_LEN;
+  private static final int KAGEMUSHA_FOLD_STEP_MAX_INPUTS = 2;
   private static final BigInteger MAX_U128 = BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE);
   private static final BigInteger BYTE_MASK = BigInteger.valueOf(0xffL);
   private static final int MULTISIG_POLICY_VERSION = 1;
@@ -487,6 +488,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         accumulator.chainId,
         accumulator.initialRoot,
         accumulator.finalRoot,
+        accumulator.topupAnchorNullifiers,
         accumulator.currentNote);
   }
 
@@ -515,15 +517,12 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   }
 
   private static String readPreviousRecursiveProofCircuitId(final byte[] payload, final int flags) {
-    final NoritoDecoder decoder = new NoritoDecoder(payload, flags);
-    final byte[] verifierKeyIdPayload = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readRemainingBytes);
-    skipFields(decoder, 3);
-    require(decoder.remaining() == 0, "Trailing bytes after lineageWitness.previousRecursiveProofs");
-    final VerifyingKeyIdParts verifierKeyId = readVerifyingKeyId(verifierKeyIdPayload, flags);
+    final String circuitId =
+        readRecursiveProofCircuitId(payload, flags, RecursiveProofDecodeContext.LINEAGE_PREVIOUS_PROOF);
     require(
-        KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(verifierKeyId.name),
+        KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(circuitId),
         "lineageWitness.previousRecursiveProofs verifierKeyId unsupported recursive proof circuit id");
-    return verifierKeyId.name;
+    return circuitId;
   }
 
   static ArchivePayload requirePayloadArchive(
@@ -1121,6 +1120,9 @@ public final class KagemushaRecursiveSpendRequestCodecs {
           this.publicAmount,
           bundleSummary.currentNote.amount,
           this.changeOutput != null);
+      if (this.changeOutput != null) {
+        requireRedeemChangeOutputNotReserved(this.changeOutput, bundleSummary);
+      }
       final boolean finalIsLineage =
           KagemushaRecursiveSpendProver.isLineageProofCircuitId(bundleSummary.proofCircuitId);
       final boolean witnessHasReservedPrevious =
@@ -1174,6 +1176,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     public final String chainId;
     private final byte[] initialRoot;
     private final byte[] finalRoot;
+    private final List<byte[]> topupAnchorNullifiers;
     public final SpendableNoteDescriptor currentNote;
 
     public SpendBundleSummary(
@@ -1183,6 +1186,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         final String chainId,
         final byte[] initialRoot,
         final byte[] finalRoot,
+        final List<byte[]> topupAnchorNullifiers,
         final SpendableNoteDescriptor currentNote) {
       this.hopCount = hopCount;
       this.proofCircuitId = Objects.requireNonNull(proofCircuitId, "proofCircuitId");
@@ -1190,6 +1194,11 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       this.chainId = Objects.requireNonNull(chainId, "chainId");
       this.initialRoot = fixedBytes(initialRoot, 32, "initialRoot");
       this.finalRoot = fixedBytes(finalRoot, 32, "finalRoot");
+      final ArrayList<byte[]> copiedTopupAnchorNullifiers = new ArrayList<>();
+      for (final byte[] value : Objects.requireNonNull(topupAnchorNullifiers, "topupAnchorNullifiers")) {
+        copiedTopupAnchorNullifiers.add(fixedBytes(value, 32, "topupAnchorNullifier"));
+      }
+      this.topupAnchorNullifiers = Collections.unmodifiableList(copiedTopupAnchorNullifiers);
       this.currentNote = Objects.requireNonNull(currentNote, "currentNote");
     }
 
@@ -1199,6 +1208,14 @@ public final class KagemushaRecursiveSpendRequestCodecs {
 
     public byte[] finalRoot() {
       return Arrays.copyOf(finalRoot, finalRoot.length);
+    }
+
+    public List<byte[]> topupAnchorNullifiers() {
+      final ArrayList<byte[]> copied = new ArrayList<>();
+      for (final byte[] value : topupAnchorNullifiers) {
+        copied.add(Arrays.copyOf(value, value.length));
+      }
+      return Collections.unmodifiableList(copied);
     }
   }
 
@@ -1343,6 +1360,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     final String asset;
     final byte[] initialRoot;
     final byte[] finalRoot;
+    final List<byte[]> topupAnchorNullifiers;
     final int hopCount;
     final SpendableNoteDescriptor currentNote;
 
@@ -1351,12 +1369,14 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         final String asset,
         final byte[] initialRoot,
         final byte[] finalRoot,
+        final List<byte[]> topupAnchorNullifiers,
         final int hopCount,
         final SpendableNoteDescriptor currentNote) {
       this.chainId = chainId;
       this.asset = asset;
       this.initialRoot = initialRoot;
       this.finalRoot = finalRoot;
+      this.topupAnchorNullifiers = topupAnchorNullifiers;
       this.hopCount = hopCount;
       this.currentNote = currentNote;
     }
@@ -1374,7 +1394,9 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     final String asset = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readAssetDefinitionId);
     final byte[] initialRoot = readField(decoder, child -> readFixedBytes(child, 32, "initial_root"));
     final byte[] finalRoot = readField(decoder, child -> readFixedBytes(child, 32, "final_root"));
-    skipFields(decoder, 1);
+    requireAccumulatorRoots(initialRoot, finalRoot);
+    final List<byte[]> topupAnchorNullifiers =
+        readField(decoder, child -> readFixed32Sequence(child, "bundle.accumulator.topup_anchor_nullifiers"));
     final int hopCount = readField(decoder, child -> checkedInt(child.readUInt(32), "hop_count"));
     require(
         hopCount >= 1
@@ -1382,21 +1404,34 @@ public final class KagemushaRecursiveSpendRequestCodecs {
                 <= KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1,
         "bundle.accumulator.hop_count must be in 1.."
             + KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1);
-    skipFields(decoder, 15);
+    requireAccumulatorCorridor(decoder, hopCount);
     final SpendableNoteDescriptor currentNote =
         readField(decoder, KagemushaRecursiveSpendRequestCodecs::readSpendableNote);
+    requireTopupAnchorNullifiers(topupAnchorNullifiers, currentNote);
     require(decoder.remaining() == 0, "Trailing bytes after accumulator");
-    return new AccumulatorSummary(chainId, asset, initialRoot, finalRoot, hopCount, currentNote);
+    return new AccumulatorSummary(
+        chainId,
+        asset,
+        initialRoot,
+        finalRoot,
+        topupAnchorNullifiers,
+        hopCount,
+        currentNote);
   }
 
   private static String readRecursiveProofCircuitId(final byte[] payload, final int flags) {
+    return readRecursiveProofCircuitId(payload, flags, RecursiveProofDecodeContext.BUNDLE);
+  }
+
+  private static String readRecursiveProofCircuitId(
+      final byte[] payload, final int flags, final RecursiveProofDecodeContext context) {
     final NoritoDecoder decoder = new NoritoDecoder(payload, flags);
     final byte[] verifierKeyIdPayload = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readRemainingBytes);
     final byte[] publicInputsPayload = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readRemainingBytes);
-    require(publicInputsPayload.length > 0, "bundle.proof_public_inputs empty recursive proof inputs");
+    require(publicInputsPayload.length > 0, context.proofPublicInputsField + " empty recursive proof inputs");
     final byte[] publicInputsHash =
-        readField(decoder, child -> readFixedBytes(child, 32, "proof_public_inputs_hash"));
-    require(!isZero(publicInputsHash), "bundle.proof_public_inputs_hash must be non-zero");
+        readField(decoder, child -> readFixedBytes(child, 32, context.proofPublicInputsHashField));
+    require(!isZero(publicInputsHash), context.proofPublicInputsHashField + " must be non-zero");
     final byte[] publicInputsArchive =
         NoritoCodec.encode(
             publicInputsPayload,
@@ -1404,14 +1439,14 @@ public final class KagemushaRecursiveSpendRequestCodecs {
             RAW_PAYLOAD_ADAPTER,
             NoritoHeader.COMPACT_LEN);
     require(Arrays.equals(publicInputsHash, irohaHash(publicInputsArchive)),
-        "bundle.proof_public_inputs_hash mismatch");
+        context.proofPublicInputsHashField + " mismatch");
     final byte[] proofPayload = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readRemainingBytes);
-    require(decoder.remaining() == 0, "Trailing bytes after recursive proof");
-    final VerifyingKeyIdParts verifierKeyId = readVerifyingKeyId(verifierKeyIdPayload, flags);
-    final String proofBackend = readProofBoxBackend(proofPayload, flags);
+    require(decoder.remaining() == 0, "Trailing bytes after " + context.trailingField);
+    final VerifyingKeyIdParts verifierKeyId = readVerifyingKeyId(verifierKeyIdPayload, flags, context);
+    final String proofBackend = readProofBoxBackend(proofPayload, flags, context);
     require(
         verifierKeyId.backend.equals(proofBackend),
-        "bundle.proof_backend recursive proof backend mismatch");
+        context.proofBackendField + " recursive proof backend mismatch");
     return verifierKeyId.name;
   }
 
@@ -1943,7 +1978,8 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     final String transcriptLabel = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
     require(!transcriptLabel.isEmpty(), field + " transcript_label must be non-empty");
     require(
-        transcriptLabel.length() <= KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES,
+        transcriptLabel.getBytes(StandardCharsets.UTF_8).length
+            <= KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES,
         field
             + " transcript_label exceeds "
             + KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES
@@ -2002,15 +2038,20 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   }
 
   private static int readFixed32SequenceCount(final NoritoDecoder decoder, final String field) {
+    return readFixed32Sequence(decoder, field).size();
+  }
+
+  private static List<byte[]> readFixed32Sequence(final NoritoDecoder decoder, final String field) {
     final int count = checkedInt(decoder.readUInt(64), field + " count");
+    final ArrayList<byte[]> values = new ArrayList<>();
     for (int index = 0; index < count; index++) {
       final int itemLength = checkedInt(decoder.readLength(compact(decoder)), field + " item length");
       final NoritoDecoder item =
           new NoritoDecoder(decoder.readBytes(itemLength), decoder.flags(), decoder.flagsHint());
-      readFixedBytes(item, 32, field + "[" + index + "]");
+      values.add(readFixedBytes(item, 32, field + "[" + index + "]"));
       require(item.remaining() == 0, "Trailing bytes after " + field + "[" + index + "]");
     }
-    return count;
+    return Collections.unmodifiableList(values);
   }
 
   private static byte[] readRequiredMetadataOption(final NoritoDecoder decoder, final String field) {
@@ -2018,9 +2059,8 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     if (payload == null) {
       throw new IllegalArgumentException(field + " is required");
     }
-    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
-    final byte[] value = readFixedBytes(child, 32, field);
-    require(child.remaining() == 0, "Trailing bytes after " + field);
+    require(payload.length == 32, field + " must be exactly 32 bytes");
+    final byte[] value = Arrays.copyOf(payload, payload.length);
     require(!isZero(value), field + " must be non-zero");
     return value;
   }
@@ -2115,6 +2155,112 @@ public final class KagemushaRecursiveSpendRequestCodecs {
           comparison == 0,
           "publicAmount must not exceed current note amount");
     }
+  }
+
+  private static void requireRedeemChangeOutputNotReserved(
+      final byte[] changeOutput,
+      final SpendBundleSummary bundleSummary) {
+    require(
+        !Arrays.equals(changeOutput, bundleSummary.currentNote.noteCommitment())
+            && !Arrays.equals(changeOutput, bundleSummary.currentNote.spendNullifier()),
+        "changeOutput must not reuse the current note commitment, redeem nullifier, or top-up anchor nullifier");
+    for (final byte[] nullifier : bundleSummary.topupAnchorNullifiers()) {
+      require(
+          !Arrays.equals(changeOutput, nullifier),
+          "changeOutput must not reuse the current note commitment, redeem nullifier, or top-up anchor nullifier");
+    }
+  }
+
+  private static void requireTopupAnchorNullifiers(
+      final List<byte[]> nullifiers,
+      final SpendableNoteDescriptor currentNote) {
+    require(
+        !nullifiers.isEmpty() && nullifiers.size() <= KAGEMUSHA_FOLD_STEP_MAX_INPUTS,
+        "bundle.accumulator.topup_anchor_nullifiers");
+    for (int index = 0; index < nullifiers.size(); index++) {
+      final byte[] nullifier = nullifiers.get(index);
+      require(!isZero(nullifier), "bundle.accumulator.topup_anchor_nullifiers");
+      if (index > 0) {
+        require(
+            compareUnsigned(nullifiers.get(index - 1), nullifier) < 0,
+            "bundle.accumulator.topup_anchor_nullifiers");
+      }
+    }
+    for (final byte[] nullifier : nullifiers) {
+      require(
+          !Arrays.equals(nullifier, currentNote.noteCommitment())
+              && !Arrays.equals(nullifier, currentNote.spendNullifier()),
+          "bundle.accumulator.topup_anchor_nullifiers");
+    }
+  }
+
+  private static void requireAccumulatorRoots(final byte[] initialRoot, final byte[] finalRoot) {
+    require(!isZero(initialRoot), "bundle.accumulator.initial_root");
+    require(
+        !isZero(finalRoot) && !Arrays.equals(finalRoot, initialRoot),
+        "bundle.accumulator.final_root");
+  }
+
+  private static void requireAccumulatorCorridor(final NoritoDecoder decoder, final int hopCount) {
+    final byte[] lineageDigest = requireNonzeroAccumulatorField(decoder, "lineage_digest");
+    final byte[] aggregationTranscriptDigest =
+        readAccumulatorFixed32(decoder, "aggregation_transcript_digest");
+    require(
+        !isZero(aggregationTranscriptDigest)
+            && Arrays.equals(aggregationTranscriptDigest, lineageDigest),
+        "bundle.accumulator.aggregation_transcript_digest");
+    for (final String field :
+        new String[] {
+          "nullifier_digest",
+          "output_commitment_digest",
+          "fold_digest",
+          "recursive_proof_chain_digest",
+          "transition_profile_binding_digest"
+        }) {
+      requireNonzeroAccumulatorField(decoder, field);
+    }
+    final byte[] appendOpeningPreflightDigest =
+        readAccumulatorFixed32(decoder, "append_opening_preflight_digest");
+    require(
+        isZero(appendOpeningPreflightDigest) || hopCount > 1,
+        "bundle.accumulator.append_opening_preflight_digest");
+    final byte[] appendBoundaryDigest = readAccumulatorFixed32(decoder, "append_boundary_digest");
+    require(
+        isZero(appendBoundaryDigest)
+            || (!isZero(appendOpeningPreflightDigest) && hopCount > 1),
+        "bundle.accumulator.append_boundary_digest");
+    for (final String field :
+        new String[] {
+          "verifier_params_fingerprint",
+          "fixed_window_table_schedule_digest",
+          "fixed_window_shared_table_manifest_digest",
+          "fixed_window_table_base_digest",
+          "verifier_witness_batch_digest"
+        }) {
+      requireNonzeroAccumulatorField(decoder, field);
+    }
+    final int verifierOpeningLen =
+        readField(decoder, child -> checkedInt(child.readUInt(32), "verifier_opening_len"));
+    require(
+        verifierOpeningLen == 2
+            || verifierOpeningLen == 4
+            || verifierOpeningLen == 8
+            || verifierOpeningLen == 16
+            || verifierOpeningLen == 32
+            || verifierOpeningLen == 64
+            || verifierOpeningLen == 128,
+        "bundle.accumulator.verifier_opening_len");
+  }
+
+  private static byte[] readAccumulatorFixed32(final NoritoDecoder decoder, final String field) {
+    return readField(decoder, child -> readFixedBytes(child, 32, field));
+  }
+
+  private static byte[] requireNonzeroAccumulatorField(
+      final NoritoDecoder decoder, final String field) {
+    final byte[] value = readAccumulatorFixed32(decoder, field);
+    require(!isZero(value), "bundle.accumulator." + field);
+    return value;
   }
 
   private static int compareCanonicalDecimal(final String left, final String right) {
@@ -2487,6 +2633,58 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     VerifyingKeyIdParts(final String backend, final String name) {
       this.backend = backend;
       this.name = name;
+    }
+  }
+
+  private static final class RecursiveProofDecodeContext {
+    static final RecursiveProofDecodeContext BUNDLE =
+        new RecursiveProofDecodeContext(
+            "recursive proof",
+            "verifier key id",
+            "verifierKeyId.backend",
+            "verifierKeyId",
+            "bundle.proof_public_inputs",
+            "bundle.proof_public_inputs_hash",
+            "bundle.proof_backend",
+            "bundle.proof_bytes");
+
+    static final RecursiveProofDecodeContext LINEAGE_PREVIOUS_PROOF =
+        new RecursiveProofDecodeContext(
+            "lineageWitness.previousRecursiveProofs",
+            "lineageWitness.previousRecursiveProofs.verifierKeyId",
+            "lineageWitness.previousRecursiveProofs.verifierKeyId.backend",
+            "lineageWitness.previousRecursiveProofs.verifierKeyId.name",
+            "lineageWitness.previousRecursiveProofs.proof_public_inputs",
+            "lineageWitness.previousRecursiveProofs.proof_public_inputs_hash",
+            "lineageWitness.previousRecursiveProofs.proof_backend",
+            "lineageWitness.previousRecursiveProofs.proof_bytes");
+
+    final String trailingField;
+    final String verifierTrailingField;
+    final String verifierBackendField;
+    final String verifierNameField;
+    final String proofPublicInputsField;
+    final String proofPublicInputsHashField;
+    final String proofBackendField;
+    final String proofBytesField;
+
+    RecursiveProofDecodeContext(
+        final String trailingField,
+        final String verifierTrailingField,
+        final String verifierBackendField,
+        final String verifierNameField,
+        final String proofPublicInputsField,
+        final String proofPublicInputsHashField,
+        final String proofBackendField,
+        final String proofBytesField) {
+      this.trailingField = trailingField;
+      this.verifierTrailingField = verifierTrailingField;
+      this.verifierBackendField = verifierBackendField;
+      this.verifierNameField = verifierNameField;
+      this.proofPublicInputsField = proofPublicInputsField;
+      this.proofPublicInputsHashField = proofPublicInputsHashField;
+      this.proofBackendField = proofBackendField;
+      this.proofBytesField = proofBytesField;
     }
   }
 

@@ -145,13 +145,12 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         assertTrue(abi7.encodedBytes > 0)
         assertEquals(abi7.chainAdmissionReason.isEmpty(), abi7.chainAdmissible)
         assertEquals(!abi7.lineageWitnessRequired, abi7.witnesslessRedeemSupported)
-        assertFailsWith<IllegalArgumentException> {
+        val trailingVerifyResultField = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult(
                 recursiveSpendVerifyResultWithTrailingField(),
             )
-        }.also { error ->
-            assertTrue(error.message!!.contains("Trailing bytes after verify result"))
         }
+        assertEquals("Trailing bytes after verify result", trailingVerifyResultField.message)
     }
 
     @Test
@@ -166,11 +165,10 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 "Trailing bytes after verifier key id",
         )
         for ((archive, expected) in malformedWitnesses) {
-            assertFailsWith<IllegalArgumentException> {
+            val error = assertFailsWith<IllegalArgumentException> {
                 KagemushaRecursiveSpendRequestCodecs.lineageWitnessHasReservedPreviousProof(archive)
-            }.also { error ->
-                assertTrue(error.message.orEmpty().contains(expected))
             }
+            assertEquals(expected, error.message)
         }
     }
 
@@ -185,7 +183,14 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             init.proofCircuitId,
         )
         assertEquals("kagemusha-recursive-spend-abi-chain", init.chainId)
-        assertTrue(init.asset.isNotBlank())
+        assertEquals("686w6ABhTWPaCrWNjjXs7X1SW6w9", init.asset)
+        val fallbackAssetBundle = KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+            recursiveSpendBundleWithAccumulatorField(
+                2,
+                fixedArrayPayload(0x01, 16),
+            ),
+        )
+        assertEquals("hex:01010101010101010101010101010101", fallbackAssetBundle.asset)
         assertTrue(init.initialRoot.any { it.toInt() != 0 })
         assertTrue(init.finalRoot.any { it.toInt() != 0 })
         assertEquals("7", init.currentNote.amount)
@@ -193,12 +198,38 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             "iroha:kagemusha:v1:recursive-spend-accumulator",
             KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
         )
+        assertTrue(init.topupAnchorNullifiers.size >= 2)
+        val malformedTopupAnchorSets = listOf(
+            emptyList<ByteArray>(),
+            listOf(ByteArray(32)),
+            listOf(
+                init.topupAnchorNullifiers[0],
+                init.topupAnchorNullifiers[1],
+                ByteArray(32) { 0x34 },
+            ),
+            listOf(init.topupAnchorNullifiers[0], init.topupAnchorNullifiers[0]),
+            listOf(init.topupAnchorNullifiers[1], init.topupAnchorNullifiers[0]),
+            listOf(init.currentNote.noteCommitment),
+            listOf(init.currentNote.spendNullifier),
+        )
+        malformedTopupAnchorSets.forEach { nullifiers ->
+            val malformedTopupAnchors = assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                    recursiveSpendBundleWithTopupAnchorNullifiers(nullifiers),
+                )
+            }
+            assertEquals(
+                "bundle.accumulator.topup_anchor_nullifiers",
+                malformedTopupAnchors.message,
+            )
+        }
 
         val append = KagemushaRecursiveSpendRequestCodecs.decodeBundle(
             sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
         )
         assertTrue(append.hopCount >= init.hopCount)
         assertTrue(KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(append.proofCircuitId))
+        assertEquals("7Y5nGzchCJcxcv98NUoBfwBR1nTk", append.asset)
         assertTrue(append.currentNote.noteCommitment.any { it.toInt() != 0 })
         assertTrue(append.currentNote.spendNullifier.any { it.toInt() != 0 })
         assertTrue(append.currentNote.amount != "0")
@@ -210,116 +241,119 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 ),
             )
         }
-        assertTrue(malformedProofCircuit.message.orEmpty().contains("bundle.proof_circuit_id"))
+        assertEquals(
+            "bundle.proof_circuit_id unsupported recursive proof circuit id",
+            malformedProofCircuit.message,
+        )
 
         val malformedProofBackend = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.decodeBundle(
                 recursiveSpendBundleWithProofBackend(UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND),
             )
         }
-        assertTrue(malformedProofBackend.message.orEmpty().contains("bundle.proof_backend"))
+        assertEquals("bundle.proof_backend unsupported recursive proof backend", malformedProofBackend.message)
         val malformedProofBoxBackend = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.decodeBundle(
                 recursiveSpendBundleWithProofBoxBackend(UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND),
             )
         }
-        assertTrue(malformedProofBoxBackend.message.orEmpty().contains("bundle.proof_backend"))
+        assertEquals("bundle.proof_backend unsupported recursive proof backend", malformedProofBoxBackend.message)
 
         val trailingRecursiveProofField = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.decodeBundle(
                 recursiveSpendBundleWithTrailingRecursiveProofField(),
             )
         }
-        assertTrue(trailingRecursiveProofField.message.orEmpty().contains("Trailing bytes after recursive proof"))
+        assertEquals("Trailing bytes after recursive proof", trailingRecursiveProofField.message)
 
         val trailingVerifierKeyIdField = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.decodeBundle(
                 recursiveSpendBundleWithTrailingVerifierKeyIdField(),
             )
         }
-        assertTrue(trailingVerifierKeyIdField.message.orEmpty().contains("Trailing bytes after verifier key id"))
+        assertEquals("Trailing bytes after verifier key id", trailingVerifierKeyIdField.message)
 
         val trailingProofBoxField = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.decodeBundle(
                 recursiveSpendBundleWithTrailingProofBoxField(),
             )
         }
-        assertTrue(trailingProofBoxField.message.orEmpty().contains("Trailing bytes after proof"))
+        assertEquals("Trailing bytes after proof", trailingProofBoxField.message)
 
         val malformedProofBytes = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.decodeBundle(
                 recursiveSpendBundleWithEmptyProofBytes(),
             )
         }
-        assertTrue(malformedProofBytes.message.orEmpty().contains("bundle.proof_bytes"))
+        assertEquals("bundle.proof_bytes empty recursive proof", malformedProofBytes.message)
 
         val malformedProofPublicInputs = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.decodeBundle(
                 recursiveSpendBundleWithEmptyProofPublicInputs(),
             )
         }
-        assertTrue(malformedProofPublicInputs.message.orEmpty().contains("bundle.proof_public_inputs"))
+        assertEquals("bundle.proof_public_inputs empty recursive proof inputs", malformedProofPublicInputs.message)
 
         val malformedProofPublicInputsHash = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.decodeBundle(
                 recursiveSpendBundleWithZeroProofPublicInputsHash(),
             )
         }
-        assertTrue(malformedProofPublicInputsHash.message.orEmpty().contains("bundle.proof_public_inputs_hash"))
+        assertEquals("bundle.proof_public_inputs_hash must be non-zero", malformedProofPublicInputsHash.message)
 
         val mismatchedProofPublicInputsHash = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.decodeBundle(
                 recursiveSpendBundleWithMismatchedProofPublicInputsHash(),
             )
         }
-        assertTrue(mismatchedProofPublicInputsHash.message.orEmpty().contains("bundle.proof_public_inputs_hash"))
+        assertEquals("bundle.proof_public_inputs_hash mismatch", mismatchedProofPublicInputsHash.message)
 
         val malformedCurrentNotes = listOf(
             Pair(
                 recursiveSpendBundleWithCurrentNoteField(0, ByteArray(32)),
-                "noteCommitment",
+                "noteCommitment must be non-zero",
             ),
             Pair(
                 recursiveSpendBundleWithCurrentNoteField(1, ByteArray(32)),
-                "spendNullifier",
+                "spendNullifier must be non-zero",
             ),
             Pair(
                 recursiveSpendBundleWithEqualCurrentNoteNullifier(),
-                "spendNullifier",
+                "spendNullifier must differ from noteCommitment",
             ),
             Pair(
                 recursiveSpendBundleWithCurrentNoteField(2, zeroNumericPayload()),
-                "amount",
+                "numeric amount must be greater than zero",
             ),
             Pair(
                 recursiveSpendBundleWithCurrentNoteField(0, fixedArrayPayload(0x04, 31)),
-                "note_commitment",
+                "note_commitment must be exactly 32 bytes",
             ),
             Pair(
                 recursiveSpendBundleWithCurrentNoteField(0, fixedArrayPayload(0x04, 33)),
-                "note_commitment",
+                "note_commitment must be exactly 32 bytes",
             ),
             Pair(
                 recursiveSpendBundleWithCurrentNoteField(1, fixedArrayPayload(0x05, 31)),
-                "spend_nullifier",
+                "spend_nullifier must be exactly 32 bytes",
             ),
             Pair(
                 recursiveSpendBundleWithCurrentNoteField(1, fixedArrayPayload(0x05, 33)),
-                "spend_nullifier",
+                "spend_nullifier must be exactly 32 bytes",
             ),
             Pair(
                 recursiveSpendBundleWithCurrentNoteField(
                     2,
                     numericPayload(byteArrayOf(1), scale = 1),
                 ),
-                "numeric scale",
+                "numeric scale must be zero",
             ),
             Pair(
                 recursiveSpendBundleWithCurrentNoteField(
                     2,
                     numericPayload(ByteArray(16) + byteArrayOf(1)),
                 ),
-                "amount",
+                "numeric amount must fit in u128",
             ),
             Pair(
                 recursiveSpendBundleWithCurrentNoteField(
@@ -329,24 +363,24 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 "Trailing bytes after field decode",
             ),
         )
-        malformedCurrentNotes.forEach { (archive, expectedField) ->
+        malformedCurrentNotes.forEach { (archive, expectedMessage) ->
             val malformedCurrentNote = assertFailsWith<IllegalArgumentException> {
                 KagemushaRecursiveSpendRequestCodecs.decodeBundle(archive)
             }
-            assertTrue(malformedCurrentNote.message.orEmpty().contains(expectedField))
+            assertEquals(expectedMessage, malformedCurrentNote.message)
         }
         val trailingBundleField = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.decodeBundle(
                 recursiveSpendBundleWithTrailingBundleField(),
             )
         }
-        assertTrue(trailingBundleField.message.orEmpty().contains("Trailing bytes after bundle"))
+        assertEquals("Trailing bytes after bundle", trailingBundleField.message)
         val trailingCurrentNoteField = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.decodeBundle(
                 recursiveSpendBundleWithTrailingCurrentNoteField(),
             )
         }
-        assertTrue(trailingCurrentNoteField.message.orEmpty().contains("Trailing bytes after field decode"))
+        assertEquals("Trailing bytes after field decode", trailingCurrentNoteField.message)
 
         val malformedDomain = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.decodeBundle(
@@ -356,16 +390,28 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 ),
             )
         }
-        assertTrue(malformedDomain.message.orEmpty().contains("bundle.accumulator.domain"))
+        assertEquals(
+            "bundle.accumulator.domain must be " +
+                KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
+            malformedDomain.message,
+        )
         val malformedAccumulatorFields = listOf(
             Triple(1, testStringPayload("kagemusha-recursive-spend-abi-chain"), "bundle.accumulator.chain_id"),
-            Triple(2, fixedArrayPayload(0x01, 15), "asset"),
-            Triple(2, fixedArrayPayload(0x01, 17), "asset"),
-            Triple(3, fixedArrayPayload(0x02, 31), "initial_root"),
-            Triple(3, fixedArrayPayload(0x02, 33), "initial_root"),
-            Triple(4, fixedArrayPayload(0x03, 31), "final_root"),
-            Triple(4, fixedArrayPayload(0x03, 33), "final_root"),
-            Triple(6, byteArrayOf(0, 0, 0, 0), "hop_count"),
+            Triple(3, ByteArray(32), "bundle.accumulator.initial_root"),
+            Triple(4, ByteArray(32), "bundle.accumulator.final_root"),
+            Triple(4, init.initialRoot, "bundle.accumulator.final_root"),
+            Triple(2, fixedArrayPayload(0x01, 15), "asset must be exactly 16 bytes"),
+            Triple(2, fixedArrayPayload(0x01, 17), "asset must be exactly 16 bytes"),
+            Triple(3, fixedArrayPayload(0x02, 31), "initial_root must be exactly 32 bytes"),
+            Triple(3, fixedArrayPayload(0x02, 33), "initial_root must be exactly 32 bytes"),
+            Triple(4, fixedArrayPayload(0x03, 31), "final_root must be exactly 32 bytes"),
+            Triple(4, fixedArrayPayload(0x03, 33), "final_root must be exactly 32 bytes"),
+            Triple(
+                6,
+                byteArrayOf(0, 0, 0, 0),
+                "bundle.accumulator.hop_count must be in 1.." +
+                    KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1,
+            ),
             Triple(
                 6,
                 byteArrayOf(
@@ -374,23 +420,29 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                     0,
                     0,
                 ),
-                "hop_count",
+                "bundle.accumulator.hop_count must be in 1.." +
+                    KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1,
             ),
+            Triple(7, ByteArray(32), "bundle.accumulator.lineage_digest"),
+            Triple(8, ByteArray(32) { 0x7d.toByte() }, "bundle.accumulator.aggregation_transcript_digest"),
+            Triple(14, ByteArray(32) { 0x7e.toByte() }, "bundle.accumulator.append_opening_preflight_digest"),
+            Triple(15, ByteArray(32) { 0x7f.toByte() }, "bundle.accumulator.append_boundary_digest"),
+            Triple(21, byteArrayOf(3, 0, 0, 0), "bundle.accumulator.verifier_opening_len"),
         )
-        malformedAccumulatorFields.forEach { (fieldIndex, replacement, expectedField) ->
+        malformedAccumulatorFields.forEach { (fieldIndex, replacement, expectedMessage) ->
             val malformedField = assertFailsWith<IllegalArgumentException> {
                 KagemushaRecursiveSpendRequestCodecs.decodeBundle(
                     recursiveSpendBundleWithAccumulatorField(fieldIndex, replacement),
                 )
             }
-            assertTrue(malformedField.message.orEmpty().contains(expectedField))
+            assertEquals(expectedMessage, malformedField.message)
         }
         val trailingAccumulatorField = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.decodeBundle(
                 recursiveSpendBundleWithTrailingAccumulatorField(),
             )
         }
-        assertTrue(trailingAccumulatorField.message.orEmpty().contains("Trailing bytes after accumulator"))
+        assertEquals("Trailing bytes after accumulator", trailingAccumulatorField.message)
     }
 
     @Test
@@ -697,7 +749,10 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 ),
             )
         }
-        assertTrue(extraColumnError.message.orEmpty().contains("exactly 9 single-row"))
+        assertEquals(
+            "hop 0 transfer proof must expose exactly 9 single-row instance columns",
+            extraColumnError.message,
+        )
 
         val sameRootError = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
@@ -712,7 +767,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 ),
             )
         }
-        assertTrue(sameRootError.message.orEmpty().contains("rootAfter must differ"))
+        assertEquals("hop 0 rootAfter must differ from rootBefore", sameRootError.message)
 
         val rootContinuityError = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
@@ -734,7 +789,10 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 ),
             )
         }
-        assertTrue(rootContinuityError.message.orEmpty().contains("rootBefore must equal previous hop rootAfter"))
+        assertEquals(
+            "hop 1 rootBefore must equal previous hop rootAfter",
+            rootContinuityError.message,
+        )
 
         val chainError = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
@@ -756,7 +814,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 ),
             )
         }
-        assertTrue(chainError.message.orEmpty().contains("chainId does not match"))
+        assertEquals("hop 1 chainId does not match first hop", chainError.message)
 
         val assetError = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
@@ -778,7 +836,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 ),
             )
         }
-        assertTrue(assetError.message.orEmpty().contains("asset does not match"))
+        assertEquals("hop 1 asset does not match first hop", assetError.message)
     }
 
     @Test
@@ -850,7 +908,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 blockHeight = 12L,
             )
         }
-        assertTrue(autoInitPallasWrongProfile.message.orEmpty().contains("init artifacts"))
+        assertEquals("lineageKeyArtifacts must be init artifacts", autoInitPallasWrongProfile.message)
 
         val previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle")
         val append = KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendAppendRequest(
@@ -936,7 +994,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 blockHeight = 16L,
             )
         }
-        assertTrue(autoAppendWrongProfile.message.orEmpty().contains("append artifacts"))
+        assertEquals("lineageKeyArtifacts must be append artifacts", autoAppendWrongProfile.message)
     }
 
     @Test
@@ -946,7 +1004,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         val pallasError = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.buildPallasOpenEnvelopesArchive(emptyList())
         }
-        assertTrue(pallasError.message.orEmpty().contains("hops"))
+        assertEquals("hops must not be empty", pallasError.message)
 
         val bundleError = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
@@ -954,7 +1012,11 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 listOf(verifierRecord),
             )
         }
-        assertTrue(bundleError.message.orEmpty().contains("chainId, asset, and rootAfter"))
+        assertEquals(
+            "chainId, asset, and rootAfter are required to build KagemushaVerifiedFoldRecordBundle; " +
+                "use VerifiedFoldHopEvidence inputs instead",
+            bundleError.message,
+        )
 
         val initError = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendInitRequest(
@@ -965,7 +1027,12 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 lineageProvingKeyArchive = syntheticArchive("test.LineageProvingKeyArchive"),
             )
         }
-        assertTrue(initError.message.orEmpty().contains("VerifiedFoldHopEvidence"))
+        assertEquals(
+            "recursive spend requests require explicit VerifiedFoldHopEvidence and a bridge-generated or explicit " +
+                "Pallas open-envelopes archive; privacy proof outputs alone do not carry " +
+                "Pallas IPA opening envelopes, chainId, asset, or rootAfter",
+            initError.message,
+        )
 
         val appendError = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendAppendRequest(
@@ -977,7 +1044,12 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 previousLineageVerifierRecord = verifierRecord,
             )
         }
-        assertTrue(appendError.message.orEmpty().contains("Pallas open-envelopes archive"))
+        assertEquals(
+            "recursive spend requests require explicit VerifiedFoldHopEvidence and a bridge-generated or explicit " +
+                "Pallas open-envelopes archive; privacy proof outputs alone do not carry " +
+                "Pallas IPA opening envelopes, chainId, asset, or rootAfter",
+            appendError.message,
+        )
     }
 
     @Test
@@ -989,7 +1061,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             entrypoint = "buildConfidentialUnshieldProofV3",
         )
 
-        assertFailsWith<IllegalArgumentException> {
+        val rejectedProofResult = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(
                 privacyBuildResultArchive(
                     algorithmId = "unshield",
@@ -1002,8 +1074,12 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 fixture.verifierRecordRef,
             )
         }
+        assertEquals(
+            "unshieldProofOutputArchive must be a successful privacy proof result: status=1 error_code=5",
+            rejectedProofResult.message,
+        )
 
-        assertFailsWith<IllegalArgumentException> {
+        val inactiveUnshieldVerifierRecord = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(
                 fixture.proofOutputArchive,
                 VerifierRecordRef(
@@ -1017,8 +1093,12 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 ),
             )
         }
+        assertEquals(
+            "unshieldVerifierRecord status must be Active",
+            inactiveUnshieldVerifierRecord.message,
+        )
 
-        assertFailsWith<IllegalArgumentException> {
+        val unshieldProofAsFoldHop = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
                 listOf(
                     VerifiedFoldHopEvidence(
@@ -1031,6 +1111,10 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 ),
             )
         }
+        assertEquals(
+            "hop 0 proofOutputArchive algorithm_id must be confidential-transfer-v2",
+            unshieldProofAsFoldHop.message,
+        )
     }
 
     @Test
@@ -1056,33 +1140,45 @@ class KagemushaRecursiveSpendRequestCodecsTest {
 
     @Test
     fun `spendable note rejects malformed digests and noncanonical amounts`() {
-        assertFailsWith<IllegalArgumentException> {
+        val shortNoteCommitment = assertFailsWith<IllegalArgumentException> {
             SpendableNoteDescriptor(ByteArray(31) { 1 }, ByteArray(32) { 2 }, "1")
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertEquals("noteCommitment must be exactly 32 bytes", shortNoteCommitment.message)
+        val zeroNoteCommitment = assertFailsWith<IllegalArgumentException> {
             SpendableNoteDescriptor(ByteArray(32), ByteArray(32) { 2 }, "1")
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertEquals("noteCommitment must be non-zero", zeroNoteCommitment.message)
+        val shortSpendNullifier = assertFailsWith<IllegalArgumentException> {
+            SpendableNoteDescriptor(ByteArray(32) { 1 }, ByteArray(31) { 2 }, "1")
+        }
+        assertEquals("spendNullifier must be exactly 32 bytes", shortSpendNullifier.message)
+        val zeroSpendNullifier = assertFailsWith<IllegalArgumentException> {
+            SpendableNoteDescriptor(ByteArray(32) { 1 }, ByteArray(32), "1")
+        }
+        assertEquals("spendNullifier must be non-zero", zeroSpendNullifier.message)
+        val repeatedDigest = assertFailsWith<IllegalArgumentException> {
             SpendableNoteDescriptor(ByteArray(32) { 3 }, ByteArray(32) { 3 }, "1")
         }
-        for (amount in listOf(
-            "",
-            "0",
-            "00",
-            "01",
-            "0007",
-            "-1",
-            "+1",
-            "1.0",
-            "1e3",
-            "7 ",
-            " 7",
-            U128_MAX_PLUS_ONE,
+        assertEquals("spendNullifier must differ from noteCommitment", repeatedDigest.message)
+        for ((amount, amountMessage, publicAmountMessage) in listOf(
+            Triple("", "amount must be a decimal integer", "publicAmount must be a decimal integer"),
+            Triple("0", "amount must be greater than zero", "publicAmount must be greater than zero"),
+            Triple("00", "amount must be canonical", "publicAmount must be canonical"),
+            Triple("01", "amount must be canonical", "publicAmount must be canonical"),
+            Triple("0007", "amount must be canonical", "publicAmount must be canonical"),
+            Triple("-1", "amount must be a decimal integer", "publicAmount must be a decimal integer"),
+            Triple("+1", "amount must be a decimal integer", "publicAmount must be a decimal integer"),
+            Triple("1.0", "amount must be a decimal integer", "publicAmount must be a decimal integer"),
+            Triple("1e3", "amount must be a decimal integer", "publicAmount must be a decimal integer"),
+            Triple("7 ", "amount must be a decimal integer", "publicAmount must be a decimal integer"),
+            Triple(" 7", "amount must be a decimal integer", "publicAmount must be a decimal integer"),
+            Triple(U128_MAX_PLUS_ONE, "amount must fit in u128", "publicAmount must fit in u128"),
         )) {
-            assertFailsWith<IllegalArgumentException> {
+            val invalidAmount = assertFailsWith<IllegalArgumentException> {
                 SpendableNoteDescriptor(ByteArray(32) { 4 }, ByteArray(32) { 5 }, amount)
             }
-            assertFailsWith<IllegalArgumentException> {
+            assertEquals(amountMessage, invalidAmount.message)
+            val invalidPublicAmount = assertFailsWith<IllegalArgumentException> {
                 RedeemSpendRequest(
                     bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
                     recipient = sampleRecipient(),
@@ -1090,6 +1186,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                     redeemProof = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
                 )
             }
+            assertEquals(publicAmountMessage, invalidPublicAmount.message)
         }
         for ((changeOutput, expectedMessage) in listOf(
             ByteArray(31) { 1 } to "changeOutput must be exactly 32 bytes",
@@ -1105,6 +1202,28 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 )
             }
             assertEquals(expectedMessage, invalidChangeOutput.message)
+        }
+        val partialBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle")
+        val partialSummary = KagemushaRecursiveSpendRequestCodecs.decodeBundle(partialBundle)
+        assertTrue(partialSummary.topupAnchorNullifiers.isNotEmpty())
+        for (changeOutput in listOf(
+            partialSummary.currentNote.noteCommitment,
+            partialSummary.currentNote.spendNullifier,
+            partialSummary.topupAnchorNullifiers[0],
+        )) {
+            val invalidReservedChangeOutput = assertFailsWith<IllegalArgumentException> {
+                RedeemSpendRequest(
+                    bundle = partialBundle,
+                    recipient = sampleRecipient(),
+                    publicAmount = "6",
+                    redeemProof = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                    changeOutput = changeOutput,
+                )
+            }
+            assertEquals(
+                "changeOutput must not reuse the current note commitment, redeem nullifier, or top-up anchor nullifier",
+                invalidReservedChangeOutput.message,
+            )
         }
         val missingChangeOutput = assertFailsWith<IllegalArgumentException> {
             RedeemSpendRequest(
@@ -1236,14 +1355,18 @@ class KagemushaRecursiveSpendRequestCodecsTest {
     fun `typed requests reject malformed archives heights and lineage gaps before native dispatch`() {
         val initLineageArtifacts = sampleInitLineageArtifacts(seed = 0x6a)
         val appendLineageArtifacts = sampleAppendLineageArtifacts(seed = 0x6b)
-        assertFailsWith<IllegalArgumentException> {
+        val missingInitLineageVerifierKey = assertFailsWith<IllegalArgumentException> {
             InitSpendRequest(
                 recordBundle = sampleRecordBundle(),
                 pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
                 currentNote = sampleNote(),
             )
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertEquals(
+            "lineageVerifierKey is required for recursive spend init",
+            missingInitLineageVerifierKey.message,
+        )
+        val initWrongRecordBundle = assertFailsWith<IllegalArgumentException> {
             InitSpendRequest(
                 recordBundle = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFY_RESULT),
                 pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
@@ -1252,12 +1375,20 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 lineageProvingKeyArchive = initLineageArtifacts.provingKeyArchive,
             )
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertEquals(
+            "recordBundle must be a valid ${KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE} Norito archive",
+            initWrongRecordBundle.message,
+        )
+        val verifierRecordWrongArchive = assertFailsWith<IllegalArgumentException> {
             VerifierRecordRef(
                 "halo2/ipa:wrong-schema",
                 syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
             )
         }
+        assertEquals(
+            "recordBytes must be a valid ${KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD} Norito archive",
+            verifierRecordWrongArchive.message,
+        )
         val missingVerifyLineageRecord = assertFailsWith<IllegalArgumentException> {
             VerifySpendRequest(
                 bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
@@ -1371,7 +1502,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         val corruptedPallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive()
         corruptedPallasOpenEnvelopes[corruptedPallasOpenEnvelopes.lastIndex] =
             (corruptedPallasOpenEnvelopes.last().toInt() xor 0x01).toByte()
-        assertFailsWith<IllegalArgumentException> {
+        val corruptedPallasOpenEnvelopeArchive = assertFailsWith<IllegalArgumentException> {
             InitSpendRequest(
                 recordBundle = sampleRecordBundle(),
                 pallasOpenEnvelopes = corruptedPallasOpenEnvelopes,
@@ -1380,13 +1511,27 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 lineageProvingKeyArchive = initLineageArtifacts.provingKeyArchive,
             )
         }
+        assertTrue(corruptedPallasOpenEnvelopeArchive.message.orEmpty().startsWith("Checksum mismatch: expected 0x"))
+        assertTrue(corruptedPallasOpenEnvelopeArchive.message.orEmpty().contains(" got 0x"))
         val malformedPallasOpenArchives = listOf(
             syntheticArchive("test.WrongPallasOpenEnvelopes") to
-                "Vec<iroha_zkp_halo2::OpenVerifyEnvelope>",
-            pallasOpenEnvelopeVectorArchive(count = 0) to "requires exactly 1 envelope",
-            pallasOpenEnvelopeVectorArchive(count = 2) to "requires exactly 1 envelope",
-            pallasOpenEnvelopeVectorArchive { it.publicCurveId = 2 } to "curve_id must be Pallas",
-            pallasOpenEnvelopeVectorArchive { it.includeDomainTag = false } to "domain_tag is required",
+                "pallasOpenEnvelopes must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive",
+            pallasOpenEnvelopeVectorArchive(count = 0) to "pallasOpenEnvelopes requires exactly 1 envelope(s)",
+            pallasOpenEnvelopeVectorArchive(count = 2) to "pallasOpenEnvelopes requires exactly 1 envelope(s)",
+            pallasOpenEnvelopeVectorArchive { it.publicCurveId = 2 } to
+                "pallasOpenEnvelopes[0].public.curve_id must be Pallas",
+            pallasOpenEnvelopeVectorArchive { it.transcriptLabel = "" } to
+                "pallasOpenEnvelopes[0] transcript_label must be non-empty",
+            pallasOpenEnvelopeVectorArchive { it.transcriptLabel = "\u00e9".repeat(65) } to
+                "pallasOpenEnvelopes[0] transcript_label exceeds 128 bytes",
+            pallasOpenEnvelopeVectorArchive { it.includeDomainTag = false } to
+                "pallasOpenEnvelopes[0].domain_tag is required",
+            pallasOpenEnvelopeVectorArchive { it.vkCommitmentPayload = fixedArrayPayload(0x70, 32) } to
+                "pallasOpenEnvelopes[0].vk_commitment must be exactly 32 bytes",
+            pallasOpenEnvelopeVectorArchive { it.publicInputsSchemaHashPayload = fixedArrayPayload(0x71, 32) } to
+                "pallasOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes",
+            pallasOpenEnvelopeVectorArchive { it.domainTagPayload = fixedArrayPayload(0x72, 32) } to
+                "pallasOpenEnvelopes[0].domain_tag must be exactly 32 bytes",
             pallasOpenEnvelopeVectorArchiveWithPayload(byteArrayOf(0x00)) to "Unexpected end of data",
         )
         for ((archive, expectedMessage) in malformedPallasOpenArchives) {
@@ -1399,11 +1544,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                     lineageProvingKeyArchive = initLineageArtifacts.provingKeyArchive,
                 )
             }
-            assertTrue(
-                archiveError.message.orEmpty().contains(expectedMessage) ||
-                    archiveError.cause?.message.orEmpty().contains(expectedMessage),
-                "expected `$expectedMessage` in ${archiveError.message} / ${archiveError.cause?.message}",
-            )
+            assertEquals(expectedMessage, archiveError.message)
         }
         val countMismatch = assertFailsWith<IllegalArgumentException> {
             InitSpendRequest(
@@ -1414,7 +1555,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 lineageProvingKeyArchive = initLineageArtifacts.provingKeyArchive,
             )
         }
-        assertTrue(countMismatch.message.orEmpty().contains("requires exactly 2 envelope"))
+        assertEquals("pallasOpenEnvelopes requires exactly 2 envelope(s)", countMismatch.message)
         val appendArtifactsOnInit = sampleAppendLineageArtifacts(seed = 0x6c)
         val wrongInitLineage = assertFailsWith<IllegalArgumentException> {
             InitSpendRequest(
@@ -1425,10 +1566,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 lineageProvingKeyArchive = appendArtifactsOnInit.provingKeyArchive,
             )
         }
-        assertTrue(
-            wrongInitLineage.message.orEmpty().contains("lineage key artifacts") ||
-                wrongInitLineage.cause?.message.orEmpty().contains("lineage_verifier_key"),
-        )
+        assertEquals("lineage key artifacts are invalid for recursive spend init", wrongInitLineage.message)
         val wrongInitLineageProfile = assertFailsWith<IllegalArgumentException> {
             InitSpendRequest(
                 recordBundle = sampleRecordBundle(),
@@ -1437,7 +1575,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 lineageKeyArtifacts = appendArtifactsOnInit.typed,
             )
         }
-        assertTrue(wrongInitLineageProfile.message.orEmpty().contains("init artifacts"))
+        assertEquals("lineageKeyArtifacts must be init artifacts", wrongInitLineageProfile.message)
         val forgedCommitmentArchive = lineageProvingKeyArchive(
             KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
             appendArtifactsOnInit.verifierKey,
@@ -1452,10 +1590,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 lineageProvingKeyArchive = forgedCommitmentArchive,
             )
         }
-        assertTrue(
-            forgedCommitment.message.orEmpty().contains("lineage key artifacts") ||
-                forgedCommitment.cause?.message.orEmpty().contains("lineage_proving_key_archive"),
-        )
+        assertEquals("lineage key artifacts are invalid for recursive spend init", forgedCommitment.message)
         val malformedVerifierKey = assertFailsWith<IllegalArgumentException> {
             InitSpendRequest(
                 recordBundle = sampleRecordBundle(),
@@ -1465,22 +1600,24 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 lineageProvingKeyArchive = initLineageArtifacts.provingKeyArchive,
             )
         }
-        assertTrue(
-            malformedVerifierKey.message.orEmpty().contains("lineage key artifacts") ||
-                malformedVerifierKey.cause?.message.orEmpty().contains("lineage_verifier_key"),
-        )
-        assertFailsWith<IllegalArgumentException> {
+        assertEquals("lineage key artifacts are invalid for recursive spend init", malformedVerifierKey.message)
+        val negativeVerifyHeight = assertFailsWith<IllegalArgumentException> {
             VerifySpendRequest(
                 bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
                 blockHeight = -1L,
             )
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertEquals("blockHeight must be non-negative", negativeVerifyHeight.message)
+        val verifyWrongBundle = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.encodeVerifyRequest(
                 VerifySpendRequest(sharedRecursiveSpendArchive(FixtureAbi.ABI6, "verify_result")),
             )
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertEquals(
+            "bundle must be a valid ${KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE} Norito archive",
+            verifyWrongBundle.message,
+        )
+        val redeemWrongBundle = assertFailsWith<IllegalArgumentException> {
             RedeemSpendRequest(
                 bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "verify_result"),
                 recipient = sampleRecipient(),
@@ -1488,15 +1625,24 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 redeemProof = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
             )
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertEquals(
+            "bundle must be a valid ${KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE} Norito archive",
+            redeemWrongBundle.message,
+        )
+        val redeemWrongProof = assertFailsWith<IllegalArgumentException> {
             RedeemSpendRequest(
                 bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
                 recipient = sampleRecipient(),
                 publicAmount = "7",
                 redeemProof = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFY_RESULT),
+                lineageWitness = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_from_init_result"),
             )
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertEquals(
+            "redeemProof must be a valid ${KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT} Norito archive",
+            redeemWrongProof.message,
+        )
+        val redeemWrongLineageWitness = assertFailsWith<IllegalArgumentException> {
             RedeemSpendRequest(
                 bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
                 recipient = sampleRecipient(),
@@ -1505,6 +1651,10 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 lineageWitness = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
             )
         }
+        assertEquals(
+            "lineageWitness must be a valid ${KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS} Norito archive",
+            redeemWrongLineageWitness.message,
+        )
         assertFailsWith<IllegalArgumentException>("reserved lineage witness malformed") {
             RedeemSpendRequest(
                 bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
@@ -1518,9 +1668,13 @@ class KagemushaRecursiveSpendRequestCodecsTest {
 
         val tampered = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle")
         tampered[tampered.lastIndex] = (tampered[tampered.lastIndex].toInt() xor 0x01).toByte()
-        assertFailsWith<IllegalArgumentException> {
+        val tamperedError = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.decodeBundle(tampered)
         }
+        assertTrue(
+            tamperedError.message?.contains("Checksum mismatch") == true,
+            "expected tampered bundle to fail checksum validation, actual: ${tamperedError.message}",
+        )
 
         val error = assertFailsWith<IllegalArgumentException> {
             AppendSpendRequest(
@@ -1535,7 +1689,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 lineageProvingKeyArchive = appendLineageArtifacts.provingKeyArchive,
             )
         }
-        assertTrue(error.message.orEmpty().contains("previousProofOpenEnvelopes is required"))
+        assertEquals("previousProofOpenEnvelopes is required for lineage append output", error.message)
 
         val initArtifactsOnAppend = sampleInitLineageArtifacts(seed = 0x6e)
         val wrongAppendLineage = assertFailsWith<IllegalArgumentException> {
@@ -1552,10 +1706,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 lineageProvingKeyArchive = initArtifactsOnAppend.provingKeyArchive,
             )
         }
-        assertTrue(
-            wrongAppendLineage.message.orEmpty().contains("lineage key artifacts") ||
-                wrongAppendLineage.cause?.message.orEmpty().contains("lineage_verifier_key"),
-        )
+        assertEquals("lineage key artifacts are invalid for lineage append output", wrongAppendLineage.message)
         val wrongAppendLineageProfile = assertFailsWith<IllegalArgumentException> {
             AppendSpendRequest(
                 previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
@@ -1570,7 +1721,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 blockHeight = null,
             )
         }
-        assertTrue(wrongAppendLineageProfile.message.orEmpty().contains("append artifacts"))
+        assertEquals("lineageKeyArtifacts must be append artifacts", wrongAppendLineageProfile.message)
 
         assertArchiveSchema(
             KagemushaRecursiveSpendRequestCodecs.encodeAppendRequest(
@@ -1592,13 +1743,25 @@ class KagemushaRecursiveSpendRequestCodecsTest {
 
         val malformedPreviousOpenArchives = listOf(
             syntheticArchive("test.WrongPreviousProofOpenEnvelopes") to
-                "Vec<iroha_zkp_halo2::OpenVerifyEnvelope>",
-            pallasOpenEnvelopeVectorArchive(count = 0) to "requires exactly 1 envelope",
-            pallasOpenEnvelopeVectorArchive(count = 2) to "requires exactly 1 envelope",
-            pallasOpenEnvelopeVectorArchive { it.paramsCurveId = 2 } to "curve_id must be Pallas",
-            pallasOpenEnvelopeVectorArchive { it.transcriptLabel = "" } to "transcript_label must be non-empty",
-            pallasOpenEnvelopeVectorArchive { it.includeVkCommitment = false } to "vk_commitment is required",
-            pallasOpenEnvelopeVectorArchive { it.trailingEnvelopeBytes = byteArrayOf(0x7f) } to "Trailing bytes",
+                "previousProofOpenEnvelopes must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive",
+            pallasOpenEnvelopeVectorArchive(count = 0) to "previousProofOpenEnvelopes requires exactly 1 envelope(s)",
+            pallasOpenEnvelopeVectorArchive(count = 2) to "previousProofOpenEnvelopes requires exactly 1 envelope(s)",
+            pallasOpenEnvelopeVectorArchive { it.paramsCurveId = 2 } to
+                "previousProofOpenEnvelopes[0].params.curve_id must be Pallas",
+            pallasOpenEnvelopeVectorArchive { it.transcriptLabel = "" } to
+                "previousProofOpenEnvelopes[0] transcript_label must be non-empty",
+            pallasOpenEnvelopeVectorArchive { it.transcriptLabel = "\u00e9".repeat(65) } to
+                "previousProofOpenEnvelopes[0] transcript_label exceeds 128 bytes",
+            pallasOpenEnvelopeVectorArchive { it.includeVkCommitment = false } to
+                "previousProofOpenEnvelopes[0].vk_commitment is required",
+            pallasOpenEnvelopeVectorArchive { it.vkCommitmentPayload = fixedArrayPayload(0x70, 32) } to
+                "previousProofOpenEnvelopes[0].vk_commitment must be exactly 32 bytes",
+            pallasOpenEnvelopeVectorArchive { it.publicInputsSchemaHashPayload = fixedArrayPayload(0x71, 32) } to
+                "previousProofOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes",
+            pallasOpenEnvelopeVectorArchive { it.domainTagPayload = fixedArrayPayload(0x72, 32) } to
+                "previousProofOpenEnvelopes[0].domain_tag must be exactly 32 bytes",
+            pallasOpenEnvelopeVectorArchive { it.trailingEnvelopeBytes = byteArrayOf(0x7f) } to
+                "Trailing bytes after previousProofOpenEnvelopes[0]",
             pallasOpenEnvelopeVectorArchiveWithPayload(byteArrayOf(0x00)) to "Unexpected end of data",
         )
         for ((archive, expectedMessage) in malformedPreviousOpenArchives) {
@@ -1616,11 +1779,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                     lineageProvingKeyArchive = appendLineageArtifacts.provingKeyArchive,
                 )
             }
-            assertTrue(
-                archiveError.message.orEmpty().contains(expectedMessage) ||
-                    archiveError.cause?.message.orEmpty().contains(expectedMessage),
-                "expected `$expectedMessage` in ${archiveError.message} / ${archiveError.cause?.message}",
-            )
+            assertEquals(expectedMessage, archiveError.message)
         }
 
         assertFailsWith<IllegalArgumentException> {
@@ -1831,6 +1990,9 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         var includeVkCommitment: Boolean = true,
         var includePublicInputsSchemaHash: Boolean = true,
         var includeDomainTag: Boolean = true,
+        var vkCommitmentPayload: ByteArray? = null,
+        var publicInputsSchemaHashPayload: ByteArray? = null,
+        var domainTagPayload: ByteArray? = null,
         var trailingEnvelopeBytes: ByteArray = ByteArray(0),
     )
 
@@ -1901,13 +2063,26 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         }
         writeTestField(encoder) { writeTestString(it, spec.transcriptLabel) }
         writeTestField(encoder) {
-            writeTestOptionRaw(it, if (spec.includeVkCommitment) fixedBytes(0x70) else null)
+            writeTestOptionRaw(
+                it,
+                if (spec.includeVkCommitment) spec.vkCommitmentPayload ?: fixedBytes(0x70) else null,
+            )
         }
         writeTestField(encoder) {
-            writeTestOptionRaw(it, if (spec.includePublicInputsSchemaHash) fixedBytes(0x71) else null)
+            writeTestOptionRaw(
+                it,
+                if (spec.includePublicInputsSchemaHash) {
+                    spec.publicInputsSchemaHashPayload ?: fixedBytes(0x71)
+                } else {
+                    null
+                },
+            )
         }
         writeTestField(encoder) {
-            writeTestOptionRaw(it, if (spec.includeDomainTag) fixedBytes(0x72) else null)
+            writeTestOptionRaw(
+                it,
+                if (spec.includeDomainTag) spec.domainTagPayload ?: fixedBytes(0x72) else null,
+            )
         }
     }
 
@@ -2177,6 +2352,9 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             NoritoHeader.COMPACT_LEN,
         )
     }
+
+    private fun recursiveSpendBundleWithTopupAnchorNullifiers(nullifiers: List<ByteArray>): ByteArray =
+        recursiveSpendBundleWithAccumulatorField(5, encodeSequence(nullifiers.map { it.copyOf() }))
 
     private fun recursiveSpendBundleWithTrailingBundleField(): ByteArray {
         val bundleFields = fieldPayloads(

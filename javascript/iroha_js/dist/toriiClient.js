@@ -134,6 +134,12 @@ const ALIAS_BY_ACCOUNT_OPTION_KEYS = new Set([
   "canonicalAuth",
 ]);
 
+const RETAIL_RECIPIENT_LOOKUP_REQUEST_KEYS = new Set([
+  "accountId",
+  "account_id",
+  "aliasFqn",
+  "alias_fqn",
+]);
 const ISO_NON_TERMINAL_STATUS_VALUES = new Set(["pending", "accepted"]);
 const ISO_STATUS_VALUES = new Map([
   ["pending", "Pending"],
@@ -2395,6 +2401,57 @@ export class ToriiClient {
       throw new Error("alias by-account endpoint returned no payload");
     }
     return normalizeAliasLookupByAccountResponse(body, "alias by-account response");
+  }
+
+  /**
+   * Lookup a retail recipient name through Torii (`POST /v1/retail/recipients/lookup`).
+   * @param {{accountId?: string, account_id?: string, aliasFqn?: string, alias_fqn?: string}} request
+   * @param {{signal?: AbortSignal, canonicalAuth?: CanonicalRequestAuth}} [options]
+   * @returns {Promise<{resolved: boolean, account_id?: string, alias_fqn?: string, fi_id?: string, full_name?: string}>}
+   */
+  async lookupRetailRecipient(request, options = {}) {
+    const requestRecord = ensureRecord(request, "lookupRetailRecipient request");
+    assertSupportedOptionKeys(
+      requestRecord,
+      RETAIL_RECIPIENT_LOOKUP_REQUEST_KEYS,
+      "lookupRetailRecipient request",
+    );
+    const accountId = ToriiClient._requireAccountId(
+      requestRecord.accountId ?? requestRecord.account_id,
+      "lookupRetailRecipient.accountId",
+    );
+    const aliasFqn = requireNonEmptyString(
+      requestRecord.aliasFqn ?? requestRecord.alias_fqn,
+      "lookupRetailRecipient.aliasFqn",
+    );
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "lookupRetailRecipient",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      ALIAS_CANONICAL_AUTH_OPTION_KEYS,
+      "lookupRetailRecipient options",
+    );
+    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(rest.canonicalAuth);
+    const response = await this._request("POST", "/v1/retail/recipients/lookup", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        account_id: accountId,
+        alias_fqn: aliasFqn,
+      }),
+      signal,
+      canonicalAuth,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("retail recipient lookup endpoint returned no payload");
+    }
+    return normalizeRetailRecipientLookupResponse(body, "retail recipient lookup response");
   }
 
   /**
@@ -21537,6 +21594,33 @@ function normalizeAliasLookupByAccountResponse(
     total,
     items,
   };
+}
+
+function normalizeRetailRecipientLookupResponse(
+  payload,
+  context = "retail recipient lookup response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  if (typeof record.resolved !== "boolean") {
+    throw new TypeError(`${context}.resolved must be a boolean`);
+  }
+  const result = { resolved: record.resolved };
+  if (record.account_id !== undefined && record.account_id !== null) {
+    result.account_id = ToriiClient._requireAccountId(
+      record.account_id,
+      `${context}.account_id`,
+    );
+  }
+  if (record.alias_fqn !== undefined && record.alias_fqn !== null) {
+    result.alias_fqn = requireNonEmptyString(record.alias_fqn, `${context}.alias_fqn`);
+  }
+  if (record.fi_id !== undefined && record.fi_id !== null) {
+    result.fi_id = requireNonEmptyString(record.fi_id, `${context}.fi_id`);
+  }
+  if (record.full_name !== undefined && record.full_name !== null) {
+    result.full_name = requireNonEmptyString(record.full_name, `${context}.full_name`);
+  }
+  return result;
 }
 
 function buildIdentifierResolveRequest(options, context) {

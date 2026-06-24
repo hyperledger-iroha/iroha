@@ -2626,6 +2626,44 @@ pub struct AliasLookupByAccountRequestDto {
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
 )]
+/// Request payload accepted by `/v1/retail/recipients/lookup`.
+pub struct RetailRecipientLookupRequestDto {
+    /// Canonical recipient account id, encoded as an I105 literal.
+    pub account_id: String,
+    /// Canonical bank alias FQN, for example `payee@hbl.sbp`.
+    pub alias_fqn: String,
+}
+
+#[derive(
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Response payload returned by `/v1/retail/recipients/lookup`.
+pub struct RetailRecipientLookupResponseDto {
+    /// Whether the bank confirmed the account, alias, FI, and recipient name.
+    pub resolved: bool,
+    /// Canonical recipient account id confirmed by the lookup service.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    /// Canonical bank alias FQN confirmed by the lookup service.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub alias_fqn: Option<String>,
+    /// Canonical FI identifier confirmed by the lookup service.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub fi_id: Option<String>,
+    /// Human-readable recipient name confirmed by the bank.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub full_name: Option<String>,
+}
+
+#[derive(
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+)]
 pub struct AliasResolveResponseDto {
     pub alias: String,
     pub account_id: String,

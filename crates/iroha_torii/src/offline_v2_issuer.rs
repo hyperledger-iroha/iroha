@@ -15,10 +15,12 @@ use iroha_data_model::{
     ValidationFail,
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
-    isi::{InstructionBox, IssueOfflineNoteV2, RedeemOfflineNoteV2},
+    isi::{
+        InstructionBox, IssueOfflineNoteV2, RedeemOfflineNoteV2, offline::RedeemKagemushaRecursive,
+    },
     offline::{
-        OFFLINE_NOTE_KEY_CERTIFICATE_VERSION, OfflineNoteIssue, OfflineNoteKeyCertificate,
-        OfflineNoteRecursiveProof, OfflineNoteRedeem,
+        KagemushaRecursiveSpendRedeemRequestV1, OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
+        OfflineNoteIssue, OfflineNoteKeyCertificate, OfflineNoteRecursiveProof, OfflineNoteRedeem,
     },
     proof::{ProofBox, VerifyingKeyId},
     transaction::{SignedTransaction, TransactionBuilder},
@@ -362,6 +364,9 @@ pub(crate) async fn handle_notes_redeem(
         body.as_ref(),
         ENDPOINT_NOTES_REDEEM,
     )?;
+    if has_kagemusha_redeem_payload(&parsed.value) {
+        return handle_kagemusha_recursive_notes_redeem(app, &issuer, parsed).await;
+    }
     let redemption = parse_redemption(&parsed)?;
     if redemption.amount > issuer.max_tx_value.clone() {
         return Err(validation(
@@ -434,6 +439,99 @@ pub(crate) async fn handle_notes_redeem(
             "public_inputs_hash",
             string_value(public_inputs_hash.to_string()),
         ),
+    ]))
+}
+
+async fn handle_kagemusha_recursive_notes_redeem(
+    app: SharedAppState,
+    issuer: &OfflineV2IssuerRuntime,
+    parsed: ParsedOfflineRequest,
+) -> Result<AxResponse, Error> {
+    let redeem_request = parse_kagemusha_recursive_redeem_request(&parsed, app.chain_id.as_ref())?;
+    let amount = Numeric::new(redeem_request.public_amount, 0);
+    if amount > issuer.max_tx_value.clone() {
+        return Err(validation(
+            "OFFLINE_AMOUNT_EXCEEDS_LIMIT",
+            "Offline Kagemusha redeem amount exceeds issuer policy.",
+        ));
+    }
+    let source_note_commitment = Hash::prehashed(
+        redeem_request
+            .bundle
+            .accumulator
+            .current_note
+            .note_commitment,
+    )
+    .to_string();
+    let input_nullifiers = redeem_request
+        .bundle
+        .accumulator
+        .redeem_nullifiers()
+        .map_err(|source| {
+            validation_owned(
+                "OFFLINE_KAGEMUSHA_REDEEM_INVALID",
+                format!("Offline Kagemusha redeem nullifier set is invalid: {source}"),
+            )
+        })?
+        .into_iter()
+        .map(|nullifier| Hash::prehashed(nullifier).to_string())
+        .collect::<Vec<_>>();
+    let public_inputs_hash = redeem_request
+        .bundle
+        .recursive_proof
+        .public_inputs_hash
+        .to_string();
+    let amount_string = amount.to_string();
+
+    let instruction = RedeemKagemushaRecursive::new_with_lineage_witness_and_change(
+        redeem_request.bundle,
+        redeem_request.recipient,
+        redeem_request.public_amount,
+        redeem_request.redeem_proof,
+        redeem_request.lineage_witness,
+        redeem_request.change_output,
+    );
+    let tx = issuer.sign_transaction(
+        TransactionBuilder::new((*app.chain_id).clone(), issuer.authority.clone().into())
+            .with_instructions([InstructionBox::from(instruction)]),
+        "offline_v2_kagemusha_recursive_redeem_transaction",
+    )?;
+    let tx_hash = tx.hash().to_string();
+    routing::handle_transaction_with_metrics(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        tx,
+        app.telemetry.clone(),
+        PATH_NOTES_REDEEM,
+    )
+    .await?;
+
+    let now_ms = now_ms();
+    let settlement = build_redeem_settlement(
+        issuer,
+        &parsed,
+        &amount_string,
+        &source_note_commitment,
+        &input_nullifiers,
+        &public_inputs_hash,
+        &tx_hash,
+        now_ms,
+    )?;
+
+    json_ok(json_object(vec![
+        ("operation_id", string_value(parsed.operation_id)),
+        ("settlement", settlement),
+        ("chain_tx_hash", string_value(tx_hash)),
+        (
+            "source_note_commitment",
+            string_value(source_note_commitment),
+        ),
+        (
+            "input_nullifiers",
+            Value::Array(input_nullifiers.into_iter().map(string_value).collect()),
+        ),
+        ("public_inputs_hash", string_value(public_inputs_hash)),
     ]))
 }
 
@@ -1272,6 +1370,202 @@ fn parse_redemption(request: &ParsedOfflineRequest) -> Result<OfflineNoteRedeem,
     };
     validate_redemption_matches_request(&redemption, request)?;
     Ok(redemption)
+}
+
+fn has_kagemusha_redeem_payload(value: &Value) -> bool {
+    value.get("redeem_request_norito_base64").is_some()
+        || value.get("compact_payment_token_norito_base64").is_some()
+        || value
+            .get("projection_verifier_record_norito_base64")
+            .is_some()
+}
+
+fn parse_kagemusha_recursive_redeem_request(
+    request: &ParsedOfflineRequest,
+    chain_id: &iroha_data_model::ChainId,
+) -> Result<KagemushaRecursiveSpendRedeemRequestV1, Error> {
+    reject_kagemusha_legacy_redeem_fields(&request.value)?;
+    let encoded = required_kagemusha_redeem_archive_string(&request.value)?;
+    reject_kagemusha_auxiliary_redeem_fields(&request.value)?;
+    let bytes = decode_canonical_base64(
+        encoded,
+        "redeem_request_norito_base64",
+        "OFFLINE_KAGEMUSHA_REDEEM_INVALID",
+    )?;
+    let redeem_request =
+        norito::decode_from_bytes::<KagemushaRecursiveSpendRedeemRequestV1>(&bytes).map_err(
+            |source| {
+                validation_owned(
+                    "OFFLINE_KAGEMUSHA_REDEEM_INVALID",
+                    format!(
+                        "Offline Kagemusha redeem_request_norito_base64 is not a KagemushaRecursiveSpendRedeemRequestV1 archive: {source}"
+                    ),
+                )
+            },
+        )?;
+    validate_kagemusha_recursive_redeem_request(&redeem_request, request, chain_id)?;
+    Ok(redeem_request)
+}
+
+fn validate_kagemusha_recursive_redeem_request(
+    redeem_request: &KagemushaRecursiveSpendRedeemRequestV1,
+    request: &ParsedOfflineRequest,
+    chain_id: &iroha_data_model::ChainId,
+) -> Result<(), Error> {
+    redeem_request.validate_public_binding().map_err(|source| {
+        validation_owned(
+            "OFFLINE_KAGEMUSHA_REDEEM_INVALID",
+            format!("Offline Kagemusha recursive redeem request is not chain-admissible: {source}"),
+        )
+    })?;
+    if &redeem_request.recipient != &request.account_id {
+        return Err(validation(
+            "OFFLINE_KAGEMUSHA_REDEEM_ACCOUNT_MISMATCH",
+            "Offline Kagemusha redeem recipient does not match the authenticated account.",
+        ));
+    }
+    if &redeem_request.bundle.accumulator.chain_id != chain_id {
+        return Err(validation(
+            "OFFLINE_KAGEMUSHA_REDEEM_CHAIN_MISMATCH",
+            "Offline Kagemusha redeem chain id does not match this Torii instance.",
+        ));
+    }
+    if redeem_request.bundle.accumulator.asset != request.asset_definition_id {
+        return Err(validation(
+            "OFFLINE_KAGEMUSHA_REDEEM_ASSET_MISMATCH",
+            "Offline Kagemusha redeem asset does not match the request asset definition.",
+        ));
+    }
+    let amount = Numeric::new(redeem_request.public_amount, 0);
+    if let Some(request_amount) = optional_kagemusha_echo_string(
+        &request.value,
+        "amount",
+        "OFFLINE_KAGEMUSHA_REDEEM_AMOUNT_MISMATCH",
+        "Offline Kagemusha redeem amount must be a canonical non-empty string when provided.",
+    )? {
+        let request_amount = parse_kagemusha_amount_echo(request_amount)?;
+        if request_amount != amount {
+            return Err(validation(
+                "OFFLINE_KAGEMUSHA_REDEEM_AMOUNT_MISMATCH",
+                "Offline Kagemusha redeem amount does not match the redeem request archive.",
+            ));
+        }
+    }
+    if let Some(source_note_commitment) = optional_kagemusha_echo_string(
+        &request.value,
+        "source_note_commitment",
+        "OFFLINE_KAGEMUSHA_REDEEM_SOURCE_MISMATCH",
+        "Offline Kagemusha redeem source note commitment must be a canonical non-empty string when provided.",
+    )? {
+        let expected = Hash::prehashed(
+            redeem_request
+                .bundle
+                .accumulator
+                .current_note
+                .note_commitment,
+        )
+        .to_string();
+        if source_note_commitment != expected {
+            return Err(validation(
+                "OFFLINE_KAGEMUSHA_REDEEM_SOURCE_MISMATCH",
+                "Offline Kagemusha redeem source note commitment does not match the archive.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn required_kagemusha_redeem_archive_string(value: &Value) -> Result<&str, Error> {
+    let Some(raw_value) = value.get("redeem_request_norito_base64") else {
+        return Err(validation(
+            "OFFLINE_KAGEMUSHA_REDEEM_REQUEST_REQUIRED",
+            "Offline Kagemusha recursive redemption requires redeem_request_norito_base64.",
+        ));
+    };
+    let Some(encoded) = raw_value.as_str() else {
+        return Err(validation(
+            "OFFLINE_KAGEMUSHA_REDEEM_INVALID",
+            "Offline Kagemusha redeem_request_norito_base64 must be a canonical base64 string.",
+        ));
+    };
+    if encoded.trim().is_empty() {
+        return Err(validation(
+            "OFFLINE_KAGEMUSHA_REDEEM_REQUEST_REQUIRED",
+            "Offline Kagemusha recursive redemption requires redeem_request_norito_base64.",
+        ));
+    }
+    if encoded != encoded.trim() {
+        return Err(validation(
+            "OFFLINE_KAGEMUSHA_REDEEM_INVALID",
+            "Offline Kagemusha redeem_request_norito_base64 must not contain surrounding whitespace.",
+        ));
+    }
+    Ok(encoded)
+}
+
+fn optional_kagemusha_echo_string<'a>(
+    value: &'a Value,
+    field: &'static str,
+    code: &'static str,
+    message: &'static str,
+) -> Result<Option<&'a str>, Error> {
+    let Some(raw_value) = value.get(field) else {
+        return Ok(None);
+    };
+    let Some(raw) = raw_value.as_str() else {
+        return Err(validation(code, message));
+    };
+    if raw.trim().is_empty() || raw != raw.trim() {
+        return Err(validation(code, message));
+    }
+    Ok(Some(raw))
+}
+
+fn parse_kagemusha_amount_echo(raw: &str) -> Result<Numeric, Error> {
+    let parsed = parse_positive_amount(raw, "amount")?;
+    if parsed.to_string() != raw {
+        return Err(validation(
+            "OFFLINE_KAGEMUSHA_REDEEM_AMOUNT_MISMATCH",
+            "Offline Kagemusha redeem amount must use canonical Numeric text.",
+        ));
+    }
+    Ok(parsed)
+}
+
+fn reject_kagemusha_legacy_redeem_fields(value: &Value) -> Result<(), Error> {
+    for field in [
+        "redemption",
+        "input_nullifiers",
+        "sender_key_certificate",
+        "recursive_proof",
+    ] {
+        if value.get(field).is_some() {
+            return Err(validation_owned(
+                "OFFLINE_KAGEMUSHA_REDEEM_LEGACY_FIELD",
+                format!(
+                    "Offline Kagemusha recursive redemption must not include legacy Offline Note V2 field `{field}`."
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn reject_kagemusha_auxiliary_redeem_fields(value: &Value) -> Result<(), Error> {
+    for field in [
+        "compact_payment_token_norito_base64",
+        "projection_verifier_record_norito_base64",
+    ] {
+        if value.get(field).is_some() {
+            return Err(validation_owned(
+                "OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_FIELD",
+                format!(
+                    "Offline Kagemusha recursive redemption must not include ignored auxiliary field `{field}` with redeem_request_norito_base64."
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn parse_redemption_object(
@@ -2194,6 +2488,69 @@ mod tests {
         .expect("offline v2 fixture parses")
     }
 
+    fn kagemusha_abi7_redeem_request_model() -> KagemushaRecursiveSpendRedeemRequestV1 {
+        let fixture: Value = json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/kagemusha_recursive_spend_abi7/archives.json"
+        )))
+        .expect("Kagemusha ABI-7 fixture parses");
+        let archives = fixture
+            .get("archives")
+            .and_then(Value::as_array)
+            .expect("Kagemusha fixture archives");
+        let archive = archives
+            .iter()
+            .find(|item| optional_string(item, "name") == Some("redeem_request"))
+            .expect("Kagemusha redeem request archive");
+        let encoded = required_string(archive, "bytes_base64").expect("redeem request bytes");
+        let bytes = BASE64_STANDARD
+            .decode(encoded)
+            .expect("decode Kagemusha redeem request");
+        norito::decode_from_bytes(&bytes).expect("decode Kagemusha redeem request model")
+    }
+
+    fn kagemusha_redeem_parsed_request(
+        model: &KagemushaRecursiveSpendRedeemRequestV1,
+    ) -> ParsedOfflineRequest {
+        let account_literal = model.recipient.to_string();
+        let asset_definition_literal = model.bundle.accumulator.asset.to_string();
+        let offline_public_key = hex::encode([0x77; 32]);
+        let device_binding = json_object(vec![
+            ("device_id", string_value("device-1")),
+            ("offline_public_key", string_value(&offline_public_key)),
+        ]);
+        let value = json_object(vec![
+            ("account_id", string_value(&account_literal)),
+            ("operation_id", string_value("fixture-kagemusha-redeem")),
+            ("device_id", string_value("device-1")),
+            ("offline_public_key", string_value(&offline_public_key)),
+            (
+                "asset_definition_id",
+                string_value(&asset_definition_literal),
+            ),
+            ("amount", string_value(model.public_amount.to_string())),
+            (
+                "source_note_commitment",
+                string_value(
+                    Hash::prehashed(model.bundle.accumulator.current_note.note_commitment)
+                        .to_string(),
+                ),
+            ),
+            ("device_binding", device_binding.clone()),
+        ]);
+        ParsedOfflineRequest {
+            value,
+            account_id: model.recipient.clone(),
+            account_literal,
+            operation_id: "fixture-kagemusha-redeem".to_string(),
+            device_id: "device-1".to_string(),
+            offline_public_key,
+            asset_definition_id: model.bundle.accumulator.asset.clone(),
+            asset_definition_literal,
+            device_binding,
+        }
+    }
+
     fn fixture_redeem_request() -> ParsedOfflineRequest {
         let fixture = offline_v2_fixture();
         let token = fixture.get("payment_token").expect("payment token");
@@ -2394,6 +2751,407 @@ mod tests {
             redemption
                 .public_inputs_hash()
                 .expect("redemption public inputs hash")
+        );
+    }
+
+    #[test]
+    fn offline_v2_notes_redeem_accepts_kagemusha_recursive_redeem_request() {
+        let model = kagemusha_abi7_redeem_request_model();
+        let mut request = kagemusha_redeem_parsed_request(&model);
+        let encoded =
+            BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode Kagemusha redeem"));
+        insert_field(
+            &mut request.value,
+            "redeem_request_norito_base64",
+            string_value(&encoded),
+        );
+
+        let parsed =
+            parse_kagemusha_recursive_redeem_request(&request, &model.bundle.accumulator.chain_id)
+                .expect("Kagemusha redeem request parses");
+
+        assert_eq!(parsed.recipient, request.account_id);
+        assert_eq!(parsed.bundle.accumulator.asset, request.asset_definition_id);
+        assert_eq!(parsed.public_amount, model.public_amount);
+    }
+
+    #[test]
+    fn offline_v2_notes_redeem_rejects_compact_token_without_recursive_redeem_request() {
+        let model = kagemusha_abi7_redeem_request_model();
+        let mut request = kagemusha_redeem_parsed_request(&model);
+        insert_field(
+            &mut request.value,
+            "compact_payment_token_norito_base64",
+            string_value("AAAA"),
+        );
+        insert_field(
+            &mut request.value,
+            "projection_verifier_record_norito_base64",
+            string_value("AAAA"),
+        );
+
+        assert!(has_kagemusha_redeem_payload(&request.value));
+        assert_eq!(
+            validation_code(parse_kagemusha_recursive_redeem_request(
+                &request,
+                &model.bundle.accumulator.chain_id
+            )),
+            "OFFLINE_KAGEMUSHA_REDEEM_REQUEST_REQUIRED"
+        );
+    }
+
+    #[test]
+    fn offline_v2_notes_redeem_rejects_legacy_redemption_smuggled_with_kagemusha_marker() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let encoded = BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode redemption"));
+        insert_field(
+            &mut request.value,
+            "redemption",
+            json_object(vec![("norito_base64", string_value(&encoded))]),
+        );
+        insert_field(
+            &mut request.value,
+            "compact_payment_token_norito_base64",
+            string_value("AAAA"),
+        );
+        assert!(parse_redemption(&request).is_ok());
+        assert!(has_kagemusha_redeem_payload(&request.value));
+        assert_eq!(
+            validation_code(parse_kagemusha_recursive_redeem_request(
+                &request,
+                &iroha_data_model::ChainId::from("offline-v2-kagemusha-smuggling")
+            )),
+            "OFFLINE_KAGEMUSHA_REDEEM_LEGACY_FIELD"
+        );
+    }
+
+    #[test]
+    fn offline_v2_notes_redeem_rejects_legacy_fields_with_kagemusha_archive() {
+        let model = kagemusha_abi7_redeem_request_model();
+        let encoded =
+            BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode Kagemusha redeem"));
+        for field in [
+            "redemption",
+            "input_nullifiers",
+            "sender_key_certificate",
+            "recursive_proof",
+        ] {
+            let mut request = kagemusha_redeem_parsed_request(&model);
+            insert_field(
+                &mut request.value,
+                "redeem_request_norito_base64",
+                string_value(&encoded),
+            );
+            insert_field(&mut request.value, field, Value::Null);
+            assert_eq!(
+                validation_code(parse_kagemusha_recursive_redeem_request(
+                    &request,
+                    &model.bundle.accumulator.chain_id
+                )),
+                "OFFLINE_KAGEMUSHA_REDEEM_LEGACY_FIELD"
+            );
+        }
+    }
+
+    #[test]
+    fn offline_v2_notes_redeem_rejects_auxiliary_kagemusha_fields_with_redeem_archive() {
+        let model = kagemusha_abi7_redeem_request_model();
+        let encoded =
+            BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode Kagemusha redeem"));
+        for field in [
+            "compact_payment_token_norito_base64",
+            "projection_verifier_record_norito_base64",
+        ] {
+            let auxiliary_field_values =
+                [string_value("AAAA"), Value::Null, Value::Array(Vec::new())];
+            for field_value in auxiliary_field_values {
+                let mut request = kagemusha_redeem_parsed_request(&model);
+                insert_field(
+                    &mut request.value,
+                    "redeem_request_norito_base64",
+                    string_value(&encoded),
+                );
+                insert_field(&mut request.value, field, field_value);
+                assert_eq!(
+                    validation_code(parse_kagemusha_recursive_redeem_request(
+                        &request,
+                        &model.bundle.accumulator.chain_id
+                    )),
+                    "OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_FIELD"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn offline_v2_notes_redeem_rejects_present_but_malformed_kagemusha_fields() {
+        let model = kagemusha_abi7_redeem_request_model();
+        let mut blank_redeem_request = kagemusha_redeem_parsed_request(&model);
+        insert_field(
+            &mut blank_redeem_request.value,
+            "redeem_request_norito_base64",
+            string_value("   "),
+        );
+        assert!(has_kagemusha_redeem_payload(&blank_redeem_request.value));
+        assert_eq!(
+            validation_code(parse_kagemusha_recursive_redeem_request(
+                &blank_redeem_request,
+                &model.bundle.accumulator.chain_id
+            )),
+            "OFFLINE_KAGEMUSHA_REDEEM_REQUEST_REQUIRED"
+        );
+
+        let mut typed_redeem_request = kagemusha_redeem_parsed_request(&model);
+        insert_field(
+            &mut typed_redeem_request.value,
+            "redeem_request_norito_base64",
+            number_value(7),
+        );
+        assert!(has_kagemusha_redeem_payload(&typed_redeem_request.value));
+        assert_eq!(
+            validation_code(parse_kagemusha_recursive_redeem_request(
+                &typed_redeem_request,
+                &model.bundle.accumulator.chain_id
+            )),
+            "OFFLINE_KAGEMUSHA_REDEEM_INVALID"
+        );
+
+        let mut typed_compact_request = kagemusha_redeem_parsed_request(&model);
+        insert_field(
+            &mut typed_compact_request.value,
+            "compact_payment_token_norito_base64",
+            number_value(7),
+        );
+        assert!(has_kagemusha_redeem_payload(&typed_compact_request.value));
+        assert_eq!(
+            validation_code(parse_kagemusha_recursive_redeem_request(
+                &typed_compact_request,
+                &model.bundle.accumulator.chain_id
+            )),
+            "OFFLINE_KAGEMUSHA_REDEEM_REQUEST_REQUIRED"
+        );
+
+        let mut padded_redeem_request = kagemusha_redeem_parsed_request(&model);
+        let encoded =
+            BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode Kagemusha redeem"));
+        insert_field(
+            &mut padded_redeem_request.value,
+            "redeem_request_norito_base64",
+            string_value(format!(" {encoded} ")),
+        );
+        assert!(has_kagemusha_redeem_payload(&padded_redeem_request.value));
+        assert_eq!(
+            validation_code(parse_kagemusha_recursive_redeem_request(
+                &padded_redeem_request,
+                &model.bundle.accumulator.chain_id
+            )),
+            "OFFLINE_KAGEMUSHA_REDEEM_INVALID"
+        );
+    }
+
+    #[test]
+    fn offline_v2_notes_redeem_rejects_kagemusha_recipient_mismatch() {
+        let model = kagemusha_abi7_redeem_request_model();
+        let mut request = kagemusha_redeem_parsed_request(&model);
+        request.account_id = AccountId::new(checked_seed_keypair(0x45).public_key().clone());
+        let encoded =
+            BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode Kagemusha redeem"));
+        insert_field(
+            &mut request.value,
+            "redeem_request_norito_base64",
+            string_value(&encoded),
+        );
+
+        assert_eq!(
+            validation_code(parse_kagemusha_recursive_redeem_request(
+                &request,
+                &model.bundle.accumulator.chain_id
+            )),
+            "OFFLINE_KAGEMUSHA_REDEEM_ACCOUNT_MISMATCH"
+        );
+    }
+
+    #[test]
+    fn offline_v2_notes_redeem_rejects_malformed_kagemusha_archive() {
+        let model = kagemusha_abi7_redeem_request_model();
+        let mut request = kagemusha_redeem_parsed_request(&model);
+        insert_field(
+            &mut request.value,
+            "redeem_request_norito_base64",
+            string_value("not standard base64"),
+        );
+
+        assert_eq!(
+            validation_code(parse_kagemusha_recursive_redeem_request(
+                &request,
+                &model.bundle.accumulator.chain_id
+            )),
+            "OFFLINE_KAGEMUSHA_REDEEM_INVALID"
+        );
+
+        insert_field(
+            &mut request.value,
+            "redeem_request_norito_base64",
+            string_value(BASE64_STANDARD.encode(b"not a norito archive")),
+        );
+        assert_eq!(
+            validation_code(parse_kagemusha_recursive_redeem_request(
+                &request,
+                &model.bundle.accumulator.chain_id
+            )),
+            "OFFLINE_KAGEMUSHA_REDEEM_INVALID"
+        );
+    }
+
+    #[test]
+    fn offline_v2_notes_redeem_rejects_kagemusha_optional_echo_field_shapes() {
+        let model = kagemusha_abi7_redeem_request_model();
+        let encoded =
+            BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode Kagemusha redeem"));
+        for amount_value in [
+            string_value(""),
+            string_value(format!(" {} ", model.public_amount)),
+            string_value(format!("+{}", model.public_amount)),
+            string_value(format!("0{}", model.public_amount)),
+            string_value(format!("{}.", model.public_amount)),
+            number_value(7),
+        ] {
+            let mut request = kagemusha_redeem_parsed_request(&model);
+            insert_field(&mut request.value, "amount", amount_value);
+            insert_field(
+                &mut request.value,
+                "redeem_request_norito_base64",
+                string_value(&encoded),
+            );
+            assert_eq!(
+                validation_code(parse_kagemusha_recursive_redeem_request(
+                    &request,
+                    &model.bundle.accumulator.chain_id
+                )),
+                "OFFLINE_KAGEMUSHA_REDEEM_AMOUNT_MISMATCH"
+            );
+        }
+
+        let expected_source =
+            Hash::prehashed(model.bundle.accumulator.current_note.note_commitment).to_string();
+        for source_value in [
+            string_value(""),
+            string_value(format!(" {expected_source} ")),
+            number_value(7),
+        ] {
+            let mut request = kagemusha_redeem_parsed_request(&model);
+            insert_field(&mut request.value, "source_note_commitment", source_value);
+            insert_field(
+                &mut request.value,
+                "redeem_request_norito_base64",
+                string_value(&encoded),
+            );
+            assert_eq!(
+                validation_code(parse_kagemusha_recursive_redeem_request(
+                    &request,
+                    &model.bundle.accumulator.chain_id
+                )),
+                "OFFLINE_KAGEMUSHA_REDEEM_SOURCE_MISMATCH"
+            );
+        }
+    }
+
+    #[test]
+    fn offline_v2_notes_redeem_rejects_kagemusha_context_mismatches() {
+        let model = kagemusha_abi7_redeem_request_model();
+        let encoded =
+            BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode Kagemusha redeem"));
+
+        let mut chain_request = kagemusha_redeem_parsed_request(&model);
+        insert_field(
+            &mut chain_request.value,
+            "redeem_request_norito_base64",
+            string_value(&encoded),
+        );
+        assert_eq!(
+            validation_code(parse_kagemusha_recursive_redeem_request(
+                &chain_request,
+                &iroha_data_model::ChainId::from("offline-v2-kagemusha-wrong-chain")
+            )),
+            "OFFLINE_KAGEMUSHA_REDEEM_CHAIN_MISMATCH"
+        );
+
+        let mut asset_request = kagemusha_redeem_parsed_request(&model);
+        asset_request.asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "wrong".parse().expect("asset name"),
+        );
+        insert_field(
+            &mut asset_request.value,
+            "redeem_request_norito_base64",
+            string_value(&encoded),
+        );
+        assert_eq!(
+            validation_code(parse_kagemusha_recursive_redeem_request(
+                &asset_request,
+                &model.bundle.accumulator.chain_id
+            )),
+            "OFFLINE_KAGEMUSHA_REDEEM_ASSET_MISMATCH"
+        );
+
+        let mut amount_request = kagemusha_redeem_parsed_request(&model);
+        insert_field(&mut amount_request.value, "amount", string_value("1"));
+        insert_field(
+            &mut amount_request.value,
+            "redeem_request_norito_base64",
+            string_value(&encoded),
+        );
+        assert_eq!(
+            validation_code(parse_kagemusha_recursive_redeem_request(
+                &amount_request,
+                &model.bundle.accumulator.chain_id
+            )),
+            "OFFLINE_KAGEMUSHA_REDEEM_AMOUNT_MISMATCH"
+        );
+
+        let mut source_request = kagemusha_redeem_parsed_request(&model);
+        insert_field(
+            &mut source_request.value,
+            "source_note_commitment",
+            string_value(Hash::prehashed([0x5A; 32]).to_string()),
+        );
+        insert_field(
+            &mut source_request.value,
+            "redeem_request_norito_base64",
+            string_value(&encoded),
+        );
+        assert_eq!(
+            validation_code(parse_kagemusha_recursive_redeem_request(
+                &source_request,
+                &model.bundle.accumulator.chain_id
+            )),
+            "OFFLINE_KAGEMUSHA_REDEEM_SOURCE_MISMATCH"
+        );
+    }
+
+    #[test]
+    fn offline_v2_notes_redeem_rejects_kagemusha_public_binding_tamper() {
+        let mut model = kagemusha_abi7_redeem_request_model();
+        model.public_amount = model
+            .public_amount
+            .checked_add(1)
+            .expect("tampered public amount");
+        let mut request = kagemusha_redeem_parsed_request(&model);
+        let encoded = BASE64_STANDARD
+            .encode(norito::to_bytes(&model).expect("encode tampered Kagemusha redeem"));
+        insert_field(
+            &mut request.value,
+            "redeem_request_norito_base64",
+            string_value(&encoded),
+        );
+
+        assert_eq!(
+            validation_code(parse_kagemusha_recursive_redeem_request(
+                &request,
+                &model.bundle.accumulator.chain_id
+            )),
+            "OFFLINE_KAGEMUSHA_REDEEM_INVALID"
         );
     }
 

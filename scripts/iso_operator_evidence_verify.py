@@ -63,6 +63,9 @@ KNOWN_RAILS = {
 EXPECTED_CANARY_STAGE_ORDER = ("rail", "notary", "verify")
 REQUIRED_CANARY_STAGES = set(EXPECTED_CANARY_STAGE_ORDER)
 REQUIRED_RECEIPT_KINDS = {"iso-audit-notary", "iso-rail-gateway"}
+RECEIPT_SOURCE_MATERIAL_FIELDS_BY_KIND = {
+    "iso-rail-gateway": ("source_path", "payload_sha256"),
+}
 STAGE_RECEIPT_KINDS = {
     "rail": "iso-rail-gateway",
     "notary": "iso-audit-notary",
@@ -81,6 +84,39 @@ SUPPORTED_RAIL_MESSAGE_TYPES = {
     "sese.025",
     "colr.007",
     "colr.012",
+}
+RAIL_MESSAGE_TYPES = {
+    "generic-iso20022": SUPPORTED_RAIL_MESSAGE_TYPES - LEGACY_RAIL_MESSAGE_TYPES,
+    "swift-cbpr-plus": {
+        "pacs.008",
+        "pacs.009",
+        "pacs.002",
+        "pacs.004",
+        "camt.056",
+    },
+    "fedwire-funds": {
+        "pacs.008",
+        "pacs.009",
+        "pacs.002",
+        "pacs.004",
+        "camt.056",
+    },
+    "sepa-sct-inst": {
+        "pacs.008",
+        "pacs.002",
+        "pacs.004",
+        "camt.056",
+    },
+    "securities-csd": {
+        "pacs.009",
+        "pacs.002",
+        "pacs.004",
+        "camt.056",
+        "sese.023",
+        "sese.024",
+        "sese.025",
+        "colr.012",
+    },
 }
 MAX_TRUST_DER_BLOBS = 8
 MAX_TRUST_DER_BYTES = 1024 * 1024
@@ -998,20 +1034,67 @@ def _reject_repository_output_path(path: Path, label: str) -> None:
     _reject_repository_artifact_path(path, label)
 
 
-def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+def _same_existing_file(left: Path, right: Path) -> bool:
+    try:
+        left_stat = left.stat()
+        right_stat = right.stat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+    return os.path.samestat(left_stat, right_stat)
+
+
+def _reject_summary_output_input_alias(
+    summary_out: Path | None,
+    inputs: tuple[tuple[str, Path], ...],
+) -> None:
+    if summary_out is None:
+        return
+    for label, path in inputs:
+        if str(summary_out) == str(path) or _same_existing_file(summary_out, path):
+            raise EvidenceError(f"summary_out must not reuse {label} path")
+
+
+def _reject_summary_output_receipt_dir_overlap(
+    summary_out: Path | None,
+    receipt_dirs: tuple[Path, ...],
+) -> None:
+    if summary_out is None:
+        return
+    summary_path = summary_out.resolve()
+    for offset, receipt_dir in enumerate(receipt_dirs):
+        receipt_root = receipt_dir.resolve()
+        if summary_path == receipt_root or receipt_root in summary_path.parents:
+            raise EvidenceError(
+                f"summary_out must not be written under --receipt-dir[{offset}]"
+            )
+
+
+def _ensure_text_output_target(
+    path: Path,
+    *,
+    display_label: str | None = None,
+    create_parent: bool = True,
+) -> None:
     label = display_label if display_label is not None else "output path"
     _reject_output_path_smuggling(path, label)
     _reject_repository_output_path(path, label)
-    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-    except FileExistsError as error:
+        _reject_symlinked_existing_ancestors(path.parent, display_label=label)
+    except NotADirectoryError as error:
         raise EvidenceError(f"{label} must be a directory") from error
-    parent_mode = path.parent.lstat().st_mode
-    if stat.S_ISLNK(parent_mode):
-        raise EvidenceError(f"{label} must not be a symlink")
-    if not stat.S_ISDIR(parent_mode):
-        raise EvidenceError(f"{label} must be a directory")
+    if create_parent:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except FileExistsError as error:
+            raise EvidenceError(f"{label} must be a directory") from error
+    if path.parent.exists() or path.parent.is_symlink():
+        parent_mode = path.parent.lstat().st_mode
+        if stat.S_ISLNK(parent_mode):
+            raise EvidenceError(f"{label} must not be a symlink")
+        if not stat.S_ISDIR(parent_mode):
+            raise EvidenceError(f"{label} must be a directory")
     if path.exists() or path.is_symlink():
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode):
@@ -1020,6 +1103,11 @@ def _write_text_output(path: Path, text: str, *, display_label: str | None = Non
             raise EvidenceError(f"{label} must be a regular file")
         if metadata.st_nlink > 1:
             raise EvidenceError(f"{label} must not be hard-linked")
+
+
+def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else "output path"
+    _ensure_text_output_target(path, display_label=label)
     parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -1575,7 +1663,11 @@ def _receipt_entry_content_metadata(receipt_entry: dict[str, Any]) -> tuple[tupl
 
 
 def _required_cli_string(value: str | None, label: str) -> str:
-    if value is None or not value.strip():
+    if value is None:
+        raise EvidenceError(f"provide {label}")
+    if not isinstance(value, str):
+        raise EvidenceError(f"{label} must be a string")
+    if not value.strip():
         raise EvidenceError(f"provide {label}")
     if any(
         ord(ch) < 0x20 or ord(ch) == 0x7F or unicodedata.category(ch) == "Cf"
@@ -1592,6 +1684,8 @@ def _required_cli_string(value: str | None, label: str) -> str:
 def _optional_cli_profile_id(value: str | None, label: str) -> str | None:
     if value is None:
         return None
+    if not isinstance(value, str):
+        raise EvidenceError(f"{label} must be a string")
     if not value.strip():
         raise EvidenceError(f"{label} requires a profile id value")
     if any(
@@ -1671,6 +1765,23 @@ def _required_bool(value: dict[str, Any], key: str, label: str) -> bool:
     if not isinstance(raw, bool):
         raise EvidenceError(f"{label}.{key} must be a boolean")
     return raw
+
+
+def _required_cli_bool(value: Any, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise EvidenceError(f"{label} must be a boolean")
+    return value
+
+
+def _optional_cli_path(value: Any, label: str) -> Path | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        raise EvidenceError(f"{label} must be a path")
+    try:
+        return Path(value)
+    except TypeError as error:
+        raise EvidenceError(f"{label} must be a path") from error
 
 
 def _required_nonnegative_int(value: dict[str, Any], key: str, label: str) -> int:
@@ -2359,6 +2470,7 @@ def _verify_receipt_verifier_summary(
     receipt_entry_kinds: set[str] = set()
     seen_receipt_paths: dict[str, int] = {}
     seen_receipt_digests: dict[str, int] = {}
+    seen_source_material_signatures: dict[tuple[str, tuple[tuple[str, str], ...]], int] = {}
     has_failed_receipt = False
     has_insecure_receipt_endpoint = False
     for offset, receipt_entry_raw in enumerate(receipt_entries_raw):
@@ -2456,6 +2568,25 @@ def _verify_receipt_verifier_summary(
             entry_label,
             receipt_kind=entry_kind,
         )
+        source_material_fields = RECEIPT_SOURCE_MATERIAL_FIELDS_BY_KIND.get(
+            entry_kind,
+            (),
+        )
+        source_material_values = tuple(
+            (field, receipt_entry.get(field)) for field in source_material_fields
+        )
+        if source_material_values and all(
+            isinstance(value, str) for _field, value in source_material_values
+        ):
+            source_material_signature = (entry_kind, source_material_values)
+            if source_material_signature in seen_source_material_signatures:
+                first_offset = seen_source_material_signatures[source_material_signature]
+                field = source_material_values[0][0]
+                raise EvidenceError(
+                    f"{entry_label}.{field} duplicates "
+                    f"{label}.receipts[{first_offset}].{field}"
+                )
+            seen_source_material_signatures[source_material_signature] = offset
         receipt_entry_kinds.add(entry_kind)
         receipt_entries.append(dict(receipt_entry))
     if receipt_kind_set != receipt_entry_kinds:
@@ -4497,6 +4628,7 @@ def verify_trust_summary(
             )
     _reject_trust_digest_role_reuse(profile_json_sha256, bundle_summaries, label)
     seen_profile_ids: dict[str, int] = {}
+    seen_bundle_paths: dict[str, int] = {}
     seen_bundle_digests: dict[str, int] = {}
     for offset, bundle in enumerate(bundle_summaries):
         profile_id = bundle["profile_id"]
@@ -4506,6 +4638,13 @@ def verify_trust_summary(
                 f"{label}.bundles[{seen_profile_ids[profile_id]}].profile_id"
             )
         seen_profile_ids[profile_id] = offset
+        bundle_path = bundle["path"]
+        if bundle_path in seen_bundle_paths:
+            raise EvidenceError(
+                f"{label}.bundles[{offset}].path duplicates "
+                f"{label}.bundles[{seen_bundle_paths[bundle_path]}].path"
+            )
+        seen_bundle_paths[bundle_path] = offset
         bundle_sha256 = bundle["bundle_sha256"]
         if bundle_sha256 in seen_bundle_digests:
             raise EvidenceError(
@@ -4797,9 +4936,20 @@ def _reject_cross_canary_receipt_reuse(canaries: list[dict[str, Any]]) -> None:
 def _reject_cross_trust_profile_reuse(trusts: list[dict[str, Any]]) -> None:
     """Reject trust profile material reused across distinct trust summaries."""
 
+    seen_profile_json_digests: dict[str, int] = {}
     seen_profile_ids: dict[str, tuple[int, int]] = {}
+    seen_bundle_paths: dict[str, tuple[int, int]] = {}
     seen_bundle_digests: dict[str, tuple[int, int]] = {}
     for trust_offset, trust in enumerate(trusts):
+        profile_json_sha256 = trust.get("profile_json_sha256")
+        if isinstance(profile_json_sha256, str):
+            if profile_json_sha256 in seen_profile_json_digests:
+                first_trust = seen_profile_json_digests[profile_json_sha256]
+                raise EvidenceError(
+                    f"trust_summaries[{trust_offset}].profile_json_sha256 "
+                    f"duplicates trust_summaries[{first_trust}].profile_json_sha256"
+                )
+            seen_profile_json_digests[profile_json_sha256] = trust_offset
         for profile_offset, profile in enumerate(trust["profiles"]):
             profile_id = profile["profile_id"]
             if profile_id in seen_profile_ids:
@@ -4810,6 +4960,15 @@ def _reject_cross_trust_profile_reuse(trusts: list[dict[str, Any]]) -> None:
                     f"[{first_profile}].profile_id"
                 )
             seen_profile_ids[profile_id] = (trust_offset, profile_offset)
+            bundle_path = profile["path"]
+            if bundle_path in seen_bundle_paths:
+                first_trust, first_profile = seen_bundle_paths[bundle_path]
+                raise EvidenceError(
+                    f"trust_summaries[{trust_offset}].profiles[{profile_offset}].path "
+                    f"duplicates trust_summaries[{first_trust}].profiles"
+                    f"[{first_profile}].path"
+                )
+            seen_bundle_paths[bundle_path] = (trust_offset, profile_offset)
             bundle_sha256 = profile["bundle_sha256"]
             if bundle_sha256 in seen_bundle_digests:
                 first_trust, first_profile = seen_bundle_digests[bundle_sha256]
@@ -4819,6 +4978,62 @@ def _reject_cross_trust_profile_reuse(trusts: list[dict[str, Any]]) -> None:
                     f"[{first_profile}].bundle_sha256"
                 )
             seen_bundle_digests[bundle_sha256] = (trust_offset, profile_offset)
+
+
+def _reject_compact_json_artifact_path_role_reuse(
+    canaries: list[dict[str, Any]],
+    trusts: list[dict[str, Any]],
+    receipt_summary: dict[str, Any] | None = None,
+) -> None:
+    """Reject compact summary paths reused as config, receipt, or trust-bundle paths."""
+
+    material_paths: dict[str, str] = {}
+    for canary_offset, canary in enumerate(canaries):
+        material_paths.setdefault(
+            canary["config_path"],
+            f"canary_summaries[{canary_offset}].config_path",
+        )
+        canary_receipt_summary = canary.get("receipt_summary")
+        if isinstance(canary_receipt_summary, dict):
+            for receipt_offset, receipt in enumerate(
+                canary_receipt_summary["receipts"]
+            ):
+                receipt_path = receipt.get("path")
+                if isinstance(receipt_path, str):
+                    material_paths.setdefault(
+                        receipt_path,
+                        (
+                            f"canary_summaries[{canary_offset}].receipt_summary"
+                            f".receipts[{receipt_offset}].path"
+                        ),
+                    )
+    for trust_offset, trust in enumerate(trusts):
+        for profile_offset, profile in enumerate(trust["profiles"]):
+            material_paths.setdefault(
+                profile["path"],
+                f"trust_summaries[{trust_offset}].profiles[{profile_offset}].path",
+            )
+    if isinstance(receipt_summary, dict):
+        for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
+            receipt_path = receipt.get("path")
+            if isinstance(receipt_path, str):
+                material_paths.setdefault(
+                    receipt_path,
+                    f"receipt_verification.receipts[{receipt_offset}].path",
+                )
+
+    for canary_offset, canary in enumerate(canaries):
+        material_label = material_paths.get(canary["path"])
+        if material_label is not None:
+            raise EvidenceError(
+                f"canary_summaries[{canary_offset}].path duplicates {material_label}"
+            )
+    for trust_offset, trust in enumerate(trusts):
+        material_label = material_paths.get(trust["path"])
+        if material_label is not None:
+            raise EvidenceError(
+                f"trust_summaries[{trust_offset}].path duplicates {material_label}"
+            )
 
 
 def _trusts_have_missing_source(trusts: list[dict[str, Any]]) -> bool:
@@ -4836,16 +5051,13 @@ def _reject_canary_rail_receipts_without_trust(
 ) -> None:
     """Reject canary rail receipts that lack matching trust material."""
 
-    trusted_profiles_by_environment = {
-        (profile["profile_id"], profile["environment"])
-        for trust in trusts
-        for profile in trust["profiles"]
-    }
-    trusted_builtin_profiles_by_rail_environment = {
-        (profile["profile_id"], profile["rail"], profile["environment"])
-        for trust in trusts
-        for profile in trust["profiles"]
-    }
+    trusted_profile_rails_by_environment: dict[tuple[str, str], set[str]] = {}
+    for trust in trusts:
+        for profile in trust["profiles"]:
+            key = (profile["profile_id"], profile["environment"])
+            trusted_profile_rails_by_environment.setdefault(key, set()).add(
+                profile["rail"]
+            )
     for canary_offset, canary in enumerate(canaries):
         receipt_summary = canary.get("receipt_summary")
         if receipt_summary is None:
@@ -4868,65 +5080,162 @@ def _reject_canary_rail_receipts_without_trust(
                         "--default-rail-profile"
                     )
                 profile_id = args.default_rail_profile
+            candidate_rails = trusted_profile_rails_by_environment.get(
+                (profile_id, canary_environment),
+                set(),
+            )
             if profile_id in KNOWN_RAILS:
-                covered = (
-                    profile_id,
-                    profile_id,
-                    canary_environment,
-                ) in trusted_builtin_profiles_by_rail_environment
+                matching_rails = candidate_rails & {profile_id}
             else:
-                covered = (
-                    profile_id,
-                    canary_environment,
-                ) in trusted_profiles_by_environment
-            if not covered:
+                matching_rails = candidate_rails
+            if not matching_rails:
                 raise EvidenceError(
                     f"canary_summaries[{canary_offset}].receipt_summary.receipts"
                     f"[{receipt_offset}].profile has no matching trust profile "
                     "coverage for canary environment"
                 )
+            message_type = receipt.get("message_type")
+            if (
+                isinstance(message_type, str)
+                and MESSAGE_TYPE_RE.fullmatch(message_type) is not None
+                and not any(
+                    message_type in RAIL_MESSAGE_TYPES.get(rail, set())
+                    for rail in matching_rails
+                )
+            ):
+                raise EvidenceError(
+                    f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                    f"[{receipt_offset}].message_type has no matching trust "
+                    "profile rail coverage"
+                )
+
+
+def _require_policy_booleans(args: argparse.Namespace) -> None:
+    for attr in (
+        "allow_plan_only",
+        "allow_dry_run",
+        "allow_insecure_http",
+        "allow_legacy_colr007",
+        "allow_default_profile",
+        "allow_failed_receipts",
+        "allow_partial_canary",
+        "allow_canary_stage_receipts_only",
+        "allow_receipt_source_missing",
+        "allow_record_only_trust",
+        "allow_synthetic_trust",
+        "allow_missing_trust_source",
+        "allow_profile_json_not_emitted",
+    ):
+        flag = f"--{attr.replace('_', '-')}"
+        setattr(args, attr, _required_cli_bool(getattr(args, attr, None), flag))
+
+
+def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+        raise EvidenceError(f"{label} must be a repeatable path list")
+    paths: list[Path] = []
+    for offset, entry in enumerate(value):
+        if isinstance(entry, bytes):
+            raise EvidenceError(f"{label}[{offset}] must be a path")
+        try:
+            paths.append(Path(entry))
+        except TypeError as error:
+            raise EvidenceError(f"{label}[{offset}] must be a path") from error
+    return paths
 
 
 def run(args: argparse.Namespace) -> int:
+    args.summary_out = _optional_cli_path(getattr(args, "summary_out", None), "summary_out")
     if args.summary_out is not None:
+        _reject_output_path_smuggling(args.summary_out, "summary_out")
         _reject_repository_output_path(args.summary_out, "summary_out")
-    for offset, receipt in enumerate(args.receipt):
+    canary_paths = _required_cli_path_sequence(
+        getattr(args, "canary_summary", None),
+        "--canary-summary",
+    )
+    trust_paths = _required_cli_path_sequence(
+        getattr(args, "trust_summary", None),
+        "--trust-summary",
+    )
+    receipt_paths = _required_cli_path_sequence(getattr(args, "receipt", None), "--receipt")
+    receipt_dir_paths = _required_cli_path_sequence(
+        getattr(args, "receipt_dir", None),
+        "--receipt-dir",
+    )
+    args.canary_summary = canary_paths
+    args.trust_summary = trust_paths
+    args.receipt = receipt_paths
+    args.receipt_dir = receipt_dir_paths
+    for offset, receipt in enumerate(receipt_paths):
         _reject_repository_artifact_path(receipt, f"receipt[{offset}]")
-    for offset, receipt_dir in enumerate(args.receipt_dir):
+    for offset, receipt_dir in enumerate(receipt_dir_paths):
         _reject_repository_artifact_path(receipt_dir, f"receipt_dir[{offset}]")
-    if not args.canary_summary:
+    _require_policy_booleans(args)
+    if not canary_paths:
         raise EvidenceError("provide at least one --canary-summary")
-    if not args.trust_summary:
+    if not trust_paths:
         raise EvidenceError("provide at least one --trust-summary")
-    args.provider = _required_cli_string(args.provider, "--provider")
-    args.environment = _required_cli_string(args.environment, "--environment")
+    args.provider = _required_cli_string(getattr(args, "provider", None), "--provider")
+    args.environment = _required_cli_string(
+        getattr(args, "environment", None),
+        "--environment",
+    )
     args.default_rail_profile = _optional_cli_profile_id(
-        args.default_rail_profile,
+        getattr(args, "default_rail_profile", None),
         "--default-rail-profile",
     )
     if args.default_rail_profile is not None and not args.allow_default_profile:
         raise EvidenceError("--default-rail-profile requires --allow-default-profile")
     args.max_canary_age_days = _required_positive_cli_int(
-        args.max_canary_age_days,
+        getattr(args, "max_canary_age_days", None),
         "--max-canary-age-days",
     )
     args.max_trust_age_days = _required_positive_cli_int(
-        args.max_trust_age_days,
+        getattr(args, "max_trust_age_days", None),
         "--max-trust-age-days",
     )
     args.max_trust_source_age_days = _required_positive_cli_int(
-        args.max_trust_source_age_days,
+        getattr(args, "max_trust_source_age_days", None),
         "--max-trust-source-age-days",
     )
     args.receipt_verifier_timeout_secs = _required_positive_finite_cli_number(
-        args.receipt_verifier_timeout_secs,
+        getattr(args, "receipt_verifier_timeout_secs", None),
         "--receipt-verifier-timeout-secs",
     )
 
-    canary_paths = list(args.canary_summary)
-    trust_paths = list(args.trust_summary)
     _reject_duplicate_paths([path.resolve() for path in canary_paths], "--canary-summary")
     _reject_duplicate_paths([path.resolve() for path in trust_paths], "--trust-summary")
+    _reject_summary_output_input_alias(
+        args.summary_out,
+        tuple(
+            (f"--canary-summary[{offset}]", path)
+            for offset, path in enumerate(canary_paths)
+        )
+        + tuple(
+            (f"--trust-summary[{offset}]", path)
+            for offset, path in enumerate(trust_paths)
+        )
+        + tuple(
+            (f"--receipt[{offset}]", path)
+            for offset, path in enumerate(receipt_paths)
+        )
+        + tuple(
+            (f"--receipt-dir[{offset}]", path)
+            for offset, path in enumerate(receipt_dir_paths)
+        ),
+    )
+    _reject_summary_output_receipt_dir_overlap(
+        args.summary_out,
+        tuple(receipt_dir_paths),
+    )
+    if args.summary_out is not None:
+        _ensure_text_output_target(
+            args.summary_out,
+            display_label="summary_out",
+            create_parent=False,
+        )
 
     canaries = [
         verify_canary_summary(
@@ -4971,6 +5280,7 @@ def run(args: argparse.Namespace) -> int:
         )
     _reject_duplicate_summary_digests(canaries, "canary_summaries")
     _reject_duplicate_summary_digests(trusts, "trust_summaries")
+    _reject_compact_json_artifact_path_role_reuse(canaries, trusts)
     _reject_cross_canary_receipt_reuse(canaries)
     _reject_cross_trust_profile_reuse(trusts)
     receipt_summary = verify_receipts(args)
@@ -4985,6 +5295,11 @@ def run(args: argparse.Namespace) -> int:
                 "--receipt or --receipt-dir"
             )
         _verify_direct_receipts_cover_canaries(canaries, receipt_summary)
+        _reject_compact_json_artifact_path_role_reuse(
+            canaries,
+            trusts,
+            receipt_summary,
+        )
     receipt_summaries = _compact_receipt_summaries(canaries, receipt_summary)
     if args.allow_legacy_colr007 and not _receipt_summaries_have_legacy_colr007(
         receipt_summaries

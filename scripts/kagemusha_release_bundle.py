@@ -1691,6 +1691,20 @@ def _expected_android_d2d_payment_transports_by_family() -> dict[str, list[str]]
     }
 
 
+def _expected_android_missing_d2d_payment_transport_pairs(
+    covered_by_family: dict[str, list[str]],
+) -> list[dict[str, str]]:
+    """Return the canonical missing D2D family/transport complement."""
+
+    missing: list[dict[str, str]] = []
+    for family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES:
+        covered = set(covered_by_family.get(family, []))
+        for transport in readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS:
+            if transport not in covered:
+                missing.append({"device_family": family, "transport": transport})
+    return missing
+
+
 def _android_d2d_payment_transports_by_family_is_shaped(value: Any) -> bool:
     """Return whether a summary contains canonical D2D transport lists by family."""
 
@@ -1795,11 +1809,31 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                 field=field,
             )
         )
+    if (
+        list_fields_ok.get("covered_d2d_payment_transports_by_family")
+        and list_fields_ok.get("missing_d2d_payment_transport_pairs")
+    ):
+        covered_by_family = android.get("covered_d2d_payment_transports_by_family")
+        missing_pairs = android.get("missing_d2d_payment_transport_pairs")
+        assert isinstance(covered_by_family, dict)
+        assert isinstance(missing_pairs, list)
+        if missing_pairs != _expected_android_missing_d2d_payment_transport_pairs(
+            covered_by_family,
+        ):
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_summary_android_d2d_transport_pair_inventory",
+                    "Android readiness summary missing D2D family/transport pairs must exactly match covered_d2d_payment_transports_by_family",
+                )
+            )
     signed_evidence_summary = android.get("signed_evidence")
     slots = android.get("slots")
     validated_slots: list[str] = []
     slot_device_families: list[str] = []
     slot_d2d_payment_transports: list[str] = []
+    slot_d2d_payment_transports_by_family: dict[str, set[str]] = {
+        family: set() for family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+    }
     if not isinstance(slots, list) or not slots:
         blockers.append(
             _blocker(
@@ -2309,6 +2343,11 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                             slot=display_slot,
                         )
                     )
+                if device_family_valid:
+                    assert isinstance(device_family, str)
+                    slot_d2d_payment_transports_by_family[device_family].update(
+                        declared_d2d_transports
+                    )
                 signed_at = kagemusha.get("signed_at_utc")
                 if (
                     not isinstance(signed_at, str)
@@ -2537,6 +2576,25 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                 _blocker(
                     "kagemusha_release_summary_android_slots_d2d_transport_inventory",
                     "Android readiness summary slot D2D transports must exactly match covered_d2d_payment_transports",
+                )
+            )
+        covered_transports_by_family = android.get(
+            "covered_d2d_payment_transports_by_family"
+        )
+        if (
+            _android_d2d_payment_transports_by_family_is_shaped(
+                covered_transports_by_family
+            )
+            and {
+                family: sorted(transports)
+                for family, transports in slot_d2d_payment_transports_by_family.items()
+            }
+            != covered_transports_by_family
+        ):
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_summary_android_slots_d2d_transport_family_inventory",
+                    "Android readiness summary slot D2D transports by family must exactly match covered_d2d_payment_transports_by_family",
                 )
             )
 
@@ -6178,6 +6236,23 @@ def _check_release_bundle_android_section_shape(
                 field=field,
             )
         )
+    if (
+        list_fields_ok.get("covered_d2d_payment_transports_by_family")
+        and list_fields_ok.get("missing_d2d_payment_transport_pairs")
+    ):
+        covered_by_family = android.get("covered_d2d_payment_transports_by_family")
+        missing_pairs = android.get("missing_d2d_payment_transport_pairs")
+        assert isinstance(covered_by_family, dict)
+        assert isinstance(missing_pairs, list)
+        if missing_pairs != _expected_android_missing_d2d_payment_transport_pairs(
+            covered_by_family,
+        ):
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_android_d2d_transport_pair_inventory",
+                    "Kagemusha release bundle Android missing D2D family/transport pairs must exactly match covered_d2d_payment_transports_by_family",
+                )
+            )
 
     if list_fields_ok.get("covered_device_families"):
         expected_families = sorted(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES)

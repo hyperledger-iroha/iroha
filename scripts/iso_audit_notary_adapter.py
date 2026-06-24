@@ -374,6 +374,46 @@ def _require_positive_finite_cli_number(value: float, label: str) -> float:
     return parsed
 
 
+def _required_cli_bool(value: Any, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise AdapterError(f"{label} must be a boolean")
+    return value
+
+
+def _optional_cli_path(value: Any, label: str) -> Path | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        raise AdapterError(f"{label} must be a path")
+    try:
+        return Path(value)
+    except TypeError as error:
+        raise AdapterError(f"{label} must be a path") from error
+
+
+def _require_policy_booleans(args: argparse.Namespace) -> None:
+    for attr, label in (
+        ("dry_run", "--dry-run"),
+        ("all", "--all"),
+        ("allow_insecure_http", "--allow-insecure-http"),
+        ("allow_missing_record_sources", "--allow-missing-record-sources"),
+    ):
+        setattr(args, attr, _required_cli_bool(getattr(args, attr, None), label))
+
+
+def _required_cli_string_sequence(value: Any, label: str) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+        raise AdapterError(f"{label} must be a repeatable string list")
+    values: list[str] = []
+    for offset, entry in enumerate(value):
+        if not isinstance(entry, str):
+            raise AdapterError(f"{label}[{offset}] must be a string")
+        values.append(entry)
+    return values
+
+
 @dataclass(frozen=True)
 class VerifiedAnchor:
     """Verified anchor bytes and selected metadata ready for publication."""
@@ -754,19 +794,32 @@ def _preflight_numeric_cli_values(
             index += 1
 
 
-def _ensure_output_directory(path: Path, label: str) -> None:
+def _ensure_output_directory(
+    path: Path,
+    label: str,
+    *,
+    create: bool = True,
+    check_leaf: bool = True,
+) -> None:
     _reject_output_path_smuggling(path, label)
     if _path_is_repository_iso_fixture(str(path)):
         raise AdapterError(
             f"{label} must not point to checked-in ISO fixture artifacts"
         )
-    _reject_symlinked_existing_ancestors(path, display_label=label)
+    try:
+        _reject_symlinked_existing_ancestors(path, display_label=label)
+    except NotADirectoryError as error:
+        raise AdapterError(f"{label} must be a directory") from error
     if path.exists() or path.is_symlink():
         mode = path.lstat().st_mode
         if stat.S_ISLNK(mode):
             raise AdapterError(f"{label} must not be a symlink")
         if not stat.S_ISDIR(mode):
+            if not check_leaf:
+                return
             raise AdapterError(f"{label} must be a directory")
+        return
+    if not create:
         return
     path.mkdir(parents=True, exist_ok=True)
     mode = path.lstat().st_mode
@@ -859,6 +912,69 @@ def _write_text_output(path: Path, text: str, *, display_label: str | None = Non
 
 def _absolute_path_without_resolving_leaf(path: Path) -> Path:
     return path if path.is_absolute() else Path.cwd() / path
+
+
+def _same_existing_path(left: Path, right: Path) -> bool:
+    try:
+        left_stat = left.stat()
+        right_stat = right.stat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+    return os.path.samestat(left_stat, right_stat)
+
+
+def _reject_receipt_dir_input_alias(
+    receipt_dir: Path,
+    input_dir: Path,
+    input_label: str,
+) -> None:
+    if str(receipt_dir) == str(input_dir) or _same_existing_path(receipt_dir, input_dir):
+        raise AdapterError(f"receipt_dir must not reuse {input_label} path")
+
+
+def _reject_receipt_dir_source_overlap(
+    receipt_dir: Path,
+    source_path: Path,
+    source_label: str,
+) -> None:
+    receipt_root = receipt_dir.resolve()
+    source_root = source_path.resolve()
+    if (
+        receipt_root == source_root
+        or source_root in receipt_root.parents
+        or receipt_root in source_root.parents
+    ):
+        raise AdapterError(f"receipt_dir must not overlap {source_label}")
+
+
+def _reject_path_overlap(
+    left: Path,
+    left_label: str,
+    right: Path,
+    right_label: str,
+) -> None:
+    left_root = left.resolve()
+    right_root = right.resolve()
+    if (
+        left_root == right_root
+        or right_root in left_root.parents
+        or left_root in right_root.parents
+    ):
+        raise AdapterError(f"{left_label} must not overlap {right_label} path")
+
+
+def _reject_receipt_dir_notary_source_overlap(
+    receipt_dir: Path,
+    export_dir: Path,
+) -> None:
+    for source_label, source_path in (
+        ("export_dir.latest_anchor", export_dir / LATEST_ANCHOR_FILE),
+        ("export_dir.anchors", export_dir / ANCHOR_DIR),
+        ("export_dir.index", export_dir / INDEX_FILE),
+    ):
+        _reject_receipt_dir_source_overlap(receipt_dir, source_path, source_label)
 
 
 def _load_json(
@@ -2146,8 +2262,14 @@ def receipt_output_path(receipt_dir: Path, anchor: VerifiedAnchor, endpoint: str
 
 
 def run(args: argparse.Namespace) -> int:
-    if args.export_dir is None:
+    if getattr(args, "export_dir", None) is None:
         raise AdapterError("provide --export-dir")
+    args.export_dir = _optional_cli_path(args.export_dir, "export_dir")
+    args.receipt_dir = _optional_cli_path(getattr(args, "receipt_dir", None), "receipt_dir")
+    args.bearer_token_file = _optional_cli_path(
+        getattr(args, "bearer_token_file", None),
+        "bearer_token_file",
+    )
     _reject_output_path_smuggling(args.export_dir, "export_dir")
     if args.bearer_token_file is not None:
         _reject_output_path_smuggling(args.bearer_token_file, "bearer_token_file")
@@ -2164,16 +2286,40 @@ def run(args: argparse.Namespace) -> int:
         raise AdapterError(
             "export_dir must not point to checked-in ISO fixture artifacts"
         )
-    timeout_secs = _require_positive_finite_cli_number(args.timeout_secs, "--timeout-secs")
-    response_limit_bytes = _require_positive_cli_int(
-        args.response_limit_bytes, "--response-limit-bytes"
+    _reject_receipt_dir_input_alias(receipt_dir, args.export_dir, "export_dir")
+    if args.bearer_token_file is not None:
+        _reject_receipt_dir_source_overlap(
+            receipt_dir,
+            args.bearer_token_file,
+            "bearer_token_file path",
+        )
+        _reject_path_overlap(
+            args.bearer_token_file,
+            "bearer_token_file",
+            args.export_dir,
+            "export_dir",
+        )
+    _reject_receipt_dir_notary_source_overlap(receipt_dir, args.export_dir)
+    _require_policy_booleans(args)
+    timeout_secs = _require_positive_finite_cli_number(
+        getattr(args, "timeout_secs", None), "--timeout-secs"
     )
-    _ensure_input_directory(args.export_dir, "export_dir", display_path=False)
-    export_dir = args.export_dir
-    endpoints = list(args.endpoint)
+    response_limit_bytes = _require_positive_cli_int(
+        getattr(args, "response_limit_bytes", None), "--response-limit-bytes"
+    )
+    endpoints = _required_cli_string_sequence(getattr(args, "endpoint", None), "--endpoint")
     for endpoint in endpoints:
         _validate_endpoint(endpoint, args.allow_insecure_http)
     _reject_duplicate_endpoints(endpoints)
+    if not args.dry_run:
+        if not endpoints:
+            raise AdapterError("at least one --endpoint is required unless --dry-run is set")
+        if args.receipt_dir is not None:
+            _ensure_output_directory(
+                receipt_dir, "receipt_dir", create=False, check_leaf=False
+            )
+    _ensure_input_directory(args.export_dir, "export_dir", display_path=False)
+    export_dir = args.export_dir
     _reject_unused_local_overrides(args, endpoints=endpoints)
     bearer_token = _load_bearer_token(args.bearer_token_file)
 
@@ -2197,8 +2343,6 @@ def run(args: argparse.Namespace) -> int:
         }
         print(json.dumps(summary, indent=2, sort_keys=True))
         return 0
-    if not endpoints:
-        raise AdapterError("at least one --endpoint is required unless --dry-run is set")
     _ensure_output_directory(receipt_dir, "receipt_dir")
     receipt_offset = 0
     for anchor in anchors:

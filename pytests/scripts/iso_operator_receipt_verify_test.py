@@ -1,5 +1,6 @@
-import importlib.util
+import argparse
 import contextlib
+import importlib.util
 import io
 import json
 import sys
@@ -1680,6 +1681,119 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertEqual(stdout, "")
                     self.assertIn(message, stderr)
+
+    def test_direct_run_receipt_paths_reject_smuggling_before_discovery(self):
+        cases = (
+            (
+                "receipt semicolon",
+                "receipt",
+                lambda root: root / "bad;debug.receipt.json",
+                "semicolon path",
+            ),
+            (
+                "receipt dir traversal",
+                "receipt_dir",
+                lambda root: root / "nested" / ".." / "receipts",
+                "dot or parent",
+            ),
+        )
+        for name, field, build_path, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        receipt=[],
+                        receipt_dir=[],
+                        allow_failed=False,
+                        allow_insecure_http=True,
+                        allow_legacy_colr007=False,
+                        allow_default_profile=False,
+                        require_source_files=False,
+                    )
+                    getattr(args, field).append(build_path(root))
+
+                    stdout = io.StringIO()
+                    with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                        with contextlib.redirect_stdout(stdout):
+                            VERIFIER.run(args)
+
+                    self.assertEqual(stdout.getvalue(), "")
+                    self.assertIn(message, str(caught.exception))
+
+    def test_direct_run_policy_flags_must_be_booleans_before_loading(self):
+        missing = object()
+        cases = (
+            ("allow_failed", missing, "--allow-failed must be a boolean"),
+            ("allow_failed", "false", "--allow-failed must be a boolean"),
+            ("allow_insecure_http", "true", "--allow-insecure-http must be a boolean"),
+            ("allow_legacy_colr007", 1, "--allow-legacy-colr007 must be a boolean"),
+            ("allow_default_profile", None, "--allow-default-profile must be a boolean"),
+            ("require_source_files", "yes", "--require-source-files must be a boolean"),
+        )
+        for field, value, message in cases:
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        receipt=[root / "missing.receipt.json"],
+                        receipt_dir=[],
+                        allow_failed=False,
+                        allow_insecure_http=True,
+                        allow_legacy_colr007=False,
+                        allow_default_profile=False,
+                        require_source_files=False,
+                    )
+                    if value is missing:
+                        delattr(args, field)
+                    else:
+                        setattr(args, field, value)
+
+                    stdout = io.StringIO()
+                    with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                        with contextlib.redirect_stdout(stdout):
+                            VERIFIER.run(args)
+
+                    self.assertEqual(stdout.getvalue(), "")
+                    error = str(caught.exception)
+                    self.assertIn(message, error)
+                    self.assertNotIn("does not exist", error)
+                    self.assertNotIn(str(root), error)
+
+    def test_direct_run_receipt_selectors_must_be_repeatable_path_lists_before_loading(self):
+        cases = (
+            ("receipt bare string", "receipt", "missing.receipt.json", "--receipt"),
+            ("receipt bad entry", "receipt", [object()], "--receipt[0]"),
+            ("receipt-dir bare string", "receipt_dir", "receipts", "--receipt-dir"),
+            ("receipt-dir bad entry", "receipt_dir", [object()], "--receipt-dir[0]"),
+        )
+        for name, field, value, label in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        receipt=[],
+                        receipt_dir=[],
+                        allow_failed=False,
+                        allow_insecure_http=True,
+                        allow_legacy_colr007=False,
+                        allow_default_profile=False,
+                        require_source_files=False,
+                    )
+                    setattr(args, field, value)
+
+                    stdout = io.StringIO()
+                    with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                        with contextlib.redirect_stdout(stdout):
+                            VERIFIER.run(args)
+
+                    self.assertEqual(stdout.getvalue(), "")
+                    error = str(caught.exception)
+                    if "bare string" in name:
+                        self.assertIn(f"{label} must be a repeatable path list", error)
+                    else:
+                        self.assertIn(f"{label} must be a path", error)
+                    self.assertNotIn("does not exist", error)
+                    self.assertNotIn(str(root), error)
 
     def test_secret_looking_receipt_paths_are_rejected_before_summary_output(self):
         cases = (

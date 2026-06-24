@@ -960,8 +960,8 @@ public final class OfflineNoteTest {
   private static void kagemushaRecursiveSpendNativeProverValidatesInput() {
     assertTrue(
         KagemushaRecursiveSpendProver.preferredMode(true, true)
-            == KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
-        "recursive spend should remain the production default when compact ABI is present");
+            == KagemushaRecursiveSpendProver.Mode.RECURSIVE_COMPACT_V1,
+        "recursive compact should be preferred when compact ABI is present");
     assertTrue(
         KagemushaRecursiveSpendProver.preferredMode(true)
             == KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,

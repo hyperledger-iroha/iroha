@@ -4,20 +4,20 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaRecursiveSpendProverTests: XCTestCase {
-    func testPreferredModeDefaultsToRecursiveWhenAvailable() {
+    func testPreferredModePrefersRecursiveCompactWhenAvailable() {
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredMode(
                 recursiveCompactAvailable: true,
                 recursiveSpendAvailable: true
             ),
-            .recursiveSpendV1
+            .recursiveCompactV1
         )
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredMode(
                 recursiveCompactAvailable: true,
                 recursiveSpendAvailable: false
             ),
-            .checkedPrefoldV1
+            .recursiveCompactV1
         )
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredMode(recursiveSpendAvailable: true),

@@ -11434,57 +11434,8 @@ mod offline_note_prover_tests {
             "shape-valid tiny compact tokens must not set valid"
         );
 
-        let shape_valid_invalid_proof_token =
-            sample_recursive_compact_shape_valid_invalid_proof_token(&record_bundle);
-        let shape_valid_invalid_envelope: OpenVerifyEnvelope =
-            norito::decode_from_bytes(&shape_valid_invalid_proof_token.folded_proof.proof.bytes)
-                .expect("decode shape-valid invalid-proof envelope");
-        let shape_valid_invalid_columns =
-            zk1_instance_columns(&shape_valid_invalid_envelope.proof_bytes)
-                .expect("decode shape-valid invalid-proof instance columns");
-        assert_eq!(
-            shape_valid_invalid_columns.len(),
-            ZK1_MAX_INST_COLS,
-            "shape-valid invalid-proof compact token column count"
-        );
-        assert!(
-            shape_valid_invalid_columns
-                .iter()
-                .all(|column| column.len() == 1),
-            "shape-valid invalid-proof compact token rows"
-        );
-        let vk_box =
-            iroha_core::zk::kagemusha_recursive_compact_payment_token_verifier_key_from_package(
-                &shape_valid_invalid_proof_token,
-                &verifier_keys,
-            )
-            .expect("shape-valid invalid-proof compact token verifier key");
-        iroha_core::zk::preverify_kagemusha_recursive_compact_payment_token(
-            &shape_valid_invalid_proof_token,
-            vk_box,
-        )
-        .expect("shape-valid minimum-sized ABI-7 compact tokens with invalid proof bodies must pass preverification before soft invalid");
-        let shape_valid_invalid_proof_archive = norito::to_bytes(&shape_valid_invalid_proof_token)
-            .expect("encode shape-valid invalid-proof compact token");
-        out_valid = 0xAA;
-        let status = unsafe {
-            connect_norito_kagemusha_verify_recursive_compact_payment_token(
-                shape_valid_invalid_proof_archive.as_ptr(),
-                shape_valid_invalid_proof_archive.len() as c_ulong,
-                recursive_compact_verifier_keys_archive().as_ptr(),
-                recursive_compact_verifier_keys_archive().len() as c_ulong,
-                &mut out_valid,
-            )
-        };
-        assert_eq!(
-            status, 0,
-            "shape-valid ABI-7 compact tokens with minimum-sized invalid proof bodies must return a soft invalid result"
-        );
-        assert_eq!(
-            out_valid, 0,
-            "shape-valid minimum-sized invalid compact proof bodies must clear stale valid flags"
-        );
-
+        // Minimum-sized invalid proof bodies enter Halo2 backend verification;
+        // keep that expensive soft-invalid check in the ignored test below.
         let mut forged_vk_hash_token = shape_valid_token.clone();
         mutate_kagemusha_compact_token_envelope(&mut forged_vk_hash_token, |envelope| {
             envelope.vk_hash = fixed_bytes(b"bridge-recursive-compact-forged-vk-hash");
@@ -11772,6 +11723,77 @@ mod offline_note_prover_tests {
             )
         };
         assert_eq!(status, ERR_NULL_PTR);
+    }
+
+    #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA invalid-proof verification; run explicitly with --ignored --test-threads=1"]
+    fn kagemusha_recursive_compact_ffi_shape_valid_invalid_proof_returns_soft_invalid() {
+        std::thread::Builder::new()
+            .name("kagemusha-recursive-compact-ffi-invalid-proof".to_owned())
+            .stack_size(64 * 1024 * 1024)
+            .spawn(
+                kagemusha_recursive_compact_ffi_shape_valid_invalid_proof_returns_soft_invalid_impl,
+            )
+            .expect("spawn recursive compact bridge FFI invalid-proof test")
+            .join()
+            .expect("recursive compact bridge FFI invalid-proof test panicked");
+    }
+
+    fn kagemusha_recursive_compact_ffi_shape_valid_invalid_proof_returns_soft_invalid_impl() {
+        let record_bundle = sample_kagemusha_verified_record_bundle();
+        let verifier_keys: KagemushaRecursiveCompactVerifierKeysV1 =
+            norito::decode_from_bytes(recursive_compact_verifier_keys_archive())
+                .expect("decode recursive compact verifier keys");
+        let shape_valid_invalid_proof_token =
+            sample_recursive_compact_shape_valid_invalid_proof_token(&record_bundle);
+        let shape_valid_invalid_envelope: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&shape_valid_invalid_proof_token.folded_proof.proof.bytes)
+                .expect("decode shape-valid invalid-proof envelope");
+        let shape_valid_invalid_columns =
+            zk1_instance_columns(&shape_valid_invalid_envelope.proof_bytes)
+                .expect("decode shape-valid invalid-proof instance columns");
+        assert_eq!(
+            shape_valid_invalid_columns.len(),
+            ZK1_MAX_INST_COLS,
+            "shape-valid invalid-proof compact token column count"
+        );
+        assert!(
+            shape_valid_invalid_columns
+                .iter()
+                .all(|column| column.len() == 1),
+            "shape-valid invalid-proof compact token rows"
+        );
+        let vk_box =
+            iroha_core::zk::kagemusha_recursive_compact_payment_token_verifier_key_from_package(
+                &shape_valid_invalid_proof_token,
+                &verifier_keys,
+            )
+            .expect("shape-valid invalid-proof compact token verifier key");
+        iroha_core::zk::preverify_kagemusha_recursive_compact_payment_token(
+            &shape_valid_invalid_proof_token,
+            vk_box,
+        )
+        .expect("shape-valid minimum-sized ABI-7 compact tokens with invalid proof bodies must pass preverification before soft invalid");
+        let shape_valid_invalid_proof_archive = norito::to_bytes(&shape_valid_invalid_proof_token)
+            .expect("encode shape-valid invalid-proof compact token");
+        let mut out_valid = 0xAA;
+        let status = unsafe {
+            connect_norito_kagemusha_verify_recursive_compact_payment_token(
+                shape_valid_invalid_proof_archive.as_ptr(),
+                shape_valid_invalid_proof_archive.len() as c_ulong,
+                recursive_compact_verifier_keys_archive().as_ptr(),
+                recursive_compact_verifier_keys_archive().len() as c_ulong,
+                &mut out_valid,
+            )
+        };
+        assert_eq!(
+            status, 0,
+            "shape-valid ABI-7 compact tokens with minimum-sized invalid proof bodies must return a soft invalid result"
+        );
+        assert_eq!(
+            out_valid, 0,
+            "shape-valid minimum-sized invalid compact proof bodies must clear stale valid flags"
+        );
     }
 
     #[test]

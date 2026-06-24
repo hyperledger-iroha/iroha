@@ -365,6 +365,39 @@ def _require_positive_finite_cli_number(value: float, label: str) -> float:
     return parsed
 
 
+def _required_cli_bool(value: Any, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise AdapterError(f"{label} must be a boolean")
+    return value
+
+
+def _optional_cli_path(value: Any, label: str) -> Path | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        raise AdapterError(f"{label} must be a path")
+    try:
+        return Path(value)
+    except TypeError as error:
+        raise AdapterError(f"{label} must be a path") from error
+
+
+def _required_cli_string(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise AdapterError(f"{label} must be a string")
+    return value
+
+
+def _require_policy_booleans(args: argparse.Namespace) -> None:
+    for attr, label in (
+        ("dry_run", "--dry-run"),
+        ("allow_insecure_http", "--allow-insecure-http"),
+        ("allow_default_profile", "--allow-default-profile"),
+        ("allow_legacy_colr007", "--allow-legacy-colr007"),
+    ):
+        setattr(args, attr, _required_cli_bool(getattr(args, attr, None), label))
+
+
 def _validate_rail_message_id(value: str, label: str) -> None:
     if len(value) > MAX_RAIL_MESSAGE_ID_CHARS:
         raise AdapterError(f"{label} must be at most {MAX_RAIL_MESSAGE_ID_CHARS} characters")
@@ -817,19 +850,32 @@ def _preflight_numeric_cli_values(
             index += 1
 
 
-def _ensure_output_directory(path: Path, label: str) -> None:
+def _ensure_output_directory(
+    path: Path,
+    label: str,
+    *,
+    create: bool = True,
+    check_leaf: bool = True,
+) -> None:
     _reject_output_path_smuggling(path, label)
     if _path_is_repository_iso_fixture(str(path)):
         raise AdapterError(
             f"{label} must not point to checked-in ISO fixture artifacts"
         )
-    _reject_symlinked_existing_ancestors(path, display_label=label)
+    try:
+        _reject_symlinked_existing_ancestors(path, display_label=label)
+    except NotADirectoryError as error:
+        raise AdapterError(f"{label} must be a directory") from error
     if path.exists() or path.is_symlink():
         mode = path.lstat().st_mode
         if stat.S_ISLNK(mode):
             raise AdapterError(f"{label} must not be a symlink")
         if not stat.S_ISDIR(mode):
+            if not check_leaf:
+                return
             raise AdapterError(f"{label} must be a directory")
+        return
+    if not create:
         return
     path.mkdir(parents=True, exist_ok=True)
     mode = path.lstat().st_mode
@@ -922,6 +968,57 @@ def _write_text_output(path: Path, text: str, *, display_label: str | None = Non
 
 def _absolute_path_without_resolving_leaf(path: Path) -> Path:
     return path if path.is_absolute() else Path.cwd() / path
+
+
+def _same_existing_path(left: Path, right: Path) -> bool:
+    try:
+        left_stat = left.stat()
+        right_stat = right.stat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+    return os.path.samestat(left_stat, right_stat)
+
+
+def _reject_receipt_dir_input_alias(
+    receipt_dir: Path,
+    input_dir: Path,
+    input_label: str,
+) -> None:
+    if str(receipt_dir) == str(input_dir) or _same_existing_path(receipt_dir, input_dir):
+        raise AdapterError(f"receipt_dir must not reuse {input_label} path")
+
+
+def _reject_receipt_dir_input_path_overlap(
+    receipt_dir: Path,
+    input_path: Path,
+    input_label: str,
+) -> None:
+    receipt_root = receipt_dir.resolve()
+    input_root = input_path.resolve()
+    if (
+        receipt_root == input_root
+        or input_root in receipt_root.parents
+        or receipt_root in input_root.parents
+    ):
+        raise AdapterError(f"receipt_dir must not overlap {input_label} path")
+
+
+def _reject_path_overlap(
+    left: Path,
+    left_label: str,
+    right: Path,
+    right_label: str,
+) -> None:
+    left_root = left.resolve()
+    right_root = right.resolve()
+    if (
+        left_root == right_root
+        or right_root in left_root.parents
+        or left_root in right_root.parents
+    ):
+        raise AdapterError(f"{left_label} must not overlap {right_label} path")
 
 
 def _load_json(
@@ -1218,6 +1315,18 @@ def resolve_message_paths(inbox_dir: Path, message: str | None) -> list[Path]:
     if not resolved_parent.is_relative_to(inbox_root):
         raise AdapterError("--message path must stay under --inbox-dir")
     return [resolved_parent / message_path.name]
+
+
+def _reject_message_receipt_dir_overlap(paths: list[Path], receipt_dir: Path) -> None:
+    receipt_root = receipt_dir.resolve()
+    for offset, path in enumerate(paths):
+        for label, source_path in (
+            (f"message[{offset}]", path),
+            (f"message[{offset}].sidecar", path.with_suffix(path.suffix + ".json")),
+        ):
+            resolved = source_path.resolve()
+            if resolved == receipt_root or receipt_root in resolved.parents:
+                raise AdapterError(f"{label} must not be read from receipt_dir")
 
 
 def _normalise_message_argument(value: Any) -> str | None:
@@ -1776,9 +1885,15 @@ def _reject_unused_local_overrides(
 
 
 def run(args: argparse.Namespace) -> int:
-    if args.inbox_dir is None:
+    if getattr(args, "inbox_dir", None) is None:
         raise AdapterError("provide --inbox-dir")
-    message = _normalise_message_argument(args.message)
+    args.inbox_dir = _optional_cli_path(args.inbox_dir, "inbox_dir")
+    args.receipt_dir = _optional_cli_path(getattr(args, "receipt_dir", None), "receipt_dir")
+    args.bearer_token_file = _optional_cli_path(
+        getattr(args, "bearer_token_file", None),
+        "bearer_token_file",
+    )
+    message = _normalise_message_argument(getattr(args, "message", None))
     _reject_output_path_smuggling(args.inbox_dir, "inbox_dir")
     if message is not None:
         _reject_raw_output_path_smuggling(message, "message")
@@ -1797,18 +1912,42 @@ def run(args: argparse.Namespace) -> int:
         raise AdapterError(
             "inbox_dir must not point to checked-in ISO fixture artifacts"
         )
-    timeout_secs = _require_positive_finite_cli_number(args.timeout_secs, "--timeout-secs")
+    _reject_receipt_dir_input_alias(receipt_dir, args.inbox_dir, "inbox_dir")
+    if args.bearer_token_file is not None:
+        _reject_receipt_dir_input_path_overlap(
+            receipt_dir,
+            args.bearer_token_file,
+            "bearer_token_file",
+        )
+        _reject_path_overlap(
+            args.bearer_token_file,
+            "bearer_token_file",
+            args.inbox_dir,
+            "inbox_dir",
+        )
+    _require_policy_booleans(args)
+    timeout_secs = _require_positive_finite_cli_number(
+        getattr(args, "timeout_secs", None), "--timeout-secs"
+    )
     response_limit_bytes = _require_positive_cli_int(
-        args.response_limit_bytes, "--response-limit-bytes"
+        getattr(args, "response_limit_bytes", None), "--response-limit-bytes"
     )
     max_payload_bytes = _require_positive_cli_int(
-        args.max_payload_bytes, "--max-payload-bytes"
+        getattr(args, "max_payload_bytes", None), "--max-payload-bytes"
     )
-    base_url = _validate_base_url(args.torii_base_url, args.allow_insecure_http)
+    base_url = _validate_base_url(
+        _required_cli_string(getattr(args, "torii_base_url", None), "--torii-base-url"),
+        args.allow_insecure_http,
+    )
+    if not args.dry_run and args.receipt_dir is not None:
+        _ensure_output_directory(
+            receipt_dir, "receipt_dir", create=False, check_leaf=False
+        )
     _ensure_input_directory(args.inbox_dir, "inbox_dir")
     inbox_dir = args.inbox_dir
     bearer_token = _load_bearer_token(args.bearer_token_file)
     paths = resolve_message_paths(inbox_dir, message)
+    _reject_message_receipt_dir_overlap(paths, receipt_dir)
     messages = [
         verify_message_file(
             path,

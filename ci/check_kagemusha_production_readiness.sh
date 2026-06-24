@@ -324,7 +324,7 @@ TEXT_REQUIREMENTS = {
         "receiver admission can trust that metadata",
         "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4",
         "64-by-4 scalar coverage",
-        "SDK default selection",
+        "compact-first SDK selection",
         "production proof-log artifact",
         "ABI-7 recursive compact key evidence",
         "compact key evidence hash-binds the ABI-7 LEN=4",
@@ -443,12 +443,13 @@ TEXT_REQUIREMENTS = {
         "def _command_disruption_errors(",
         "must not manage other running jobs",
         "ADB `getprop`",
+        "def _timeout_arg(timeout_seconds: int) -> int | None:",
         "errors = _command_disruption_errors(command, f\"ADB getprop {prop}\")",
-        "timeout=timeout_seconds",
+        "timeout=_timeout_arg(timeout_seconds)",
         "ADB getprop {prop} timed out after {timeout_seconds} seconds",
         "adb_timeout_seconds=args.adb_timeout_seconds",
         "--adb-timeout-seconds",
-        "--adb-timeout-seconds must be positive",
+        "--adb-timeout-seconds must be non-negative",
         "exact one-LF values",
     ),
     "docs/source/offline_kagemusha.md": (
@@ -457,12 +458,14 @@ TEXT_REQUIREMENTS = {
         "64-hop cap",
         "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4",
         "64-by-4 fixed-window Vesta verifier witness profile",
-        "The routine offline-offline production path",
-        "uses the ABI-6 reserved-lineage recursive spend verifier and redemption surface",
+        "The routine readiness route still validates the ABI-6 reserved-lineage",
+        "recursive spend verifier and redemption surface",
+        "SDK preferred-mode selection can choose ABI-7 compact",
         "ABI-7 recursive compact-token symbols now route one-hop",
         "LEN=4 compact-token proof path",
         "packaged compact one-hop and append proving-key archives",
-        "default selection remain reserved ABI-7 state",
+        "compact-first SDK selection do not open receiver admission",
+        "packaged-key and evidence gates",
         "iroha app zk kagemusha recursive-compact-key-artifacts",
         "--record-out artifacts/kagemusha/recursive-compact-len4.record.norito",
         "--pk-out artifacts/kagemusha/recursive-compact-len4.pk",
@@ -537,6 +540,8 @@ TEXT_REQUIREMENTS = {
         "rejects summary drift",
         "extra release claims",
         "readiness-summary Android matrix lists",
+        "rejects any forged or stale",
+        "missing-pair complement",
         "per-slot `signed_evidence` map",
         "trusted-signer digest lists",
         "are",
@@ -1909,8 +1914,9 @@ TEXT_REQUIREMENTS = {
         "signing inputs are required unless --allow-unsigned is set",
         "--private-key, --public-key, and --signer-key-id must be supplied together",
         "def _run_adb_getprop",
+        "def _timeout_arg(timeout_seconds: int) -> int | None:",
         "errors = _command_disruption_errors(command, f\"ADB getprop {prop}\")",
-        "timeout=timeout_seconds",
+        "timeout=_timeout_arg(timeout_seconds)",
         "ADB getprop {prop} timed out after {timeout_seconds} seconds",
         "ADB getprop {prop} failed with exit code {exc.returncode}",
         "ADB getprop {prop} could not be executed",
@@ -4120,6 +4126,15 @@ TEXT_REQUIREMENTS = {
         "must not contain surrounding whitespace",
         'if "\\\\" in path_text:\n        return f"{label} must not contain backslashes"',
         'if ".." in path.parts:\n        return f"{label} must be canonical"',
+        "def validate_iroha_bin_path",
+        "--iroha-bin must point to a binary named iroha",
+        "--iroha-bin is missing",
+        "--iroha-bin must not be a symlink",
+        "--iroha-bin must be a regular file",
+        "--iroha-bin must be executable",
+        "--iroha-bin ancestor directory",
+        "explicit_bins.append(str(_absolute_path(iroha_bin).parent))",
+        "errors.extend(validate_iroha_bin_path(args.iroha_bin))",
         "validate_exit_file_path_shape",
         "exit_path_errors = validate_exit_file_path_shape(args.exit_file)",
         "validate_elapsed_seconds_file_path_shape",
@@ -4217,6 +4232,8 @@ TEXT_REQUIREMENTS = {
         "readiness.validate_lineage_proof_command(",
         "executable_repo_root=repo_root",
         "executable_repo_root=args.repo_root",
+        "iroha_bin=args.iroha_bin",
+        '"--iroha-bin"',
         "args.staged_artifact_dir.mkdir(mode=0o700",
         "_write_exit_marker",
         "f\"{exit_code}\\n\"",
@@ -4248,6 +4265,15 @@ TEXT_REQUIREMENTS = {
         "must not contain surrounding whitespace",
         'if "\\\\" in path_text:\n        return f"{label} must not contain backslashes"',
         'if ".." in path.parts:\n        return f"{label} must be canonical"',
+        "def validate_iroha_bin_path",
+        "--iroha-bin must point to a binary named iroha",
+        "--iroha-bin is missing",
+        "--iroha-bin must not be a symlink",
+        "--iroha-bin must be a regular file",
+        "--iroha-bin must be executable",
+        "--iroha-bin ancestor directory",
+        "explicit_bins.append(str(_absolute_path(iroha_bin).parent))",
+        "errors.extend(validate_iroha_bin_path(args.iroha_bin))",
         "validate_exit_file_path_shape",
         "exit_path_errors = validate_exit_file_path_shape(args.exit_file)",
         "def _display_exit_marker",
@@ -4346,6 +4372,8 @@ TEXT_REQUIREMENTS = {
         'parser.add_argument("--repo-root", type=Path, default=Path("."))',
         "readiness.validate_repo_root_path(args.repo_root)",
         "executable_repo_root=args.repo_root",
+        "iroha_bin=args.iroha_bin",
+        '"--iroha-bin"',
         "args.staged_artifact_dir.mkdir(mode=0o700",
         'f"{exit_code}\\n"',
         "staged keygen exit marker",
@@ -4378,6 +4406,10 @@ TEXT_REQUIREMENTS = {
         "missing_d2d_payment_transport_pairs",
         "_android_d2d_payment_transports_by_family_is_shaped",
         "_android_missing_d2d_payment_transport_pairs_are_shaped",
+        "_expected_android_missing_d2d_payment_transport_pairs",
+        "missing_pairs != _expected_android_missing_d2d_payment_transport_pairs(",
+        "kagemusha_release_summary_android_d2d_transport_pair_inventory",
+        "kagemusha_release_bundle_manifest_android_d2d_transport_pair_inventory",
         "d2d_payment_transport",
         "d2d_payment_transports",
         "d2d_payment_transcripts",
@@ -5110,6 +5142,7 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_slot_assembler_rejects_blank_identity_override_without_adb",
         "test_kagemusha_slot_assembler_rejects_disruptive_adb_getprop_before_subprocess",
         "test_kagemusha_slot_assembler_adb_getprop_uses_timeout",
+        "test_kagemusha_slot_assembler_zero_adb_getprop_timeout_disables_timeout",
         "test_kagemusha_slot_assembler_reports_adb_getprop_timeout",
         "test_kagemusha_slot_assembler_redacts_adb_getprop_called_process_command",
         "test_kagemusha_slot_assembler_redacts_adb_getprop_oserror_detail",
@@ -5120,7 +5153,7 @@ TEXT_REQUIREMENTS = {
         "test_android_capture_expected_family_cli_secret_does_not_leak_before_commands",
         "test_android_capture_expected_family_redacts_unsafe_getprop_before_build",
         "test_android_capture_expected_family_rejects_disruptive_getprop_before_runner",
-        "test_kagemusha_slot_assembler_rejects_nonpositive_adb_timeout_before_root_classify",
+        "test_kagemusha_slot_assembler_rejects_negative_adb_timeout_before_root_classify",
         "test_kagemusha_slot_assembler_rejects_padded_adb_identity",
         "test_kagemusha_slot_assembler_rejects_noncanonical_adb_identity_output",
         "test_kagemusha_slot_assembler_uses_source_identity_without_adb",
@@ -5730,6 +5763,13 @@ TEXT_REQUIREMENTS = {
         "test_json_summary_rejects_hardlinked_output_without_overwriting_alias",
         "test_standard_matrix_requires_every_kagemusha_device_family",
         "test_standard_matrix_accepts_all_kagemusha_device_families",
+        "test_standard_matrix_rejects_missing_d2d_payment_transport_matrix",
+        "test_standard_matrix_rejects_aggregate_d2d_transport_without_family_pairs",
+        "expected_missing_pairs = [",
+        "if transport != \"nfc_hce\"",
+        "if transport != transports[index % len(transports)]",
+        "summary[\"kagemusha\"][\"missing_d2d_payment_transport_pairs\"]",
+        "expected_missing_pairs,",
         "test_signer_helper_generates_validator_accepted_evidence",
         "test_signer_helper_preserves_multi_transport_d2d_transcripts",
         "test_signer_helper_rejects_nonfinite_canonical_payload_before_signing",
@@ -6075,6 +6115,22 @@ TEXT_REQUIREMENTS = {
         "test_android_signed_evidence_summary_rejects_missing_identity_values",
         "test_android_signed_evidence_summary_rejects_single_missing_identity_without_partial_reflection",
         "test_multi_transport_d2d_slot_satisfies_transport_rollup",
+        "test_aggregate_d2d_transport_coverage_without_family_pairs_blocks_rollup",
+        "test_missing_d2d_payment_transport_blocks_rollup",
+        "expected_missing_pairs = [",
+        "if transport != \"nfc_hce\"",
+        "if transport != transports[index % len(transports)]",
+        "summary[\"android_device_lab\"][\"missing_d2d_payment_transport_pairs\"]",
+        "summary[\"missing_d2d_payment_transport_pairs\"]",
+        "expected_missing_pairs,",
+        "test_kagemusha_release_bundle_rejects_android_d2d_family_map_drift",
+        "test_kagemusha_release_bundle_rejects_android_d2d_missing_pair_inventory_drift",
+        "test_kagemusha_release_bundle_rejects_android_d2d_duplicate_missing_pair_shape",
+        "test_kagemusha_release_bundle_manifest_rejects_android_d2d_missing_pair_inventory_drift",
+        "test_kagemusha_release_bundle_manifest_rejects_android_d2d_duplicate_missing_pair_shape",
+        "test_kagemusha_release_bundle_manifest_rejects_android_d2d_extra_missing_pair_inventory",
+        "test_kagemusha_release_bundle_verify_existing_rejects_android_d2d_missing_pair_inventory_drift",
+        "test_kagemusha_release_bundle_verify_existing_rejects_android_d2d_extra_missing_pair_inventory",
         "test_direct_d2d_transport_rollup_requires_transcript_map_for_declared_list",
         "test_direct_d2d_transport_rollup_requires_exact_transcript_bindings",
         "test_direct_d2d_transport_rollup_rejects_reused_transcript_path",
@@ -6288,6 +6344,7 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_staged_runner_resume_reuses_complete_keygen",
         "test_compact_key_staged_runner_rejects_replace_with_resume_keygen",
         "test_compact_key_staged_runner_resume_replaces_failed_keygen",
+        "test_compact_key_staged_runner_resume_replaces_killed_keygen",
         "test_compact_key_staged_runner_resume_rejects_symlinked_artifact",
         "test_compact_key_staged_runner_refuses_existing_artifact_before_run",
         "test_compact_key_staged_runner_refuses_existing_run_report_before_run",
@@ -6313,6 +6370,15 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_staged_runner_rejects_symlinked_exit_marker",
         "test_compact_key_staged_runner_writes_child_output_directly_to_log_file",
         "test_compact_key_staged_runner_finds_repo_local_iroha_with_empty_path",
+        "test_compact_key_staged_runner_explicit_iroha_bin_precedes_stale_release",
+        "test_compact_key_staged_runner_rejects_symlinked_iroha_bin",
+        "test_compact_key_staged_runner_rejects_unsafe_iroha_bin_variants",
+        "test_compact_key_staged_runner_rejects_unsafe_iroha_bin_before_launch",
+        "--iroha-bin must not contain secret-looking material",
+        "--iroha-bin must be canonical",
+        "--iroha-bin must not contain control characters",
+        "--iroha-bin must not contain surrounding whitespace",
+        "--iroha-bin must not contain backslashes",
         "test_compact_key_staged_runner_resolves_relative_repo_root_for_child_path",
         "compact relative iroha app",
         "fsync_fds",
@@ -6363,6 +6429,7 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_staged_runner_resume_reuses_completed_init_phase",
         "test_lineage_proof_staged_runner_rejects_replace_with_resume_key_artifacts",
         "test_lineage_proof_staged_runner_resume_replaces_failed_append_phase",
+        "test_lineage_proof_staged_runner_resume_replaces_killed_append_phase",
         "test_lineage_proof_staged_runner_resume_rejects_symlinked_phase_output",
         "test_lineage_proof_staged_runner_refuses_existing_log_before_run",
         "test_lineage_proof_staged_runner_refuses_existing_run_report_before_run",
@@ -6389,6 +6456,15 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_staged_runner_rejects_symlinked_exit_marker",
         "test_lineage_proof_staged_runner_writes_child_output_directly_to_log_file",
         "test_lineage_proof_staged_runner_finds_repo_local_iroha_with_empty_path",
+        "test_lineage_proof_staged_runner_explicit_iroha_bin_precedes_stale_release",
+        "test_lineage_proof_staged_runner_rejects_symlinked_iroha_bin",
+        "test_lineage_proof_staged_runner_rejects_unsafe_iroha_bin_variants",
+        "test_lineage_proof_staged_runner_rejects_unsafe_iroha_bin_before_launch",
+        "--iroha-bin must not contain secret-looking material",
+        "--iroha-bin must be canonical",
+        "--iroha-bin must not contain control characters",
+        "--iroha-bin must not contain surrounding whitespace",
+        "--iroha-bin must not contain backslashes",
         "test_lineage_proof_staged_runner_resolves_relative_repo_root_for_child_path",
         "lineage relative iroha app",
         "test_lineage_proof_staged_runner_removes_temp_log_on_spawn_failure",
@@ -7160,9 +7236,11 @@ TEXT_REQUIREMENTS = {
     "crates/iroha_data_model/src/offline/mod.rs": (
         "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1: u32 = 64;",
         "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
-        "This mode is intentionally not selected by production defaults",
         "preferred_kagemusha_offline_spend_mode_for_capabilities(false, recursive_spend_available)",
-        "_recursive_compact_available: bool",
+        "Prefer ABI-7 recursive compact when both the compact prover and verifier are",
+        "recursive_compact_available: bool",
+        "if recursive_compact_available",
+        "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
         "if recursive_spend_available",
         "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
         "KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
@@ -7366,36 +7444,50 @@ EXACT_LINE_REQUIREMENTS = {
 
 SDK_SELECTOR_REQUIREMENTS = {
     "javascript/iroha_js/src/crypto.js": (
-        "void recursiveCompactAvailable;",
+        "if (recursiveCompactAvailable)",
+        "return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1;",
         "if (recursiveSpendAvailable)",
         "return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1;",
         "return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;",
     ),
     "javascript/iroha_js/dist/crypto.js": (
-        "void recursiveCompactAvailable;",
+        "if (recursiveCompactAvailable)",
+        "return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1;",
         "if (recursiveSpendAvailable)",
         "return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1;",
         "return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;",
     ),
     "python/iroha_python/src/iroha_python/kagemusha.py": (
-        "_ = recursive_compact_available",
+        "if recursive_compact_available:",
+        "return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
         "if recursive_spend_available:",
         "return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
         "return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
     ),
+    "crates/iroha_data_model/src/offline/mod.rs": (
+        "recursive_compact_available: bool",
+        "if recursive_compact_available",
+        "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
+        "if recursive_spend_available",
+        "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
+        "KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
+    ),
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift": (
-        "_ = recursiveCompactAvailable",
+        "if recursiveCompactAvailable {",
+        "return .recursiveCompactV1",
         "return recursiveSpendAvailable ? .recursiveSpendV1 : .checkedPrefoldV1",
     ),
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt": (
-        '@Suppress("UNUSED_PARAMETER")',
         "recursiveCompactAvailable: Boolean",
+        "if (recursiveCompactAvailable)",
+        "return Mode.RECURSIVE_COMPACT_V1",
         "if (recursiveSpendAvailable)",
         "Mode.RECURSIVE_SPEND_V1",
         "Mode.CHECKED_PREFOLD_V1",
     ),
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java": (
-        "compact mode is not a production default yet",
+        "if (recursiveCompactAvailable)",
+        "return Mode.RECURSIVE_COMPACT_V1;",
         "return recursiveSpendAvailable ? Mode.RECURSIVE_SPEND_V1 : Mode.CHECKED_PREFOLD_V1;",
     ),
     "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs": (
@@ -8214,6 +8306,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-supervisor-output-pipe",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-supervisor-output-pipe",
     "ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-relative-repo-root-child-path",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-iroha-bin-validation",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-heartbeat",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-heartbeat",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-execution-log-sha256",
@@ -9650,8 +9743,8 @@ if mode == "--negative-control-sdk-default":
         "SDK default selector",
         lambda: override_text(
             "crates/iroha_data_model/src/offline/mod.rs",
-            "if recursive_spend_available",
-            "if _recursive_compact_available",
+            "    if recursive_compact_available {\n        KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1\n    } else ",
+            "    ",
         ),
     )
     raise SystemExit(0)
@@ -9661,33 +9754,38 @@ if mode == "--negative-control-sdk-default-cross-sdk":
         mutations = (
             (
                 "javascript/iroha_js/src/crypto.js",
-                "void recursiveCompactAvailable;",
-                "if (recursiveCompactAvailable) { return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1; }",
+                "  if (recursiveCompactAvailable) {\n    return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1;\n  }\n",
+                "  void recursiveCompactAvailable;\n",
             ),
             (
                 "javascript/iroha_js/dist/crypto.js",
-                "void recursiveCompactAvailable;",
-                "if (recursiveCompactAvailable) { return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1; }",
+                "  if (recursiveCompactAvailable) {\n    return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1;\n  }\n",
+                "  void recursiveCompactAvailable;\n",
             ),
             (
                 "python/iroha_python/src/iroha_python/kagemusha.py",
-                "_ = recursive_compact_available",
-                "if recursive_compact_available: return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
+                "    if recursive_compact_available:\n        return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1\n",
+                "    _ = recursive_compact_available\n",
+            ),
+            (
+                "crates/iroha_data_model/src/offline/mod.rs",
+                "    if recursive_compact_available {\n        KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1\n    } else ",
+                "    ",
             ),
             (
                 "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
-                "_ = recursiveCompactAvailable",
-                "if recursiveCompactAvailable { return .recursiveCompactV1 }",
+                "        if recursiveCompactAvailable {\n            return .recursiveCompactV1\n        }\n",
+                "        _ = recursiveCompactAvailable\n",
             ),
             (
                 "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
-                "return if (recursiveSpendAvailable) {",
-                "return if (recursiveCompactAvailable) {",
+                "            if (recursiveCompactAvailable) {\n                return Mode.RECURSIVE_COMPACT_V1\n            }\n",
+                "",
             ),
             (
                 "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
-                "return recursiveSpendAvailable ? Mode.RECURSIVE_SPEND_V1 : Mode.CHECKED_PREFOLD_V1;",
-                "return recursiveCompactAvailable ? Mode.RECURSIVE_COMPACT_V1 : Mode.CHECKED_PREFOLD_V1;",
+                "    if (recursiveCompactAvailable) {\n      return Mode.RECURSIVE_COMPACT_V1;\n    }\n",
+                "",
             ),
             (
                 "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
@@ -10974,13 +11072,21 @@ if mode == "--negative-control-android-device-lab-duplicate-binding-zero-digest"
     raise SystemExit(0)
 
 if mode == "--negative-control-android-device-lab-zero-sha256-placeholders":
-    run_negative_control(
-        "Android device-lab zero SHA-256 placeholder evidence",
-        lambda: override_text_all(
+    def disable_android_zero_sha256_placeholder_gate() -> None:
+        override_text_all(
             "scripts/check_android_device_lab_slot.py",
             '== "0" * 64',
             '== "__disabled_zero_sha256_placeholder_gate__"',
-        ),
+        )
+        override_text_all(
+            "scripts/check_android_device_lab_slot.py",
+            '!= "0" * 64',
+            '!= "__disabled_zero_sha256_placeholder_gate__"',
+        )
+
+    run_negative_control(
+        "Android device-lab zero SHA-256 placeholder evidence",
+        disable_android_zero_sha256_placeholder_gate,
     )
     raise SystemExit(0)
 
@@ -14840,7 +14946,7 @@ if mode == "--negative-control-android-device-lab-slot-assembler-adb-getprop-tim
         "Android slot assembler ADB getprop timeout gate",
         lambda: override_text(
             "scripts/kagemusha_android_device_lab_slot.py",
-            "        timeout=timeout_seconds,\n",
+            "            timeout=_timeout_arg(timeout_seconds),\n",
             "        # timeout intentionally disabled\n",
         ),
     )
@@ -19669,6 +19775,24 @@ if mode == "--negative-control-staged-runner-relative-repo-root-child-path":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-staged-runner-iroha-bin-validation":
+    run_negative_control(
+        "Kagemusha staged runner explicit iroha binary validation",
+        lambda: (
+            override_text(
+                "scripts/kagemusha_run_lineage_proof_staged.py",
+                "errors.extend(validate_iroha_bin_path(args.iroha_bin))",
+                "errors.extend([])",
+            ),
+            override_text(
+                "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+                "errors.extend(validate_iroha_bin_path(args.iroha_bin))",
+                "errors.extend([])",
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-lineage-proof-staged-runner-heartbeat":
     run_negative_control(
         "Reserved-lineage proof staged runner heartbeat observability",
@@ -20080,10 +20204,15 @@ if mode == "--negative-control-android-device-lab-d2d-transport-matrix":
             "if missing_d2d_payment_transports or missing_d2d_payment_transport_pairs:",
             "if False and (missing_d2d_payment_transports or missing_d2d_payment_transport_pairs):",
         )
-        override_text(
+        override_text_all(
             "scripts/kagemusha_release_bundle.py",
-            'if list_fields_ok.get("covered_d2d_payment_transports_by_family"):',
-            'if False and list_fields_ok.get("covered_d2d_payment_transports_by_family"):',
+            'list_fields_ok.get("covered_d2d_payment_transports_by_family")',
+            'False and list_fields_ok.get("covered_d2d_payment_transports_by_family")',
+        )
+        override_text_all(
+            "scripts/kagemusha_release_bundle.py",
+            "missing_pairs != _expected_android_missing_d2d_payment_transport_pairs(",
+            "False and missing_pairs != _expected_android_missing_d2d_payment_transport_pairs(",
         )
 
     run_negative_control(
@@ -20621,5 +20750,5 @@ if errors:
         print(f"error: {error}", file=sys.stderr)
     raise SystemExit(1)
 
-print("Kagemusha production readiness is routed through ABI-6 Reserved-lineage recursive spend; ABI-7 recursive compact has package-aware one-hop/append proof wiring while production default selection remains blocked")
+print("Kagemusha production readiness is routed through ABI-6 Reserved-lineage recursive spend; ABI-7 recursive compact has package-aware one-hop/append proof wiring and compact-first SDK selection outside the C# Windows deferral")
 PY

@@ -154,6 +154,10 @@ DISRUPTIVE_TOKEN_SEQUENCES: tuple[tuple[str, ...], ...] = (
 Runner = Callable[..., subprocess.CompletedProcess]
 
 
+def _timeout_arg(timeout_seconds: int) -> int | None:
+    return None if timeout_seconds == 0 else timeout_seconds
+
+
 def _json_dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
 
@@ -697,7 +701,7 @@ def _run_latest_slot_query(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout_seconds,
+            timeout=_timeout_arg(timeout_seconds),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         detail = _safe_detail(str(exc), redact_tokens=(serial or "",))
@@ -752,7 +756,7 @@ def _run_raw_slot_tar_pull(
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=timeout_seconds,
+            timeout=_timeout_arg(timeout_seconds),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         detail = _safe_detail(str(exc), redact_tokens=(serial or "",))
@@ -2324,8 +2328,8 @@ def pull_raw_slot(
     errors.extend(_path_shape_errors(args.out_root, "raw output root path"))
     if args.summary_out is not None:
         errors.extend(_path_shape_errors(args.summary_out, "raw pull summary output"))
-    if args.adb_timeout_seconds <= 0:
-        errors.append("--adb-timeout-seconds must be positive")
+    if args.adb_timeout_seconds < 0:
+        errors.append("--adb-timeout-seconds must be non-negative")
     if errors:
         return 1, None, errors
 
@@ -2452,7 +2456,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--slot-id")
     parser.add_argument("--out-root", type=Path, default=DEFAULT_OUT_ROOT)
     parser.add_argument("--summary-out", type=Path)
-    parser.add_argument("--adb-timeout-seconds", type=int, default=120)
+    parser.add_argument(
+        "--adb-timeout-seconds",
+        type=int,
+        default=120,
+        help="ADB subprocess timeout in seconds; 0 disables the timeout.",
+    )
     parser.epilog = (
         f"Latest-slot command: {ADB_LATEST_SLOT_COMMAND_HELP}\n"
         f"Raw-tar command: {ADB_PULL_TAR_COMMAND_HELP}\n"

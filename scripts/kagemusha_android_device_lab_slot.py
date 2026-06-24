@@ -81,6 +81,10 @@ DEVICE_FAMILY_MODEL_RULES: tuple[
 )
 
 
+def _timeout_arg(timeout_seconds: int) -> int | None:
+    return None if timeout_seconds == 0 else timeout_seconds
+
+
 def _json_dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
 
@@ -923,8 +927,8 @@ def _run_adb_getprop(
     *,
     timeout_seconds: int,
 ) -> str:
-    if timeout_seconds <= 0:
-        raise ValueError("ADB getprop timeout must be positive")
+    if timeout_seconds < 0:
+        raise ValueError("ADB getprop timeout must be non-negative")
     command = [adb]
     if serial:
         command.extend(["-s", serial])
@@ -939,7 +943,7 @@ def _run_adb_getprop(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout_seconds,
+            timeout=_timeout_arg(timeout_seconds),
         )
     except subprocess.TimeoutExpired as exc:
         raise ValueError(
@@ -1672,8 +1676,8 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
         return 1, None, ["slot id must not contain whitespace"]
     if device_lab._contains_control_character(args.slot_id):
         return 1, None, ["slot id must not contain control characters"]
-    if args.adb_timeout_seconds <= 0:
-        return 1, None, ["--adb-timeout-seconds must be positive"]
+    if args.adb_timeout_seconds < 0:
+        return 1, None, ["--adb-timeout-seconds must be non-negative"]
     slot_id = _single_safe_slot_id(args.slot_id)
     if slot_id is None:
         return 1, None, ["slot id must be a single safe directory name"]
@@ -2097,6 +2101,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--adb-timeout-seconds",
         type=int,
         default=DEFAULT_ADB_TIMEOUT_SECONDS,
+        help="ADB subprocess timeout in seconds; 0 disables the timeout.",
     )
     parser.add_argument("--serial")
     parser.add_argument("--device-fingerprint")

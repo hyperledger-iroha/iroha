@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-22
+Last updated: 2026-06-24
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -75,7 +75,10 @@ Canary runbook path strings and archived child-command local path values must
 remain printable ASCII and capped by the 4096-character local path limit, while
 production-readiness compact summary/config/receipt path strings replay the
 stricter 2048-character archive cap, so Unicode-confusable or oversized path
-evidence cannot be planned or replayed into release archives.
+evidence cannot be planned or replayed into release archives. Evidence and
+readiness replay also reject compact canary/trust summary paths reused as canary
+config paths, canary-stage receipt paths, direct receipt-verification paths, or
+trust-bundle paths, including across relabelled evidence summaries.
 Archived canary child commands now also must keep the runner-emitted shape:
 Python interpreter, expected stage script path, then supported flags and their
 values. Interpreter version suffixes are ASCII-only, so Unicode digit
@@ -91,7 +94,37 @@ network work.
 Production-readiness direct `run(args)` calls now mirror the CLI path-smuggling
 guard for XSD summaries, evidence summaries, and summary outputs before input
 loading, without converting checked-in fixture summary inputs from structured
-release blockers into hard selector errors.
+release blockers into hard selector errors. Evidence-gate and final-readiness
+direct production-policy flags also must be real booleans before summary
+loading, so truthy strings or integers cannot enable diagnostic release
+overrides.
+Direct XSD fixture and trust-bundle policy flags likewise must be real booleans
+before manifest or bundle loading, so programmatic callers cannot use truthy
+strings, integers, nulls, or containers to loosen strict fixture or trust
+verification.
+Direct operator-canary, rail-gateway, and audit-notary policy flags must also
+be real booleans before canary config, rail inbox, or audit export loading, so
+programmatic callers cannot use non-boolean values to alter plan-only,
+discovery, insecure-HTTP, default-profile, legacy-message, or missing-source
+behavior.
+Direct repeatable path and endpoint arguments now reject bare strings and
+non-path/non-string entries before loading trust bundles, receipts, evidence
+summaries, readiness summaries, or notary exports, so programmatic callers
+cannot accidentally split selector strings into character paths or endpoints.
+Direct scalar path arguments now normalize string/path-like values and reject
+invalid path objects with label-only errors before loading XSD manifests, trust
+bundles, canary configs, rail inboxes, audit exports, evidence summaries, or
+readiness summaries, and direct rail gateway Torii URLs must be real strings
+before URL validation or inbox loading. Direct evidence/readiness
+provider/environment/default-profile context values must also be real strings
+before summary loading. Missing direct `argparse.Namespace` attributes for
+required ISO config/inbox/export paths, policy booleans, evidence/readiness
+context strings, freshness budgets, canary output limits, rail payload limits,
+and notary response limits now fail through the same controlled validators
+before file discovery, summary loading, network work, or child execution
+instead of surfacing raw `AttributeError`s; omitted optional trust source
+freshness budgets and rail message selectors now take the same defaults as
+their CLI forms.
 Direct XSD fixture verification and trust-bundle verification `run(args)` calls
 also mirror their CLI path-smuggling guards for manifest/profile-catalog,
 bundle, profile-output, and summary-output paths before manifest or bundle
@@ -206,7 +239,10 @@ values so forged archived commands cannot reintroduce repository fixtures.
 Direct receipt verification and its parent evidence gate also reject `--receipt`
 and `--receipt-dir` selectors under checked-in `fixtures/iso20022/` artifacts
 before receipt discovery, child verifier launch, file loading, or digest-bound
-summary construction.
+summary construction. Direct receipt-verifier `run(args)` calls now also mirror
+the CLI path-smuggling preflight for those selectors before discovery or file
+loading, and require direct policy flags to be real booleans before receipt
+selectors are discovered or loaded.
 Raw evidence verification now also rejects `--canary-summary` and
 `--trust-summary` inputs under checked-in `fixtures/iso20022/` artifacts, and
 final readiness blocks forged compact XSD/evidence/canary/trust summary paths
@@ -268,12 +304,16 @@ input files under checked-in ISO fixture coordinates as
 under checked-in `fixtures/iso20022/` artifacts fail before manifest loading,
 and archived `profile_catalog.path` values under those artifacts replay as
 `xsd.repository_profile_catalog` blockers. The local `--allow-reviewed-xsd-gaps`
-diagnostic mode can only downgrade reviewed missing-schema, schema-only, or
-blocked-source gap warnings, never repository fixture manifest blockers or an
-unreviewed profile-catalog-only schema gap; advertised profile-version gaps
-remain blockers unless the exact message definition also has reviewed
-missing-schema, schema-only, or blocked source evidence.
-XSD summary version 2 now also carries a recomputed
+diagnostic mode can only downgrade reviewed missing-schema, schema-only,
+blocked-source, or pending-source gap warnings, never repository fixture
+manifest blockers or a truly unreviewed profile-catalog-only schema gap;
+advertised profile-version gaps remain blockers unless the exact message
+definition also has reviewed missing-schema, schema-only, blocked-source, or
+pending-source evidence. Cross-summary XSD material replay checks also include
+pending-source message IDs, official catalogue/source references, and direct
+download URLs, so one operator package cannot satisfy another by replaying the
+same pending-source record.
+XSD summary version 3 now also carries a recomputed
 `missing_profile_schema_message_ids` aggregate with unique missing message
 definitions, per-message profile-version counts, and reviewed-gap
 classifications; final readiness replays the raw gap evidence and blocks forged
@@ -3686,7 +3726,9 @@ redistributable schemas, and official trust/revocation bundles.
   The direct strict XSD profile-catalog gate now reports the count of
   non-schema-backed advertised message versions without echoing the profile or
   message-definition values; the checked-in manifest/catalog pair still has
-  `24` missing profile schema proofs pending redistributable official XSDs.
+  `24` missing profile schema proofs pending redistributable official XSDs, all
+  now backed by reviewed missing-schema, blocked-source, or official ISO
+  pending-source evidence.
 - Completed 2026-06-04: added a checked-in `sese.024` securities status-advice
   XML fixture and pinned it at both the IVM parser layer and the Torii
   lifecycle layer. The Torii regressions now cover known-original pending
@@ -4551,6 +4593,16 @@ redistributable schemas, and official trust/revocation bundles.
   the default `DEFAULT_PROFILES_JSON` catalog when no `--profile-catalog`
 	  override is supplied, so the release gate fails directly on the current
 	  profile-advertised schema gaps.
+  The checked-in manifest records official ISO pending-source evidence,
+  including exact direct XSD download URLs, for the remaining unreviewed
+  securities/collateral profile message ids, so current compact readiness
+  summaries report zero unreviewed unique profile schema gaps while strict
+  schema-backed closure still fails. Pending direct download URLs must be unique
+  within each summary and across archived summary replay, pending official ISO
+  catalogue/download URLs must not contain percent escapes, archive catalogue
+  URLs must use canonical raw `page=<nonzero decimal>` queries, and pending
+  source message names must use canonical ISO-style CamelCase plus `VNN` suffixes
+  that match the corresponding `message_def_id` version segment.
   Blocked public XSD candidate evidence now must include at least one explicit
   redistribution or public-distribution restriction marker; a copyright-only
   marker list is rejected before manifest summary emission and again during
@@ -4652,8 +4704,9 @@ redistributable schemas, and official trust/revocation bundles.
   Compact canary stage names must also be unique, limited to the production
   stages, and ordered as rail/notary/verify. Local readiness overrides are now
   bound to matching evidence: `--allow-reviewed-xsd-gaps` requires at least one
-  reviewed XSD warning beyond an unreviewed profile-version gap, only downgrades
-  profile-version gaps tied to exact reviewed message-definition evidence, and
+  reviewed XSD warning beyond a truly unreviewed profile-version gap, only
+  downgrades profile-version gaps tied to exact reviewed message-definition
+  evidence, and
   `--allow-canary-stage-receipts-only` requires an
   evidence summary with canary-stage-only receipt policy and missing direct
   receipt archive verification. Compact trust summaries that explicitly record
