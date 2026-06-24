@@ -44,6 +44,114 @@ READINESS_REPORT_PUBLIC_FIELDS = (
     "cryptographic_evidence",
     "user_prover_submission_surfaces",
 )
+RELEASE_CHECKLIST_PUBLIC_FIELDS = frozenset(("ready", "items"))
+RELEASE_CHECKLIST_ITEM_PUBLIC_FIELDS = frozenset(("id", "title", "ready", "blockers"))
+INPUT_ARTIFACT_PUBLIC_FIELDS = frozenset(("path", "bytes", "sha256"))
+SOURCE_INVENTORY_PUBLIC_FIELDS = frozenset(("validation_status", "validation_blockers"))
+USER_PROVER_SUBMISSION_SURFACE_PUBLIC_FIELDS = frozenset(
+    (
+        "lanes",
+        "proof_backend",
+        "sdk_helper_symbols",
+        "sdk_helper_symbols_by_sdk",
+        "sdk_helpers",
+        "on_chain_submission",
+        "required_phases",
+        "validation_status",
+        "validation_blockers",
+    )
+)
+CRYPTOGRAPHIC_EVIDENCE_PUBLIC_FIELDS = frozenset(
+    (
+        "domain",
+        "chain",
+        "evm_source_rpc_chain_id",
+        "evm_source_block_tag",
+        "evm_destination_rpc_chain_id",
+        "evm_destination_block_tag",
+        "source_verifier_material_hash",
+        "source_adapter_engine_deployment_hash",
+        "destination_binding_hash",
+        "route_allowlist_hash",
+        "route_canary_evidence_hash",
+        "route_canary_evidence_source",
+        "route_canary_evidence_bound",
+        "route_canary_transaction_hash",
+        "route_canary_receipt_block_number",
+        "route_canary_receipt_block_hash",
+        "route_canary_receipt_block_finalized",
+        "route_canary_block_receipts_root",
+        "route_canary_message_id",
+        "route_canary_block_number",
+        "route_canary_block_timestamp",
+        "source_adapter_gate_required",
+        "source_adapter_gate_hash",
+        "source_adapter_gate_audit_hashes",
+    )
+)
+CRYPTOGRAPHIC_EVIDENCE_TEXT_FIELDS = frozenset(
+    (
+        "evm_source_rpc_chain_id",
+        "evm_source_block_tag",
+        "evm_destination_rpc_chain_id",
+        "evm_destination_block_tag",
+        "route_canary_evidence_source",
+    )
+)
+CRYPTOGRAPHIC_EVIDENCE_HASH_FIELDS = frozenset(
+    (
+        "source_verifier_material_hash",
+        "source_adapter_engine_deployment_hash",
+        "destination_binding_hash",
+        "route_allowlist_hash",
+        "route_canary_evidence_hash",
+        "route_canary_transaction_hash",
+        "route_canary_receipt_block_hash",
+        "route_canary_block_receipts_root",
+        "route_canary_message_id",
+        "source_adapter_gate_hash",
+    )
+)
+CRYPTOGRAPHIC_EVIDENCE_INTEGER_FIELDS = frozenset(
+    (
+        "route_canary_receipt_block_number",
+        "route_canary_block_number",
+        "route_canary_block_timestamp",
+    )
+)
+ACTIVE_LAUNCH_RELEASE_CHECKLIST_ITEM_IDS = (
+    "all_required_lane_records",
+    "governed_deployment_evidence",
+    "route_allowlist_binding",
+    "live_route_canary_evidence",
+    "native_evm_groth16_prover_bundle",
+    "no_unresolved_blockers",
+)
+ACTIVE_LAUNCH_RELEASE_CHECKLIST_TITLES = {
+    "all_required_lane_records": (
+        f"Active {ACTIVE_LAUNCH_DISPLAY} SCCP lane has the required source, "
+        "deployment, destination, and route records"
+    ),
+    "governed_deployment_evidence": (
+        f"{ACTIVE_LAUNCH_DISPLAY} source-adapter deployment and destination "
+        "rollout are governed and hash-bound"
+    ),
+    "route_allowlist_binding": (
+        f"{ACTIVE_LAUNCH_DISPLAY} route allowlist binds the governed source and "
+        "destination evidence"
+    ),
+    "live_route_canary_evidence": (
+        f"{ACTIVE_LAUNCH_DISPLAY} post-deploy route canary evidence is live, "
+        "passed, and bound to the route"
+    ),
+    "native_evm_groth16_prover_bundle": (
+        f"{ACTIVE_LAUNCH_DISPLAY} browser and native SDKs ship an audited "
+        "no-WASM, no-remote EVM Groth16 prover bundle"
+    ),
+    "no_unresolved_blockers": (
+        f"No active {ACTIVE_LAUNCH_DISPLAY} launch blockers remain"
+    ),
+}
 ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE = {
     "eth": "`eth_chainId == 0x1` (1)",
     "bsc": "`eth_chainId == 0x38` (56)",
@@ -74,6 +182,33 @@ USER_PROVER_SDK_PHASES = (
 )
 USER_PROVER_CHAIN_PHASES = (*USER_PROVER_SDK_PHASES, "core-admission")
 EVM_NATIVE_DOTNET_PHASE = "dotnet-sdk"
+DOTNET_VERSION_SUCCESS_PREFIX = "SCCP .NET SDK version: 8."
+DOTNET_VERSION_SUCCESS_PATTERN = re.compile(
+    r"^SCCP \.NET SDK version:\s+8\.[0-9]+\.[0-9]+"
+    r"(?:-[A-Za-z0-9][A-Za-z0-9_.-]*)?$",
+)
+DOTNET_WINDOWS_OS_SUCCESS_LINE = "SCCP .NET SDK OS: Windows"
+DOTNET_RID_SUCCESS_PREFIX = "SCCP .NET SDK RID: win-"
+DOTNET_RID_SUCCESS_PATTERN = re.compile(
+    r"^SCCP \.NET SDK RID:\s+win-(?:x64|x86|arm64|arm)$",
+)
+DOTNET_ARCHITECTURE_SUCCESS_PREFIX = "SCCP .NET SDK Architecture:"
+DOTNET_ARCHITECTURE_SUCCESS_PATTERN = re.compile(
+    rf"^{re.escape(DOTNET_ARCHITECTURE_SUCCESS_PREFIX)}\s+(?:x64|x86|arm64|arm)$",
+)
+DOTNET_TEST_PASSED_SUCCESS_FRAGMENT = "Passed!"
+DOTNET_TEST_PASSED_SUCCESS_PATTERN = re.compile(
+    r"^\s*Passed!\s+-\s+Failed:\s*0,\s+Passed:\s*(?P<passed>[1-9][0-9]*),"
+    r"\s+Skipped:\s*(?P<skipped>[0-9]+),"
+    r"\s+Total:\s*(?P<total>[1-9][0-9]*),\s+Duration:\s*.+$",
+)
+DOTNET_TRX_SUCCESS_PREFIX = "SCCP .NET SDK TRX:"
+DOTNET_TRX_SUCCESS_PATTERN = re.compile(
+    r"^SCCP \.NET SDK TRX:\s+"
+    r"csharp/tests/Hyperledger\.Iroha\.Sdk\.Tests/"
+    r"(?:[A-Za-z0-9_.-]+/)*TestResults/(?:[A-Za-z0-9_.-]+/)*"
+    r"sccp-dotnet-sdk\.trx$",
+)
 NATIVE_EVM_PROVER_BUNDLE_SCHEMA = "sccp-native-evm-groth16-prover-bundle-v1"
 NATIVE_EVM_PROVER_BUNDLE_ID = (
     "sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1"
@@ -1806,8 +1941,12 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests",
     ),
     "dotnet-sdk": (
+        "dotnet --version",
+        "dotnet --info",
+        "dotnet restore Hyperledger.Iroha.Sdk.sln",
         "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
-        "FullyQualifiedName~SccpEthereumMainnetTests\\|FullyQualifiedName~SccpBscMainnetTests",
+        "FullyQualifiedName~Sccp",
+        "sccp-dotnet-sdk.trx",
     ),
     "contract-smoke": (
         "scripts/sccp_bsc_groth16_material.test.mjs",
@@ -1846,7 +1985,14 @@ PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS: dict[str, tuple[str, ...]] = {
     "swift-sdk": ("0 failures",),
     "kotlin-sdk": ("version \"21", "BUILD SUCCESSFUL"),
     "java-android": ("version \"21", "BUILD SUCCESSFUL"),
-    "dotnet-sdk": ("Passed!",),
+    "dotnet-sdk": (
+        DOTNET_VERSION_SUCCESS_PREFIX,
+        DOTNET_WINDOWS_OS_SUCCESS_LINE,
+        DOTNET_RID_SUCCESS_PREFIX,
+        DOTNET_ARCHITECTURE_SUCCESS_PREFIX,
+        DOTNET_TEST_PASSED_SUCCESS_FRAGMENT,
+        DOTNET_TRX_SUCCESS_PREFIX,
+    ),
     "contract-smoke": (
         *CONTRACT_SMOKE_NODE_SUCCESS_FRAGMENTS,
         "sccp_message_bridge_smoke: ok",
@@ -3926,9 +4072,12 @@ def _transcript_has_full_corridor_completion(transcript: str) -> bool:
             )
             if not success_positions:
                 return False
-            if not any(
-                position > first_phase_command_position
-                for position in success_positions
+            if not _phase_success_fragment_has_position_after_required_command(
+                phase,
+                phase_block,
+                fragment,
+                success_positions,
+                first_phase_command_position,
             ):
                 return False
             block_offset = marker_positions[-1]
@@ -4188,11 +4337,24 @@ def _node_check_command_matches(tokens: list[str], expected_path: str) -> bool:
 
 
 def _dotnet_sdk_command_matches(tokens: list[str]) -> bool:
-    if len(tokens) != 6 or _command_token_basename(tokens[0]) != "dotnet":
+    if len(tokens) != 8 or _command_token_basename(tokens[0]) != "dotnet":
         return False
-    project_fragment, filter_fragment = PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
-        "dotnet-sdk"
-    ]
+    project_fragment = next(
+        (
+            fragment
+            for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+            if fragment.startswith("dotnet test ")
+        ),
+        "",
+    )
+    filter_fragment = next(
+        (
+            fragment
+            for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+            if fragment.startswith("FullyQualifiedName")
+        ),
+        "",
+    )
     project_tokens = shlex.split(project_fragment)
     expected_project = project_tokens[2] if len(project_tokens) > 2 else ""
     return (
@@ -4201,6 +4363,8 @@ def _dotnet_sdk_command_matches(tokens: list[str]) -> bool:
         and tokens[3] == "--filter"
         and tokens[4].replace("\\|", "|") == filter_fragment.replace("\\|", "|")
         and tokens[5] == "--nologo"
+        and tokens[6] == "--logger"
+        and tokens[7] == "trx;LogFileName=sccp-dotnet-sdk.trx"
     )
 
 
@@ -4354,6 +4518,24 @@ def _java_android_command_has_fragment(command: str, fragment: str) -> bool:
 
 def _dotnet_sdk_command_has_fragment(command: str, fragment: str) -> bool:
     tokens = _phase_effective_command_tokens(command)
+    if fragment == "dotnet --version":
+        return (
+            len(tokens) == 2
+            and _command_token_basename(tokens[0]) == "dotnet"
+            and tokens[1] == "--version"
+        )
+    if fragment == "dotnet --info":
+        return (
+            len(tokens) == 2
+            and _command_token_basename(tokens[0]) == "dotnet"
+            and tokens[1] == "--info"
+        )
+    if fragment == "dotnet restore Hyperledger.Iroha.Sdk.sln":
+        return (
+            len(tokens) == 3
+            and _command_token_basename(tokens[0]) == "dotnet"
+            and tuple(tokens[1:]) == ("restore", "Hyperledger.Iroha.Sdk.sln")
+        )
     if not _dotnet_sdk_command_matches(tokens):
         return False
     if fragment.startswith("FullyQualifiedName"):
@@ -4364,6 +4546,8 @@ def _dotnet_sdk_command_has_fragment(command: str, fragment: str) -> bool:
             _command_token_basename(tokens[0]) == fragment_tokens[0]
             and tuple(tokens[1 : len(fragment_tokens)]) == tuple(fragment_tokens[1:])
         )
+    if fragment == "sccp-dotnet-sdk.trx":
+        return any(fragment in token for token in tokens[6:])
     return all(part in tokens for part in shlex.split(fragment))
 
 
@@ -4438,8 +4622,187 @@ def _phase_block_has_command_fragment(
     return bool(_phase_block_command_fragment_line_indices(phase, phase_block, fragment))
 
 
-def _phase_block_has_output_fragment(phase_block: str, fragment: str) -> bool:
-    return bool(_phase_block_output_fragment_line_indices(phase_block, fragment))
+def _phase_success_fragment_required_command_fragment(
+    phase: str,
+    fragment: str,
+) -> str | None:
+    required_command_fragments = _phase_success_fragment_required_command_fragments(
+        phase, fragment
+    )
+    if not required_command_fragments:
+        return None
+    return required_command_fragments[0]
+
+
+def _phase_success_fragment_required_command_fragments(
+    phase: str,
+    fragment: str,
+) -> tuple[str, ...]:
+    if phase == "swift-sdk" and fragment == "0 failures":
+        return (
+            "swift test --filter SccpSolanaProverTests --disable-swift-testing",
+            "ToriiClientTests/testBridgeProofSubmitRequestBuildsSccpPayloadsFromSubmissions",
+        )
+    if phase in ("kotlin-sdk", "java-android") and fragment == 'version "21':
+        return ("java -version",)
+    if phase == "kotlin-sdk" and fragment == "BUILD SUCCESSFUL":
+        return (
+            "./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp.",
+        )
+    if phase == "java-android" and fragment == "BUILD SUCCESSFUL":
+        return (
+            "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests",
+            "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests",
+        )
+    if phase == "contract-smoke":
+        if fragment == "sccp_message_bridge_smoke: ok":
+            return ("bash scripts/sccp_evm_contract_smoke.sh",)
+        if fragment in CONTRACT_SMOKE_NODE_SUCCESS_FRAGMENTS:
+            return ("scripts/sccp_taira_xor_contract.test.mjs",)
+    if phase == "dotnet-sdk":
+        if fragment == DOTNET_VERSION_SUCCESS_PREFIX:
+            return ("dotnet --version",)
+        if fragment in (
+            DOTNET_WINDOWS_OS_SUCCESS_LINE,
+            DOTNET_RID_SUCCESS_PREFIX,
+            DOTNET_ARCHITECTURE_SUCCESS_PREFIX,
+        ):
+            return ("dotnet --info",)
+        if fragment in (DOTNET_TEST_PASSED_SUCCESS_FRAGMENT, DOTNET_TRX_SUCCESS_PREFIX):
+            return (
+                "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
+            )
+    return ()
+
+
+def _phase_success_command_windows(
+    phase: str,
+    phase_block: str,
+    fragment: str,
+    fallback_position: int,
+    ceiling_position: int | None = None,
+) -> list[tuple[int, int | None]]:
+    required_command_fragments = _phase_success_fragment_required_command_fragments(
+        phase, fragment
+    )
+    if not required_command_fragments:
+        return [(fallback_position, ceiling_position)]
+
+    phase_required_fragments = PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase, ())
+    windows: list[tuple[int, int | None]] = []
+    for required_command_fragment in required_command_fragments:
+        required_success_command_positions = _phase_block_command_fragment_line_indices(
+            phase,
+            phase_block,
+            required_command_fragment,
+        )
+        if ceiling_position is not None:
+            required_success_command_positions = [
+                position
+                for position in required_success_command_positions
+                if position < ceiling_position
+            ]
+        if not required_success_command_positions:
+            return []
+        anchor_position = max(required_success_command_positions)
+        try:
+            required_fragment_index = phase_required_fragments.index(
+                required_command_fragment
+            )
+        except ValueError:
+            next_required_fragments: tuple[str, ...] = ()
+        else:
+            next_required_fragments = phase_required_fragments[
+                required_fragment_index + 1 :
+            ]
+        later_command_positions: list[int] = []
+        for later_fragment in next_required_fragments:
+            later_command_positions.extend(
+                position
+                for position in _phase_block_command_fragment_line_indices(
+                    phase,
+                    phase_block,
+                    later_fragment,
+                )
+                if position > anchor_position
+                and (ceiling_position is None or position < ceiling_position)
+            )
+        window_ceiling = (
+            min(later_command_positions)
+            if later_command_positions
+            else ceiling_position
+        )
+        windows.append((anchor_position, window_ceiling))
+    return windows
+
+
+def _phase_success_fragment_has_position_after_required_command(
+    phase: str,
+    phase_block: str,
+    fragment: str,
+    success_positions: list[int],
+    fallback_position: int,
+) -> bool:
+    windows = _phase_success_command_windows(
+        phase,
+        phase_block,
+        fragment,
+        fallback_position,
+    )
+    if not windows:
+        return False
+    return all(
+        any(
+            position > anchor_position
+            and (window_ceiling is None or position < window_ceiling)
+            for position in success_positions
+        )
+        for anchor_position, window_ceiling in windows
+    )
+
+
+def _phase_success_fragment_has_position_before_completion(
+    phase: str,
+    phase_block: str,
+    fragment: str,
+    success_positions: list[int],
+    fallback_position: int,
+    completion_position: int,
+) -> bool:
+    windows = _phase_success_command_windows(
+        phase,
+        phase_block,
+        fragment,
+        fallback_position,
+        completion_position,
+    )
+    if not windows:
+        return False
+    return all(
+        any(
+            anchor_position < position < window_ceiling
+            for position in success_positions
+        )
+        for anchor_position, window_ceiling in windows
+        if window_ceiling is not None
+    )
+
+
+def _phase_block_has_output_fragment(
+    phase: str,
+    phase_block: str,
+    fragment: str,
+) -> bool:
+    success_positions = _phase_block_output_fragment_line_indices(phase_block, fragment)
+    if not success_positions:
+        return False
+    return _phase_success_fragment_has_position_after_required_command(
+        phase,
+        phase_block,
+        fragment,
+        success_positions,
+        -1,
+    )
 
 
 def _phase_block_command_fragment_line_indices(
@@ -4471,6 +4834,33 @@ def _phase_output_line_has_success_fragment(line: str, fragment: str) -> bool:
         return False
     normalized_line = _phase_output_failure_scan_line(line)
     scan_lines = (line,) if normalized_line == line else (line, normalized_line)
+    if fragment == DOTNET_VERSION_SUCCESS_PREFIX:
+        return any(
+            DOTNET_VERSION_SUCCESS_PATTERN.fullmatch(scan_line)
+            for scan_line in scan_lines
+        )
+    if fragment == DOTNET_WINDOWS_OS_SUCCESS_LINE:
+        return any(scan_line == DOTNET_WINDOWS_OS_SUCCESS_LINE for scan_line in scan_lines)
+    if fragment == DOTNET_RID_SUCCESS_PREFIX:
+        return any(
+            DOTNET_RID_SUCCESS_PATTERN.fullmatch(scan_line)
+            for scan_line in scan_lines
+        )
+    if fragment == DOTNET_ARCHITECTURE_SUCCESS_PREFIX:
+        return any(
+            DOTNET_ARCHITECTURE_SUCCESS_PATTERN.fullmatch(scan_line)
+            for scan_line in scan_lines
+        )
+    if fragment == DOTNET_TEST_PASSED_SUCCESS_FRAGMENT:
+        return any(
+            _dotnet_test_passed_success_line_matches(scan_line)
+            for scan_line in scan_lines
+        )
+    if fragment == DOTNET_TRX_SUCCESS_PREFIX:
+        return any(
+            DOTNET_TRX_SUCCESS_PATTERN.fullmatch(scan_line)
+            for scan_line in scan_lines
+        )
     for scan_line in scan_lines:
         position = scan_line.find(fragment)
         if position < 0:
@@ -4482,6 +4872,16 @@ def _phase_output_line_has_success_fragment(line: str, fragment: str) -> bool:
             continue
         return True
     return False
+
+
+def _dotnet_test_passed_success_line_matches(line: str) -> bool:
+    match = DOTNET_TEST_PASSED_SUCCESS_PATTERN.fullmatch(line)
+    if match is None:
+        return False
+    passed = int(match.group("passed"))
+    skipped = int(match.group("skipped"))
+    total = int(match.group("total"))
+    return total == passed + skipped
 
 
 def _phase_block_has_exact_output_line(phase_block: str, expected: str) -> bool:
@@ -4510,7 +4910,7 @@ def _phase_block_has_completion_after_required_evidence(
         for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase, ())
     ]
     success_positions_by_fragment = [
-        _phase_block_output_fragment_line_indices(phase_block, fragment)
+        (fragment, _phase_block_output_fragment_line_indices(phase_block, fragment))
         for fragment in PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS.get(phase, ())
     ]
     for completion_position in completion_positions:
@@ -4527,11 +4927,15 @@ def _phase_block_has_completion_after_required_evidence(
                 continue
             first_command_position = min(command_positions_before_completion)
             if all(
-                any(
-                    first_command_position < position < completion_position
-                    for position in positions
+                _phase_success_fragment_has_position_before_completion(
+                    phase,
+                    phase_block,
+                    fragment,
+                    positions,
+                    first_command_position,
+                    completion_position,
                 )
-                for positions in success_positions_by_fragment
+                for fragment, positions in success_positions_by_fragment
             ):
                 return True
     return False
@@ -4745,7 +5149,7 @@ def _phase_transcript_errors(phase: str, artifact: Any) -> list[str]:
         errors.append("evidence artifact has no expected success fragment configured")
     elif phase_block is not None:
         for fragment in success_fragments:
-            if not _phase_block_has_output_fragment(phase_block, fragment):
+            if not _phase_block_has_output_fragment(phase, phase_block, fragment):
                 errors.append(
                     "evidence artifact is missing expected phase-block success marker: "
                     f"{_phase_diagnostic_fragment(fragment)}"
@@ -5029,13 +5433,35 @@ def _active_launch_source_record_hash_role_blockers(
     return []
 
 
+def _active_launch_hash_role_reuse_blockers(
+    lane_label: str,
+    evidence_label: str,
+    role_label: str,
+    role_hash: Any,
+    prior_roles: tuple[tuple[str, Any], ...],
+) -> list[str]:
+    """Return blockers when an active launch hash role reuses earlier evidence."""
+
+    if not _is_nonzero_hex32(role_hash):
+        return []
+    return [
+        f"{lane_label}: {evidence_label} {role_label} must not reuse {prior_label}"
+        for prior_label, prior_hash in prior_roles
+        if _is_nonzero_hex32(prior_hash) and role_hash == prior_hash
+    ]
+
+
 def _active_launch_route_canary_metadata_blockers(
     lane_label: str,
     canary: dict[str, Any],
+    upstream_hash_roles: tuple[tuple[str, Any], ...] = (),
 ) -> list[str]:
     """Return active launch route-canary transaction metadata blockers."""
 
-    blockers: list[str] = []
+    blockers = _active_launch_route_canary_blocker_container_errors(
+        lane_label,
+        canary,
+    )
     if not _is_nonzero_hex32(canary.get("evidence_hash")):
         blockers.append(
             f"{lane_label}: route canary evidence hash must be a canonical non-zero bytes32 hex string"
@@ -5088,7 +5514,83 @@ def _active_launch_route_canary_metadata_blockers(
         )
     if canary.get("receipt_block_finalized") is not True:
         blockers.append(f"{lane_label}: route canary receipt block must be finalized")
+    canary_hash_roles = (
+        ("evidence hash", canary.get("evidence_hash")),
+        ("transaction hash", canary.get("transaction_hash")),
+        ("receipt block hash", canary.get("receipt_block_hash")),
+        ("block receipts root", canary.get("block_receipts_root")),
+        ("message id", canary.get("message_id")),
+    )
+    for index, (role_label, role_hash) in enumerate(canary_hash_roles):
+        blockers.extend(
+            _active_launch_hash_role_reuse_blockers(
+                lane_label,
+                "route canary",
+                role_label,
+                role_hash,
+                (*upstream_hash_roles, *canary_hash_roles[:index]),
+            )
+        )
     return blockers
+
+
+def _active_launch_route_canary_blocker_container_errors(
+    lane_label: str,
+    canary: dict[str, Any],
+) -> list[str]:
+    """Return blockers for copied active route-canary blocker containers."""
+
+    canary_blockers = canary.get("blockers", [])
+    label = f"{lane_label}: route canary blockers"
+    if not isinstance(canary_blockers, list):
+        # Source-inventory marker: route canary blockers must be a list of non-empty canonical strings
+        return [f"{label} must be a list of non-empty canonical strings"]
+    blockers: list[str] = []
+    for index, blocker in enumerate(canary_blockers):
+        issue = _public_blocker_text_issue(blocker)
+        if issue == "non-empty canonical string":
+            blockers.append(f"{label}[{index}] must be a non-empty canonical string")
+        elif issue is not None:
+            blockers.append(f"{label}[{index}] contains {issue}")
+    if canary_blockers:
+        # Source-inventory marker: route canary blockers must be empty
+        blockers.append(f"{label} must be empty")
+    return blockers
+
+
+def _active_launch_route_canary_upstream_hash_roles(
+    lane: dict[str, Any],
+) -> tuple[tuple[str, Any], ...]:
+    """Return upstream active-launch hash roles a route canary must not replay."""
+
+    source_hashes = lane.get("source_record_hashes")
+    if not isinstance(source_hashes, dict):
+        source_hashes = {}
+    destination_binding = lane.get("destination_binding")
+    if not isinstance(destination_binding, dict):
+        destination_binding = {}
+    source_gate = lane.get("source_adapter_gate")
+    if not isinstance(source_gate, dict):
+        source_gate = {}
+    route_summary = lane.get("route_allowlist")
+    if not isinstance(route_summary, dict):
+        route_summary = {}
+    return (
+        (
+            "source verifier material hash",
+            source_hashes.get("source_verifier_material_hash"),
+        ),
+        (
+            "source adapter engine deployment hash",
+            source_hashes.get("source_adapter_engine_deployment_hash"),
+        ),
+        (
+            "destination binding hash",
+            destination_binding.get("destination_binding_hash"),
+        ),
+        ("source adapter gate hash", source_gate.get("gate_hash")),
+        ("route allowlist hash", route_summary.get("route_allowlist_hash")),
+    )
 
 
 def _active_launch_governed_deployment_metadata_blockers(
@@ -5112,6 +5614,16 @@ def _active_launch_governed_deployment_metadata_blockers(
             blockers.append(
                 f"{lane_label}: governed deployment {label} must be a canonical non-zero bytes32 hex string"
             )
+    source_hash_roles = (
+        (
+            "source verifier material hash",
+            source_hashes.get("source_verifier_material_hash"),
+        ),
+        (
+            "source adapter engine deployment hash",
+            source_hashes.get("source_adapter_engine_deployment_hash"),
+        ),
+    )
     blockers.extend(
         _active_launch_source_record_hash_role_blockers(
             lane_label,
@@ -5123,12 +5635,27 @@ def _active_launch_governed_deployment_metadata_blockers(
     destination_binding = lane.get("destination_binding")
     if not isinstance(destination_binding, dict):
         destination_binding = {}
+    blockers.extend(
+        _active_launch_destination_binding_blocker_container_errors(
+            lane_label,
+            destination_binding,
+        )
+    )
     supplied_hash = destination_binding.get("destination_binding_hash")
     expected_hash = destination_binding.get("expected_destination_binding_hash")
     if not _is_nonzero_hex32(supplied_hash):
         blockers.append(
             f"{lane_label}: governed deployment destination binding hash must be a canonical non-zero bytes32 hex string"
         )
+    blockers.extend(
+        _active_launch_hash_role_reuse_blockers(
+            lane_label,
+            "governed deployment",
+            "destination binding hash",
+            supplied_hash,
+            source_hash_roles,
+        )
+    )
     if not _is_nonzero_hex32(expected_hash):
         blockers.append(
             f"{lane_label}: governed deployment expected destination binding hash must be a canonical non-zero bytes32 hex string"
@@ -5149,6 +5676,12 @@ def _active_launch_governed_deployment_metadata_blockers(
     source_gate = lane.get("source_adapter_gate")
     if not isinstance(source_gate, dict):
         return blockers + [f"{lane_label}: source adapter gate summary is missing"]
+    blockers.extend(
+        _active_launch_source_adapter_gate_blocker_container_errors(
+            lane_label,
+            source_gate,
+        )
+    )
     if source_gate.get("ready") is not True:
         blockers.append(f"{lane_label}: source adapter gate summary must be ready")
     if source_gate.get("required") is not True:
@@ -5160,6 +5693,18 @@ def _active_launch_governed_deployment_metadata_blockers(
         blockers.append(
             f"{lane_label}: active EVM source adapter gate hash must be a canonical non-zero bytes32 hex string"
         )
+    blockers.extend(
+        _active_launch_hash_role_reuse_blockers(
+            lane_label,
+            "governed deployment",
+            "source adapter gate hash",
+            gate_hash,
+            (
+                *source_hash_roles,
+                ("destination binding hash", supplied_hash),
+            ),
+        )
+    )
     audit_hashes = source_gate.get("audit_hashes")
     if not isinstance(audit_hashes, dict):
         blockers.append(
@@ -5173,6 +5718,54 @@ def _active_launch_governed_deployment_metadata_blockers(
         blockers.append(
             f"{lane_label}: active EVM source adapter gate hash must match audit hash evm_source_gate_hash"
         )
+    return blockers
+
+
+def _active_launch_source_adapter_gate_blocker_container_errors(
+    lane_label: str,
+    source_gate: dict[str, Any],
+) -> list[str]:
+    """Return blockers for copied active source-adapter gate blocker containers."""
+
+    gate_blockers = source_gate.get("blockers", [])
+    label = f"{lane_label}: source adapter gate blockers"
+    if not isinstance(gate_blockers, list):
+        # Source-inventory marker: source adapter gate blockers must be a list of non-empty canonical strings
+        return [f"{label} must be a list of non-empty canonical strings"]
+    blockers: list[str] = []
+    for index, blocker in enumerate(gate_blockers):
+        issue = _public_blocker_text_issue(blocker)
+        if issue == "non-empty canonical string":
+            blockers.append(f"{label}[{index}] must be a non-empty canonical string")
+        elif issue is not None:
+            blockers.append(f"{label}[{index}] contains {issue}")
+    if gate_blockers:
+        # Source-inventory marker: source adapter gate blockers must be empty
+        blockers.append(f"{label} must be empty")
+    return blockers
+
+
+def _active_launch_destination_binding_blocker_container_errors(
+    lane_label: str,
+    destination_binding: dict[str, Any],
+) -> list[str]:
+    """Return blockers for copied active destination rollout blocker containers."""
+
+    destination_blockers = destination_binding.get("blockers", [])
+    label = f"{lane_label}: destination rollout blockers"
+    if not isinstance(destination_blockers, list):
+        # Source-inventory marker: destination rollout blockers must be a list of non-empty canonical strings
+        return [f"{label} must be a list of non-empty canonical strings"]
+    blockers: list[str] = []
+    for index, blocker in enumerate(destination_blockers):
+        issue = _public_blocker_text_issue(blocker)
+        if issue == "non-empty canonical string":
+            blockers.append(f"{label}[{index}] must be a non-empty canonical string")
+        elif issue is not None:
+            blockers.append(f"{label}[{index}] contains {issue}")
+    if destination_blockers:
+        # Source-inventory marker: destination rollout blockers must be empty
+        blockers.append(f"{label} must be empty")
     return blockers
 
 
@@ -5225,6 +5818,12 @@ def _active_launch_route_allowlist_binding_blockers(
     if not isinstance(route_summary, dict):
         return [f"{lane_label}: route allowlist summary is missing"]
 
+    blockers.extend(
+        _active_launch_route_allowlist_blocker_container_errors(
+            lane_label,
+            route_summary,
+        )
+    )
     for field, label in (
         ("source_verifier_material_hash", "source verifier material hash"),
         (
@@ -5236,6 +5835,16 @@ def _active_launch_route_allowlist_binding_blockers(
             blockers.append(
                 f"{lane_label}: route allowlist {label} must be a canonical non-zero bytes32 hex string"
             )
+    source_hash_roles = (
+        (
+            "source verifier material hash",
+            source_hashes.get("source_verifier_material_hash"),
+        ),
+        (
+            "source adapter engine deployment hash",
+            source_hashes.get("source_adapter_engine_deployment_hash"),
+        ),
+    )
     blockers.extend(
         _active_launch_source_record_hash_role_blockers(
             lane_label,
@@ -5254,6 +5863,21 @@ def _active_launch_route_allowlist_binding_blockers(
         blockers.append(
             f"{lane_label}: route allowlist hash must be a canonical non-zero bytes32 hex string"
         )
+    blockers.extend(
+        _active_launch_hash_role_reuse_blockers(
+            lane_label,
+            "route allowlist",
+            "hash",
+            supplied_hash,
+            (
+                *source_hash_roles,
+                (
+                    "destination binding hash",
+                    destination_binding.get("destination_binding_hash"),
+                ),
+            ),
+        )
+    )
     if not _is_nonzero_hex32(expected_hash):
         blockers.append(
             f"{lane_label}: expected route allowlist hash must be a canonical non-zero bytes32 hex string"
@@ -5270,6 +5894,30 @@ def _active_launch_route_allowlist_binding_blockers(
         blockers.append(
             f"{lane_label}: route allowlist expected hash match flag must be true"
         )
+    return blockers
+
+
+def _active_launch_route_allowlist_blocker_container_errors(
+    lane_label: str,
+    route_summary: dict[str, Any],
+) -> list[str]:
+    """Return blockers for copied active route-allowlist blocker containers."""
+
+    route_blockers = route_summary.get("blockers", [])
+    label = f"{lane_label}: route allowlist blockers"
+    if not isinstance(route_blockers, list):
+        # Source-inventory marker: route allowlist blockers must be a list of non-empty canonical strings
+        return [f"{label} must be a list of non-empty canonical strings"]
+    blockers: list[str] = []
+    for index, blocker in enumerate(route_blockers):
+        issue = _public_blocker_text_issue(blocker)
+        if issue == "non-empty canonical string":
+            blockers.append(f"{label}[{index}] must be a non-empty canonical string")
+        elif issue is not None:
+            blockers.append(f"{label}[{index}] contains {issue}")
+    if route_blockers:
+        # Source-inventory marker: route allowlist blockers must be empty
+        blockers.append(f"{label} must be empty")
     return blockers
 
 
@@ -5347,7 +5995,11 @@ def _active_launch_release_checklist(
     if canary.get("status") != "passed":
         canary_blockers.append(f"{lane_label}: route canary status is not passed")
     canary_blockers.extend(
-        _active_launch_route_canary_metadata_blockers(lane_label, canary)
+        _active_launch_route_canary_metadata_blockers(
+            lane_label,
+            canary,
+            _active_launch_route_canary_upstream_hash_roles(lane),
+        )
     )
     if (
         "evidence_bound" in canary
@@ -5367,37 +6019,49 @@ def _active_launch_release_checklist(
     items = [
         {
             "id": "all_required_lane_records",
-            "title": f"Active {ACTIVE_LAUNCH_DISPLAY} SCCP lane has the required source, deployment, destination, and route records",
+            "title": ACTIVE_LAUNCH_RELEASE_CHECKLIST_TITLES[
+                "all_required_lane_records"
+            ],
             "ready": not records_blockers,
             "blockers": records_blockers,
         },
         {
             "id": "governed_deployment_evidence",
-            "title": f"{ACTIVE_LAUNCH_DISPLAY} source-adapter deployment and destination rollout are governed and hash-bound",
+            "title": ACTIVE_LAUNCH_RELEASE_CHECKLIST_TITLES[
+                "governed_deployment_evidence"
+            ],
             "ready": not deployment_blockers,
             "blockers": deployment_blockers,
         },
         {
             "id": "route_allowlist_binding",
-            "title": f"{ACTIVE_LAUNCH_DISPLAY} route allowlist binds the governed source and destination evidence",
+            "title": ACTIVE_LAUNCH_RELEASE_CHECKLIST_TITLES[
+                "route_allowlist_binding"
+            ],
             "ready": not route_blockers,
             "blockers": route_blockers,
         },
         {
             "id": "live_route_canary_evidence",
-            "title": f"{ACTIVE_LAUNCH_DISPLAY} post-deploy route canary evidence is live, passed, and bound to the route",
+            "title": ACTIVE_LAUNCH_RELEASE_CHECKLIST_TITLES[
+                "live_route_canary_evidence"
+            ],
             "ready": not canary_blockers,
             "blockers": canary_blockers,
         },
         {
             "id": "native_evm_groth16_prover_bundle",
-            "title": f"{ACTIVE_LAUNCH_DISPLAY} browser and native SDKs ship an audited no-WASM, no-remote EVM Groth16 prover bundle",
+            "title": ACTIVE_LAUNCH_RELEASE_CHECKLIST_TITLES[
+                "native_evm_groth16_prover_bundle"
+            ],
             "ready": not native_prover_blockers,
             "blockers": native_prover_blockers,
         },
         {
             "id": "no_unresolved_blockers",
-            "title": f"No active {ACTIVE_LAUNCH_DISPLAY} launch blockers remain",
+            "title": ACTIVE_LAUNCH_RELEASE_CHECKLIST_TITLES[
+                "no_unresolved_blockers"
+            ],
             "ready": not launch_blockers,
             "blockers": launch_blockers,
         },
@@ -7581,7 +8245,8 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             f"- Complete {ACTIVE_LAUNCH_DISPLAY} launch-lane evidence containing source verifier material, source-adapter deployment, destination rollout, route allowlist, and route canary records; the all-lanes summary remains attached as diagnostic evidence for future lanes.",
             f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report {ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE} and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
             f"- {ACTIVE_LAUNCH_DISPLAY} route-canary transaction metadata must include a canonical non-zero transaction hash, finalized receipt block number/hash, receipts root, message id, and `{ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE}` evidence source before launch readiness can pass.",
-            "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked.",
+            "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked. Required source-verifier evidence by lane: Ethereum recursive source-adapter verifier deployment and remaining beacon light-client update/state branches are not complete for the SCCP inbound path; BSC recursive source-adapter verifier deployment is not complete for the SCCP inbound path; Solana audited Tower replay, full-bank AccountsDB lattice, bank/fork-choice, and source-adapter verifier deployment evidence is not complete for the SCCP inbound path; TON governed full-light-client verifier deployment, canary, and source-adapter deployment evidence are not complete for the SCCP inbound path; TRON transaction-Merkle source-call verifier deployment is not complete for the SCCP inbound path.",
+            "- Windows `.NET 8` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, canonical Windows OS/RID/architecture markers, a non-zero passed VSTest summary with `Failed: 0`, and the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker before release readiness can pass.",
             "- An audited `--native-evm-prover-bundle` manifest with `schema = sccp-native-evm-groth16-prover-bundle-v1`, `no_wasm = true`, `remote_prover_required = false`, and matching Ethereum destination binding/proving-key hashes.",
             f"- {SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE}",
             f"- {SCCP_NOT_REMAINING_WORK_SCOPE_NOTE}",
@@ -7601,7 +8266,7 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- SCCP all-lanes route-canary scalar source inventory must pin canonical status/evidence-source schema blockers before all-lanes release-checklist route-canary readiness can pass.",
             "- SCCP all-lanes evidence-root schema source inventory must pin malformed evidence root, unknown section, and non-string section-key blockers before all-lanes evidence can satisfy production readiness.",
             "- SCCP all-lanes governed blocker schema source inventory must pin destination-rollout and route-allowlist blocker container rejection before governed evidence can satisfy production readiness.",
-            "- SCCP all-lanes release-checklist exact-boolean source inventory must pin exact checklist-item aggregation, record-presence gates, CLI production-ready exits, source-adapter gate hash/audit replay rejection, and route-canary hash replay rejection before all-lanes evidence can satisfy production readiness.",
+            "- SCCP all-lanes release-checklist exact-boolean source inventory must pin exact checklist-item aggregation, record-presence gates, CLI production-ready exits, source-adapter gate hash/audit replay rejection, route-canary hash replay rejection, and upstream route-canary hash replay rejection before all-lanes evidence can satisfy production readiness.",
             "- SCCP active-launch checklist schema source inventory must pin the active launch checklist ready value, malformed release-checklist roots, malformed lane metadata, and verifier recomputation before production readiness can pass.",
             "- SCCP route allowlist canary summary source inventory must pin optional canary-summary exactness, route-hash binding, and hash role-separation regressions before route profiles can be published as production evidence.",
             "- SCCP release manifest readiness-flags source inventory must pin exact boolean manifest generation, malformed readiness-root suppression, verifier boolean rejection, manifest/report equality checks, and all-lanes readiness recomputation before published bundle readiness can pass.",
@@ -7629,17 +8294,17 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- SCCP Ethereum Beacon REST finalized-header shape source inventory must pin public SDK validators and negative tests for non-zero parent/state/body roots plus 96-byte finalized-header signatures before local finality evidence can be accepted.",
             "- SCCP Ethereum Beacon REST execution-payload binding source inventory must pin Beacon target-header/root/block reads, light-client finality-update evidence, execution block-hash/receipts-root binding, and C# SSZ root parity vectors before local finality evidence can be accepted.",
             "- SCCP Ethereum sync-committee roster source inventory must pin exact 512-authority mainnet rosters, unit validator weights, 342-participant quorum fixtures, and 81,925-byte next-sync-committee payload vectors across public SDKs before local finality evidence can be accepted.",
-            "- SCCP Ethereum source-bridge config source inventory must pin bridge-address/network/code-hash config hashing and negative config-drift tests.",
-            "- SCCP Ethereum EVM source-adapter deployment source inventory must pin the active deployment gate, source-bridge network/config binding, and negative drift tests.",
+            "- SCCP Ethereum source-bridge config source inventory must pin bridge-address/network/code-hash config hashing, source-bridge network-id/code-hash role-reuse rejection, and negative config-drift tests.",
+            "- SCCP Ethereum EVM source-adapter deployment source inventory must pin the active deployment gate, source-bridge network/config binding, ETH/BSC deployment helper coverage, and negative drift tests.",
             "- SCCP source-material template rejection source inventory must pin ETH, BSC, Solana, TON, and TRON evidence-script guards, aggregate all-lanes copied-evidence guards, strict release-bundle public JSON guards, and negative tests that reject built-in template verifier hashes before source material can satisfy production readiness.",
-            "- SCCP source-material role validation source inventory must pin ETH, BSC, Solana, TON, and TRON zero-hash, role-reuse, canonical adapter-verifier, full-light-client audit role-separation guards, C#/.NET ETH/BSC source-material vectors, and redacted all-lanes-TOML/source validator/source-record/source-gate/TON-live-accountStates/address/code-BoC/TON-destination-code-BoC/TRON-live-API/metadata/full-TOML/TRON-witness-JSON blockers before source material can satisfy production readiness.",
+            "- SCCP source-material role validation source inventory must pin ETH, BSC, Solana, TON, and TRON zero-hash, role-reuse, canonical adapter-verifier, full-light-client audit role-separation, TRON source-call contract/owner role-separation guards, C#/.NET ETH/BSC source-material vectors, and redacted all-lanes-TOML/source validator/source-record/source-gate/TON-live-accountStates/address/code-BoC/TON-destination-code-BoC/TRON-live-API/metadata/full-TOML/TRON-witness-JSON blockers before source material can satisfy production readiness.",
             "- SCCP EVM contract smoke Ethereum mainnet network-id source inventory must pin ETH chain-id vectors, BSC rejection vectors, and accepted-event network-id assertions.",
             "- SCCP EVM contract smoke production-surface source inventory must pin verifier-code/key, destination-binding, domain-overflow, proof-shape, cross-deployment, and replay rejection smoke coverage.",
             "- SCCP Ethereum core range/finality binding source inventory must pin finality-height range binding in Core and negative outer-range replay tests.",
             "- SCCP Ethereum core message replay source inventory must pin durable pinned-record replay protection and negative replay/history tests.",
             "- SCCP Ethereum Torii pinned message proof source inventory must pin pinned message-proof extraction and negative unpinned-record serving tests.",
-            "- Ethereum mainnet live EVM source production source inventory must pin canonical live source RPC chain ids, finalized block tags, deployment receipt binding, redacted JSON-RPC diagnostics, route canary calldata, and proof tuple drift tests.",
-            "- Ethereum mainnet live EVM destination production source inventory must pin canonical live destination RPC chain ids, finalized block tags, runtime bytecode hashes, redacted runtime bytecode parser diagnostics, and destination production TOML evidence before production readiness can pass.",
+            "- Ethereum mainnet live EVM source production source inventory must pin canonical live source RPC chain ids, ETH/BSC source-live lane coverage, finalized block tags, deployment receipt binding, redacted JSON-RPC diagnostics, route canary calldata, and proof tuple drift tests.",
+            "- Ethereum mainnet live EVM destination production source inventory must pin canonical live destination RPC chain ids, ETH/BSC destination-live lane coverage, finalized block tags, runtime bytecode hashes, redacted runtime bytecode parser diagnostics, and destination production TOML evidence before production readiness can pass.",
             "- SCCP Ethereum route-canary finalized receipt-block source inventory must pin finalized receipt-block binding, TOML evidence fields, all-lanes comments, runtime hashing, and negative drift tests.",
             "- SCCP Ethereum EVM block-tag metadata source inventory must pin finalized source/destination block-tag evidence and negative drift tests.",
             "- SCCP native no-WASM/no-remote source inventory must pin public SDK parsers, artifact verifiers, self-tests, browser distribution guards, canonical native EVM prover SDK-id rejection, padded-SDK adversarial tests, adversarial manifest coverage, and redacted native payload artifact-path diagnostics.",
@@ -7808,6 +8473,495 @@ def _readiness_report_unknown_field_blocker(field: Any) -> str:
     )
 
 
+def _public_release_checklist_errors(value: Any) -> list[str]:
+    """Return bounded blockers for malformed public release-checklist payloads."""
+
+    if not isinstance(value, dict):
+        return ["readiness report release_checklist must be an object"]
+
+    errors: list[str] = []
+    for field in sorted(
+        (field for field in value if field not in RELEASE_CHECKLIST_PUBLIC_FIELDS),
+        key=str,
+    ):
+        errors.append(
+            _native_evm_prover_field_name_blocker(
+                "readiness report release_checklist",
+                field,
+                "unknown",
+            )
+        )
+
+    if type(value.get("ready")) is not bool:
+        errors.append("readiness report release_checklist ready must be boolean")
+
+    items = value.get("items")
+    if not isinstance(items, list):
+        errors.append("readiness report release_checklist items must be a list")
+        return errors
+
+    seen_item_ids: set[str] = set()
+    for index, item in enumerate(items):
+        item_label = f"readiness report release_checklist items[{index}]"
+        if not isinstance(item, dict):
+            errors.append(f"{item_label} must be an object")
+            continue
+        for field in sorted(
+            (field for field in item if field not in RELEASE_CHECKLIST_ITEM_PUBLIC_FIELDS),
+            key=str,
+        ):
+            errors.append(
+                _native_evm_prover_field_name_blocker(item_label, field, "unknown")
+            )
+        item_id = item.get("id")
+        if not _source_inventory_gate_is_markdown_safe(item_id):
+            errors.append(f"{item_label} id must be a non-empty canonical string")
+            item_key: str | None = None
+        elif item_id not in ACTIVE_LAUNCH_RELEASE_CHECKLIST_ITEM_IDS:
+            errors.append(f"{item_label} id must be a required checklist id")
+            item_key = None
+        elif item_id in seen_item_ids:
+            errors.append(
+                f"readiness report release_checklist item {item_id} is duplicated"
+            )
+            item_key = item_id
+        else:
+            seen_item_ids.add(item_id)
+            item_key = item_id
+        title = item.get("title")
+        if not isinstance(title, str) or not title or title.strip() != title:
+            errors.append(f"{item_label} title must be a non-empty canonical string")
+        elif _path_control_character(title) is not None:
+            errors.append(f"{item_label} title contains control character")
+        elif not title.isascii():
+            errors.append(f"{item_label} title contains non-ASCII character")
+        elif _path_markdown_unsafe_character(title) is not None:
+            errors.append(f"{item_label} title contains Markdown-unsafe character")
+        elif any(
+            marker in title.lower()
+            for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS
+        ):
+            errors.append(f"{item_label} title contains sensitive value")
+        elif (
+            item_key is None
+            or title != ACTIVE_LAUNCH_RELEASE_CHECKLIST_TITLES[item_key]
+        ):
+            errors.append(f"{item_label} title must match the canonical checklist title")
+        if type(item.get("ready")) is not bool:
+            errors.append(f"{item_label} ready must be boolean")
+        blockers = item.get("blockers")
+        if not isinstance(blockers, list):
+            errors.append(
+                f"{item_label} blockers must be a list of non-empty canonical strings"
+            )
+            continue
+        for blocker_index, blocker in enumerate(blockers):
+            issue = _public_blocker_text_issue(blocker)
+            if issue is None:
+                continue
+            if issue == "non-empty canonical string":
+                errors.append(
+                    f"{item_label} blockers[{blocker_index}] must be a {issue}"
+                )
+            else:
+                errors.append(f"{item_label} blockers[{blocker_index}] contains {issue}")
+    for item_id in ACTIVE_LAUNCH_RELEASE_CHECKLIST_ITEM_IDS:
+        if item_id not in seen_item_ids:
+            errors.append(f"readiness report release_checklist missing item {item_id}")
+    return errors
+
+
+def _public_input_artifact_errors(value: Any) -> list[str]:
+    """Return bounded blockers for malformed public input artifact rows."""
+
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        return ["readiness report input_artifacts must be a list of objects"]
+
+    errors: list[str] = []
+    for index, artifact in enumerate(value):
+        artifact_label = f"readiness report input_artifacts[{index}]"
+        for field in sorted(
+            (field for field in artifact if field not in INPUT_ARTIFACT_PUBLIC_FIELDS),
+            key=str,
+        ):
+            errors.append(
+                _native_evm_prover_field_name_blocker(
+                    artifact_label,
+                    field,
+                    "unknown",
+                )
+            )
+        for field in sorted(INPUT_ARTIFACT_PUBLIC_FIELDS - set(artifact)):
+            errors.append(f"{artifact_label} missing field: {field}")
+        if "path" in artifact and not _native_evm_markdown_path_is_safe(
+            artifact.get("path")
+        ):
+            errors.append(f"{artifact_label} path must be a canonical public path")
+        if "bytes" in artifact and type(artifact.get("bytes")) is not int:
+            errors.append(f"{artifact_label} bytes must be an integer")
+        if "sha256" in artifact and not _is_canonical_sha256_text(
+            artifact.get("sha256")
+        ):
+            errors.append(f"{artifact_label} sha256 must be a canonical SHA-256 hex string")
+    return errors
+
+
+def _public_source_inventory_gate_error(gate: Any) -> str | None:
+    """Return a bounded blocker for malformed public source-inventory gates."""
+
+    label = "readiness report source_inventory"
+    if not isinstance(gate, str) or not gate:
+        return f"{label} contains malformed gate name"
+    if _path_control_character(gate) is not None:
+        return f"{label} contains gate name with control character"
+    if not gate.isascii():
+        return f"{label} contains gate name with non-ASCII character"
+    if gate.strip() != gate:
+        return f"{label} contains gate name with surrounding whitespace"
+    if any(character.isspace() for character in gate):
+        return f"{label} contains gate name with whitespace"
+    if _path_markdown_unsafe_character(gate) is not None:
+        return f"{label} contains gate name with Markdown-unsafe character"
+    if any(marker in gate.lower() for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS):
+        return f"{label} contains gate name with sensitive name"
+    if not _source_inventory_gate_is_markdown_safe(gate):
+        return f"{label} contains malformed gate name"
+    return None
+
+
+def _public_source_inventory_errors(value: Any) -> list[str]:
+    """Return bounded blockers for malformed public source-inventory rows."""
+
+    if not isinstance(value, dict):
+        return ["readiness report source_inventory must be an object"]
+
+    errors: list[str] = []
+    for index, (gate, inventory) in enumerate(
+        sorted(value.items(), key=lambda item: str(item[0]))
+    ):
+        gate_error = _public_source_inventory_gate_error(gate)
+        if gate_error is not None:
+            errors.append(gate_error)
+        inventory_label = f"readiness report source_inventory[{index}]"
+        if not isinstance(inventory, dict):
+            errors.append(f"{inventory_label} must be an object")
+            continue
+        for field in sorted(
+            (
+                field
+                for field in inventory
+                if field not in SOURCE_INVENTORY_PUBLIC_FIELDS
+            ),
+            key=str,
+        ):
+            errors.append(
+                _native_evm_prover_field_name_blocker(
+                    inventory_label,
+                    field,
+                    "unknown",
+                )
+            )
+        for field in sorted(SOURCE_INVENTORY_PUBLIC_FIELDS - set(inventory)):
+            errors.append(f"{inventory_label} missing field: {field}")
+        if "validation_status" in inventory and inventory.get(
+            "validation_status"
+        ) not in {"passed", "blocked"}:
+            errors.append(
+                f"{inventory_label} validation_status must be passed or blocked"
+            )
+        validation_blockers = inventory.get("validation_blockers")
+        if "validation_blockers" in inventory:
+            if not isinstance(validation_blockers, list):
+                errors.append(
+                    f"{inventory_label} validation_blockers must be a list of "
+                    "non-empty canonical strings"
+                )
+            else:
+                for blocker_index, blocker in enumerate(validation_blockers):
+                    issue = _public_blocker_text_issue(blocker)
+                    if issue is None:
+                        continue
+                    if issue == "non-empty canonical string":
+                        errors.append(
+                            f"{inventory_label} validation_blockers[{blocker_index}] "
+                            f"must be a {issue}"
+                        )
+                    else:
+                        errors.append(
+                            f"{inventory_label} validation_blockers[{blocker_index}] "
+                            f"contains {issue}"
+                        )
+    return errors
+
+
+def _public_user_prover_submission_surface_errors(value: Any) -> list[str]:
+    """Return bounded blockers for malformed public user-prover rows."""
+
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        return [
+            "readiness report user_prover_submission_surfaces must be a list of objects"
+        ]
+
+    errors: list[str] = []
+    seen_lanes: set[str] = set()
+    expected_lanes = tuple(
+        surface["lanes"] for surface in USER_PROVER_SUBMISSION_SURFACES
+    )
+    for index, surface in enumerate(value):
+        surface_label = f"readiness report user_prover_submission_surfaces[{index}]"
+        for field in sorted(
+            (
+                field
+                for field in surface
+                if field not in USER_PROVER_SUBMISSION_SURFACE_PUBLIC_FIELDS
+            ),
+            key=str,
+        ):
+            errors.append(
+                _native_evm_prover_field_name_blocker(
+                    surface_label,
+                    field,
+                    "unknown",
+                )
+            )
+        for field in sorted(
+            USER_PROVER_SUBMISSION_SURFACE_PUBLIC_FIELDS - set(surface)
+        ):
+            errors.append(f"{surface_label} missing field: {field}")
+
+        lanes = surface.get("lanes")
+        if not isinstance(lanes, str) or lanes not in USER_PROVER_REQUIRED_LANE_BACKENDS:
+            errors.append(f"{surface_label} lanes must be a required lane set")
+            expected_backend = None
+            expected_submission = None
+            expected_phases = None
+            expected_helper_sets = None
+        else:
+            expected_backend = USER_PROVER_REQUIRED_LANE_BACKENDS[lanes]
+            expected_submission = USER_PROVER_ON_CHAIN_SUBMISSION_BY_LANE[lanes]
+            expected_phases = USER_PROVER_REQUIRED_PHASES_BY_LANE[lanes]
+            expected_helper_sets = USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK[lanes]
+            if lanes in seen_lanes:
+                errors.append(f"{surface_label} lanes is duplicated")
+            else:
+                seen_lanes.add(lanes)
+
+        if surface.get("proof_backend") != expected_backend:
+            errors.append(f"{surface_label} proof_backend must match the required lane")
+        if surface.get("on_chain_submission") != expected_submission:
+            errors.append(
+                f"{surface_label} on_chain_submission must match the required lane"
+            )
+
+        helper_symbols = surface.get("sdk_helper_symbols")
+        expected_js_helpers = (
+            expected_helper_sets.get("js-sdk")
+            if isinstance(expected_helper_sets, dict)
+            else None
+        )
+        if (
+            expected_js_helpers is None
+            or not isinstance(helper_symbols, list)
+            or tuple(helper_symbols) != expected_js_helpers
+            or any(not _helper_symbol_is_markdown_safe(helper) for helper in helper_symbols)
+        ):
+            errors.append(f"{surface_label} sdk_helper_symbols must match expected helpers")
+        if surface.get("sdk_helpers") != (
+            ", ".join(expected_js_helpers) if expected_js_helpers is not None else None
+        ):
+            errors.append(f"{surface_label} sdk_helpers must match sdk_helper_symbols")
+
+        helper_sets = surface.get("sdk_helper_symbols_by_sdk")
+        if not isinstance(helper_sets, dict) or not isinstance(
+            expected_helper_sets,
+            dict,
+        ):
+            errors.append(
+                f"{surface_label} sdk_helper_symbols_by_sdk must be an object"
+            )
+        else:
+            if set(helper_sets) != set(expected_helper_sets):
+                errors.append(
+                    f"{surface_label} sdk_helper_symbols_by_sdk must contain the "
+                    "required SDKs"
+                )
+            for sdk, expected_helpers in expected_helper_sets.items():
+                helpers = helper_sets.get(sdk)
+                if (
+                    not isinstance(helpers, list)
+                    or tuple(helpers) != expected_helpers
+                    or any(
+                        not _helper_symbol_is_markdown_safe(helper)
+                        for helper in helpers
+                    )
+                ):
+                    errors.append(
+                        f"{surface_label} sdk_helper_symbols_by_sdk[{sdk}] "
+                        "must match expected helpers"
+                    )
+
+        required_phases = surface.get("required_phases")
+        if (
+            expected_phases is None
+            or not isinstance(required_phases, list)
+            or tuple(required_phases) != expected_phases
+            or any(_public_blocker_text_issue(phase) is not None for phase in required_phases)
+        ):
+            errors.append(f"{surface_label} required_phases must match expected phases")
+
+        validation_status = surface.get("validation_status")
+        if validation_status not in {"passed", "blocked"}:
+            errors.append(f"{surface_label} validation_status must be passed or blocked")
+        validation_blockers = surface.get("validation_blockers")
+        if not isinstance(validation_blockers, list):
+            errors.append(
+                f"{surface_label} validation_blockers must be a list of "
+                "non-empty canonical strings"
+            )
+        else:
+            for blocker_index, blocker in enumerate(validation_blockers):
+                issue = _public_blocker_text_issue(blocker)
+                if issue is None:
+                    continue
+                if issue == "non-empty canonical string":
+                    errors.append(
+                        f"{surface_label} validation_blockers[{blocker_index}] "
+                        f"must be a {issue}"
+                    )
+                else:
+                    errors.append(
+                        f"{surface_label} validation_blockers[{blocker_index}] "
+                        f"contains {issue}"
+                    )
+            if validation_status == "passed" and validation_blockers:
+                errors.append(
+                    f"{surface_label} validation_blockers must be empty when "
+                    "validation_status is passed"
+                )
+            if validation_status == "blocked" and not validation_blockers:
+                errors.append(
+                    f"{surface_label} validation_blockers must be non-empty when "
+                    "validation_status is blocked"
+                )
+    for lanes in expected_lanes:
+        if lanes not in seen_lanes:
+            errors.append(
+                "readiness report user_prover_submission_surfaces missing "
+                f"lane set {lanes}"
+            )
+    return errors
+
+
+def _public_crypto_text_is_safe(value: Any) -> bool:
+    return (
+        value is None
+        or value == ""
+        or (
+            isinstance(value, str)
+            and _public_blocker_text_issue(value) is None
+            and not any(character.isspace() for character in value)
+        )
+    )
+
+
+def _public_cryptographic_evidence_errors(value: Any) -> list[str]:
+    """Return bounded blockers for malformed public cryptographic evidence rows."""
+
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        return ["readiness report cryptographic_evidence must be a list of objects"]
+
+    errors: list[str] = []
+    for index, row in enumerate(value):
+        row_label = f"readiness report cryptographic_evidence[{index}]"
+        for field in sorted(
+            (
+                field
+                for field in row
+                if field not in CRYPTOGRAPHIC_EVIDENCE_PUBLIC_FIELDS
+            ),
+            key=str,
+        ):
+            errors.append(
+                _native_evm_prover_field_name_blocker(
+                    row_label,
+                    field,
+                    "unknown",
+                )
+            )
+        for field in sorted(CRYPTOGRAPHIC_EVIDENCE_PUBLIC_FIELDS - set(row)):
+            errors.append(f"{row_label} missing field: {field}")
+
+        domain = row.get("domain")
+        if type(domain) is not int:
+            errors.append(f"{row_label} domain must be an integer")
+        chain = row.get("chain")
+        if (
+            type(domain) is not int
+            or not isinstance(chain, str)
+            or chain != ALL_LANES_CHAIN_BY_DOMAIN.get(domain)
+        ):
+            errors.append(f"{row_label} chain must match the domain")
+
+        for field in sorted(CRYPTOGRAPHIC_EVIDENCE_TEXT_FIELDS):
+            if field in row and not _public_crypto_text_is_safe(row.get(field)):
+                errors.append(f"{row_label} {field} must be a canonical public string")
+        for field in sorted(CRYPTOGRAPHIC_EVIDENCE_HASH_FIELDS):
+            value_for_field = row.get(field)
+            if value_for_field in (None, ""):
+                continue
+            if not _is_nonzero_hex32(value_for_field):
+                errors.append(
+                    f"{row_label} {field} must be a canonical non-zero bytes32 "
+                    "hex string"
+                )
+        for field in sorted(CRYPTOGRAPHIC_EVIDENCE_INTEGER_FIELDS):
+            value_for_field = row.get(field)
+            if value_for_field is None:
+                continue
+            if type(value_for_field) is not int:
+                errors.append(f"{row_label} {field} must be an integer")
+        if type(row.get("route_canary_evidence_bound")) is not bool:
+            errors.append(f"{row_label} route_canary_evidence_bound must be boolean")
+        if (
+            row.get("route_canary_receipt_block_finalized") is not None
+            and type(row.get("route_canary_receipt_block_finalized")) is not bool
+        ):
+            errors.append(
+                f"{row_label} route_canary_receipt_block_finalized must be boolean"
+            )
+        if (
+            row.get("source_adapter_gate_required") is not None
+            and type(row.get("source_adapter_gate_required")) is not bool
+        ):
+            errors.append(f"{row_label} source_adapter_gate_required must be boolean")
+
+        audit_hashes = row.get("source_adapter_gate_audit_hashes")
+        if audit_hashes in (None, {}):
+            continue
+        if not isinstance(audit_hashes, dict):
+            errors.append(
+                f"{row_label} source_adapter_gate_audit_hashes must be an object"
+            )
+            continue
+        for audit_field, audit_hash in sorted(
+            audit_hashes.items(),
+            key=lambda item: str(item[0]),
+        ):
+            audit_label = f"{row_label} source_adapter_gate_audit_hashes"
+            if not isinstance(audit_field, str):
+                errors.append(f"{audit_label} contains malformed audit field name")
+                continue
+            if _public_blocker_text_issue(audit_field) is not None:
+                errors.append(f"{audit_label} contains malformed audit field name")
+                continue
+            if not _is_nonzero_hex32(audit_hash):
+                errors.append(
+                    f"{audit_label} {audit_field} must be a canonical non-zero "
+                    "bytes32 hex string"
+                )
+    return errors
+
+
 def _public_report_payload(report: Any) -> dict[str, Any]:
     """Return a fail-closed public readiness report payload."""
 
@@ -7848,9 +9002,30 @@ def _public_report_payload(report: Any) -> dict[str, Any]:
     for field, message in object_root_messages.items():
         if field in report and not isinstance(report.get(field), dict):
             root_errors[field] = message
+    inputs = report.get("inputs")
+    if "inputs" in report and (
+        not isinstance(inputs, list)
+        or not all(
+            isinstance(item, str)
+            and item
+            and _public_blocker_text_issue(item) is None
+            for item in inputs
+        )
+    ):
+        root_errors["inputs"] = (
+            "readiness report inputs must be a list of canonical strings"
+        )
+
+    input_artifacts = report.get("input_artifacts")
+    if "input_artifacts" in report and (
+        not isinstance(input_artifacts, list)
+        or not all(isinstance(item, dict) for item in input_artifacts)
+    ):
+        root_errors["input_artifacts"] = (
+            "readiness report input_artifacts must be a list of objects"
+        )
+
     list_root_messages = {
-        "inputs": "readiness report inputs must be a list of objects",
-        "input_artifacts": "readiness report input_artifacts must be a list of objects",
         "cryptographic_evidence": (
             "readiness report cryptographic_evidence must be a list of objects"
         ),
@@ -7871,6 +9046,54 @@ def _public_report_payload(report: Any) -> dict[str, Any]:
         root_errors["native_evm_prover_bundle"] = (
             "readiness report native_evm_prover_bundle must be an object"
         )
+    if "input_artifacts" in report and "input_artifacts" not in root_errors:
+        input_artifact_errors = _public_input_artifact_errors(
+            report.get("input_artifacts")
+        )
+        if input_artifact_errors:
+            blockers.extend(input_artifact_errors)
+            root_errors["input_artifacts"] = (
+                "readiness report input_artifacts is invalid"
+            )
+    if "source_inventory" in report and "source_inventory" not in root_errors:
+        source_inventory_errors = _public_source_inventory_errors(
+            report.get("source_inventory")
+        )
+        if source_inventory_errors:
+            blockers.extend(source_inventory_errors)
+            root_errors["source_inventory"] = (
+                "readiness report source_inventory is invalid"
+            )
+    if (
+        "user_prover_submission_surfaces" in report
+        and "user_prover_submission_surfaces" not in root_errors
+    ):
+        user_prover_errors = _public_user_prover_submission_surface_errors(
+            report.get("user_prover_submission_surfaces")
+        )
+        if user_prover_errors:
+            blockers.extend(user_prover_errors)
+            root_errors["user_prover_submission_surfaces"] = (
+                "readiness report user_prover_submission_surfaces is invalid"
+            )
+    if "cryptographic_evidence" in report and "cryptographic_evidence" not in root_errors:
+        cryptographic_evidence_errors = _public_cryptographic_evidence_errors(
+            report.get("cryptographic_evidence")
+        )
+        if cryptographic_evidence_errors:
+            blockers.extend(cryptographic_evidence_errors)
+            root_errors["cryptographic_evidence"] = (
+                "readiness report cryptographic_evidence is invalid"
+            )
+    if "release_checklist" in report and "release_checklist" not in root_errors:
+        release_checklist_errors = _public_release_checklist_errors(
+            report.get("release_checklist")
+        )
+        if release_checklist_errors:
+            blockers.extend(release_checklist_errors)
+            root_errors["release_checklist"] = (
+                "readiness report release_checklist is invalid"
+            )
     blockers.extend(root_errors.values())
 
     public_report = {

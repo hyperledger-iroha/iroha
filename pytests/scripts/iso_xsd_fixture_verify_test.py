@@ -175,6 +175,31 @@ def run_verify(argv):
 
 
 class IsoXsdFixtureVerifyTest(unittest.TestCase):
+    def test_text_output_symlink_ancestor_diagnostic_does_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            target = root / "target"
+            target.mkdir()
+            hidden = "hidden-xsd-output-link"
+            link = root / hidden
+            try:
+                link.symlink_to(target, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                VERIFIER._write_text_output(
+                    link / "summary.json",
+                    "{}\n",
+                    display_label="summary_out",
+                )
+
+            message = str(caught.exception)
+            self.assertIn("summary_out", message)
+            self.assertIn("must not be a symlink", message)
+            self.assertNotIn(str(link), message)
+            self.assertNotIn(hidden, message)
+
     def test_secret_looking_unknown_keys_are_rejected_without_echo(self):
         cases = (
             ("password_xsd_unknown_secret", "xsd_unknown_secret"),
@@ -470,7 +495,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertEqual(stdout, "")
             self.assertIn(
-                "output path must not point to checked-in ISO fixture artifacts",
+                "summary_out must not point to checked-in ISO fixture artifacts",
                 stderr,
             )
             self.assertNotIn("does not exist", stderr)
@@ -1156,10 +1181,10 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             root = Path(raw_root)
             manifest_path = write_minimal_tree(root, minimal_manifest())
             hidden_profile = "minimal-profile"
-            hidden_version = "fooo.001.001.02"
+            hidden_versions = ("fooo.001.001.02", "fooo.001.001.03")
             profile_catalog = write_profile_catalog(
                 root / "profiles.rs",
-                [hidden_version],
+                list(hidden_versions),
             )
 
             rc, stdout, stderr = run_verify(
@@ -1174,9 +1199,13 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertEqual(stdout, "")
-            self.assertIn("not schema-backed", stderr)
+            self.assertIn(
+                "profile catalog has 2 message versions not schema-backed",
+                stderr,
+            )
             self.assertNotIn(hidden_profile, stderr)
-            self.assertNotIn(hidden_version, stderr)
+            for hidden_version in hidden_versions:
+                self.assertNotIn(hidden_version, stderr)
 
     def test_source_filename_mismatch_diagnostics_do_not_echo_message_id(self):
         cases = (
@@ -1980,7 +2009,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     root,
                     summary_out=root / "nested" / "-xsd.summary.json",
                 ),
-                "output path must not contain leading-dash path segments",
+                "summary_out must not contain leading-dash path segments",
             ),
         )
         for name, make_args, message in cases:
@@ -2238,6 +2267,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertEqual(summary["profile_checked_versions"], 1)
             self.assertEqual(summary["profile_schema_backed_versions"], 1)
             self.assertEqual(summary["missing_profile_schema_versions"], [])
+            self.assertEqual(summary["missing_profile_schema_message_ids"], [])
             self.assertEqual(summary["profile_catalog"]["profiles"], 1)
             self.assertEqual(
                 summary["profile_catalog"]["sha256"],
@@ -2278,6 +2308,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertEqual(summary["profile_checked_versions"], 1)
             self.assertEqual(summary["profile_schema_backed_versions"], 1)
             self.assertEqual(summary["missing_profile_schema_versions"], [])
+            self.assertEqual(summary["missing_profile_schema_message_ids"], [])
 
     def test_profile_catalog_loader_ignores_commented_or_string_spoofs(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -2426,6 +2457,18 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 summary["missing_profile_schema_versions"][0]["message_def_id"],
                 "fooo.001.001.02",
             )
+            self.assertEqual(
+                summary["missing_profile_schema_message_ids"],
+                [
+                    {
+                        "message_def_id": "fooo.001.001.02",
+                        "profile_version_count": 1,
+                        "reviewed_missing_schema_fixture": False,
+                        "reviewed_schema_only": False,
+                        "blocked_source": False,
+                    }
+                ],
+            )
 
             rc, _stdout, stderr = run_verify(
                 [
@@ -2438,13 +2481,17 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             )
 
             self.assertEqual(rc, 2)
-            self.assertIn("not schema-backed", stderr)
+            self.assertIn(
+                "profile catalog has 1 message version not schema-backed",
+                stderr,
+            )
+            self.assertNotIn("fooo.001.001.02", stderr)
 
     def test_profile_catalog_shape_is_fail_closed(self):
         cases = []
-        minimal_der = b"\x30\x00"
-        minimal_der_b64 = base64.b64encode(minimal_der).decode("ascii")
-        minimal_der_sha256 = VERIFIER.sha256_hex(minimal_der)
+        crl_der = b"\x30\x07\x30\x00\x30\x00\x03\x01\x00"
+        crl_der_b64 = base64.b64encode(crl_der).decode("ascii")
+        crl_der_sha256 = VERIFIER.sha256_hex(crl_der)
         duplicate_profile = [
             {
                 "id": "minimal-profile",
@@ -2781,8 +2828,8 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         overlapping_pin_revocation_der = [
             {
                 "id": "minimal-profile",
-                "signature_public_key_sha256_pins": [minimal_der_sha256],
-                "x509_crl_der_base64": [minimal_der_b64],
+                "signature_public_key_sha256_pins": [crl_der_sha256],
+                "x509_crl_der_base64": [crl_der_b64],
                 "message_profiles": [
                     {
                         "message_type": "fooo.001",
@@ -2868,6 +2915,44 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             }
         ]
         cases.append((malformed_ocsp_material, "must be canonical base64"))
+        too_many_ocsp_responses = [
+            {
+                "id": "minimal-profile",
+                "x509_ocsp_response_der_base64": [
+                    f"not-base64-{index}"
+                    for index in range(VERIFIER.MAX_PROFILE_DER_BLOBS + 1)
+                ],
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                    }
+                ],
+            }
+        ]
+        cases.append(
+            (
+                too_many_ocsp_responses,
+                "x509_ocsp_response_der_base64 must not contain more than",
+            )
+        )
+        non_ocsp_sequence = [
+            {
+                "id": "minimal-profile",
+                "x509_ocsp_response_der_base64": [
+                    base64.b64encode(b"\x30\x03\x02\x01\x00").decode("ascii")
+                ],
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                    }
+                ],
+            }
+        ]
+        cases.append((non_ocsp_sequence, "must look like a successful DER OCSP response"))
         null_crl_material = [
             {
                 "id": "minimal-profile",
@@ -2882,6 +2967,28 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             }
         ]
         cases.append((null_crl_material, "x509_crl_der_base64 must be a JSON array"))
+        too_many_crls = [
+            {
+                "id": "minimal-profile",
+                "x509_crl_der_base64": [
+                    f"not-base64-{index}"
+                    for index in range(VERIFIER.MAX_PROFILE_DER_BLOBS + 1)
+                ],
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                    }
+                ],
+            }
+        ]
+        cases.append(
+            (
+                too_many_crls,
+                "x509_crl_der_base64 must not contain more than",
+            )
+        )
         malformed_crl_der = [
             {
                 "id": "minimal-profile",
@@ -2898,6 +3005,22 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             }
         ]
         cases.append((malformed_crl_der, "must be a DER SEQUENCE"))
+        non_crl_sequence = [
+            {
+                "id": "minimal-profile",
+                "x509_crl_der_base64": [
+                    base64.b64encode(b"\x30\x03\x02\x01\x00").decode("ascii")
+                ],
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                    }
+                ],
+            }
+        ]
+        cases.append((non_crl_sequence, "must look like a DER CRL"))
         truncated_crl_der = [
             {
                 "id": "minimal-profile",
@@ -3018,6 +3141,28 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             }
         ]
         cases.append((missing_business_service, "business_services must not be empty"))
+        case_drift_duplicate_business_services = [
+            {
+                "id": "minimal-profile",
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                        "business_services": [
+                            "Service.A",
+                            "service.a",
+                        ],
+                    }
+                ],
+            }
+        ]
+        cases.append(
+            (
+                case_drift_duplicate_business_services,
+                "ignoring ASCII case",
+            )
+        )
         zero_supplementary_cap = [
             {
                 "id": "minimal-profile",
@@ -3049,6 +3194,27 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             (
                 null_supplementary_cap,
                 "supplementary_data_max_bytes must be a non-negative integer",
+            )
+        )
+        oversized_supplementary_cap = [
+            {
+                "id": "minimal-profile",
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                        "supplementary_data_max_bytes": (
+                            VERIFIER.MAX_PROFILE_UNSIGNED_INT + 1
+                        ),
+                    }
+                ],
+            }
+        ]
+        cases.append(
+            (
+                oversized_supplementary_cap,
+                "supplementary_data_max_bytes must fit in u64",
             )
         )
         null_amount_minor_units = [
@@ -3114,6 +3280,22 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             }
         ]
         cases.append((duplicate_minor_units_currency, "currency duplicates"))
+        excessive_minor_units = [
+            {
+                "id": "minimal-profile",
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                        "amount_minor_units": [
+                            {"currency": "USD", "minor_units": 5},
+                        ],
+                    }
+                ],
+            }
+        ]
+        cases.append((excessive_minor_units, "minor_units must be at most 4"))
 
         for catalog, message in cases:
             with self.subTest(message=message):
@@ -3139,7 +3321,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     if message == "already checked-in schema":
                         self.assertNotIn("fooo.001.001.01", stderr)
                     if message == "trust pin/revocation DER SHA-256 roles":
-                        self.assertNotIn(minimal_der_sha256, stderr)
+                        self.assertNotIn(crl_der_sha256, stderr)
 
     def test_profile_catalog_duplicate_strings_do_not_echo_secret_material(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -3213,6 +3395,81 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertGreater(summary["profile_schema_backed_versions"], 0)
             self.assertEqual(summary["profile_schema_backed_versions"], 31)
             self.assertEqual(len(summary["missing_profile_schema_versions"]), 24)
+            self.assertEqual(
+                summary["missing_profile_schema_message_ids"],
+                [
+                    {
+                        "message_def_id": "colr.012.001.05",
+                        "profile_version_count": 2,
+                        "reviewed_missing_schema_fixture": True,
+                        "reviewed_schema_only": False,
+                        "blocked_source": False,
+                    },
+                    {
+                        "message_def_id": "pacs.002.001.12",
+                        "profile_version_count": 4,
+                        "reviewed_missing_schema_fixture": False,
+                        "reviewed_schema_only": False,
+                        "blocked_source": True,
+                    },
+                    {
+                        "message_def_id": "pacs.008.001.10",
+                        "profile_version_count": 3,
+                        "reviewed_missing_schema_fixture": False,
+                        "reviewed_schema_only": False,
+                        "blocked_source": True,
+                    },
+                    {
+                        "message_def_id": "pacs.009.001.10",
+                        "profile_version_count": 3,
+                        "reviewed_missing_schema_fixture": False,
+                        "reviewed_schema_only": False,
+                        "blocked_source": True,
+                    },
+                    {
+                        "message_def_id": "sese.023.001.09",
+                        "profile_version_count": 1,
+                        "reviewed_missing_schema_fixture": False,
+                        "reviewed_schema_only": False,
+                        "blocked_source": False,
+                    },
+                    {
+                        "message_def_id": "sese.023.001.11",
+                        "profile_version_count": 2,
+                        "reviewed_missing_schema_fixture": True,
+                        "reviewed_schema_only": False,
+                        "blocked_source": False,
+                    },
+                    {
+                        "message_def_id": "sese.024.001.09",
+                        "profile_version_count": 2,
+                        "reviewed_missing_schema_fixture": False,
+                        "reviewed_schema_only": False,
+                        "blocked_source": False,
+                    },
+                    {
+                        "message_def_id": "sese.024.001.10",
+                        "profile_version_count": 2,
+                        "reviewed_missing_schema_fixture": True,
+                        "reviewed_schema_only": False,
+                        "blocked_source": False,
+                    },
+                    {
+                        "message_def_id": "sese.025.001.08",
+                        "profile_version_count": 2,
+                        "reviewed_missing_schema_fixture": False,
+                        "reviewed_schema_only": False,
+                        "blocked_source": False,
+                    },
+                    {
+                        "message_def_id": "sese.025.001.10",
+                        "profile_version_count": 3,
+                        "reviewed_missing_schema_fixture": False,
+                        "reviewed_schema_only": False,
+                        "blocked_source": False,
+                    },
+                ],
+            )
 
     def test_xml_schema_validation_bounds_xmllint_output(self):
         cases = [
@@ -5536,6 +5793,9 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+                    if message == "must stay under":
+                        self.assertIn("manifest root", stderr)
+                        self.assertNotIn(str(root), stderr)
 
     def test_duplicate_manifest_json_keys_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:

@@ -4539,9 +4539,19 @@ impl Actor {
         height: u64,
         view: u64,
         requested_missing_block: bool,
+        has_commit_evidence: bool,
     ) -> bool {
         let known_block = self.block_known_locally(*block_hash);
         let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let active_frontier_range_pull = self
+            .active_frontier_range_pull_accepts_future_block_sync_update(
+                height,
+                local_height,
+                has_commit_evidence,
+            );
+        if active_frontier_range_pull {
+            return false;
+        }
         let requested_margin = block_sync_future_window_requested_margin(
             self.recovery_missing_request_stale_height_margin(),
         );
@@ -4570,6 +4580,31 @@ impl Actor {
             lower_unresolved_missing.is_some(),
             parent_available,
             self.should_drop_future_consensus_message(height, view, "BlockSyncUpdate"),
+        )
+    }
+
+    fn active_frontier_range_pull_accepts_future_block_sync_update(
+        &self,
+        height: u64,
+        local_height: u64,
+        has_commit_evidence: bool,
+    ) -> bool {
+        if !has_commit_evidence || height <= local_height.saturating_add(1) {
+            return false;
+        }
+        let frontier_height = local_height.saturating_add(1);
+        let now = Instant::now();
+        self.range_pull_escalation_cooldowns.iter().any(
+            |((_, pull_local_height, canonical_height, reason), expires)| {
+                *pull_local_height == local_height
+                    && *canonical_height == frontier_height
+                    && now < *expires
+                    && (Self::reason_is_canonical_frontier_reanchor(reason)
+                        || matches!(
+                            *reason,
+                            "rbc_far_future_missing_block" | "block_sync_future_gap"
+                        ))
+            },
         )
     }
 
@@ -5345,10 +5380,21 @@ impl Actor {
                 "processing contiguous frontier BlockSyncUpdate as deep catch-up"
             );
         }
+        let has_commit_votes = !commit_votes.is_empty();
+        let has_commit_evidence = block_sync_stale_view_has_commit_evidence(
+            incoming_qc.is_some(),
+            validator_checkpoint.is_some(),
+            has_commit_votes,
+        );
         if !block_known_locally
             && !requested_missing_block
             && frontier_lane_locked
             && block_height > local_height.saturating_add(2)
+            && !self.active_frontier_range_pull_accepts_future_block_sync_update(
+                block_height,
+                local_height,
+                has_commit_evidence,
+            )
         {
             debug!(
                 height = block_height,
@@ -5367,18 +5413,13 @@ impl Actor {
             );
             return Ok(());
         }
-        let has_commit_votes = !commit_votes.is_empty();
-        let has_commit_evidence = block_sync_stale_view_has_commit_evidence(
-            incoming_qc.is_some(),
-            validator_checkpoint.is_some(),
-            has_commit_votes,
-        );
         if self.should_drop_future_block_sync_update(
             &block_hash,
             parent_hash,
             block_height,
             block_view,
             requested_missing_block,
+            has_commit_evidence,
         ) {
             self.record_consensus_message_handling(
                 super::status::ConsensusMessageKind::BlockSyncUpdate,
@@ -5410,6 +5451,65 @@ impl Actor {
                     );
                 }
             }
+            return Ok(());
+        }
+        let parent_missing_for_evidence_ahead = !block_known_locally
+            && block_height > local_height.saturating_add(1)
+            && parent_hash.is_some_and(|hash| !self.block_known_locally(hash))
+            && has_commit_evidence;
+        if parent_missing_for_evidence_ahead {
+            let expected_height = local_height.saturating_add(1);
+            let expected_usize = usize::try_from(expected_height).ok();
+            let actual_usize = usize::try_from(block_height).ok();
+            if let Some(parent_hash) = parent_hash {
+                let commit_topology = self.effective_commit_topology();
+                self.request_missing_parent(
+                    block_hash,
+                    block_height,
+                    block_view,
+                    parent_hash,
+                    &commit_topology,
+                    None,
+                    expected_usize,
+                    actual_usize,
+                    "block_sync_evidence_parent_gap",
+                );
+                if block_height > expected_height.saturating_add(1) {
+                    self.request_missing_parents_for_gap(
+                        &commit_topology,
+                        None,
+                        "block_sync_evidence_parent_gap",
+                    );
+                }
+            }
+            self.cache_deferred_block_sync_update(
+                super::message::BlockSyncUpdate {
+                    block,
+                    commit_votes: Vec::new(),
+                    commit_qc: incoming_qc,
+                    validator_checkpoint,
+                    stake_snapshot,
+                },
+                sender,
+                block_hash,
+                block_height,
+                block_view,
+                "evidence_parent_gap",
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::BlockSyncUpdate,
+                super::status::ConsensusMessageOutcome::Deferred,
+                super::status::ConsensusMessageReason::FutureWindow,
+            );
+            info!(
+                height = block_height,
+                view = block_view,
+                block = %block_hash,
+                local_height,
+                parent = ?parent_hash,
+                deferred = self.deferred_block_sync_updates.len(),
+                "deferred evidence-bearing block sync update until parent is locally available"
+            );
             return Ok(());
         }
         if let Some(local_view) = self.stale_view(block_height, block_view) {
@@ -7452,8 +7552,24 @@ impl Actor {
                             }
                             return Ok(());
                         }
-                        super::status::record_commit_qc(qc.clone());
                         self.qc_cache.insert(Self::qc_tally_key(&qc), qc.clone());
+                        if block_known_for_commit {
+                            super::status::record_commit_qc(qc.clone());
+                        } else {
+                            let sent = self.request_certified_block_for_qc(
+                                &qc,
+                                &topology,
+                                &tally.voting_signers,
+                                "block_sync_update_qc_missing_commit_ready_payload",
+                            );
+                            info!(
+                                incoming_hash = %block_hash,
+                                height = block_height,
+                                view = block_view,
+                                targets = sent,
+                                "cached block sync QC and requested certified block before publishing commit status"
+                            );
+                        }
                         #[cfg(feature = "telemetry")]
                         if let Some(telemetry) = self.telemetry_handle() {
                             telemetry.note_qc_signer_counts(
@@ -7838,13 +7954,19 @@ impl Actor {
                 }
                 self.quarantined_block_sync_qcs
                     .remove(&Self::qc_tally_key(&qc));
-                super::status::record_commit_qc(qc.clone());
+                let sent = self.request_certified_block_for_qc(
+                    &qc,
+                    topology,
+                    &tally.voting_signers,
+                    "cached_block_sync_qc_missing_payload",
+                );
                 self.qc_cache.insert(Self::qc_tally_key(&qc), qc);
                 debug!(
                     incoming_hash = %block_hash,
                     signers = tally.voting_signers.len(),
                     qc_signers,
-                    "cached block sync QC before block payload is ready"
+                    targets = sent,
+                    "cached block sync QC and requested certified block before block payload is ready"
                 );
             }
             Err(err) => {
@@ -8606,6 +8728,11 @@ impl Actor {
                 rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
                 block_rx_depth = queue_depths.block_rx,
                 "materialized block body from BlockBodyResponse"
+            );
+            let _ = self.maybe_start_validation_for_pending_after_cached_new_view_qc(
+                response.height,
+                response.view,
+                "block_body_response_payload_ready",
             );
         }
         let materialized_at = Instant::now();

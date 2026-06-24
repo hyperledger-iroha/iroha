@@ -60,6 +60,128 @@ ALL_LANES_PUBLIC_SUMMARY_FIELDS = (
     "blockers",
     "release_checklist",
 )
+RELEASE_CHECKLIST_TITLES = {
+    "all_required_lane_records": (
+        "All advertised SCCP lanes have the required source, deployment, "
+        "destination, and route records"
+    ),
+    "governed_deployment_evidence": (
+        "Source-adapter deployments and destination rollouts are governed and hash-bound"
+    ),
+    "route_allowlist_binding": (
+        "Route allowlists bind the governed source and destination evidence"
+    ),
+    "live_route_canary_evidence": (
+        "Post-deploy route canary evidence is live, passed, and bound to the route"
+    ),
+    "no_unresolved_blockers": "No SCCP all-lanes preflight blockers remain",
+}
+RELEASE_CHECKLIST_ITEM_IDS = tuple(RELEASE_CHECKLIST_TITLES)
+RELEASE_CHECKLIST_ITEM_FIELDS = ("id", "title", "ready", "blockers")
+PUBLIC_LANE_FIELDS = (
+    "domain",
+    "chain",
+    "production_ready",
+    "records",
+    "source_record_hashes",
+    "source_adapter_gate",
+    "evm_live_metadata",
+    "destination_binding",
+    "route_allowlist",
+    "blockers",
+)
+PUBLIC_LANE_RECORD_FIELDS = (
+    "source_verifier_material",
+    "source_adapter_deployment",
+    "destination_rollout",
+    "route_allowlist",
+)
+PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS = (
+    "source_verifier_material_hash",
+    "source_adapter_engine_deployment_hash",
+)
+PUBLIC_LANE_SOURCE_ADAPTER_GATE_FIELDS = (
+    "required",
+    "ready",
+    "gate_hash",
+    "audit_hashes",
+    "blockers",
+)
+PUBLIC_LANE_EVM_LIVE_METADATA_FIELDS = (
+    "required",
+    "ready",
+    "source_rpc_chain_id",
+    "source_block_tag",
+    "destination_rpc_chain_id",
+    "destination_block_tag",
+)
+PUBLIC_LANE_DESTINATION_BINDING_FIELDS = (
+    "destination_binding_hash",
+    "expected_destination_binding_hash",
+    "expected_destination_binding_hash_matches",
+    "destination_binding_key",
+    "destination_network_id",
+    "destination_bridge_address",
+    "recomputed",
+)
+PUBLIC_LANE_ROUTE_ALLOWLIST_FIELDS = (
+    "route_allowlist_hash",
+    "expected_route_allowlist_hash",
+    "expected_route_allowlist_hash_matches",
+    "route_canary",
+)
+PUBLIC_LANE_ROUTE_CANARY_FIELDS = (
+    "status",
+    "evidence_hash",
+    "route_allowlist_hash",
+    "destination_binding_hash",
+    "evidence_source",
+    "evidence_bound",
+    "transaction_hash",
+    "receipt_block_number",
+    "receipt_block_hash",
+    "block_receipts_root",
+    "call_data_sha256",
+    "log_index",
+    "message_id",
+    "payload_hash",
+    "target_domain",
+    "statement_hash",
+    "commitment_root",
+    "finality_height",
+    "finality_block_hash",
+    "proof_version",
+    "proof_source_domain",
+    "message_proof_used",
+    "receipt_block_finalized",
+    "transaction_id",
+    "transaction_owner_address",
+    "block_number",
+    "block_timestamp",
+    "raw_data_owner_matches_transaction",
+    "signature_sha256",
+    "signature_recovered_address",
+    "signature_recovers_to_owner",
+    "ton_account_state_hash",
+    "ton_last_transaction_lt",
+    "ton_last_transaction_hash",
+    "solana_programdata_address",
+    "solana_programdata_slot",
+)
+PUBLIC_DOMAIN_LISTS = {
+    "required_domains": (
+        SCCP_CORE_REMOTE_DOMAINS,
+        "must be the production remote domains",
+    ),
+    "supported_launch_domains": (
+        SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS,
+        "must be the supported launch remote domains",
+    ),
+    "unsupported_launch_domains": (
+        SCCP_UNSUPPORTED_LAUNCH_REMOTE_DOMAINS,
+        "must be the diagnostic unsupported remote domains",
+    ),
+}
 SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID = "sccp-source-adapter-v1"
 SCCP_PROOF_FAMILY_STARK_FRI = "stark-fri-v1"
 ROUTE_CANARY_EVIDENCE_SOURCE_BY_DOMAIN = {
@@ -6644,18 +6766,18 @@ def _release_checklist(
                         source_adapter_gate,
                     )
                 )
-                if gate_required is True and gate_ready is not True:
-                    gate_errors, gate_schema_errors = _canonical_blocker_list(
-                        source_adapter_gate.get("blockers", []),
-                        f"{lane_label}: source adapter gate",
+                gate_errors, gate_schema_errors = _canonical_blocker_list(
+                    source_adapter_gate.get("blockers", []),
+                    f"{lane_label}: source adapter gate",
+                )
+                if gate_schema_errors:
+                    deployment_blockers.extend(gate_schema_errors)
+                elif gate_errors:
+                    deployment_blockers.extend(
+                        f"{lane_label}: {error}" for error in gate_errors
                     )
-                    if gate_schema_errors:
-                        deployment_blockers.extend(gate_schema_errors)
-                    elif gate_errors:
-                        deployment_blockers.extend(
-                            f"{lane_label}: {error}" for error in gate_errors
-                        )
-                    else:
+                if gate_required is True and gate_ready is not True:
+                    if not gate_schema_errors and not gate_errors:
                         deployment_blockers.append(
                             f"{lane_label}: source adapter gate is not ready"
                         )
@@ -6788,6 +6910,15 @@ def _release_checklist(
         if canary.get("evidence_bound") is not True and not lane_canary_blockers:
             lane_canary_blockers.append("route canary evidence is not bound")
         canary_blockers.extend(f"{lane_label}: {item}" for item in lane_canary_blockers)
+
+    for blockers in (
+        records_blockers,
+        deployment_blockers,
+        route_blockers,
+        canary_blockers,
+    ):
+        for blocker in blockers:
+            append_unresolved(blocker)
 
     items = [
         _release_checklist_item(
@@ -7179,6 +7310,330 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     return text
 
 
+def _public_release_checklist_errors(value: Any) -> list[str]:
+    """Return bounded public errors for a copied all-lanes release checklist."""
+
+    if not isinstance(value, dict):
+        return ["all-lanes summary release_checklist must be an object"]
+
+    errors: list[str] = []
+    expected_fields = {"ready", "items"}
+    for field in sorted(
+        (field for field in value if field not in expected_fields),
+        key=lambda item: str(item),
+    ):
+        errors.append(
+            f"all-lanes summary release_checklist {_unexpected_record_field_detail(field)}"
+        )
+
+    ready = value.get("ready")
+    if type(ready) is not bool:
+        errors.append("all-lanes summary release_checklist ready must be a boolean")
+    elif ready is not True:
+        errors.append("all-lanes summary release_checklist ready must be true")
+
+    items = value.get("items")
+    if not isinstance(items, list):
+        errors.append("all-lanes summary release_checklist items must be a list")
+        return errors
+
+    seen_ids: set[str] = set()
+    for index, item in enumerate(items):
+        item_label = f"all-lanes summary release_checklist items[{index}]"
+        if not isinstance(item, dict):
+            errors.append(f"{item_label} must be an object")
+            continue
+        for field in sorted(
+            (field for field in item if field not in RELEASE_CHECKLIST_ITEM_FIELDS),
+            key=lambda field: str(field),
+        ):
+            errors.append(f"{item_label} {_unexpected_record_field_detail(field)}")
+
+        item_id = item.get("id")
+        if (
+            not isinstance(item_id, str)
+            or not item_id
+            or item_id.strip() != item_id
+        ):
+            errors.append(f"{item_label} id must be a non-empty canonical string")
+            item_key: str | None = None
+        elif item_id not in RELEASE_CHECKLIST_ITEM_IDS:
+            errors.append(f"{item_label} id must be a required checklist id")
+            item_key = None
+        elif item_id in seen_ids:
+            errors.append(f"all-lanes summary release_checklist item {item_id} is duplicated")
+            item_key = item_id
+        else:
+            seen_ids.add(item_id)
+            item_key = item_id
+
+        title = item.get("title")
+        if not isinstance(title, str) or not title or title.strip() != title:
+            errors.append(f"{item_label} title must be a non-empty canonical string")
+        elif item_key is None or title != RELEASE_CHECKLIST_TITLES[item_key]:
+            errors.append(f"{item_label} title must match the canonical checklist title")
+
+        item_ready = item.get("ready")
+        if type(item_ready) is not bool:
+            errors.append(f"{item_label} ready must be a boolean")
+        elif item_ready is not True:
+            errors.append(f"{item_label} ready must be true")
+
+        blockers = item.get("blockers")
+        canonical_blockers, blocker_errors = _canonical_blocker_list(
+            blockers,
+            item_label,
+        )
+        errors.extend(blocker_errors)
+        if canonical_blockers:
+            errors.append(f"{item_label} blockers must be empty")
+
+    for item_id in RELEASE_CHECKLIST_ITEM_IDS:
+        if item_id not in seen_ids:
+            errors.append(
+                f"all-lanes summary release_checklist missing item {item_id}"
+            )
+    return errors
+
+
+def _public_nested_lane_value_errors(value: Any, label: str) -> list[str]:
+    """Return bounded public errors for unsafe copied lane nested values."""
+
+    errors: list[str] = []
+    if isinstance(value, dict):
+        for field, nested in value.items():
+            if not isinstance(field, str):
+                errors.append(f"{label} contains non-string field name")
+                nested_label = f"{label} value"
+            else:
+                detail = _unexpected_record_field_detail(field)
+                if detail != f"unexpected field {field}":
+                    errors.append(f"{label} {detail}")
+                    nested_label = f"{label} value"
+                else:
+                    nested_label = f"{label}.{field}"
+            errors.extend(_public_nested_lane_value_errors(nested, nested_label))
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            errors.extend(_public_nested_lane_value_errors(nested, f"{label}[{index}]"))
+    elif isinstance(value, str):
+        lowered = value.lower()
+        if any(marker in lowered for marker in SENSITIVE_PUBLIC_BLOCKER_MARKERS):
+            errors.append(f"{label} contains sensitive value")
+        elif any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+            errors.append(f"{label} contains control character")
+        elif not value.isascii():
+            errors.append(f"{label} contains non-ASCII value")
+    return errors
+
+
+def _public_lane_object_field_errors(
+    value: Any,
+    label: str,
+    allowed_fields: tuple[str, ...],
+) -> list[str]:
+    """Return bounded public errors for copied lane object field drift."""
+
+    if not isinstance(value, dict):
+        return [f"{label} must be an object"]
+    allowed = set(allowed_fields)
+    return [
+        f"{label} {_unexpected_record_field_detail(field)}"
+        for field in sorted(
+            (field for field in value if field not in allowed),
+            key=lambda field: str(field),
+        )
+    ]
+
+
+def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
+    """Return bounded public errors for copied all-lanes lane summaries."""
+
+    if not isinstance(value, list) or not all(isinstance(lane, dict) for lane in value):
+        return ["all-lanes summary lanes must be a list of objects"]
+
+    errors: list[str] = []
+    seen_domains: set[int] = set()
+    for index, lane in enumerate(value):
+        lane_label = f"all-lanes summary lanes[{index}]"
+        for field in sorted(
+            (field for field in lane if field not in PUBLIC_LANE_FIELDS),
+            key=lambda field: str(field),
+        ):
+            errors.append(f"{lane_label} {_unexpected_record_field_detail(field)}")
+
+        domain = lane.get("domain")
+        expected_chain: str | None = None
+        if type(domain) is not int:
+            errors.append(f"{lane_label} domain must be an integer")
+        elif domain not in LANE_PROFILES:
+            errors.append(f"{lane_label} domain must be a production remote domain")
+        else:
+            expected_chain = LANE_PROFILES[domain].chain
+            if domain in seen_domains:
+                errors.append(f"all-lanes summary lane domain {domain} is duplicated")
+            seen_domains.add(domain)
+
+        chain = lane.get("chain")
+        if not isinstance(chain, str) or not chain or chain.strip() != chain:
+            errors.append(f"{lane_label} chain must be a non-empty canonical string")
+        elif expected_chain is not None and chain != expected_chain:
+            errors.append(f"{lane_label} chain must match the lane domain")
+
+        lane_ready = lane.get("production_ready")
+        if type(lane_ready) is not bool:
+            errors.append(f"{lane_label} production_ready must be a boolean")
+        elif require_ready and lane_ready is not True:
+            errors.append(f"{lane_label} production_ready must be true")
+
+        records = lane.get("records")
+        if not isinstance(records, dict):
+            errors.append(f"{lane_label} records must be an object")
+        else:
+            for field in sorted(
+                (field for field in records if field not in PUBLIC_LANE_RECORD_FIELDS),
+                key=lambda field: str(field),
+            ):
+                errors.append(f"{lane_label} records {_unexpected_record_field_detail(field)}")
+            for field in PUBLIC_LANE_RECORD_FIELDS:
+                if type(records.get(field)) is not bool:
+                    errors.append(f"{lane_label} records.{field} must be a boolean")
+                elif require_ready and records.get(field) is not True:
+                    errors.append(f"{lane_label} records.{field} must be true")
+
+        errors.extend(
+            _public_lane_object_field_errors(
+                lane.get("source_record_hashes"),
+                f"{lane_label}.source_record_hashes",
+                PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS,
+            )
+        )
+        source_adapter_gate = lane.get("source_adapter_gate")
+        errors.extend(
+            _public_lane_object_field_errors(
+                source_adapter_gate,
+                f"{lane_label}.source_adapter_gate",
+                PUBLIC_LANE_SOURCE_ADAPTER_GATE_FIELDS,
+            )
+        )
+        if isinstance(source_adapter_gate, dict):
+            audit_hashes = source_adapter_gate.get("audit_hashes")
+            if not isinstance(audit_hashes, dict):
+                errors.append(
+                    f"{lane_label}.source_adapter_gate.audit_hashes must be an object"
+                )
+            elif domain in LANE_PROFILES:
+                _gate_field, audit_fields = _source_adapter_gate_requirements(domain)
+                errors.extend(
+                    _public_lane_object_field_errors(
+                        audit_hashes,
+                        f"{lane_label}.source_adapter_gate.audit_hashes",
+                        audit_fields,
+                    )
+                )
+        errors.extend(
+            _public_lane_object_field_errors(
+                lane.get("evm_live_metadata"),
+                f"{lane_label}.evm_live_metadata",
+                PUBLIC_LANE_EVM_LIVE_METADATA_FIELDS,
+            )
+        )
+        errors.extend(
+            _public_lane_object_field_errors(
+                lane.get("destination_binding"),
+                f"{lane_label}.destination_binding",
+                PUBLIC_LANE_DESTINATION_BINDING_FIELDS,
+            )
+        )
+        route_allowlist = lane.get("route_allowlist")
+        errors.extend(
+            _public_lane_object_field_errors(
+                route_allowlist,
+                f"{lane_label}.route_allowlist",
+                PUBLIC_LANE_ROUTE_ALLOWLIST_FIELDS,
+            )
+        )
+        if isinstance(route_allowlist, dict):
+            errors.extend(
+                _public_lane_object_field_errors(
+                    route_allowlist.get("route_canary"),
+                    f"{lane_label}.route_allowlist.route_canary",
+                    PUBLIC_LANE_ROUTE_CANARY_FIELDS,
+                )
+            )
+
+        canonical_blockers, blocker_errors = _canonical_blocker_list(
+            lane.get("blockers", []),
+            lane_label,
+        )
+        errors.extend(blocker_errors)
+        if require_ready and canonical_blockers:
+            errors.append(f"{lane_label} blockers must be empty")
+
+        errors.extend(_public_nested_lane_value_errors(lane, lane_label))
+
+    if require_ready:
+        for domain in SCCP_CORE_REMOTE_DOMAINS:
+            if domain not in seen_domains:
+                errors.append(f"all-lanes summary lanes missing domain {domain}")
+    return errors
+
+
+def _public_domain_list_errors(summary: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
+    """Return bounded public errors for copied launch-domain roots."""
+
+    errors: list[str] = []
+    invalid_fields: dict[str, str] = {}
+    parsed: dict[str, list[int]] = {}
+    for field, (expected, detail) in PUBLIC_DOMAIN_LISTS.items():
+        if field not in summary:
+            continue
+        value = summary.get(field)
+        if not isinstance(value, list) or not all(type(domain) is int for domain in value):
+            error = f"all-lanes summary {field} must be a list of integers"
+            invalid_fields[field] = error
+            continue
+        parsed[field] = value
+        if len(set(value)) != len(value):
+            errors.append(f"all-lanes summary {field} must not contain duplicate integers")
+            invalid_fields[field] = f"all-lanes summary {field} is invalid"
+        if value != list(expected):
+            errors.append(f"all-lanes summary {field} {detail}")
+            invalid_fields[field] = f"all-lanes summary {field} is invalid"
+
+    supported = parsed.get("supported_launch_domains")
+    unsupported = parsed.get("unsupported_launch_domains")
+    required = parsed.get("required_domains")
+    if supported is not None and unsupported is not None:
+        if set(supported).intersection(unsupported):
+            errors.append(
+                "all-lanes summary supported_launch_domains and "
+                "unsupported_launch_domains must be disjoint"
+            )
+            invalid_fields["supported_launch_domains"] = (
+                "all-lanes summary supported_launch_domains is invalid"
+            )
+            invalid_fields["unsupported_launch_domains"] = (
+                "all-lanes summary unsupported_launch_domains is invalid"
+            )
+    if supported is not None and unsupported is not None and required is not None:
+        if sorted(supported + unsupported) != sorted(required):
+            errors.append(
+                "all-lanes summary supported_launch_domains plus "
+                "unsupported_launch_domains must match required_domains"
+            )
+            invalid_fields["required_domains"] = (
+                "all-lanes summary required_domains is invalid"
+            )
+            invalid_fields["supported_launch_domains"] = (
+                "all-lanes summary supported_launch_domains is invalid"
+            )
+            invalid_fields["unsupported_launch_domains"] = (
+                "all-lanes summary unsupported_launch_domains is invalid"
+            )
+    return errors, invalid_fields
+
+
 def _public_summary_payload(summary: Any) -> dict[str, Any]:
     """Return a fail-closed public all-lanes summary payload."""
 
@@ -7213,26 +7668,47 @@ def _public_summary_payload(summary: Any) -> dict[str, Any]:
         blockers.append("all-lanes summary production_ready must be boolean")
 
     root_errors: dict[str, str] = {}
-    for field in (
-        "required_domains",
-        "supported_launch_domains",
-        "unsupported_launch_domains",
-    ):
-        value = summary.get(field)
-        if field in summary and (
-            not isinstance(value, list) or not all(type(domain) is int for domain in value)
-        ):
-            root_errors[field] = f"all-lanes summary {field} must be a list of integers"
+    domain_list_errors, invalid_domain_fields = _public_domain_list_errors(summary)
+    blockers.extend(domain_list_errors)
+    root_errors.update(invalid_domain_fields)
     lanes = summary.get("lanes")
-    if "lanes" in summary and (
-        not isinstance(lanes, list) or not all(isinstance(lane, dict) for lane in lanes)
-    ):
-        root_errors["lanes"] = "all-lanes summary lanes must be a list of objects"
+    if "lanes" in summary:
+        lane_errors = _public_lanes_errors(
+            lanes,
+            require_ready=production_ready is True,
+        )
+        if lane_errors:
+            if lane_errors == ["all-lanes summary lanes must be a list of objects"]:
+                root_errors["lanes"] = lane_errors[0]
+            else:
+                blockers.extend(lane_errors)
+                root_errors["lanes"] = "all-lanes summary lanes are invalid"
+    elif production_ready is True:
+        blockers.append("all-lanes summary lanes missing")
     release_checklist = summary.get("release_checklist")
     if "release_checklist" in summary and not isinstance(release_checklist, dict):
         root_errors["release_checklist"] = (
             "all-lanes summary release_checklist must be an object"
         )
+    elif "release_checklist" in summary:
+        release_checklist_errors = _public_release_checklist_errors(
+            release_checklist
+        )
+        if release_checklist_errors:
+            blockers.extend(release_checklist_errors)
+            root_errors["release_checklist"] = (
+                "all-lanes summary release_checklist is invalid"
+            )
+    elif production_ready is True:
+        blockers.append("all-lanes summary release_checklist missing")
+    if production_ready is True:
+        for field in (
+            "required_domains",
+            "supported_launch_domains",
+            "unsupported_launch_domains",
+        ):
+            if field not in summary:
+                blockers.append(f"all-lanes summary {field} missing")
     blockers.extend(root_errors.values())
 
     public_summary = {

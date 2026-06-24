@@ -7,8 +7,9 @@
 
 use norito::decode_from_bytes;
 use sorafs_manifest::{
-    ManifestV1, ManifestValidationError, PinPolicyConstraints, ValidationContextFieldV1,
-    ValidationInputV1, ValidationOutcomeV1, validate_manifest,
+    ManifestV1,
+    reference::{ValidationContextFieldV1, ValidationInputV1, ValidationOutcomeV1},
+    validation::{ManifestValidationError, PinPolicyConstraints, validate_manifest},
 };
 
 use crate::{TrustlessVerificationError, TrustlessVerificationOutcome, TrustlessVerifierConfig};

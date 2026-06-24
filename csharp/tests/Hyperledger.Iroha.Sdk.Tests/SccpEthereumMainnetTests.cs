@@ -1443,6 +1443,18 @@ public sealed class SccpEthereumMainnetTests
                 NetworkId =
                     "0x0000000000000000000000000000000000000000000000000000000000000038",
             }));
+        var reusedConfigRole = Assert.Throws<ArgumentException>(
+            () => EthereumMainnetSccp.SourceBridgeConfigHash(
+                material.BridgeAddress,
+                EthereumMainnetSccp.MainnetNetworkId));
+        Assert.Contains("sourceBridgeEmitterCodeHash", reusedConfigRole.Message);
+        var reusedSourceBridgeCodeHashRole = Assert.Throws<ArgumentException>(
+            () => EthereumMainnetSccp.SourceVerifierMaterialHash(material with
+            {
+                SourceBridgeEmitterCodeHash = EthereumMainnetSccp.MainnetNetworkId,
+                NetworkId = EthereumMainnetSccp.MainnetNetworkId,
+            }));
+        Assert.Contains("sourceBridgeEmitterCodeHash", reusedSourceBridgeCodeHashRole.Message);
         Assert.Throws<ArgumentException>(
             () => EthereumMainnetSccp.SourceVerifierMaterialHash(material with
             {

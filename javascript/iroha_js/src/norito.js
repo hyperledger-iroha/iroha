@@ -604,6 +604,27 @@ export function noritoEncodeMultisigProposeRequest(request) {
         ),
       ],
       [
+        encodeOptionValue(
+          request.memo ?? null,
+          encodeNoritoStringValue,
+          "MultisigProposeDto.memo",
+        ),
+      ],
+      [
+        encodeOptionValue(
+          request.validation_fee_policy_version ?? request.validationFeePolicyVersion ?? null,
+          encodeNoritoStringValue,
+          "MultisigProposeDto.validation_fee_policy_version",
+        ),
+      ],
+      [
+        encodeOptionValue(
+          request.validation_fee_policy_hash ?? request.validationFeePolicyHash ?? null,
+          encodeNoritoStringValue,
+          "MultisigProposeDto.validation_fee_policy_hash",
+        ),
+      ],
+      [
         encodeNoritoVec(request.instructions, (instruction, index) =>
           encodeEmbeddedInstructionBox(
             instruction,

@@ -4,7 +4,16 @@
 //! plus dedicated shielded-asset 3-hop and unshield/transfer scenarios, and
 //! restart-pressure + malformed-proof rejection fault-injection checks.
 
-use std::time::Duration;
+use std::{
+    env,
+    fs::{self, File, OpenOptions},
+    io::Write as _,
+    path::{Component, Path, PathBuf},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 
 use eyre::{Report, Result, WrapErr as _, eyre};
 use integration_tests::sandbox;
@@ -43,6 +52,7 @@ use iroha_data_model::{
 };
 use iroha_test_network::{NetworkBuilder, NetworkPeer};
 use iroha_test_samples::{BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID};
+use norito::json::{self, Map, Value};
 use sorafs_manifest::alias_cache::AliasCachePolicy;
 
 const PROOF_VERIFY_TIMEOUT_MS: i64 = 600_000;
@@ -64,6 +74,55 @@ const COMBINED_PRESSURE_RESTART_PROGRESS_TIMEOUT: Duration = Duration::from_secs
 const COMBINED_PRESSURE_CATCH_UP_TIMEOUT: Duration = Duration::from_secs(180);
 const DUAL_RESTART_ALL_PEER_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
 const DUAL_RESTART_QUORUM_ATTEMPTS: usize = 600;
+const LOCALNET_LIFECYCLE_SOURCE_DIR_ENV: &str = "IROHA_KAGEMUSHA_LOCALNET_LIFECYCLE_SOURCE_DIR";
+const LOCALNET_LIFECYCLE_RUN_ID_ENV: &str = "IROHA_KAGEMUSHA_LOCALNET_LIFECYCLE_RUN_ID";
+const LOCALNET_LIFECYCLE_CHAIN_ID_ENV: &str = "IROHA_KAGEMUSHA_LOCALNET_LIFECYCLE_CHAIN_ID";
+const LOCALNET_LIFECYCLE_DEFAULT_CHAIN_ID: &str = "kagemusha-production-localnet-v1";
+const LOCALNET_LIFECYCLE_SOURCE_SCHEMA: &str = "iroha.kagemusha.localnet.lifecycle.source.v1";
+const LOCALNET_LIFECYCLE_SOURCE_ARTIFACTS: &[(&str, &str)] = &[
+    ("smoke_artifact", "smoke-artifact.json"),
+    (
+        "replay_rejection_artifact",
+        "replay-rejection-artifact.json",
+    ),
+    (
+        "restart_replay_rejection_artifact",
+        "restart-replay-rejection-artifact.json",
+    ),
+    ("state_recovery_artifact", "state-recovery-artifact.json"),
+    (
+        "lifecycle_shield_tx_artifact",
+        "lifecycle-shield-tx-artifact.json",
+    ),
+    (
+        "lifecycle_hop_proof_artifact",
+        "lifecycle-hop-proof-artifact.json",
+    ),
+    (
+        "lifecycle_recursive_init_artifact",
+        "lifecycle-recursive-init-artifact.json",
+    ),
+    (
+        "lifecycle_recursive_init_verify_artifact",
+        "lifecycle-recursive-init-verify-artifact.json",
+    ),
+    (
+        "lifecycle_recursive_append_artifact",
+        "lifecycle-recursive-append-artifact.json",
+    ),
+    (
+        "lifecycle_recursive_append_verify_artifact",
+        "lifecycle-recursive-append-verify-artifact.json",
+    ),
+    (
+        "lifecycle_unshield_proof_artifact",
+        "lifecycle-unshield-proof-artifact.json",
+    ),
+    (
+        "lifecycle_redeem_tx_artifact",
+        "lifecycle-redeem-tx-artifact.json",
+    ),
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PeerBlockProgress {
@@ -86,6 +145,364 @@ impl NegativeSubmitOutcome {
     fn reached_live_peer(self) -> bool {
         !matches!(self, Self::Inconclusive)
     }
+}
+
+#[derive(Clone, Debug)]
+struct LocalnetLifecycleArtifactRecorder {
+    root: Option<PathBuf>,
+    run_id: String,
+    chain_id: String,
+    peer_ids: Vec<String>,
+}
+
+impl LocalnetLifecycleArtifactRecorder {
+    fn disabled(test_name: &str, chain_id: String, peer_ids: Vec<String>) -> Self {
+        Self {
+            root: None,
+            run_id: test_name.to_owned(),
+            chain_id,
+            peer_ids,
+        }
+    }
+
+    fn from_env(network: &sandbox::SerializedNetwork, test_name: &str) -> Result<Self> {
+        let chain_id = network.chain_id().to_string();
+        let mut peer_ids = network
+            .topology_entries()
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| localnet_lifecycle_source_peer_id(index, &entry.peer.to_string()))
+            .collect::<Vec<_>>();
+        peer_ids.sort();
+        peer_ids.dedup();
+
+        let Some(root) = env::var_os(LOCALNET_LIFECYCLE_SOURCE_DIR_ENV) else {
+            return Ok(Self::disabled(test_name, chain_id, peer_ids));
+        };
+        let run_id = env::var(LOCALNET_LIFECYCLE_RUN_ID_ENV)
+            .unwrap_or_else(|_| format!("{test_name}-{}", std::process::id()));
+        Ok(Self {
+            root: Some(PathBuf::from(root)),
+            run_id,
+            chain_id,
+            peer_ids,
+        })
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.root.is_some()
+    }
+
+    fn record_tx(
+        &self,
+        artifact: &str,
+        context: &str,
+        tx_hash: &str,
+        non_empty_target: u64,
+    ) -> Result<()> {
+        self.write_artifact(
+            artifact,
+            context,
+            [
+                ("kind", Value::String("transaction".to_owned())),
+                ("tx_hash", Value::String(tx_hash.to_owned())),
+                ("non_empty_target", Value::from(non_empty_target)),
+            ],
+        )
+    }
+
+    fn record_rejection(
+        &self,
+        artifact: &str,
+        context: &str,
+        replayed_tx_hash: &str,
+        rejection: &str,
+        non_empty_target: u64,
+    ) -> Result<()> {
+        self.write_artifact(
+            artifact,
+            context,
+            [
+                ("kind", Value::String("replay_rejection".to_owned())),
+                (
+                    "replayed_tx_hash",
+                    Value::String(replayed_tx_hash.to_owned()),
+                ),
+                ("rejection", Value::String(rejection.to_owned())),
+                ("non_empty_target", Value::from(non_empty_target)),
+            ],
+        )
+    }
+
+    fn record_event(&self, artifact: &str, context: &str, non_empty_target: u64) -> Result<()> {
+        self.write_artifact(
+            artifact,
+            context,
+            [
+                ("kind", Value::String("localnet_event".to_owned())),
+                ("non_empty_target", Value::from(non_empty_target)),
+            ],
+        )
+    }
+
+    fn write_artifact<const N: usize>(
+        &self,
+        artifact: &str,
+        context: &str,
+        fields: [(&str, Value); N],
+    ) -> Result<()> {
+        let Some(root) = self.root.as_ref() else {
+            return Ok(());
+        };
+        let filename = localnet_lifecycle_source_artifact_filename(artifact)
+            .ok_or_else(|| eyre!("unknown Kagemusha localnet lifecycle artifact `{artifact}`"))?;
+        prepare_localnet_lifecycle_source_dir(root)?;
+
+        let mut map = Map::new();
+        map.insert(
+            "schema".to_owned(),
+            Value::String(LOCALNET_LIFECYCLE_SOURCE_SCHEMA.to_owned()),
+        );
+        map.insert("artifact".to_owned(), Value::String(artifact.to_owned()));
+        map.insert("context".to_owned(), Value::String(context.to_owned()));
+        map.insert("run_id".to_owned(), Value::String(self.run_id.clone()));
+        map.insert("chain_id".to_owned(), Value::String(self.chain_id.clone()));
+        map.insert(
+            "peer_ids".to_owned(),
+            Value::Array(self.peer_ids.iter().cloned().map(Value::String).collect()),
+        );
+        map.insert(
+            "generated_at_unix_ms".to_owned(),
+            Value::from(unix_time_ms()),
+        );
+        for (key, value) in fields {
+            map.insert(key.to_owned(), value);
+        }
+        let json_text = json::to_json_pretty(&Value::Object(map))
+            .map_err(|err| eyre!("serialize localnet lifecycle source artifact: {err}"))?;
+        let path = root.join(filename);
+        write_localnet_lifecycle_source_artifact(&path, json_text.as_bytes())?;
+        Ok(())
+    }
+}
+
+fn validate_localnet_lifecycle_source_dir_shape(root: &Path) -> Result<()> {
+    let root_text = root.to_string_lossy();
+    if root_text.is_empty()
+        || root_text.trim() != root_text
+        || root_text.chars().any(char::is_control)
+        || root_text.contains('\\')
+        || root
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(eyre!(
+            "{LOCALNET_LIFECYCLE_SOURCE_DIR_ENV} must be a canonical local source directory"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_localnet_lifecycle_source_dir_ancestors(root: &Path) -> Result<()> {
+    for ancestor in root.ancestors().skip(1) {
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(eyre!(
+                        "{LOCALNET_LIFECYCLE_SOURCE_DIR_ENV} ancestor must not be a symlink"
+                    ));
+                }
+                if !metadata.is_dir() {
+                    return Err(eyre!(
+                        "{LOCALNET_LIFECYCLE_SOURCE_DIR_ENV} ancestor must be a directory"
+                    ));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(eyre!(
+                    "{LOCALNET_LIFECYCLE_SOURCE_DIR_ENV} ancestor metadata could not be read: {error}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn prepare_localnet_lifecycle_source_dir(root: &Path) -> Result<()> {
+    validate_localnet_lifecycle_source_dir_shape(root)?;
+    validate_localnet_lifecycle_source_dir_ancestors(root)?;
+    match fs::symlink_metadata(root) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(eyre!(
+                    "{LOCALNET_LIFECYCLE_SOURCE_DIR_ENV} must not be a symlink"
+                ));
+            }
+            if !metadata.is_dir() {
+                return Err(eyre!(
+                    "{LOCALNET_LIFECYCLE_SOURCE_DIR_ENV} must be a directory"
+                ));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(eyre!(
+                "{LOCALNET_LIFECYCLE_SOURCE_DIR_ENV} metadata could not be read: {error}"
+            ));
+        }
+    }
+    fs::create_dir_all(root)
+        .wrap_err_with(|| format!("create localnet lifecycle source dir {}", root.display()))?;
+    validate_localnet_lifecycle_source_dir_ancestors(root)?;
+    let metadata = fs::symlink_metadata(root).wrap_err_with(|| {
+        format!(
+            "read localnet lifecycle source dir metadata {}",
+            root.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(eyre!(
+            "{LOCALNET_LIFECYCLE_SOURCE_DIR_ENV} must not be a symlink"
+        ));
+    }
+    if !metadata.is_dir() {
+        return Err(eyre!(
+            "{LOCALNET_LIFECYCLE_SOURCE_DIR_ENV} must be a directory"
+        ));
+    }
+    #[cfg(unix)]
+    fs::set_permissions(root, fs::Permissions::from_mode(0o700)).wrap_err_with(|| {
+        format!(
+            "set private localnet lifecycle source dir permissions {}",
+            root.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn write_localnet_lifecycle_source_artifact(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| eyre!("localnet lifecycle source artifact must have a parent directory"))?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| eyre!("localnet lifecycle source artifact filename must be UTF-8"))?;
+    let tmp_path = parent.join(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        unix_time_ms()
+    ));
+    let mut tmp_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp_path)
+        .wrap_err_with(|| {
+            format!(
+                "create temporary localnet lifecycle source {}",
+                tmp_path.display()
+            )
+        })?;
+    #[cfg(unix)]
+    tmp_file
+        .set_permissions(fs::Permissions::from_mode(0o600))
+        .wrap_err_with(|| {
+            format!(
+                "set private temporary localnet lifecycle source permissions {}",
+                tmp_path.display()
+            )
+        })?;
+    tmp_file
+        .write_all(bytes)
+        .wrap_err_with(|| format!("write localnet lifecycle source {}", tmp_path.display()))?;
+    tmp_file
+        .sync_all()
+        .wrap_err_with(|| format!("sync localnet lifecycle source {}", tmp_path.display()))?;
+    drop(tmp_file);
+    if let Err(error) = fs::rename(&tmp_path, path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(error)
+            .wrap_err_with(|| format!("publish localnet lifecycle source {}", path.display()));
+    }
+    let metadata = fs::symlink_metadata(path).wrap_err_with(|| {
+        format!(
+            "read published localnet lifecycle source metadata {}",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(eyre!(
+            "localnet lifecycle source artifact must be a regular file"
+        ));
+    }
+    #[cfg(unix)]
+    {
+        let mode = metadata.permissions().mode() & 0o777;
+        if mode != 0o600 {
+            return Err(eyre!(
+                "localnet lifecycle source artifact permissions must be 0600"
+            ));
+        }
+    }
+    if let Ok(dir) = File::open(parent) {
+        dir.sync_all().wrap_err_with(|| {
+            format!(
+                "sync localnet lifecycle source directory {}",
+                parent.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn localnet_lifecycle_source_artifact_filename(artifact: &str) -> Option<&'static str> {
+    LOCALNET_LIFECYCLE_SOURCE_ARTIFACTS
+        .iter()
+        .find_map(|(candidate, filename)| (*candidate == artifact).then_some(*filename))
+}
+
+fn localnet_lifecycle_source_peer_id(index: usize, peer_id: &str) -> String {
+    format!("peer-{index}@production-localnet:{peer_id}")
+}
+
+fn validate_localnet_lifecycle_release_chain_id(chain_id: &str) -> Result<()> {
+    let lower = chain_id.to_ascii_lowercase();
+    let has_forbidden_marker = [
+        "dev", "test", "sample", "demo", "mock", "zero", "preprod", "uat", "qa",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker));
+    if chain_id.is_empty()
+        || chain_id.trim() != chain_id
+        || chain_id.chars().any(char::is_control)
+        || !lower.contains("localnet")
+        || !(lower.contains("production") || lower.contains("prod"))
+        || has_forbidden_marker
+    {
+        return Err(eyre!(
+            "{LOCALNET_LIFECYCLE_CHAIN_ID_ENV} must be a production localnet chain id"
+        ));
+    }
+    Ok(())
+}
+
+fn localnet_lifecycle_release_chain_id_from_env() -> Result<Option<String>> {
+    if env::var_os(LOCALNET_LIFECYCLE_SOURCE_DIR_ENV).is_none() {
+        return Ok(None);
+    }
+    let chain_id = env::var(LOCALNET_LIFECYCLE_CHAIN_ID_ENV)
+        .unwrap_or_else(|_| LOCALNET_LIFECYCLE_DEFAULT_CHAIN_ID.to_owned());
+    validate_localnet_lifecycle_release_chain_id(&chain_id)?;
+    Ok(Some(chain_id))
+}
+
+fn unix_time_ms() -> u64 {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    u64::try_from(millis).unwrap_or(u64::MAX)
 }
 
 fn marker(byte: u8) -> [u8; 32] {
@@ -712,6 +1129,44 @@ fn submit_transaction_on_any_peer(
     finish_submit_attempts(accepted, fatal_last_err, transient_last_err, context)
 }
 
+fn submit_transaction_expect_replay_rejection(
+    submitters: &[Client],
+    tx: &SignedTransaction,
+    context: &str,
+) -> Result<String> {
+    let mut accepted = false;
+    let mut fatal_last_err = None;
+    let mut transient_last_err = None;
+
+    for attempt in 0..TRANSACTION_SUBMIT_ATTEMPTS {
+        transient_last_err = None;
+
+        for submitter in submitters {
+            match submitter.submit_transaction(tx) {
+                Ok(_) => accepted = true,
+                Err(err) if is_duplicate_tx_error(&err) => return Ok(err.to_string()),
+                Err(err) if is_transient_client_error(&err) => transient_last_err = Some(err),
+                Err(err) => fatal_last_err = Some(err),
+            }
+        }
+
+        if fatal_last_err.is_some() {
+            break;
+        }
+
+        if transient_last_err.is_some() && attempt + 1 < TRANSACTION_SUBMIT_ATTEMPTS {
+            std::thread::sleep(TRANSACTION_SUBMIT_RETRY_DELAY);
+        }
+    }
+
+    if accepted {
+        return Err(eyre!("{context}: replayed transaction was accepted"));
+    }
+    Err(fatal_last_err
+        .or(transient_last_err)
+        .unwrap_or_else(|| eyre!("{context}: replayed transaction did not reach a peer")))
+}
+
 fn accepted_or_expected_rejection(
     submit_result: Result<()>,
     expected_rejection: impl Fn(&str) -> bool,
@@ -745,11 +1200,32 @@ async fn submit_and_wait_non_empty_block(
     instructions: Vec<InstructionBox>,
     non_empty_target: &mut u64,
     context: &str,
-) -> Result<()> {
+) -> Result<String> {
+    let (tx_hash, _tx) = submit_and_wait_non_empty_block_with_tx(
+        network,
+        tx_builder_client,
+        submitters,
+        instructions,
+        non_empty_target,
+        context,
+    )
+    .await?;
+    Ok(tx_hash)
+}
+
+async fn submit_and_wait_non_empty_block_with_tx(
+    network: &sandbox::SerializedNetwork,
+    tx_builder_client: &Client,
+    submitters: &[Client],
+    instructions: Vec<InstructionBox>,
+    non_empty_target: &mut u64,
+    context: &str,
+) -> Result<(String, SignedTransaction)> {
     let tx = tx_builder_client.build_transaction_from_items(
         instructions,
         iroha_data_model::metadata::Metadata::default(),
     );
+    let tx_hash = tx.hash().to_string();
     let wait_timeout = all_peer_wait_timeout(context);
 
     submit_transaction_on_any_peer(submitters, &tx, context)?;
@@ -788,7 +1264,7 @@ async fn submit_and_wait_non_empty_block(
     let readiness_quorum = submitters.len().saturating_sub(1).max(1);
     wait_for_torii_ready_quorum(submitters, readiness_quorum, context).await?;
 
-    Ok(())
+    Ok((tx_hash, tx))
 }
 
 async fn wait_for_non_empty_quorum(
@@ -951,6 +1427,7 @@ async fn start_confidential_localnet(test_name: &str) -> Result<Option<Confident
     const RETRY_DELAY: Duration = Duration::from_millis(500);
 
     for attempt in 1..=START_ATTEMPTS {
+        let release_chain_id = localnet_lifecycle_release_chain_id_from_env()?;
         let builder = NetworkBuilder::new()
             .with_peers(4)
             .with_auto_populated_trusted_peers()
@@ -959,14 +1436,25 @@ async fn start_confidential_localnet(test_name: &str) -> Result<Option<Confident
                 SAMPLE_GENESIS_ACCOUNT_ID.clone(),
             ))
             .with_genesis_instruction(live_halo2_verifying_key_registration())
-            .with_config_layer(|layer| {
-                layer
-                    .write(["confidential", "enabled"], true)
-                    .write(["zk", "halo2", "enabled"], true)
-                    .write(
-                        ["confidential", "verify_timeout_ms"],
-                        PROOF_VERIFY_TIMEOUT_MS,
-                    );
+            .with_config_layer(move |layer| {
+                if let Some(chain_id) = release_chain_id.as_deref() {
+                    layer
+                        .write("chain", chain_id)
+                        .write(["confidential", "enabled"], true)
+                        .write(["zk", "halo2", "enabled"], true)
+                        .write(
+                            ["confidential", "verify_timeout_ms"],
+                            PROOF_VERIFY_TIMEOUT_MS,
+                        );
+                } else {
+                    layer
+                        .write(["confidential", "enabled"], true)
+                        .write(["zk", "halo2", "enabled"], true)
+                        .write(
+                            ["confidential", "verify_timeout_ms"],
+                            PROOF_VERIFY_TIMEOUT_MS,
+                        );
+                }
             });
 
         let Some(network) = (match sandbox::start_network_async_or_skip(builder, test_name).await {
@@ -982,12 +1470,17 @@ async fn start_confidential_localnet(test_name: &str) -> Result<Option<Confident
 
         network.ensure_blocks(1).await?;
 
-        let tx_builder_client = network.client();
+        let chain_id = network.chain_id();
+        let mut tx_builder_client = network.client();
+        tx_builder_client.chain = chain_id.clone();
         let mut peer_clients = network
             .peers()
             .iter()
             .map(NetworkPeer::client)
             .collect::<Vec<_>>();
+        for client in &mut peer_clients {
+            client.chain = chain_id.clone();
+        }
         if peer_clients.is_empty() {
             peer_clients.push(tx_builder_client.clone());
         }
@@ -1692,8 +2185,12 @@ async fn confidential_dual_restart_stress_mid_flow_localnet() -> Result<()> {
         DomainId::try_new("wonderland", "universal").unwrap(),
         "zkrestartstress".parse().unwrap(),
     );
+    let recorder = LocalnetLifecycleArtifactRecorder::from_env(
+        &network,
+        stringify!(confidential_dual_restart_stress_mid_flow_localnet),
+    )?;
 
-    submit_and_wait_non_empty_block(
+    let (smoke_tx_hash, smoke_tx) = submit_and_wait_non_empty_block_with_tx(
         &network,
         &tx_builder_client,
         &peer_clients,
@@ -1720,8 +2217,28 @@ async fn confidential_dual_restart_stress_mid_flow_localnet() -> Result<()> {
         "prepare dual-restart stress flow",
     )
     .await?;
+    recorder.record_tx(
+        "smoke_artifact",
+        "prepare dual-restart stress flow",
+        &smoke_tx_hash,
+        non_empty_target,
+    )?;
+    if recorder.is_enabled() {
+        let replay_rejection = submit_transaction_expect_replay_rejection(
+            &peer_clients,
+            &smoke_tx,
+            "dual-restart stress pre-restart replay rejection",
+        )?;
+        recorder.record_rejection(
+            "replay_rejection_artifact",
+            "dual-restart stress pre-restart replay rejection",
+            &smoke_tx_hash,
+            &replay_rejection,
+            non_empty_target,
+        )?;
+    }
 
-    submit_and_wait_non_empty_block(
+    let shield_tx_hash = submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
@@ -1739,9 +2256,16 @@ async fn confidential_dual_restart_stress_mid_flow_localnet() -> Result<()> {
         "dual-restart stress shield failed",
     )
     .await?;
+    recorder.record_tx(
+        "lifecycle_shield_tx_artifact",
+        "dual-restart stress shield failed",
+        &shield_tx_hash,
+        non_empty_target,
+    )?;
 
+    let mut restart_replay_tx: Option<(String, SignedTransaction)> = None;
     for output_commitment in [132_u8, 133_u8, 134_u8] {
-        submit_and_wait_non_empty_block(
+        let (tx_hash, tx) = submit_and_wait_non_empty_block_with_tx(
             &network,
             &tx_builder_client,
             &peer_clients,
@@ -1759,6 +2283,21 @@ async fn confidential_dual_restart_stress_mid_flow_localnet() -> Result<()> {
             "dual-restart stress first 3-hop transfer failed",
         )
         .await?;
+        let artifact = match output_commitment {
+            132 => "lifecycle_hop_proof_artifact",
+            133 => "lifecycle_recursive_init_artifact",
+            134 => "lifecycle_recursive_init_verify_artifact",
+            _ => unreachable!("fixed first 3-hop output commitment set"),
+        };
+        recorder.record_tx(
+            artifact,
+            "dual-restart stress first 3-hop transfer failed",
+            &tx_hash,
+            non_empty_target,
+        )?;
+        if output_commitment == 134 {
+            restart_replay_tx = Some((tx_hash, tx));
+        }
     }
 
     let (restart_a, restart_b) = select_dual_restart_indices(network.peers().len());
@@ -1769,10 +2308,32 @@ async fn confidential_dual_restart_stress_mid_flow_localnet() -> Result<()> {
         "dual-restart stress first restart",
     )
     .await?;
+    recorder.record_event(
+        "state_recovery_artifact",
+        "dual-restart stress first restart",
+        non_empty_target,
+    )?;
+    if recorder.is_enabled() {
+        let (replayed_tx_hash, replayed_tx) = restart_replay_tx
+            .as_ref()
+            .expect("restart replay transaction should be recorded");
+        let restart_replay_rejection = submit_transaction_expect_replay_rejection(
+            &peer_clients,
+            replayed_tx,
+            "dual-restart stress post-restart replay rejection",
+        )?;
+        recorder.record_rejection(
+            "restart_replay_rejection_artifact",
+            "dual-restart stress post-restart replay rejection",
+            replayed_tx_hash,
+            &restart_replay_rejection,
+            non_empty_target,
+        )?;
+    }
     let stable_submitters = vec![network.client()];
 
     for output_commitment in [135_u8, 136_u8, 137_u8] {
-        submit_and_wait_non_empty_block(
+        let tx_hash = submit_and_wait_non_empty_block(
             &network,
             &tx_builder_client,
             &stable_submitters,
@@ -1790,6 +2351,20 @@ async fn confidential_dual_restart_stress_mid_flow_localnet() -> Result<()> {
             "dual-restart stress second 3-hop transfer failed",
         )
         .await?;
+        let artifact = match output_commitment {
+            135 => Some("lifecycle_recursive_append_artifact"),
+            136 => Some("lifecycle_recursive_append_verify_artifact"),
+            137 => None,
+            _ => unreachable!("fixed second 3-hop output commitment set"),
+        };
+        if let Some(artifact) = artifact {
+            recorder.record_tx(
+                artifact,
+                "dual-restart stress second 3-hop transfer failed",
+                &tx_hash,
+                non_empty_target,
+            )?;
+        }
     }
 
     restart_peer_and_wait_non_empty(
@@ -1800,7 +2375,7 @@ async fn confidential_dual_restart_stress_mid_flow_localnet() -> Result<()> {
     )
     .await?;
 
-    submit_and_wait_non_empty_block(
+    let unshield_tx_hash = submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &stable_submitters,
@@ -1819,8 +2394,14 @@ async fn confidential_dual_restart_stress_mid_flow_localnet() -> Result<()> {
         "dual-restart stress unshield failed",
     )
     .await?;
+    recorder.record_tx(
+        "lifecycle_unshield_proof_artifact",
+        "dual-restart stress unshield failed",
+        &unshield_tx_hash,
+        non_empty_target,
+    )?;
 
-    submit_and_wait_non_empty_block(
+    let redeem_tx_hash = submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &stable_submitters,
@@ -1836,6 +2417,12 @@ async fn confidential_dual_restart_stress_mid_flow_localnet() -> Result<()> {
         "dual-restart stress transfer failed",
     )
     .await?;
+    recorder.record_tx(
+        "lifecycle_redeem_tx_artifact",
+        "dual-restart stress transfer failed",
+        &redeem_tx_hash,
+        non_empty_target,
+    )?;
 
     wait_for_numeric_balance(
         &tx_builder_client,
@@ -4019,6 +4606,217 @@ fn should_retry_submit_after_all_peer_timeout_matches_restart_pressure_contexts(
     assert!(!should_retry_submit_after_all_peer_timeout(
         "plain transfer"
     ));
+}
+
+#[test]
+fn localnet_lifecycle_source_artifact_filenames_are_complete_and_distinct() {
+    let mut filenames = LOCALNET_LIFECYCLE_SOURCE_ARTIFACTS
+        .iter()
+        .map(|(_artifact, filename)| *filename)
+        .collect::<Vec<_>>();
+    filenames.sort_unstable();
+    filenames.dedup();
+
+    assert_eq!(LOCALNET_LIFECYCLE_SOURCE_ARTIFACTS.len(), 12);
+    assert_eq!(filenames.len(), LOCALNET_LIFECYCLE_SOURCE_ARTIFACTS.len());
+    for artifact in [
+        "smoke_artifact",
+        "replay_rejection_artifact",
+        "restart_replay_rejection_artifact",
+        "state_recovery_artifact",
+        "lifecycle_shield_tx_artifact",
+        "lifecycle_hop_proof_artifact",
+        "lifecycle_recursive_init_artifact",
+        "lifecycle_recursive_init_verify_artifact",
+        "lifecycle_recursive_append_artifact",
+        "lifecycle_recursive_append_verify_artifact",
+        "lifecycle_unshield_proof_artifact",
+        "lifecycle_redeem_tx_artifact",
+    ] {
+        assert!(
+            localnet_lifecycle_source_artifact_filename(artifact).is_some(),
+            "missing source artifact filename for {artifact}",
+        );
+    }
+}
+
+#[test]
+fn localnet_lifecycle_release_chain_id_validation_matches_production_gate() {
+    validate_localnet_lifecycle_release_chain_id(LOCALNET_LIFECYCLE_DEFAULT_CHAIN_ID)
+        .expect("default lifecycle chain id should be production localnet");
+
+    for invalid in [
+        "",
+        " kagemusha-production-localnet-v1",
+        "kagemusha-production-mainnet-v1",
+        "kagemusha-localnet-dev",
+        "kagemusha-localnet-test",
+        "kagemusha-localnet-preprod",
+        "kagemusha-localnet-zero",
+        "kagemusha-production-localnet\n",
+    ] {
+        assert!(
+            validate_localnet_lifecycle_release_chain_id(invalid).is_err(),
+            "invalid lifecycle chain id should fail: {invalid:?}",
+        );
+    }
+}
+
+#[test]
+fn localnet_lifecycle_source_peer_id_binds_actual_peer_material() {
+    let peer_id = localnet_lifecycle_source_peer_id(2, "ed0120abcdef");
+
+    assert_eq!(peer_id, "peer-2@production-localnet:ed0120abcdef");
+    assert!(peer_id.contains("production-localnet"));
+    assert!(peer_id.ends_with("ed0120abcdef"));
+}
+
+#[test]
+fn localnet_lifecycle_recorder_writes_norito_json_source_artifact() {
+    let root = unique_temp_dir("kagemusha-localnet-lifecycle-recorder");
+    let recorder = LocalnetLifecycleArtifactRecorder {
+        root: Some(root.clone()),
+        run_id: "production-4-peer-localnet-unit".to_owned(),
+        chain_id: "kagemusha-production-localnet-unit".to_owned(),
+        peer_ids: vec![
+            "peer-0@production-localnet".to_owned(),
+            "peer-1@production-localnet".to_owned(),
+            "peer-2@production-localnet".to_owned(),
+            "peer-3@production-localnet".to_owned(),
+        ],
+    };
+
+    recorder
+        .record_tx("lifecycle_shield_tx_artifact", "unit shield", "abc123", 7)
+        .expect("write source artifact");
+
+    let path = root.join("lifecycle-shield-tx-artifact.json");
+    let raw = fs::read_to_string(&path).expect("read source artifact");
+    let parsed = json::from_json::<Value>(&raw).expect("parse source artifact JSON");
+    let object = parsed.as_object().expect("source artifact object");
+
+    assert_eq!(
+        object.get("schema").and_then(Value::as_str),
+        Some(LOCALNET_LIFECYCLE_SOURCE_SCHEMA),
+    );
+    assert_eq!(
+        object.get("artifact").and_then(Value::as_str),
+        Some("lifecycle_shield_tx_artifact"),
+    );
+    assert_eq!(
+        object.get("tx_hash").and_then(Value::as_str),
+        Some("abc123")
+    );
+    assert_eq!(
+        object.get("non_empty_target").and_then(Value::as_u64),
+        Some(7)
+    );
+    assert_eq!(
+        object
+            .get("peer_ids")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(4),
+    );
+    #[cfg(unix)]
+    {
+        let root_mode = fs::metadata(&root)
+            .expect("read source root metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        let file_mode = fs::metadata(&path)
+            .expect("read source artifact metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(root_mode, 0o700);
+        assert_eq!(file_mode, 0o600);
+    }
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn localnet_lifecycle_recorder_rejects_unsafe_source_dirs_before_write() {
+    let base = unique_temp_dir("kagemusha-localnet-lifecycle-recorder-unsafe");
+    let cases = [
+        base.join("bad\nsource"),
+        base.join("..").join("source"),
+        base.join("bad\\source"),
+    ];
+
+    for root in cases {
+        let recorder = LocalnetLifecycleArtifactRecorder {
+            root: Some(root.clone()),
+            run_id: "production-4-peer-localnet-unit".to_owned(),
+            chain_id: "kagemusha-production-localnet-unit".to_owned(),
+            peer_ids: vec![
+                "peer-0@production-localnet".to_owned(),
+                "peer-1@production-localnet".to_owned(),
+                "peer-2@production-localnet".to_owned(),
+                "peer-3@production-localnet".to_owned(),
+            ],
+        };
+
+        let err = recorder
+            .record_tx("lifecycle_shield_tx_artifact", "unit shield", "abc123", 7)
+            .expect_err("unsafe source root must reject before writing");
+
+        assert!(
+            err.to_string()
+                .contains("must be a canonical local source directory"),
+            "unexpected error for {root:?}: {err}",
+        );
+        assert!(
+            !root.join("lifecycle-shield-tx-artifact.json").exists(),
+            "unsafe source root must not receive an artifact",
+        );
+    }
+
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn localnet_lifecycle_recorder_rejects_symlink_source_dir_before_write() {
+    let base = unique_temp_dir("kagemusha-localnet-lifecycle-recorder-symlink");
+    let real_root = base.join("real");
+    let link_root = base.join("link");
+    fs::create_dir_all(&real_root).expect("create real source root");
+    std::os::unix::fs::symlink(&real_root, &link_root).expect("create source root symlink");
+    let recorder = LocalnetLifecycleArtifactRecorder {
+        root: Some(link_root.clone()),
+        run_id: "production-4-peer-localnet-unit".to_owned(),
+        chain_id: "kagemusha-production-localnet-unit".to_owned(),
+        peer_ids: vec![
+            "peer-0@production-localnet".to_owned(),
+            "peer-1@production-localnet".to_owned(),
+            "peer-2@production-localnet".to_owned(),
+            "peer-3@production-localnet".to_owned(),
+        ],
+    };
+
+    let err = recorder
+        .record_tx("lifecycle_shield_tx_artifact", "unit shield", "abc123", 7)
+        .expect_err("symlink source root must reject before writing");
+
+    assert!(
+        err.to_string().contains("must not be a symlink"),
+        "unexpected symlink source root error: {err}",
+    );
+    assert!(!real_root.join("lifecycle-shield-tx-artifact.json").exists());
+    let _ = fs::remove_dir_all(base);
+}
+
+fn unique_temp_dir(name: &str) -> PathBuf {
+    let millis = unix_time_ms();
+    let base = env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("target")
+        .join("kagemusha-test-tmp");
+    fs::create_dir_all(&base).expect("create local test temp root");
+    base.join(format!("{name}-{}-{millis}", std::process::id()))
 }
 
 #[test]

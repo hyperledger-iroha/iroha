@@ -718,6 +718,52 @@ def test_eth_direct_record_hashes_reject_reused_role_hashes():
         raise AssertionError("ETH deployment hash accepted reused role hashes")
 
 
+def test_eth_source_bridge_config_hash_rejects_network_id_code_hash_reuse():
+    module = load_evidence_module()
+    args = eth_args(module)
+    network_id = module.eth_source_bridge_network_id()
+
+    try:
+        module.eth_source_bridge_config_hash(
+            bridge_address=args.bridge_address,
+            source_bridge_code_hash=network_id,
+            network_id=network_id,
+            source_domain=1,
+            target_domain=0,
+        )
+    except ValueError as exc:
+        assert (
+            "source_bridge_emitter_code_hash must not match source_bridge_network_id"
+            in str(exc)
+        )
+    else:
+        raise AssertionError("ETH config hash accepted network-id/code-hash reuse")
+
+    material_args = eth_args(module)
+    material_args.source_bridge_emitter_code_hash = network_id
+    try:
+        module.eth_source_verifier_material_record_hash(material_args)
+    except ValueError as exc:
+        assert (
+            "source_bridge_emitter_code_hash must not match source_bridge_network_id"
+            in str(exc)
+        )
+    else:
+        raise AssertionError("ETH material hash accepted network-id/code-hash reuse")
+
+    toml_args = eth_args(module)
+    toml_args.source_bridge_emitter_code_hash = network_id
+    try:
+        module.render_toml(toml_args)
+    except ValueError as exc:
+        assert (
+            "source_bridge_emitter_code_hash must not match source_bridge_network_id"
+            in str(exc)
+        )
+    else:
+        raise AssertionError("ETH TOML accepted network-id/code-hash reuse")
+
+
 def test_eth_source_record_hashes_match_rust_vectors():
     module = load_evidence_module()
     args = eth_args(module)

@@ -851,31 +851,32 @@ def _ensure_output_file_target(path: Path, *, display_label: str | None = None) 
             raise AdapterError(f"{label} must not be hard-linked")
 
 
-def _write_text_output(path: Path, text: str) -> None:
-    _reject_output_path_smuggling(path, "output path")
+def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else "output path"
+    _reject_output_path_smuggling(path, label)
     if _path_is_repository_iso_fixture(str(path)):
         raise AdapterError(
-            "output path must not point to checked-in ISO fixture artifacts"
+            f"{label} must not point to checked-in ISO fixture artifacts"
         )
-    _reject_symlinked_existing_ancestors(path.parent)
+    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except FileExistsError as error:
-        raise AdapterError(f"{path.parent} must be a directory") from error
+        raise AdapterError(f"{label} must be a directory") from error
     parent_mode = path.parent.lstat().st_mode
     if stat.S_ISLNK(parent_mode):
-        raise AdapterError(f"{path.parent} must not be a symlink")
+        raise AdapterError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(parent_mode):
-        raise AdapterError(f"{path.parent} must be a directory")
-    _ensure_output_file_target(path)
+        raise AdapterError(f"{label} must be a directory")
+    _ensure_output_file_target(path, display_label=label)
     parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
         parent_fd = os.open(path.parent, parent_flags | nofollow)
     except OSError as error:
         if error.errno == errno.ELOOP:
-            raise AdapterError(f"{path.parent} must not be a symlink") from error
-        raise AdapterError(f"{path.parent} must be a directory") from error
+            raise AdapterError(f"{label} must not be a symlink") from error
+        raise AdapterError(f"{label} must be a directory") from error
 
     fd = -1
     leaf_digest = hashlib.sha256(path.name.encode("utf-8", "surrogatepass")).hexdigest()
@@ -888,15 +889,15 @@ def _write_text_output(path: Path, text: str) -> None:
             tmp_created = True
         except OSError as error:
             if error.errno == errno.ELOOP:
-                raise AdapterError(f"{path} temp file must not be a symlink") from error
+                raise AdapterError(f"{label} temp file must not be a symlink") from error
             raise AdapterError(
-                f"cannot open temporary output for {path}: {error.strerror}"
+                f"cannot open temporary output for {label}: {error.strerror}"
             ) from error
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
-            raise AdapterError(f"{path} temp file must be a regular file")
+            raise AdapterError(f"{label} temp file must be a regular file")
         if opened.st_nlink > 1:
-            raise AdapterError(f"{path} temp file must not be hard-linked")
+            raise AdapterError(f"{label} temp file must not be hard-linked")
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = -1
             handle.write(text)
@@ -1033,7 +1034,7 @@ def verify_message_file(
     _reject_raw_output_path_smuggling(str(xml_path), "message XML path")
     if _path_is_repository_iso_fixture(str(xml_path)):
         raise AdapterError(
-            f"{xml_path} must not point to checked-in ISO XML fixtures"
+            f"{xml_label} must not point to checked-in ISO XML fixtures"
         )
     _validate_path_argument(str(xml_path.name), "message XML filename")
     if xml_path.suffix.lower() != ".xml":
@@ -1215,7 +1216,7 @@ def resolve_message_paths(inbox_dir: Path, message: str | None) -> list[Path]:
     message_path = raw_message if raw_message.is_absolute() else inbox_dir / raw_message
     resolved_parent = message_path.parent.resolve()
     if not resolved_parent.is_relative_to(inbox_root):
-        raise AdapterError(f"--message path {message} must stay under --inbox-dir {inbox_root}")
+        raise AdapterError("--message path must stay under --inbox-dir")
     return [resolved_parent / message_path.name]
 
 
@@ -1714,7 +1715,11 @@ def write_receipt(receipt_dir: Path, message: GatewayMessage, result: SubmitResu
     _ensure_output_directory(receipt_dir, "receipt_dir")
     receipt = receipt_value(message, result, endpoint_url)
     path = receipt_output_path(receipt_dir, message)
-    _write_text_output(path, json.dumps(receipt, indent=2) + "\n")
+    _write_text_output(
+        path,
+        json.dumps(receipt, indent=2) + "\n",
+        display_label="receipt output",
+    )
     return path
 
 

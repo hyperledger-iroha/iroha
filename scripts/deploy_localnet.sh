@@ -348,43 +348,71 @@ pid_matches_localnet_peer() {
     || printf '%s' "$command_line" | grep -F -- "--config=$config_path" >/dev/null
 }
 
-if [[ -d "$OUT_DIR" ]]; then
-  if [[ -f "$OUT_DIR/stop.sh" ]]; then
-    echo "Stopping existing Iroha peers in $OUT_DIR..."
-    (cd "$OUT_DIR" && ./stop.sh 2>/dev/null) || true
-    out_dir_abs="$(cd "$OUT_DIR" 2>/dev/null && pwd || printf '%s' "$OUT_DIR")"
-    for pidfile in "$OUT_DIR"/peer*.pid; do
-      [[ -f "$pidfile" ]] || continue
-      pid="$(cat "$pidfile" 2>/dev/null || true)"
-      [[ -n "$pid" ]] || continue
-      if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
-        echo "Removing malformed pidfile $pidfile (pid=$pid)" >&2
-        rm -f "$pidfile"
-        continue
-      fi
-      if ! kill -0 "$pid" 2>/dev/null; then
-        rm -f "$pidfile"
-        continue
-      fi
-      peer_name="$(basename "$pidfile" .pid)"
-      config_path="$out_dir_abs/${peer_name}.toml"
-      if ! pid_matches_localnet_peer "$pid" "$config_path"; then
-        echo "Leaving $pidfile in place: live pid $pid does not match $config_path" >&2
-        continue
-      fi
-      for _ in {1..20}; do
-        if kill -0 "$pid" 2>/dev/null; then
-          sleep 0.25
-        else
-          break
-        fi
-      done
-      if kill -0 "$pid" 2>/dev/null; then
-        kill -9 "$pid" 2>/dev/null || true
+pid_is_running() {
+  local pid="$1"
+
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  command -v ps >/dev/null 2>&1 || return 0
+  ps -p "$pid" -o pid= >/dev/null 2>&1
+}
+
+stop_existing_localnet() {
+  local out_dir="$1"
+  local out_dir_abs
+  local had_live=0
+  local had_error=0
+  local pidfile pid peer_name config_path
+
+  out_dir_abs="$(cd "$out_dir" 2>/dev/null && pwd || printf '%s' "$out_dir")"
+  for pidfile in "$out_dir"/peer*.pid; do
+    [[ -f "$pidfile" ]] || continue
+    pid="$(cat "$pidfile" 2>/dev/null || true)"
+    if [[ -z "$pid" ]]; then
+      rm -f "$pidfile"
+      continue
+    fi
+    if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
+      echo "Removing malformed pidfile $pidfile (pid=$pid)" >&2
+      rm -f "$pidfile"
+      continue
+    fi
+    if ! pid_is_running "$pid"; then
+      rm -f "$pidfile"
+      continue
+    fi
+    peer_name="$(basename "$pidfile" .pid)"
+    config_path="$out_dir_abs/${peer_name}.toml"
+    if ! pid_matches_localnet_peer "$pid" "$config_path"; then
+      echo "Leaving $pidfile in place: live pid $pid does not match $config_path" >&2
+      had_error=1
+      continue
+    fi
+    kill "$pid" 2>/dev/null || true
+    for _ in {1..20}; do
+      if pid_is_running "$pid"; then
+        sleep 0.25
+      else
+        break
       fi
     done
+    if pid_is_running "$pid"; then
+      echo "Refusing to remove existing out-dir while localnet peer $peer_name pid $pid is still running." >&2
+      had_live=1
+      continue
+    fi
+    rm -f "$pidfile"
+  done
+
+  if [[ "$had_live" -ne 0 || "$had_error" -ne 0 ]]; then
+    return 1
   fi
+}
+
+if [[ -d "$OUT_DIR" ]]; then
   if [[ "$FORCE" == true ]]; then
+    echo "Stopping existing Iroha peers in $OUT_DIR with guarded pid ownership checks..."
+    stop_existing_localnet "$OUT_DIR" \
+      || { echo "Out-dir $OUT_DIR still has live or mismatched pidfiles; not removing it." >&2; exit 1; }
     echo "Removing existing out-dir $OUT_DIR..."
     rm -rf "$OUT_DIR"
   else
@@ -667,27 +695,127 @@ if [[ -n "$LOCALNET_GUEST_STACK_BYTES" || -n "$LOCALNET_GAS_TO_STACK_MULTIPLIER"
   echo "Applying IVM stack overrides in peer configs..."
   for cfg in "$OUT_DIR"/peer*.toml; do
     [[ -f "$cfg" ]] || continue
-    cat >> "$cfg" <<EOF
+    "$PYTHON_BIN" - "$cfg" \
+      "$LOCALNET_GUEST_STACK_BYTES" \
+      "$LOCALNET_GAS_TO_STACK_MULTIPLIER" \
+      "$LOCALNET_MEMORY_BUDGET_PROFILE" \
+      "$LOCALNET_MAX_STACK_BYTES" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
 
-[ivm]
-memory_budget_profile = "$LOCALNET_MEMORY_BUDGET_PROFILE"
+path = Path(sys.argv[1])
+guest_stack_bytes = int(sys.argv[2])
+gas_to_stack_multiplier = int(sys.argv[3])
+profile = sys.argv[4]
+max_stack_bytes = int(sys.argv[5])
+profile_header_key = profile.replace("\\", "\\\\").replace('"', '\\"')
 
-[concurrency]
-guest_stack_bytes = $LOCALNET_GUEST_STACK_BYTES
-gas_to_stack_multiplier = $LOCALNET_GAS_TO_STACK_MULTIPLIER
+target_sections = {
+    "[ivm]": {
+        "memory_budget_profile": json.dumps(profile),
+    },
+    "[concurrency]": {
+        "guest_stack_bytes": str(guest_stack_bytes),
+        "gas_to_stack_multiplier": str(gas_to_stack_multiplier),
+    },
+    "[compute]": {
+        "default_resource_profile": json.dumps(profile),
+    },
+    f'[compute.resource_profiles."{profile_header_key}"]': {
+        "max_cycles": "10000000",
+        "max_memory_bytes": "268435456",
+        "max_stack_bytes": str(max_stack_bytes),
+        "max_io_bytes": "25165824",
+        "max_egress_bytes": "12582912",
+        "allow_gpu_hints": "true",
+        "allow_wasi": "true",
+    },
+}
 
-[compute]
-default_resource_profile = "$LOCALNET_MEMORY_BUDGET_PROFILE"
+key_pattern = re.compile(r"^\s*([A-Za-z0-9_.-]+)\s*=")
+header_pattern = re.compile(r"^\s*\[[^\]]+\]\s*$|^\s*\[\[[^\]]+\]\]\s*$")
 
-[compute.resource_profiles."$LOCALNET_MEMORY_BUDGET_PROFILE"]
-max_cycles = 10000000
-max_memory_bytes = 268435456
-max_stack_bytes = $LOCALNET_MAX_STACK_BYTES
-max_io_bytes = 25165824
-max_egress_bytes = 12582912
-allow_gpu_hints = true
-allow_wasi = true
-EOF
+
+def split_sections(lines):
+    chunks = []
+    current_header = None
+    current = []
+    for line in lines:
+        if header_pattern.match(line):
+            if current or current_header is not None:
+                chunks.append((current_header, current))
+            current_header = line.strip()
+            current = [line]
+        else:
+            current.append(line)
+    if current or current_header is not None:
+        chunks.append((current_header, current))
+    return chunks
+
+
+lines = path.read_text().splitlines()
+chunks = split_sections(lines)
+chunks_by_header = {}
+for header, chunk in chunks:
+    chunks_by_header.setdefault(header, []).append(chunk)
+
+emitted_targets = set()
+result = []
+
+
+def append_blank_if_needed():
+    if result and result[-1] != "":
+        result.append("")
+
+
+def merged_target_section(header):
+    overrides = target_sections[header]
+    preserved = []
+    seen_preserved = set()
+    for chunk in chunks_by_header.get(header, []):
+        for line in chunk[1:]:
+            match = key_pattern.match(line)
+            if match and match.group(1) in overrides:
+                continue
+            identity = line.strip()
+            if identity and identity in seen_preserved:
+                continue
+            if identity:
+                seen_preserved.add(identity)
+            preserved.append(line)
+
+    merged = [header]
+    merged.extend(preserved)
+    if preserved and preserved[-1] != "":
+        merged.append("")
+    for key, value in overrides.items():
+        merged.append(f"{key} = {value}")
+    return merged
+
+
+for header, chunk in chunks:
+    if header in target_sections:
+        if header in emitted_targets:
+            continue
+        append_blank_if_needed()
+        result.extend(merged_target_section(header))
+        emitted_targets.add(header)
+        continue
+    if result and chunk and chunk[0].strip().startswith("[") and result[-1] != "":
+        result.append("")
+    result.extend(chunk)
+
+for header in target_sections:
+    if header in emitted_targets:
+        continue
+    append_blank_if_needed()
+    result.extend(merged_target_section(header))
+    emitted_targets.add(header)
+
+path.write_text("\n".join(result).rstrip() + "\n")
+PY
   done
 fi
 

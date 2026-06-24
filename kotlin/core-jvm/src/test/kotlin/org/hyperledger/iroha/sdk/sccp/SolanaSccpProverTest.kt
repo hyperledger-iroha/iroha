@@ -3615,6 +3615,15 @@ class SolanaSccpProverTest {
         }
         assertTrue(error.message?.contains("must both be zero") == true)
 
+        // Receipt-only deployment bindings must fail, not only deployment-only bindings.
+        val receiptOnlyBinding = assertFailsWith<IllegalArgumentException> {
+            SccpSolana.normalizeSourceAdapterDeploymentBinding(
+                sourceAdapterDeploymentHash = SccpSolana.ZERO_HASH_V1,
+                sourceAdapterDeploymentReceiptHash = receiptHash,
+            )
+        }
+        assertTrue(receiptOnlyBinding.message?.contains("must both be zero") == true)
+
         val reusedRoleHash = assertFailsWith<IllegalArgumentException> {
             SccpSolana.normalizeSourceAdapterDeploymentBinding(
                 sourceAdapterDeploymentHash = deploymentHash,

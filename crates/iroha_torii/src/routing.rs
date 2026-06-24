@@ -15751,6 +15751,84 @@ mod zk_roots_selector_tests {
         assert_eq!(fee_sponsor.as_deref(), Some("sponsor@cbsi"));
     }
 
+    #[test]
+    fn multisig_propose_metadata_with_default_gas_asset_forwards_validation_fee_policy_metadata() {
+        let (mut state, definition_id) = selector_state();
+        let mut pipeline = state.pipeline_snapshot();
+        pipeline.gas.accepted_assets = vec!["usd#main".to_owned()];
+        std::sync::Arc::get_mut(&mut state)
+            .expect("state should have no other refs")
+            .set_pipeline(pipeline);
+        let policy_hash = "ABCDEFabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000";
+        let validation_fee_policy_metadata = normalize_validation_fee_policy_metadata(
+            Some("7".to_owned()),
+            Some(policy_hash.to_owned()),
+        )
+        .expect("valid policy metadata");
+
+        let metadata = build_multisig_propose_metadata_with_default_gas_asset(
+            state.as_ref(),
+            Some("sponsor@cbsi"),
+            Some("memo"),
+            validation_fee_policy_metadata
+                .as_ref()
+                .map(|(version, hash)| (*version, hash.as_str())),
+        );
+        let gas_asset_id = metadata
+            .get("gas_asset_id")
+            .cloned()
+            .and_then(|value| value.try_into_any_norito::<String>().ok());
+        let policy_version = metadata
+            .get(iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_VERSION_METADATA_KEY)
+            .cloned()
+            .and_then(|value| value.try_into_any_norito::<u64>().ok());
+        let policy_hash = metadata
+            .get(iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_HASH_METADATA_KEY)
+            .cloned()
+            .and_then(|value| value.try_into_any_norito::<String>().ok());
+
+        assert_eq!(gas_asset_id, Some(definition_id.to_string()));
+        assert_eq!(policy_version, Some(7));
+        assert_eq!(
+            policy_hash.as_deref(),
+            Some("abcdefabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000")
+        );
+    }
+
+    #[test]
+    fn normalize_validation_fee_policy_metadata_requires_complete_well_formed_pair() {
+        assert!(
+            normalize_validation_fee_policy_metadata(None, None)
+                .expect("absent policy metadata is allowed")
+                .is_none()
+        );
+        assert_eq!(
+            normalize_validation_fee_policy_metadata(
+                Some(" 7 ".to_owned()),
+                Some(
+                    "ABCDEFabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000"
+                        .to_owned(),
+                ),
+            )
+            .expect("valid metadata")
+            .as_ref()
+            .map(|(version, hash)| (*version, hash.as_str())),
+            Some((
+                7,
+                "abcdefabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000",
+            )),
+        );
+        assert!(normalize_validation_fee_policy_metadata(Some("7".to_owned()), None).is_err());
+        assert!(
+            normalize_validation_fee_policy_metadata(Some("x".to_owned()), Some("0".repeat(64)))
+                .is_err()
+        );
+        assert!(
+            normalize_validation_fee_policy_metadata(Some("7".to_owned()), Some("0".repeat(63)))
+                .is_err()
+        );
+    }
+
     #[tokio::test]
     async fn metadata_with_default_gas_asset_stays_empty_when_unconfigured() {
         let (state, _) = selector_state();
@@ -21998,6 +22076,38 @@ fn normalize_transaction_memo(memo: Option<String>) -> Option<String> {
 }
 
 #[cfg(feature = "app_api")]
+fn normalize_validation_fee_policy_metadata(
+    version: Option<String>,
+    hash: Option<String>,
+) -> Result<Option<(u64, String)>> {
+    let version = version
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let hash = hash
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    match (version, hash) {
+        (None, None) => Ok(None),
+        (Some(_), None) | (None, Some(_)) => Err(conversion_error(
+            "validation fee policy metadata requires both version and hash".to_owned(),
+        )),
+        (Some(version), Some(hash)) => {
+            let version = version.parse::<u64>().map_err(|_| {
+                conversion_error(
+                    "validation_fee_policy_version must be an unsigned integer".to_owned(),
+                )
+            })?;
+            if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(conversion_error(
+                    "validation_fee_policy_hash must be a 64-character hex string".to_owned(),
+                ));
+            }
+            Ok(Some((version, hash.to_ascii_lowercase())))
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn build_fee_sponsor_metadata(fee_sponsor: Option<&str>) -> Metadata {
     let mut metadata = Metadata::default();
     if let Some(fee_sponsor) = fee_sponsor {
@@ -22035,11 +22145,24 @@ fn build_multisig_propose_metadata_with_default_gas_asset(
     state: &CoreState,
     fee_sponsor: Option<&str>,
     memo: Option<&str>,
+    validation_fee_policy_metadata: Option<(u64, &str)>,
 ) -> Metadata {
     let mut metadata = build_fee_sponsor_metadata_with_default_gas_asset(state, fee_sponsor);
     if let Some(memo) = memo {
         let memo_key = Name::from_str("memo").expect("static metadata key `memo`");
         metadata.insert(memo_key, IrohaJson::new(memo.to_owned()));
+    }
+    if let Some((policy_version, policy_hash)) = validation_fee_policy_metadata {
+        let version_key = Name::from_str(
+            iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
+        )
+        .expect("static metadata key `validation_fee_policy_version`");
+        metadata.insert(version_key, IrohaJson::new(policy_version));
+        let hash_key = Name::from_str(
+            iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
+        )
+        .expect("static metadata key `validation_fee_policy_hash`");
+        metadata.insert(hash_key, IrohaJson::new(policy_hash.to_owned()));
     }
     metadata
 }
@@ -27136,6 +27259,8 @@ seiyaku BlobPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
                 memo: None,
+                validation_fee_policy_version: None,
+                validation_fee_policy_hash: None,
                 instructions: vec![instruction],
             }),
         )
@@ -27181,6 +27306,8 @@ seiyaku BlobPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
                 memo: None,
+                validation_fee_policy_version: None,
+                validation_fee_policy_hash: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27202,6 +27329,8 @@ seiyaku BlobPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
                 memo: None,
+                validation_fee_policy_version: None,
+                validation_fee_policy_hash: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27223,6 +27352,8 @@ seiyaku BlobPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
                 memo: None,
+                validation_fee_policy_version: None,
+                validation_fee_policy_hash: None,
                 instructions: vec![instruction],
             }),
         )
@@ -27254,6 +27385,8 @@ seiyaku BlobPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
                 memo: None,
+                validation_fee_policy_version: None,
+                validation_fee_policy_hash: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27284,6 +27417,8 @@ seiyaku BlobPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
                 memo: None,
+                validation_fee_policy_version: None,
+                validation_fee_policy_hash: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27310,6 +27445,8 @@ seiyaku BlobPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
                 memo: None,
+                validation_fee_policy_version: None,
+                validation_fee_policy_hash: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27332,6 +27469,8 @@ seiyaku BlobPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
                 memo: None,
+                validation_fee_policy_version: None,
+                validation_fee_policy_hash: None,
                 instructions: vec![instruction],
             }),
         )
@@ -27379,7 +27518,12 @@ seiyaku BlobPayloadNormalizeTest {
             state.as_ref(),
             &signer_account_id,
             creation_time_ms,
-            build_multisig_propose_metadata_with_default_gas_asset(state.as_ref(), None, None),
+            build_multisig_propose_metadata_with_default_gas_asset(
+                state.as_ref(),
+                None,
+                None,
+                None,
+            ),
             dm::Executable::Instructions(ConstVec::from(inner_instructions.clone())),
             ENDPOINT_MULTISIG_PROPOSE,
         )
@@ -27408,6 +27552,7 @@ seiyaku BlobPayloadNormalizeTest {
                     state.as_ref(),
                     None,
                     None,
+                    None,
                 ))
                 .with_instructions(transaction_instructions),
             signer_keypair.private_key(),
@@ -27433,6 +27578,8 @@ seiyaku BlobPayloadNormalizeTest {
                 creation_time_ms: Some(creation_time_ms),
                 fee_sponsor: None,
                 memo: None,
+                validation_fee_policy_version: None,
+                validation_fee_policy_hash: None,
                 instructions: inner_instructions,
             }),
         )
@@ -27533,6 +27680,8 @@ seiyaku BlobPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
                 memo: None,
+                validation_fee_policy_version: None,
+                validation_fee_policy_hash: None,
                 instructions: vec![instruction],
             }),
         )
@@ -27564,6 +27713,8 @@ seiyaku BlobPayloadNormalizeTest {
             creation_time_ms: Some(1_700_000_000_345),
             fee_sponsor: None,
             memo: None,
+            validation_fee_policy_version: None,
+            validation_fee_policy_hash: None,
             instructions: vec![instruction.clone()],
         };
 
@@ -27699,6 +27850,8 @@ seiyaku BlobPayloadNormalizeTest {
             creation_time_ms: Some(1_700_000_000_345),
             fee_sponsor: None,
             memo: None,
+            validation_fee_policy_version: None,
+            validation_fee_policy_hash: None,
             instructions: vec![instruction],
         };
         let raw = norito::json::to_string(&request).expect("serialize multisig propose dto");
@@ -28382,10 +28535,16 @@ pub async fn handle_post_multisig_propose(
         creation_time_ms,
         fee_sponsor,
         memo,
+        validation_fee_policy_version,
+        validation_fee_policy_hash,
         instructions,
     } = req;
     let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
     let memo = normalize_transaction_memo(memo);
+    let validation_fee_policy_metadata = normalize_validation_fee_policy_metadata(
+        validation_fee_policy_version,
+        validation_fee_policy_hash,
+    )?;
     let (multisig_account_id, spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
 
@@ -28419,6 +28578,9 @@ pub async fn handle_post_multisig_propose(
         state.as_ref(),
         fee_sponsor.as_deref(),
         memo.as_deref(),
+        validation_fee_policy_metadata
+            .as_ref()
+            .map(|(version, hash)| (*version, hash.as_str())),
     );
     let builder = builder
         .with_metadata(tx_metadata.clone())
@@ -30635,7 +30797,25 @@ const CONTRACT_BUNDLE_RECEIPTS_DIR: &str = "contract_deploy_bundles";
 #[cfg(feature = "app_api")]
 const CONTRACT_BUNDLE_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
 #[cfg(feature = "app_api")]
+const CONTRACT_BUNDLE_DEPLOY_WAIT_TIMEOUT: Duration = Duration::from_secs(600);
+#[cfg(all(test, feature = "app_api"))]
+static CONTRACT_BUNDLE_DEPLOY_WAIT_TIMEOUT_OVERRIDE_MS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(u64::MAX);
+#[cfg(feature = "app_api")]
 const CONTRACT_BUNDLE_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+#[cfg(feature = "app_api")]
+fn contract_bundle_deploy_wait_timeout() -> Duration {
+    #[cfg(test)]
+    {
+        let override_ms = CONTRACT_BUNDLE_DEPLOY_WAIT_TIMEOUT_OVERRIDE_MS
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if override_ms != u64::MAX {
+            return Duration::from_millis(override_ms);
+        }
+    }
+    CONTRACT_BUNDLE_DEPLOY_WAIT_TIMEOUT
+}
 
 #[cfg(feature = "app_api")]
 fn contract_bundle_receipt_root() -> std::path::PathBuf {
@@ -30936,7 +31116,23 @@ async fn wait_for_contract_alias_target(
     contract_alias: &iroha_data_model::smart_contract::ContractAlias,
     expected_address: &iroha_data_model::smart_contract::ContractAddress,
 ) -> Result<()> {
-    let deadline = tokio::time::Instant::now() + CONTRACT_BUNDLE_WAIT_TIMEOUT;
+    wait_for_contract_alias_target_with_timeout(
+        state,
+        contract_alias,
+        expected_address,
+        CONTRACT_BUNDLE_WAIT_TIMEOUT,
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+async fn wait_for_contract_alias_target_with_timeout(
+    state: Arc<CoreState>,
+    contract_alias: &iroha_data_model::smart_contract::ContractAlias,
+    expected_address: &iroha_data_model::smart_contract::ContractAddress,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let (bound, active) =
             contract_alias_activation_state(state.as_ref(), contract_alias, expected_address);
@@ -31567,6 +31763,12 @@ pub struct MultisigProposeDto {
     /// Optional user-facing transfer memo forwarded to transaction metadata.
     #[norito(default)]
     pub memo: Option<String>,
+    /// Optional validation-fee policy version forwarded to transaction metadata.
+    #[norito(default)]
+    pub validation_fee_policy_version: Option<String>,
+    /// Optional validation-fee policy hash forwarded to transaction metadata.
+    #[norito(default)]
+    pub validation_fee_policy_hash: Option<String>,
     /// Instruction batch that will be wrapped inside `MultisigPropose`.
     pub instructions: Vec<iroha_data_model::isi::InstructionBox>,
 }
@@ -33602,7 +33804,6 @@ async fn execute_contract_bundle_request(
         .collect::<BTreeMap<_, _>>();
 
     if !bundle_stage_completed(&receipt, "deploy") {
-        let requires_active_contracts = !req.init_calls.is_empty() || !req.assertions.is_empty();
         for index in 0..receipt.contracts.len() {
             let contract_name = receipt.contracts[index].name.clone();
             let contract_alias = receipt.contracts[index].contract_alias.clone();
@@ -33662,25 +33863,30 @@ async fn execute_contract_bundle_request(
             receipt.contracts[index] = response;
             persist_contract_bundle_receipt(&receipt)?;
 
-            if requires_active_contracts {
-                if let Err(err) = wait_for_contract_alias_target(
-                    state.clone(),
-                    &response_contract_alias,
-                    &response_contract_address,
-                )
-                .await
-                {
-                    mark_bundle_failure(
-                        &mut receipt,
-                        format!("activate contract `{contract_name}`: {err}"),
-                    );
-                    persist_contract_bundle_receipt(&receipt)?;
-                    return Err(err);
-                }
-
-                receipt.contracts[index].status = "deployed".to_owned();
+            let deploy_wait_timeout = contract_bundle_deploy_wait_timeout();
+            if deploy_wait_timeout.is_zero() {
                 persist_contract_bundle_receipt(&receipt)?;
+                return Ok(receipt);
             }
+
+            if let Err(err) = wait_for_contract_alias_target_with_timeout(
+                state.clone(),
+                &response_contract_alias,
+                &response_contract_address,
+                deploy_wait_timeout,
+            )
+            .await
+            {
+                mark_bundle_failure(
+                    &mut receipt,
+                    format!("activate contract `{contract_name}`: {err}"),
+                );
+                persist_contract_bundle_receipt(&receipt)?;
+                return Err(err);
+            }
+
+            receipt.contracts[index].status = "deployed".to_owned();
+            persist_contract_bundle_receipt(&receipt)?;
         }
 
         record_bundle_stage(&mut receipt, "deploy");
@@ -34014,6 +34220,25 @@ mod contract_bundle_tests {
     use nonzero_ext::nonzero;
     use tempfile::tempdir;
 
+    struct ContractBundleDeployWaitGuard {
+        previous_ms: u64,
+    }
+
+    impl ContractBundleDeployWaitGuard {
+        fn disable() -> Self {
+            let previous_ms = CONTRACT_BUNDLE_DEPLOY_WAIT_TIMEOUT_OVERRIDE_MS
+                .swap(0, std::sync::atomic::Ordering::SeqCst);
+            Self { previous_ms }
+        }
+    }
+
+    impl Drop for ContractBundleDeployWaitGuard {
+        fn drop(&mut self) {
+            CONTRACT_BUNDLE_DEPLOY_WAIT_TIMEOUT_OVERRIDE_MS
+                .store(self.previous_ms, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
     fn sample_authority() -> AccountId {
         AccountId::new(
             KeyPair::try_from_seed(vec![7u8; 32], Algorithm::Ed25519)
@@ -34315,6 +34540,7 @@ mod contract_bundle_tests {
     async fn execute_contract_bundle_resume_redeploys_when_completed_stage_is_stale() {
         let dir = tempdir().expect("tempdir");
         let _guard = OverrideGuard::new(dir.path());
+        let _deploy_wait = ContractBundleDeployWaitGuard::disable();
         let creds = crate::test_utils::random_authority();
         let (state, kura, queue, chain_id) = contract_test_state(&creds.account);
         let request = sample_bundle_request(creds.account.clone(), creds.private_key.clone());
@@ -34347,10 +34573,7 @@ mod contract_bundle_tests {
 
         assert!(resumed.ok);
         assert!(resumed.failure_point.is_none());
-        assert_eq!(
-            resumed.completed_stages,
-            vec!["plan".to_owned(), "deploy".to_owned()]
-        );
+        assert_eq!(resumed.completed_stages, vec!["plan".to_owned()]);
         assert_eq!(resumed.contracts[0].status, "submitted");
         assert_ne!(resumed.contracts[0].tx_hash_hex, Some("11".repeat(32)));
     }
@@ -61145,6 +61368,658 @@ mod transaction_ingress_overload_tests {
         );
         assert_eq!(backpressure.queued(), 2);
         assert_eq!(backpressure.capacity().get(), 32);
+    }
+}
+
+#[cfg(test)]
+mod validation_fee_torii_ingress_tests {
+    use std::{
+        num::{NonZeroU64, NonZeroUsize},
+        sync::Arc,
+        time::Duration,
+    };
+
+    use iroha_core::{
+        block::{BlockBuilder, ValidBlock},
+        kura::Kura,
+        query::store::LiveQueryStore,
+        queue::{Queue, TransactionGuard},
+        smartcontracts::Execute,
+        smartcontracts::ivm::cache::IvmCache,
+        state::{State, World},
+    };
+    use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
+    use iroha_data_model::{
+        account::AccountId,
+        asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
+        block::BlockHeader,
+        domain::DomainId,
+        isi::{SetParameter, Transfer},
+        metadata::Metadata,
+        parameter::Parameter,
+        prelude::*,
+        transaction::SignedTransaction,
+        validation_fee::{
+            SignedValidationFeePolicyV1, VALIDATION_FEE_INITIAL_MINOR_UNITS,
+            VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
+            VALIDATION_FEE_POLICY_SCHEMA_VERSION, VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
+            VALIDATION_FEE_SBD_SCALE, ValidationFeeChargingMode, ValidationFeeGovernanceKeyV1,
+            ValidationFeeGovernanceKeysetV1, ValidationFeePolicyRegistryEntryV1,
+            ValidationFeePolicyRegistryV1, ValidationFeePolicySignatureV1, ValidationFeePolicyV1,
+        },
+    };
+    use iroha_primitives::{json::Json, numeric::Numeric};
+
+    use super::*;
+
+    const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_SBD_SCALE;
+    const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = VALIDATION_FEE_INITIAL_MINOR_UNITS;
+
+    fn fixture_key_pair(seed: u8, algorithm: Algorithm, context: &'static str) -> KeyPair {
+        checked_routing_fixture_keypair(seed, algorithm, context)
+    }
+
+    fn ed25519_key_pair(seed: u8, context: &'static str) -> KeyPair {
+        fixture_key_pair(seed, Algorithm::Ed25519, context)
+    }
+
+    fn block_header(height: u64, timestamp_ms: u64) -> BlockHeader {
+        BlockHeader::new(
+            NonZeroU64::new(height).expect("height"),
+            None,
+            None,
+            None,
+            timestamp_ms,
+            0,
+        )
+    }
+
+    fn account(seed: u8, context: &'static str) -> (AccountId, KeyPair) {
+        let key_pair = ed25519_key_pair(seed, context);
+        (AccountId::new(key_pair.public_key().clone()), key_pair)
+    }
+
+    fn fee_asset_definition_id() -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("fees", "paynet").expect("domain id"),
+            "fee_token".parse().expect("asset name"),
+        )
+    }
+
+    fn test_world(
+        user: &AccountId,
+        recipient: &AccountId,
+        treasury: &AccountId,
+        fee_asset: &AssetDefinitionId,
+    ) -> World {
+        let domain_id = DomainId::try_new("fees", "paynet").expect("domain id");
+        let domain = Domain::new(domain_id).build(user);
+        let asset_definition = AssetDefinition::numeric(fee_asset.clone()).build(user);
+        let user_asset = Asset::new(
+            AssetId::new(fee_asset.clone(), user.clone()),
+            Numeric::new(100, 0),
+        );
+        World::with_assets(
+            [domain],
+            [
+                Account::new(user.clone()).build(user),
+                Account::new(recipient.clone()).build(user),
+                Account::new(treasury.clone()).build(user),
+            ],
+            [asset_definition],
+            [user_asset],
+            [],
+        )
+    }
+
+    fn test_state() -> (
+        Arc<State>,
+        AccountId,
+        KeyPair,
+        AccountId,
+        AccountId,
+        AssetDefinitionId,
+    ) {
+        let (user, user_key_pair) = account(1, "derive validation-fee Torii user key");
+        let (recipient, _) = account(2, "derive validation-fee Torii recipient key");
+        let (treasury, _) = account(3, "derive validation-fee Torii treasury key");
+        let fee_asset = fee_asset_definition_id();
+        let state = State::new_for_testing(
+            test_world(&user, &recipient, &treasury, &fee_asset),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        (
+            Arc::new(state),
+            user,
+            user_key_pair,
+            recipient,
+            treasury,
+            fee_asset,
+        )
+    }
+
+    fn test_app_state() -> (
+        crate::SharedAppState,
+        AccountId,
+        KeyPair,
+        AccountId,
+        AccountId,
+        AssetDefinitionId,
+    ) {
+        let (user, user_key_pair) = account(1, "derive validation-fee Torii user key");
+        let (recipient, _) = account(2, "derive validation-fee Torii recipient key");
+        let (treasury, _) = account(3, "derive validation-fee Torii treasury key");
+        let fee_asset = fee_asset_definition_id();
+        let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(test_world(
+            &user, &recipient, &treasury, &fee_asset,
+        ));
+        (app, user, user_key_pair, recipient, treasury, fee_asset)
+    }
+
+    fn queue() -> Arc<Queue> {
+        let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
+        Arc::new(Queue::from_config(
+            iroha_config::parameters::actual::Queue {
+                capacity: NonZeroUsize::new(32).expect("queue capacity non-zero"),
+                capacity_per_user: NonZeroUsize::new(32).expect("queue per-user capacity non-zero"),
+                transaction_time_to_live: Duration::from_secs(60),
+                ..Default::default()
+            },
+            events,
+        ))
+    }
+
+    fn commit_empty_genesis_like_block(state: &Arc<State>) -> [u8; 32] {
+        let block_signer = fixture_key_pair(
+            240,
+            Algorithm::BlsNormal,
+            "derive validation-fee Torii genesis block signer",
+        );
+        let new_block = BlockBuilder::new(Vec::new())
+            .chain(0, None)
+            .sign(block_signer.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(new_block.header());
+        let valid_block =
+            ValidBlock::validate_unchecked(new_block.into(), &mut state_block).unpack(|_| {});
+        let committed_block = valid_block.commit_unchecked().unpack(|_| {});
+        let genesis_hash = committed_block.as_ref().hash();
+        let _events = state_block.apply_without_execution(&committed_block, Vec::new());
+        state_block.commit().expect("commit initial block hash");
+        *genesis_hash.as_ref()
+    }
+
+    fn validation_fee_policy(
+        state: &Arc<State>,
+        fee_asset: AssetDefinitionId,
+        treasury: AccountId,
+        genesis_hash: [u8; 32],
+    ) -> ValidationFeePolicyV1 {
+        ValidationFeePolicyV1 {
+            schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+            network_id: state.chain_id.to_string(),
+            genesis_hash,
+            policy_version: 1,
+            previous_policy_hash: None,
+            fee_asset_definition_id: fee_asset,
+            fee_asset_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
+            fee_minor_units: TEST_VALIDATION_FEE_MINOR_UNITS,
+            treasury_account_id: treasury,
+            charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
+            effective_from_height: 3,
+            expires_after_height: Some(100),
+            governance_keyset_id: "validation-fee-governance-v1".to_string(),
+            exemption_classes: Vec::new(),
+        }
+    }
+
+    fn signed_policy(
+        policy: ValidationFeePolicyV1,
+        key_pairs: &[&KeyPair],
+    ) -> SignedValidationFeePolicyV1 {
+        SignedValidationFeePolicyV1 {
+            signatures: key_pairs
+                .iter()
+                .map(|key_pair| ValidationFeePolicySignatureV1 {
+                    public_key: key_pair.public_key().clone(),
+                    signature: SignatureOf::try_new(
+                        key_pair.private_key(),
+                        &policy.signing_payload(),
+                    )
+                    .expect("policy signature"),
+                })
+                .collect(),
+            policy,
+        }
+    }
+
+    fn policy_registry(policy: &ValidationFeePolicyV1) -> ValidationFeePolicyRegistryV1 {
+        let entry = ValidationFeePolicyRegistryEntryV1::from_policy(policy)
+            .expect("validation-fee registry entry");
+        ValidationFeePolicyRegistryV1 {
+            active_policy_hash: entry.policy_hash,
+            active_policy_version: entry.policy_version,
+            registered_policies: vec![entry],
+        }
+    }
+
+    fn install_validation_fee_policy(
+        state: &Arc<State>,
+        authority: &AccountId,
+        policy: ValidationFeePolicyV1,
+        key_pairs: &[&KeyPair],
+    ) {
+        let keyset = ValidationFeeGovernanceKeysetV1 {
+            keyset_id: policy.governance_keyset_id.clone(),
+            threshold: u16::try_from(key_pairs.len()).expect("threshold fits"),
+            keys: key_pairs
+                .iter()
+                .map(|key_pair| ValidationFeeGovernanceKeyV1 {
+                    public_key: key_pair.public_key().clone(),
+                    weight: 1,
+                })
+                .collect(),
+        };
+        let signed = signed_policy(policy.clone(), key_pairs);
+        let registry = policy_registry(&policy);
+        let mut block = state.block(block_header(2, 1_700_000_001_000));
+        let mut stx = block.transaction();
+        for custom in [
+            keyset.into_custom_parameter(),
+            registry.into_custom_parameter(),
+            signed.into_custom_parameter(),
+        ] {
+            SetParameter::new(Parameter::Custom(custom))
+                .execute(authority, &mut stx)
+                .expect("install validation-fee custom parameter");
+        }
+        stx.apply();
+        block.commit().expect("commit validation-fee policy");
+    }
+
+    fn metadata_for_policy(
+        policy: &ValidationFeePolicyV1,
+        fee_instruction_index: usize,
+    ) -> Metadata {
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            VALIDATION_FEE_POLICY_VERSION_METADATA_KEY
+                .parse()
+                .expect("metadata key"),
+            Json::new(policy.policy_version),
+        );
+        metadata.insert(
+            VALIDATION_FEE_POLICY_HASH_METADATA_KEY
+                .parse()
+                .expect("metadata key"),
+            Json::new(hex::encode(policy.policy_hash().expect("policy hash"))),
+        );
+        metadata.insert(
+            VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY
+                .parse()
+                .expect("metadata key"),
+            Json::new(u64::try_from(fee_instruction_index).expect("instruction index fits")),
+        );
+        metadata
+    }
+
+    fn signed_transfer(
+        state: &Arc<State>,
+        user: &AccountId,
+        user_key_pair: &KeyPair,
+        recipient: &AccountId,
+        fee_asset: &AssetDefinitionId,
+        policy: &ValidationFeePolicyV1,
+        include_fee: bool,
+    ) -> SignedTransaction {
+        let principal = Transfer::asset_numeric(
+            AssetId::new(fee_asset.clone(), user.clone()),
+            Numeric::new(1, 0),
+            recipient.clone(),
+        );
+        let mut instructions: Vec<InstructionBox> = vec![principal.into()];
+        if include_fee {
+            instructions.push(
+                Transfer::asset_numeric(
+                    AssetId::new(fee_asset.clone(), user.clone()),
+                    policy.fee_amount_numeric(),
+                    policy.treasury_account_id.clone(),
+                )
+                .into(),
+            );
+        }
+        let metadata = if include_fee {
+            metadata_for_policy(policy, 1)
+        } else {
+            Metadata::default()
+        };
+        TransactionBuilder::new(state.chain_id.clone(), user.clone())
+            .with_instructions(instructions)
+            .with_metadata(metadata)
+            .sign(user_key_pair.private_key())
+    }
+
+    async fn submit_via_public_transaction_handler(
+        app: crate::SharedAppState,
+        transaction: SignedTransaction,
+    ) -> axum::http::StatusCode {
+        use axum::{extract::State as AxumState, response::IntoResponse};
+
+        crate::handler_post_transaction(
+            AxumState(app),
+            axum::http::HeaderMap::new(),
+            None,
+            crate::utils::extractors::JsonOrNoritoVersioned(transaction),
+        )
+        .await
+        .expect("public transaction handler should accept a statelessly valid transaction")
+        .into_response()
+        .status()
+    }
+
+    async fn submit_via_public_transaction_batch_handler(
+        app: crate::SharedAppState,
+        transactions: Vec<SignedTransaction>,
+    ) -> axum::http::StatusCode {
+        use axum::extract::State as AxumState;
+
+        let payloads = transactions
+            .iter()
+            .map(iroha_version::codec::EncodeVersioned::encode_versioned)
+            .collect();
+        crate::handler_post_transactions_batch(
+            AxumState(app),
+            axum::http::HeaderMap::new(),
+            crate::utils::extractors::Norito(payloads),
+        )
+        .await
+        .expect("public transaction batch handler should accept statelessly valid transactions")
+        .status()
+    }
+
+    async fn submit_via_public_transaction_batch_http(
+        app: crate::SharedAppState,
+        transactions: Vec<SignedTransaction>,
+    ) -> axum::http::StatusCode {
+        use tower::ServiceExt as _;
+
+        let payloads = transactions
+            .iter()
+            .map(iroha_version::codec::EncodeVersioned::encode_versioned)
+            .collect::<Vec<_>>();
+        let body = norito::to_bytes(&payloads).expect("encode transaction batch payloads");
+        let router = axum::Router::new()
+            .route(
+                iroha_torii_shared::uri::TRANSACTIONS_BATCH,
+                axum::routing::post(crate::handler_post_transactions_batch),
+            )
+            .with_state(app);
+        let request = axum::http::Request::builder()
+            .method(axum::http::Method::POST)
+            .uri(iroha_torii_shared::uri::TRANSACTIONS_BATCH)
+            .header(
+                axum::http::header::CONTENT_TYPE,
+                crate::utils::NORITO_MIME_TYPE,
+            )
+            .body(axum::body::Body::from(body))
+            .expect("HTTP transaction batch request");
+        router
+            .oneshot(request)
+            .await
+            .expect("router response")
+            .status()
+    }
+
+    fn validate_single_queued_transaction_in_block(
+        state: &Arc<State>,
+        queue: &Arc<Queue>,
+        height: u64,
+    ) -> String {
+        let max_txs_in_block = NonZeroUsize::new(1024).expect("nonzero");
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block(&state.view(), max_txs_in_block, &mut guards);
+        assert_eq!(guards.len(), 1, "expected one queued transaction");
+        let accepted = guards
+            .iter()
+            .map(TransactionGuard::clone_accepted)
+            .next()
+            .expect("queued transaction");
+        let mut block = state.block(block_header(height, 1_700_000_002_000 + height));
+        let mut ivm_cache = IvmCache::new();
+        let (_, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        match result {
+            Ok(_) => "ok".to_string(),
+            Err(error) => format!("{error:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn torii_raw_fee_asset_transfer_reaches_validator_fee_admission() {
+        let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
+        let chain_id = Arc::new(state.chain_id.clone());
+        let genesis_hash = commit_empty_genesis_like_block(&state);
+        let gov_1 = ed25519_key_pair(21, "derive validation-fee governance signer one");
+        let gov_2 = ed25519_key_pair(22, "derive validation-fee governance signer two");
+        let policy = validation_fee_policy(&state, fee_asset.clone(), treasury, genesis_hash);
+        install_validation_fee_policy(&state, &user, policy.clone(), &[&gov_1, &gov_2]);
+
+        let missing_fee_queue = queue();
+        let missing_fee_tx = signed_transfer(
+            &state,
+            &user,
+            &user_key_pair,
+            &recipient,
+            &fee_asset,
+            &policy,
+            false,
+        );
+        handle_transaction(
+            Arc::clone(&chain_id),
+            Arc::clone(&missing_fee_queue),
+            Arc::clone(&state),
+            missing_fee_tx,
+        )
+        .await
+        .expect("Torii should enqueue a statelessly valid raw transaction");
+        let missing_fee_error =
+            validate_single_queued_transaction_in_block(&state, &missing_fee_queue, 3);
+        assert!(
+            missing_fee_error.contains("missing validation-fee transfer of 10 minor units"),
+            "unexpected missing-fee rejection: {missing_fee_error}"
+        );
+
+        let exact_fee_queue = queue();
+        let exact_fee_tx = signed_transfer(
+            &state,
+            &user,
+            &user_key_pair,
+            &recipient,
+            &fee_asset,
+            &policy,
+            true,
+        );
+        handle_transaction(
+            Arc::clone(&chain_id),
+            Arc::clone(&exact_fee_queue),
+            Arc::clone(&state),
+            exact_fee_tx,
+        )
+        .await
+        .expect("Torii should enqueue a raw transaction carrying the exact validation fee");
+        let exact_fee_result =
+            validate_single_queued_transaction_in_block(&state, &exact_fee_queue, 4);
+        assert_eq!(exact_fee_result, "ok");
+    }
+
+    fn test_app_with_active_policy() -> (
+        crate::SharedAppState,
+        AccountId,
+        KeyPair,
+        AccountId,
+        ValidationFeePolicyV1,
+    ) {
+        let (app, user, user_key_pair, recipient, treasury, fee_asset) = test_app_state();
+        let genesis_hash = commit_empty_genesis_like_block(&app.state);
+        let gov_1 = ed25519_key_pair(21, "derive validation-fee governance signer one");
+        let gov_2 = ed25519_key_pair(22, "derive validation-fee governance signer two");
+        let policy = validation_fee_policy(&app.state, fee_asset.clone(), treasury, genesis_hash);
+        install_validation_fee_policy(&app.state, &user, policy.clone(), &[&gov_1, &gov_2]);
+        (app, user, user_key_pair, recipient, policy)
+    }
+
+    #[tokio::test]
+    async fn public_transaction_handler_raw_fee_asset_transfer_reaches_validator_fee_admission() {
+        let (missing_fee_app, user, user_key_pair, recipient, policy) =
+            test_app_with_active_policy();
+        let missing_fee_tx = signed_transfer(
+            &missing_fee_app.state,
+            &user,
+            &user_key_pair,
+            &recipient,
+            &policy.fee_asset_definition_id,
+            &policy,
+            false,
+        );
+        let missing_fee_status =
+            submit_via_public_transaction_handler(Arc::clone(&missing_fee_app), missing_fee_tx)
+                .await;
+        assert_eq!(missing_fee_status, axum::http::StatusCode::ACCEPTED);
+        let missing_fee_error = validate_single_queued_transaction_in_block(
+            &missing_fee_app.state,
+            &missing_fee_app.queue,
+            3,
+        );
+        assert!(
+            missing_fee_error.contains("missing validation-fee transfer of 10 minor units"),
+            "unexpected missing-fee rejection: {missing_fee_error}"
+        );
+
+        let (exact_fee_app, user, user_key_pair, recipient, policy) = test_app_with_active_policy();
+        let exact_fee_tx = signed_transfer(
+            &exact_fee_app.state,
+            &user,
+            &user_key_pair,
+            &recipient,
+            &policy.fee_asset_definition_id,
+            &policy,
+            true,
+        );
+        let exact_fee_status =
+            submit_via_public_transaction_handler(Arc::clone(&exact_fee_app), exact_fee_tx).await;
+        assert_eq!(exact_fee_status, axum::http::StatusCode::ACCEPTED);
+        let exact_fee_result = validate_single_queued_transaction_in_block(
+            &exact_fee_app.state,
+            &exact_fee_app.queue,
+            3,
+        );
+        assert_eq!(exact_fee_result, "ok");
+    }
+
+    #[tokio::test]
+    async fn public_batch_raw_fee_transfer_reaches_validation_fee_admission() {
+        let (missing_fee_app, user, user_key_pair, recipient, policy) =
+            test_app_with_active_policy();
+        let missing_fee_tx = signed_transfer(
+            &missing_fee_app.state,
+            &user,
+            &user_key_pair,
+            &recipient,
+            &policy.fee_asset_definition_id,
+            &policy,
+            false,
+        );
+        let missing_fee_status = submit_via_public_transaction_batch_handler(
+            Arc::clone(&missing_fee_app),
+            vec![missing_fee_tx],
+        )
+        .await;
+        assert_eq!(missing_fee_status, axum::http::StatusCode::ACCEPTED);
+        let missing_fee_error = validate_single_queued_transaction_in_block(
+            &missing_fee_app.state,
+            &missing_fee_app.queue,
+            3,
+        );
+        assert!(
+            missing_fee_error.contains("missing validation-fee transfer of 10 minor units"),
+            "unexpected missing-fee rejection: {missing_fee_error}"
+        );
+
+        let (exact_fee_app, user, user_key_pair, recipient, policy) = test_app_with_active_policy();
+        let exact_fee_tx = signed_transfer(
+            &exact_fee_app.state,
+            &user,
+            &user_key_pair,
+            &recipient,
+            &policy.fee_asset_definition_id,
+            &policy,
+            true,
+        );
+        let exact_fee_status = submit_via_public_transaction_batch_handler(
+            Arc::clone(&exact_fee_app),
+            vec![exact_fee_tx],
+        )
+        .await;
+        assert_eq!(exact_fee_status, axum::http::StatusCode::ACCEPTED);
+        let exact_fee_result = validate_single_queued_transaction_in_block(
+            &exact_fee_app.state,
+            &exact_fee_app.queue,
+            3,
+        );
+        assert_eq!(exact_fee_result, "ok");
+    }
+
+    #[tokio::test]
+    async fn public_batch_http_raw_fee_transfer_reaches_validation_fee_admission() {
+        let (missing_fee_app, user, user_key_pair, recipient, policy) =
+            test_app_with_active_policy();
+        let missing_fee_tx = signed_transfer(
+            &missing_fee_app.state,
+            &user,
+            &user_key_pair,
+            &recipient,
+            &policy.fee_asset_definition_id,
+            &policy,
+            false,
+        );
+        let missing_fee_status = submit_via_public_transaction_batch_http(
+            Arc::clone(&missing_fee_app),
+            vec![missing_fee_tx],
+        )
+        .await;
+        assert_eq!(missing_fee_status, axum::http::StatusCode::ACCEPTED);
+        let missing_fee_error = validate_single_queued_transaction_in_block(
+            &missing_fee_app.state,
+            &missing_fee_app.queue,
+            3,
+        );
+        assert!(
+            missing_fee_error.contains("missing validation-fee transfer of 10 minor units"),
+            "unexpected missing-fee rejection: {missing_fee_error}"
+        );
+
+        let (exact_fee_app, user, user_key_pair, recipient, policy) = test_app_with_active_policy();
+        let exact_fee_tx = signed_transfer(
+            &exact_fee_app.state,
+            &user,
+            &user_key_pair,
+            &recipient,
+            &policy.fee_asset_definition_id,
+            &policy,
+            true,
+        );
+        let exact_fee_status = submit_via_public_transaction_batch_http(
+            Arc::clone(&exact_fee_app),
+            vec![exact_fee_tx],
+        )
+        .await;
+        assert_eq!(exact_fee_status, axum::http::StatusCode::ACCEPTED);
+        let exact_fee_result = validate_single_queued_transaction_in_block(
+            &exact_fee_app.state,
+            &exact_fee_app.queue,
+            3,
+        );
+        assert_eq!(exact_fee_result, "ok");
     }
 }
 

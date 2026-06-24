@@ -6,9 +6,16 @@
 //! truth for generic ISO, CBPR+, Fedwire, SEPA SCT Inst, and securities CSD
 //! validation policy.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use norito::json::{self, Value};
+use sha2::{Digest as _, Sha256};
+
+const MAX_ISO4217_MINOR_UNITS: u8 = 4;
+const MAX_PROFILE_DER_BLOBS: usize = 8;
+const MAX_PROFILE_DER_BYTES: usize = 1024 * 1024;
+const OCSP_BASIC_RESPONSE_OID_DER: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01, 0x01];
 
 /// Default profile used when Torii configuration does not select a rail.
 pub const DEFAULT_PROFILE_ID: &str = "generic-iso20022";
@@ -703,11 +710,12 @@ impl MessageProfile {
     /// Returns `true` if `business_service` is accepted by this profile.
     #[must_use]
     pub fn allows_business_service(&self, business_service: &str) -> bool {
-        self.business_services.is_empty()
-            || self
-                .business_services
-                .iter()
-                .any(|candidate| candidate.eq_ignore_ascii_case(business_service))
+        if self.business_services.is_empty() {
+            return !self.require_business_service;
+        }
+        self.business_services
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(business_service))
     }
 
     /// Minor units allowed for the currency. Unlisted currencies default to two.
@@ -821,12 +829,23 @@ impl TradfiRailProfile {
     }
 }
 
-fn append_unique_sha256_pins(target: &mut Vec<String>, aliases: &[String]) {
+fn append_unique_sha256_pins(
+    profile_id: &str,
+    target_field: &str,
+    target: &mut Vec<String>,
+    alias_field: &str,
+    aliases: &[String],
+) -> Result<(), String> {
+    let mut seen = target.iter().cloned().collect::<BTreeSet<_>>();
     for alias in aliases {
-        if !target.iter().any(|existing| existing == alias) {
-            target.push(alias.clone());
+        if !seen.insert(alias.clone()) {
+            return Err(format!(
+                "profile `{profile_id}` fields `{target_field}` and `{alias_field}` must not overlap"
+            ));
         }
+        target.push(alias.clone());
     }
+    Ok(())
 }
 
 /// Parse the embedded Norito JSON profile catalog.
@@ -871,11 +890,11 @@ fn profile_from_value(value: &Value) -> Result<TradfiRailProfile, String> {
     let obj = value
         .as_object()
         .ok_or_else(|| "profile entry must be an object".to_owned())?;
-    let id = required_string(obj, "id")?;
-    let rail = TradfiRail::parse(required_string(obj, "rail")?)
+    let id = required_trimmed_string(obj, "id")?;
+    let rail = TradfiRail::parse(required_trimmed_string(obj, "rail")?)
         .ok_or_else(|| format!("profile `{id}` has unknown rail"))?;
     let embedded_signature_policy =
-        EmbeddedSignaturePolicy::parse(required_string(obj, "embedded_signature_policy")?)
+        EmbeddedSignaturePolicy::parse(required_trimmed_string(obj, "embedded_signature_policy")?)
             .ok_or_else(|| format!("profile `{id}` has unknown embedded signature policy"))?;
     let trusted_public_key_sha256 =
         canonical_sha256_pins(optional_string_array(obj, "trusted_public_key_sha256")?)?;
@@ -883,34 +902,42 @@ fn profile_from_value(value: &Value) -> Result<TradfiRailProfile, String> {
         canonical_sha256_pins(optional_string_array(obj, "trusted_certificate_sha256")?)?;
     let revoked_certificate_sha256 =
         canonical_sha256_pins(optional_string_array(obj, "revoked_certificate_sha256")?)?;
-    let required_reference_datasets = optional_string_array(obj, "required_reference_datasets")?
-        .into_iter()
-        .map(|raw| {
-            ReferenceDatasetRequirement::parse(&raw)
-                .ok_or_else(|| format!("profile `{id}` has unknown reference dataset `{raw}`"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let required_reference_datasets = parse_reference_dataset_requirements(
+        id,
+        optional_string_array(obj, "required_reference_datasets")?,
+    )?;
     let mut signature_public_key_sha256_pins =
         optional_sha256_pin_array(obj, "signature_public_key_sha256_pins", id)?;
     append_unique_sha256_pins(
+        id,
+        "signature_public_key_sha256_pins",
         &mut signature_public_key_sha256_pins,
+        "trusted_public_key_sha256",
         &trusted_public_key_sha256,
-    );
+    )?;
     let mut x509_trust_anchor_sha256_pins =
         optional_sha256_pin_array(obj, "x509_trust_anchor_sha256_pins", id)?;
     append_unique_sha256_pins(
+        id,
+        "x509_trust_anchor_sha256_pins",
         &mut x509_trust_anchor_sha256_pins,
+        "trusted_certificate_sha256",
         &trusted_certificate_sha256,
-    );
+    )?;
     let x509_required_certificate_policy_oids =
         optional_oid_array(obj, "x509_required_certificate_policy_oids", id)?;
     let x509_require_crl_revocation_check =
         optional_bool(obj, "x509_require_crl_revocation_check")?.unwrap_or(false);
-    let x509_crl_der_base64 = optional_string_array(obj, "x509_crl_der_base64")?;
+    let x509_crl_der_base64 =
+        optional_der_base64_array(obj, "x509_crl_der_base64", id, DerMaterialKind::Crl)?;
     let x509_require_ocsp_revocation_check =
         optional_bool(obj, "x509_require_ocsp_revocation_check")?.unwrap_or(false);
-    let x509_ocsp_response_der_base64 =
-        optional_string_array(obj, "x509_ocsp_response_der_base64")?;
+    let x509_ocsp_response_der_base64 = optional_der_base64_array(
+        obj,
+        "x509_ocsp_response_der_base64",
+        id,
+        DerMaterialKind::OcspResponse,
+    )?;
     let message_values = obj
         .get("message_profiles")
         .and_then(Value::as_array)
@@ -919,6 +946,7 @@ fn profile_from_value(value: &Value) -> Result<TradfiRailProfile, String> {
         .iter()
         .map(message_profile_from_value)
         .collect::<Result<Vec<_>, _>>()?;
+    validate_message_profiles(id, &message_profiles)?;
     Ok(TradfiRailProfile {
         id: id.to_owned(),
         rail,
@@ -936,6 +964,46 @@ fn profile_from_value(value: &Value) -> Result<TradfiRailProfile, String> {
         required_reference_datasets,
         message_profiles,
     })
+}
+
+fn parse_reference_dataset_requirements(
+    profile_id: &str,
+    values: Vec<String>,
+) -> Result<Vec<ReferenceDatasetRequirement>, String> {
+    let mut parsed = Vec::new();
+    let mut seen = BTreeSet::new();
+    for raw in values {
+        require_trimmed_non_empty(
+            &format!("profile `{profile_id}` required_reference_datasets entry"),
+            &raw,
+        )?;
+        let requirement = ReferenceDatasetRequirement::parse(&raw).ok_or_else(|| {
+            format!("profile `{profile_id}` has unknown reference dataset `{raw}`")
+        })?;
+        if !seen.insert(requirement) {
+            return Err(format!(
+                "profile `{profile_id}` required_reference_datasets entries must be duplicate-free"
+            ));
+        }
+        parsed.push(requirement);
+    }
+    Ok(parsed)
+}
+
+fn validate_message_profiles(
+    profile_id: &str,
+    message_profiles: &[MessageProfile],
+) -> Result<(), String> {
+    let mut seen = BTreeSet::new();
+    for profile in message_profiles {
+        let key = (profile.message_type.to_ascii_lowercase(), profile.direction);
+        if !seen.insert(key) {
+            return Err(format!(
+                "profile `{profile_id}` message_profiles entries must be unique by message_type and direction"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn canonical_sha256_pins(values: Vec<String>) -> Result<Vec<String>, String> {
@@ -959,15 +1027,19 @@ fn message_profile_from_value(value: &Value) -> Result<MessageProfile, String> {
     let obj = value
         .as_object()
         .ok_or_else(|| "message profile must be an object".to_owned())?;
-    let message_type = required_string(obj, "message_type")?.to_owned();
-    let direction = MessageDirection::parse(required_string(obj, "direction")?)
+    let message_type = required_trimmed_string(obj, "message_type")?.to_owned();
+    let direction = MessageDirection::parse(required_trimmed_string(obj, "direction")?)
         .ok_or_else(|| format!("message profile `{message_type}` has unknown direction"))?;
     let versions = optional_string_array(obj, "versions")?;
+    validate_versions(&message_type, &versions)?;
     let business_services = optional_string_array(obj, "business_services")?;
+    let require_business_service = optional_bool(obj, "require_business_service")?.unwrap_or(false);
+    validate_business_services(&message_type, &business_services, require_business_service)?;
     let structured_address_mode =
-        StructuredAddressMode::parse(required_string(obj, "structured_address_mode")?).ok_or_else(
-            || format!("message profile `{message_type}` has unknown structured address mode"),
-        )?;
+        StructuredAddressMode::parse(required_trimmed_string(obj, "structured_address_mode")?)
+            .ok_or_else(|| {
+                format!("message profile `{message_type}` has unknown structured address mode")
+            })?;
     let supplementary_data_max_bytes =
         optional_usize(obj, "supplementary_data_max_bytes")?.unwrap_or(4096);
     let amount_minor_units = parse_minor_units(obj.get("amount_minor_units"), &message_type)?;
@@ -977,12 +1049,66 @@ fn message_profile_from_value(value: &Value) -> Result<MessageProfile, String> {
         versions,
         business_services,
         require_app_header: optional_bool(obj, "require_app_header")?.unwrap_or(false),
-        require_business_service: optional_bool(obj, "require_business_service")?.unwrap_or(false),
+        require_business_service,
         require_uetr: optional_bool(obj, "require_uetr")?.unwrap_or(false),
         structured_address_mode,
         supplementary_data_max_bytes,
         amount_minor_units,
     })
+}
+
+fn validate_versions(message_type: &str, versions: &[String]) -> Result<(), String> {
+    if versions.is_empty() {
+        return Err(format!(
+            "message profile `{message_type}` requires at least one versions entry"
+        ));
+    }
+    if versions
+        .iter()
+        .any(|version| version.trim().is_empty() || version.trim() != version)
+    {
+        return Err(format!(
+            "message profile `{message_type}` versions entries must be non-empty trimmed strings"
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    for version in versions {
+        if !seen.insert(version.to_ascii_lowercase()) {
+            return Err(format!(
+                "message profile `{message_type}` versions entries must be duplicate-free"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_business_services(
+    message_type: &str,
+    business_services: &[String],
+    require_business_service: bool,
+) -> Result<(), String> {
+    if require_business_service && business_services.is_empty() {
+        return Err(format!(
+            "message profile `{message_type}` requires at least one business_services entry"
+        ));
+    }
+    if business_services
+        .iter()
+        .any(|service| service.trim().is_empty() || service.trim() != service)
+    {
+        return Err(format!(
+            "message profile `{message_type}` business_services entries must be non-empty trimmed strings"
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    for service in business_services {
+        if !seen.insert(service.to_ascii_lowercase()) {
+            return Err(format!(
+                "message profile `{message_type}` business_services entries must be duplicate-free"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn parse_minor_units(
@@ -999,9 +1125,7 @@ fn parse_minor_units(
         let obj = entry
             .as_object()
             .ok_or_else(|| "amount_minor_units entry must be an object".to_owned())?;
-        let currency = required_string(obj, "currency")?
-            .trim()
-            .to_ascii_uppercase();
+        let currency = required_trimmed_string(obj, "currency")?.to_ascii_uppercase();
         if currency.len() != 3 || !currency.chars().all(|c| c.is_ascii_uppercase()) {
             return Err(format!(
                 "invalid currency `{currency}` in amount minor-unit profile"
@@ -1011,7 +1135,16 @@ fn parse_minor_units(
             .ok_or_else(|| format!("currency `{currency}` missing minor_units"))?;
         let units = u8::try_from(units)
             .map_err(|_| format!("currency `{currency}` minor_units is too large"))?;
-        out.insert(currency, units);
+        if units > MAX_ISO4217_MINOR_UNITS {
+            return Err(format!(
+                "currency `{currency}` minor_units must be at most {MAX_ISO4217_MINOR_UNITS}"
+            ));
+        }
+        if out.insert(currency.clone(), units).is_some() {
+            return Err(format!(
+                "message profile `{message_type}` amount_minor_units contains duplicate currency `{currency}`"
+            ));
+        }
     }
     Ok(out)
 }
@@ -1020,6 +1153,22 @@ fn required_string<'a>(obj: &'a BTreeMap<String, Value>, key: &str) -> Result<&'
     obj.get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| format!("missing string field `{key}`"))
+}
+
+fn required_trimmed_string<'a>(
+    obj: &'a BTreeMap<String, Value>,
+    key: &str,
+) -> Result<&'a str, String> {
+    let value = required_string(obj, key)?;
+    require_trimmed_non_empty(&format!("field `{key}`"), value)?;
+    Ok(value)
+}
+
+fn require_trimmed_non_empty(label: &str, value: &str) -> Result<(), String> {
+    if value.is_empty() || value.trim() != value {
+        return Err(format!("{label} must be a non-empty trimmed string"));
+    }
+    Ok(())
 }
 
 fn optional_string_array(obj: &BTreeMap<String, Value>, key: &str) -> Result<Vec<String>, String> {
@@ -1038,6 +1187,199 @@ fn optional_string_array(obj: &BTreeMap<String, Value>, key: &str) -> Result<Vec
                 .ok_or_else(|| format!("field `{key}` entries must be strings"))
         })
         .collect()
+}
+
+#[derive(Clone, Copy)]
+enum DerMaterialKind {
+    Crl,
+    OcspResponse,
+}
+
+struct DerElement<'a> {
+    tag: u8,
+    value: &'a [u8],
+    end: usize,
+}
+
+fn optional_der_base64_array(
+    obj: &BTreeMap<String, Value>,
+    key: &str,
+    profile_id: &str,
+    kind: DerMaterialKind,
+) -> Result<Vec<String>, String> {
+    let values = optional_string_array(obj, key)?;
+    if values.len() > MAX_PROFILE_DER_BLOBS {
+        return Err(format!(
+            "profile `{profile_id}` field `{key}` must not contain more than {MAX_PROFILE_DER_BLOBS} entries"
+        ));
+    }
+    values
+        .into_iter()
+        .try_fold(
+            (BTreeSet::new(), Vec::new()),
+            |(mut seen, mut out), value| {
+                require_trimmed_non_empty(
+                    &format!("profile `{profile_id}` field `{key}` entry"),
+                    &value,
+                )?;
+                let der = decode_profile_der_base64(profile_id, key, &value, kind)?;
+                let digest = Sha256::digest(&der).to_vec();
+                if !seen.insert(digest) {
+                    return Err(format!(
+                        "profile `{profile_id}` field `{key}` entries must be duplicate-free"
+                    ));
+                }
+                out.push(value);
+                Ok((seen, out))
+            },
+        )
+        .map(|(_, out)| out)
+}
+
+fn decode_profile_der_base64(
+    profile_id: &str,
+    key: &str,
+    value: &str,
+    kind: DerMaterialKind,
+) -> Result<Vec<u8>, String> {
+    let label = format!("profile `{profile_id}` field `{key}`");
+    let der = BASE64_STANDARD
+        .decode(value)
+        .map_err(|_| format!("{label} entries must be canonical base64 DER"))?;
+    if der.is_empty() || der.len() > MAX_PROFILE_DER_BYTES {
+        return Err(format!(
+            "{label} entries must decode to non-empty DER no larger than {MAX_PROFILE_DER_BYTES} bytes"
+        ));
+    }
+    if BASE64_STANDARD.encode(&der) != value {
+        return Err(format!("{label} entries must be canonical padded base64"));
+    }
+    require_der_sequence(&der, &label)?;
+    match kind {
+        DerMaterialKind::Crl => require_crl_der_shape(&der, &label)?,
+        DerMaterialKind::OcspResponse => require_ocsp_response_der_shape(&der, &label)?,
+    }
+    Ok(der)
+}
+
+fn require_der_sequence(der: &[u8], label: &str) -> Result<(), String> {
+    let root = read_der_element(der, 0, label)?;
+    if root.tag != 0x30 {
+        return Err(format!("{label} entries must be DER SEQUENCE values"));
+    }
+    if root.end != der.len() {
+        return Err(format!("{label} DER length must consume the whole value"));
+    }
+    Ok(())
+}
+
+fn require_crl_der_shape(der: &[u8], label: &str) -> Result<(), String> {
+    let root = read_der_element(der, 0, label)?;
+    let children = der_children(&root, label)?;
+    if children.len() != 3
+        || children[0].tag != 0x30
+        || children[1].tag != 0x30
+        || children[2].tag != 0x03
+    {
+        return Err(format!("{label} entries must look like DER X.509 CRLs"));
+    }
+    Ok(())
+}
+
+fn require_ocsp_response_der_shape(der: &[u8], label: &str) -> Result<(), String> {
+    let root = read_der_element(der, 0, label)?;
+    let children = der_children(&root, label)?;
+    if children.len() != 2 || children[0].tag != 0x0A || children[1].tag != 0xA0 {
+        return Err(format!(
+            "{label} entries must look like successful DER OCSP responses"
+        ));
+    }
+    if children[0].value != [0] {
+        return Err(format!(
+            "{label} entries must look like successful DER OCSP responses"
+        ));
+    }
+    let response_bytes = der_expect_single(children[1].value, 0x30, label)?;
+    let response_children = der_children(&response_bytes, label)?;
+    if response_children.len() != 2
+        || response_children[0].tag != 0x06
+        || response_children[0].value != OCSP_BASIC_RESPONSE_OID_DER
+        || response_children[1].tag != 0x04
+    {
+        return Err(format!(
+            "{label} entries must look like successful DER OCSP responses"
+        ));
+    }
+    require_der_sequence(response_children[1].value, label)?;
+    Ok(())
+}
+
+fn der_expect_single<'a>(data: &'a [u8], tag: u8, label: &str) -> Result<DerElement<'a>, String> {
+    let element = read_der_element(data, 0, label)?;
+    if element.tag != tag || element.end != data.len() {
+        return Err(format!("{label} entries must contain well-formed DER"));
+    }
+    Ok(element)
+}
+
+fn der_children<'a>(element: &DerElement<'a>, label: &str) -> Result<Vec<DerElement<'a>>, String> {
+    let mut offset = 0;
+    let mut children = Vec::new();
+    while offset < element.value.len() {
+        let child = read_der_element(element.value, offset, label)?;
+        offset = child.end;
+        children.push(child);
+    }
+    Ok(children)
+}
+
+fn read_der_element<'a>(
+    data: &'a [u8],
+    offset: usize,
+    label: &str,
+) -> Result<DerElement<'a>, String> {
+    if offset + 2 > data.len() {
+        return Err(format!("{label} has truncated DER"));
+    }
+    let tag = data[offset];
+    let length_byte = data[offset + 1];
+    let (header_len, length) = if length_byte & 0x80 == 0 {
+        (2, usize::from(length_byte))
+    } else {
+        let length_len = usize::from(length_byte & 0x7f);
+        if length_len == 0 || length_len > core::mem::size_of::<usize>() {
+            return Err(format!("{label} has invalid DER length"));
+        }
+        if offset + 2 + length_len > data.len() {
+            return Err(format!("{label} has truncated DER length"));
+        }
+        if data[offset + 2] == 0 {
+            return Err(format!("{label} has non-minimal DER length"));
+        }
+        let mut length = 0usize;
+        for byte in &data[offset + 2..offset + 2 + length_len] {
+            length = length
+                .checked_mul(256)
+                .and_then(|value| value.checked_add(usize::from(*byte)))
+                .ok_or_else(|| format!("{label} has invalid DER length"))?;
+        }
+        if length < 128 {
+            return Err(format!("{label} has non-minimal DER length"));
+        }
+        (2 + length_len, length)
+    };
+    let value_start = offset + header_len;
+    let end = value_start
+        .checked_add(length)
+        .ok_or_else(|| format!("{label} has invalid DER length"))?;
+    if end > data.len() {
+        return Err(format!("{label} has truncated DER value"));
+    }
+    Ok(DerElement {
+        tag,
+        value: &data[value_start..end],
+        end,
+    })
 }
 
 fn optional_sha256_pin_array(
@@ -1072,16 +1414,25 @@ fn optional_oid_array(
 ) -> Result<Vec<String>, String> {
     optional_string_array(obj, key)?
         .into_iter()
-        .map(|oid| {
-            let normalized = oid.trim().to_owned();
-            if !is_valid_oid_literal(&normalized) {
+        .try_fold((BTreeSet::new(), Vec::new()), |(mut seen, mut out), oid| {
+            require_trimmed_non_empty(
+                &format!("profile `{profile_id}` field `{key}` entry"),
+                &oid,
+            )?;
+            if !is_valid_oid_literal(&oid) {
                 return Err(format!(
                     "profile `{profile_id}` field `{key}` entries must be dotted numeric OIDs"
                 ));
             }
-            Ok(normalized)
+            if !seen.insert(oid.clone()) {
+                return Err(format!(
+                    "profile `{profile_id}` field `{key}` entries must be duplicate-free"
+                ));
+            }
+            out.push(oid);
+            Ok((seen, out))
         })
-        .collect()
+        .map(|(_, out)| out)
 }
 
 fn is_valid_oid_literal(value: &str) -> bool {
@@ -1205,6 +1556,255 @@ mod tests {
     }
 
     #[test]
+    fn xml_signature_sha256_pin_aliases_must_not_overlap() {
+        let pin = "ab".repeat(32);
+        for (current_field, legacy_field) in [
+            (
+                "signature_public_key_sha256_pins",
+                "trusted_public_key_sha256",
+            ),
+            (
+                "x509_trust_anchor_sha256_pins",
+                "trusted_certificate_sha256",
+            ),
+        ] {
+            let profile_json = format!(
+                r#"{{
+                    "id": "alias-overlap-test",
+                    "rail": "generic-iso20022",
+                    "embedded_signature_policy": "record-only",
+                    "{current_field}": ["{pin}"],
+                    "{legacy_field}": ["{pin}"],
+                    "message_profiles": [{{
+                        "message_type": "pacs.008",
+                        "direction": "inbound",
+                        "versions": ["pacs.008"],
+                        "structured_address_mode": "permissive"
+                    }}]
+                }}"#
+            );
+            let value: Value = json::from_json(&profile_json).expect("profile JSON");
+            let err = profile_from_value(&value)
+                .expect_err("overlapping current and legacy trust pins must fail");
+            assert!(
+                err.contains("must not overlap"),
+                "unexpected overlap error for {current_field}/{legacy_field}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn embedded_profile_string_literals_must_be_non_empty_and_trimmed() {
+        for (json, key) in [
+            (r#"{"id":" generic-iso20022"}"#, "id"),
+            (r#"{"rail":"generic-iso20022 "}"#, "rail"),
+            (
+                r#"{"embedded_signature_policy":""}"#,
+                "embedded_signature_policy",
+            ),
+        ] {
+            let value: Value = json::from_json(json).expect("profile string JSON");
+            let obj = value.as_object().expect("profile string object");
+            let err = required_trimmed_string(obj, key)
+                .expect_err("embedded profile string fields must be trimmed");
+            assert!(err.contains("non-empty trimmed string"));
+        }
+    }
+
+    #[test]
+    fn embedded_profile_der_lists_must_be_non_empty_and_trimmed() {
+        const CRL_DER_B64: &str = "MAcwADAAAwEA";
+        const OCSP_DER_B64: &str = "MBYKAQCgETAPBgkrBgEFBQcwAQEEAjAA";
+        const GENERIC_SEQUENCE_B64: &str = "MAMCAQA=";
+
+        let value: Value =
+            json::from_json(&format!(r#"{{"x509_crl_der_base64":["{CRL_DER_B64}"]}}"#))
+                .expect("valid CRL list JSON");
+        let obj = value.as_object().expect("valid CRL list object");
+        assert!(
+            optional_der_base64_array(obj, "x509_crl_der_base64", "signed", DerMaterialKind::Crl)
+                .is_ok()
+        );
+
+        let value: Value = json::from_json(&format!(
+            r#"{{"x509_ocsp_response_der_base64":["{OCSP_DER_B64}"]}}"#
+        ))
+        .expect("valid OCSP list JSON");
+        let obj = value.as_object().expect("valid OCSP list object");
+        assert!(
+            optional_der_base64_array(
+                obj,
+                "x509_ocsp_response_der_base64",
+                "signed",
+                DerMaterialKind::OcspResponse,
+            )
+            .is_ok()
+        );
+
+        let value: Value =
+            json::from_json(r#"{"x509_crl_der_base64":[" MIIB"]}"#).expect("CRL list JSON");
+        let obj = value.as_object().expect("CRL list object");
+        let err =
+            optional_der_base64_array(obj, "x509_crl_der_base64", "signed", DerMaterialKind::Crl)
+                .expect_err("padded CRL DER base64 entries must fail");
+        assert!(err.contains("non-empty trimmed string"));
+
+        let value: Value =
+            json::from_json(r#"{"x509_ocsp_response_der_base64":[""]}"#).expect("OCSP list JSON");
+        let obj = value.as_object().expect("OCSP list object");
+        let err = optional_der_base64_array(
+            obj,
+            "x509_ocsp_response_der_base64",
+            "signed",
+            DerMaterialKind::OcspResponse,
+        )
+        .expect_err("empty OCSP DER base64 entries must fail");
+        assert!(err.contains("non-empty trimmed string"));
+
+        let value: Value = json::from_json(&format!(
+            r#"{{"x509_crl_der_base64":["{GENERIC_SEQUENCE_B64}"]}}"#
+        ))
+        .expect("generic CRL list JSON");
+        let obj = value.as_object().expect("generic CRL list object");
+        let err =
+            optional_der_base64_array(obj, "x509_crl_der_base64", "signed", DerMaterialKind::Crl)
+                .expect_err("generic DER SEQUENCE must not pass CRL validation");
+        assert!(
+            err.contains("DER X.509 CRLs"),
+            "unexpected CRL DER shape error: {err}"
+        );
+
+        let value: Value = json::from_json(&format!(
+            r#"{{"x509_ocsp_response_der_base64":["{GENERIC_SEQUENCE_B64}"]}}"#
+        ))
+        .expect("generic OCSP list JSON");
+        let obj = value.as_object().expect("generic OCSP list object");
+        let err = optional_der_base64_array(
+            obj,
+            "x509_ocsp_response_der_base64",
+            "signed",
+            DerMaterialKind::OcspResponse,
+        )
+        .expect_err("generic DER SEQUENCE must not pass OCSP validation");
+        assert!(
+            err.contains("successful DER OCSP responses"),
+            "unexpected OCSP DER shape error: {err}"
+        );
+
+        let value: Value = json::from_json(&format!(
+            r#"{{"x509_crl_der_base64":["{CRL_DER_B64}","{CRL_DER_B64}"]}}"#
+        ))
+        .expect("duplicate CRL list JSON");
+        let obj = value.as_object().expect("duplicate CRL list object");
+        let err =
+            optional_der_base64_array(obj, "x509_crl_der_base64", "signed", DerMaterialKind::Crl)
+                .expect_err("duplicate CRL DER entries must fail");
+        assert!(
+            err.contains("duplicate-free"),
+            "unexpected duplicate CRL DER error: {err}"
+        );
+
+        let too_many_crls = vec!["\"not-base64\""; MAX_PROFILE_DER_BLOBS + 1].join(",");
+        let value: Value =
+            json::from_json(&format!(r#"{{"x509_crl_der_base64":[{too_many_crls}]}}"#))
+                .expect("over-limit CRL list JSON");
+        let obj = value.as_object().expect("over-limit CRL list object");
+        let err =
+            optional_der_base64_array(obj, "x509_crl_der_base64", "signed", DerMaterialKind::Crl)
+                .expect_err("over-limit CRL DER entries must fail before parsing");
+        assert!(
+            err.contains("must not contain more than"),
+            "unexpected over-limit CRL DER error: {err}"
+        );
+
+        let too_many_ocsp = vec!["\"not-base64\""; MAX_PROFILE_DER_BLOBS + 1].join(",");
+        let value: Value = json::from_json(&format!(
+            r#"{{"x509_ocsp_response_der_base64":[{too_many_ocsp}]}}"#
+        ))
+        .expect("over-limit OCSP list JSON");
+        let obj = value.as_object().expect("over-limit OCSP list object");
+        let err = optional_der_base64_array(
+            obj,
+            "x509_ocsp_response_der_base64",
+            "signed",
+            DerMaterialKind::OcspResponse,
+        )
+        .expect_err("over-limit OCSP DER entries must fail before parsing");
+        assert!(
+            err.contains("must not contain more than"),
+            "unexpected over-limit OCSP DER error: {err}"
+        );
+    }
+
+    #[test]
+    fn embedded_profile_der_parser_rejects_malformed_material() {
+        fn assert_der_error(key: &str, kind: DerMaterialKind, der: &[u8], expected: &str) {
+            let encoded = BASE64_STANDARD.encode(der);
+            let value: Value = json::from_json(&format!(r#"{{"{key}":["{encoded}"]}}"#))
+                .expect("DER material JSON");
+            let obj = value.as_object().expect("DER material object");
+            let err = optional_der_base64_array(obj, key, "signed", kind)
+                .expect_err("malformed DER material must fail");
+            assert!(
+                err.contains(expected),
+                "unexpected DER error for {key}: {err}"
+            );
+        }
+
+        assert_der_error(
+            "x509_crl_der_base64",
+            DerMaterialKind::Crl,
+            &[0x02, 0x01, 0x00],
+            "DER SEQUENCE values",
+        );
+        assert_der_error(
+            "x509_crl_der_base64",
+            DerMaterialKind::Crl,
+            &[0x30, 0x00, 0x00],
+            "DER length must consume the whole value",
+        );
+        assert_der_error(
+            "x509_crl_der_base64",
+            DerMaterialKind::Crl,
+            &[0x30, 0x81, 0x00],
+            "non-minimal DER length",
+        );
+        assert_der_error(
+            "x509_crl_der_base64",
+            DerMaterialKind::Crl,
+            &[0x30, 0x06, 0x30, 0x00, 0x30, 0x00, 0x30, 0x00],
+            "DER X.509 CRLs",
+        );
+        assert_der_error(
+            "x509_ocsp_response_der_base64",
+            DerMaterialKind::OcspResponse,
+            &[
+                0x30, 0x16, 0x0A, 0x01, 0x01, 0xA0, 0x11, 0x30, 0x0F, 0x06, 0x09, 0x2B, 0x06, 0x01,
+                0x05, 0x05, 0x07, 0x30, 0x01, 0x01, 0x04, 0x02, 0x30, 0x00,
+            ],
+            "successful DER OCSP responses",
+        );
+        assert_der_error(
+            "x509_ocsp_response_der_base64",
+            DerMaterialKind::OcspResponse,
+            &[
+                0x30, 0x16, 0x0A, 0x01, 0x00, 0xA0, 0x11, 0x30, 0x0F, 0x06, 0x09, 0x2B, 0x06, 0x01,
+                0x05, 0x05, 0x07, 0x30, 0x01, 0x02, 0x04, 0x02, 0x30, 0x00,
+            ],
+            "successful DER OCSP responses",
+        );
+        assert_der_error(
+            "x509_ocsp_response_der_base64",
+            DerMaterialKind::OcspResponse,
+            &[
+                0x30, 0x17, 0x0A, 0x01, 0x00, 0xA0, 0x12, 0x30, 0x10, 0x06, 0x09, 0x2B, 0x06, 0x01,
+                0x05, 0x05, 0x07, 0x30, 0x01, 0x01, 0x04, 0x03, 0x02, 0x01, 0x00,
+            ],
+            "DER SEQUENCE values",
+        );
+    }
+
+    #[test]
     fn xml_signature_key_pins_accept_terminal_certificate_digest() {
         let mut profile = default_profile("generic-iso20022").expect("profile");
         profile.trusted_public_key_sha256 = vec!["aa".repeat(32)];
@@ -1257,6 +1857,40 @@ mod tests {
     }
 
     #[test]
+    fn reference_dataset_requirements_reject_duplicates() {
+        let err = parse_reference_dataset_requirements(
+            "swift-cbpr-plus",
+            vec!["bic-lei".to_owned(), "BIC_LEI".to_owned()],
+        )
+        .expect_err("case-drifted duplicate reference datasets must fail");
+        assert!(err.contains("duplicate-free"));
+
+        let err =
+            parse_reference_dataset_requirements("swift-cbpr-plus", vec![" bic-lei".to_owned()])
+                .expect_err("padded reference dataset requirements must fail");
+        assert!(err.contains("non-empty trimmed string"));
+    }
+
+    #[test]
+    fn message_profile_entries_must_be_unique_by_family_and_direction() {
+        let profile = MessageProfile {
+            message_type: "pacs.008".to_owned(),
+            direction: MessageDirection::Inbound,
+            versions: vec!["pacs.008.001.08".to_owned()],
+            business_services: Vec::new(),
+            require_app_header: false,
+            require_business_service: false,
+            require_uetr: false,
+            structured_address_mode: StructuredAddressMode::Permissive,
+            supplementary_data_max_bytes: 4096,
+            amount_minor_units: BTreeMap::new(),
+        };
+        let err = validate_message_profiles("duplicate-profile", &[profile.clone(), profile])
+            .expect_err("duplicate message family/direction entries must fail");
+        assert!(err.contains("unique by message_type and direction"));
+    }
+
+    #[test]
     fn minor_units_default_to_two_with_overrides() {
         let catalog = default_profile_catalog();
         let profile = catalog["swift-cbpr-plus"]
@@ -1266,6 +1900,113 @@ mod tests {
         assert_eq!(profile.minor_units_for("JPY"), 0);
         assert_eq!(profile.minor_units_for("KWD"), 3);
         assert_eq!(profile.minor_units_for("XAU"), 2);
+    }
+
+    #[test]
+    fn message_version_allowlists_must_be_explicit_and_trimmed() {
+        let err = validate_versions("pacs.008", &[]).expect_err("empty list must fail");
+        assert!(err.contains("requires at least one versions entry"));
+
+        for version in ["", " ", " pacs.008.001.08", "pacs.008.001.08 "] {
+            let err = validate_versions("pacs.008", &[version.to_owned()])
+                .expect_err("blank or padded versions must fail");
+            assert!(err.contains("non-empty trimmed strings"));
+        }
+
+        let err = validate_versions(
+            "pacs.008",
+            &["pacs.008.001.08".to_owned(), "PACS.008.001.08".to_owned()],
+        )
+        .expect_err("case-drifted duplicate versions must fail");
+        assert!(err.contains("duplicate-free"));
+    }
+
+    #[test]
+    fn required_business_service_profiles_must_have_explicit_allowlists() {
+        let err =
+            validate_business_services("pacs.008", &[], true).expect_err("empty list must fail");
+        assert!(err.contains("requires at least one business_services entry"));
+
+        let profile = MessageProfile {
+            message_type: "pacs.008".to_owned(),
+            direction: MessageDirection::Inbound,
+            versions: vec!["pacs.008.001.08".to_owned()],
+            business_services: Vec::new(),
+            require_app_header: true,
+            require_business_service: true,
+            require_uetr: true,
+            structured_address_mode: StructuredAddressMode::RequireStructured,
+            supplementary_data_max_bytes: 4096,
+            amount_minor_units: BTreeMap::new(),
+        };
+        assert!(
+            !profile.allows_business_service("swift.cbprplus.02"),
+            "required BizSvc profiles must not treat an empty allowlist as a wildcard"
+        );
+    }
+
+    #[test]
+    fn business_service_allowlist_entries_must_be_non_empty_and_trimmed() {
+        for service in ["", " ", " swift.cbprplus.02", "swift.cbprplus.02 "] {
+            let err = validate_business_services("pacs.008", &[service.to_owned()], false)
+                .expect_err("blank or padded service ids must fail");
+            assert!(err.contains("non-empty trimmed strings"));
+        }
+
+        let err = validate_business_services(
+            "pacs.008",
+            &[
+                "swift.cbprplus.02".to_owned(),
+                "SWIFT.CBPRPLUS.02".to_owned(),
+            ],
+            false,
+        )
+        .expect_err("case-drifted duplicate service ids must fail");
+        assert!(err.contains("duplicate-free"));
+    }
+
+    #[test]
+    fn amount_minor_units_reject_duplicate_currency_and_excess_precision() {
+        let duplicate: Value = json::from_json(
+            r#"[{"currency":"usd","minor_units":2},{"currency":"USD","minor_units":3}]"#,
+        )
+        .expect("minor-unit JSON");
+        let err = parse_minor_units(Some(&duplicate), "pacs.008")
+            .expect_err("duplicate normalized currencies must fail");
+        assert!(err.contains("duplicate currency `USD`"));
+
+        let excessive: Value =
+            json::from_json(r#"[{"currency":"USD","minor_units":5}]"#).expect("minor-unit JSON");
+        let err = parse_minor_units(Some(&excessive), "pacs.008")
+            .expect_err("ISO fiat minor units must be bounded");
+        assert!(err.contains("minor_units must be at most 4"));
+
+        let padded: Value =
+            json::from_json(r#"[{"currency":" USD","minor_units":2}]"#).expect("minor-unit JSON");
+        let err = parse_minor_units(Some(&padded), "pacs.008")
+            .expect_err("padded minor-unit currency literals must fail");
+        assert!(err.contains("non-empty trimmed string"));
+    }
+
+    #[test]
+    fn x509_policy_oid_literals_must_be_trimmed_and_duplicate_free() {
+        let padded: Value = json::from_json(
+            r#"{"x509_required_certificate_policy_oids":[" 1.3.6.1.4.1.55555.1"]}"#,
+        )
+        .expect("OID JSON");
+        let obj = padded.as_object().expect("OID object");
+        let err = optional_oid_array(obj, "x509_required_certificate_policy_oids", "signed")
+            .expect_err("padded OID literals must fail");
+        assert!(err.contains("non-empty trimmed string"));
+
+        let duplicate: Value = json::from_json(
+            r#"{"x509_required_certificate_policy_oids":["1.3.6.1.4.1.55555.1","1.3.6.1.4.1.55555.1"]}"#,
+        )
+        .expect("OID JSON");
+        let obj = duplicate.as_object().expect("OID object");
+        let err = optional_oid_array(obj, "x509_required_certificate_policy_oids", "signed")
+            .expect_err("duplicate OID literals must fail");
+        assert!(err.contains("duplicate-free"));
     }
 
     #[test]

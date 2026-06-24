@@ -5772,6 +5772,185 @@ impl Actor {
         emitted
     }
 
+    pub(super) fn maybe_start_validation_for_pending_after_new_view_qc(
+        &mut self,
+        qc: &crate::sumeragi::consensus::Qc,
+        trigger: &'static str,
+    ) -> bool {
+        if !matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
+            return false;
+        }
+        let Some(highest_qc) = qc.highest_qc else {
+            return false;
+        };
+        if !self
+            .cached_new_view_qc_extends_committed_frontier(qc.height, qc.view, qc.view, highest_qc)
+        {
+            return false;
+        }
+
+        let epoch = self.epoch_for_height(qc.height);
+        let candidates: Vec<_> = self
+            .pending
+            .pending_blocks
+            .iter()
+            .filter_map(|(block_hash, pending)| {
+                let retained = self.slot_tracker.retained_branches.contains_key(&(
+                    qc.height,
+                    qc.view,
+                    *block_hash,
+                ));
+                let authoritative_owner =
+                    self.authoritative_slot_owner_hash(qc.height, qc.view) == Some(*block_hash);
+                let branch_evidence = retained
+                    || authoritative_owner
+                    || self
+                        .slot_tracker
+                        .proposals_seen
+                        .contains(&(qc.height, qc.view))
+                    || self.pending_block_has_commit_votes(*block_hash, qc.height, qc.view)
+                    || self.pending_block_has_qc(*block_hash, qc.height, qc.view);
+                (pending.height == qc.height
+                    && pending.view == qc.view
+                    && (pending.is_retired_same_height() || !pending.aborted)
+                    && !pending.local_commit_vote_emitted()
+                    && !pending.commit_qc_observed()
+                    && pending.validation_status == ValidationStatus::Pending
+                    && pending.block.header().prev_block_hash()
+                        == Some(highest_qc.subject_block_hash)
+                    && branch_evidence
+                    && !self.should_defer_tip_precommit_for_same_height_conflict(
+                        *block_hash,
+                        qc.height,
+                        qc.view,
+                        epoch,
+                    ))
+                .then_some((*block_hash, pending.payload_hash))
+            })
+            .collect();
+
+        let mut started = false;
+        for (block_hash, payload_hash) in candidates {
+            self.drop_superseded_contiguous_frontier_owner_state(
+                block_hash, qc.height, qc.view, false,
+            );
+            let Some(pending) = self.pending.pending_blocks.get_mut(&block_hash) else {
+                continue;
+            };
+            pending.reactivate_retired_same_height();
+            self.note_authoritative_slot_owner(qc.height, qc.view, block_hash);
+            self.note_proposal_seen(qc.height, qc.view, payload_hash);
+            self.drive_vnext_proposal_accepted_for_block(
+                block_hash,
+                qc.height,
+                qc.view,
+                payload_hash,
+            );
+            self.drive_vnext_availability_ready_for_block(block_hash, qc.height, qc.view);
+            if self.drive_vnext_validation_for_pending(block_hash, qc.height, qc.view, payload_hash)
+            {
+                info!(
+                    height = qc.height,
+                    view = qc.view,
+                    block = %block_hash,
+                    trigger,
+                    "started validation for passive same-height pending block after NEW_VIEW QC"
+                );
+                started = true;
+            }
+        }
+        started
+    }
+
+    pub(super) fn maybe_start_validation_for_pending_after_cached_new_view_qc(
+        &mut self,
+        height: u64,
+        view: u64,
+        trigger: &'static str,
+    ) -> bool {
+        let expected_epoch = self.epoch_for_height(height);
+        let qcs: Vec<_> = self
+            .qc_cache
+            .values()
+            .filter(|qc| {
+                matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView)
+                    && qc.height == height
+                    && qc.view == view
+                    && qc.epoch == expected_epoch
+            })
+            .cloned()
+            .collect();
+
+        let mut started = false;
+        for qc in qcs {
+            if self.maybe_start_validation_for_pending_after_new_view_qc(&qc, trigger) {
+                started = true;
+            }
+        }
+        started
+    }
+
+    pub(super) fn maybe_start_validation_for_block_created_after_cached_new_view_qc(
+        &mut self,
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+        trigger: &'static str,
+    ) -> bool {
+        let expected_epoch = self.epoch_for_height(height);
+        let qcs: Vec<_> = self
+            .qc_cache
+            .values()
+            .filter(|qc| {
+                matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView)
+                    && qc.height == height
+                    && qc.view == view
+                    && qc.epoch == expected_epoch
+            })
+            .cloned()
+            .collect();
+
+        let mut started = false;
+        for qc in qcs {
+            let Some(highest_qc) = qc.highest_qc else {
+                continue;
+            };
+            if !self.cached_new_view_qc_extends_committed_frontier(
+                qc.height, qc.view, qc.view, highest_qc,
+            ) {
+                continue;
+            }
+            let epoch = self.epoch_for_height(qc.height);
+            let candidate_matches =
+                self.pending
+                    .pending_blocks
+                    .get(&block_hash)
+                    .is_some_and(|pending| {
+                        pending.height == qc.height
+                            && pending.view == qc.view
+                            && (pending.is_retired_same_height() || !pending.aborted)
+                            && !pending.local_commit_vote_emitted()
+                            && !pending.commit_qc_observed()
+                            && pending.validation_status == ValidationStatus::Pending
+                            && pending.block.header().prev_block_hash()
+                                == Some(highest_qc.subject_block_hash)
+                    });
+            if !candidate_matches
+                || self.should_defer_tip_precommit_for_same_height_conflict(
+                    block_hash, qc.height, qc.view, epoch,
+                )
+            {
+                continue;
+            }
+
+            self.note_authoritative_slot_owner(qc.height, qc.view, block_hash);
+            if self.maybe_start_validation_for_pending_after_new_view_qc(&qc, trigger) {
+                started = true;
+            }
+        }
+        started
+    }
+
     pub(super) fn request_missing_commit_vote_payloads_after_new_view_qc(
         &mut self,
         qc: &crate::sumeragi::consensus::Qc,

@@ -80,15 +80,40 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
         )
     }
 
+    static func encodeRegisterDeviceAttestation(chainId: String,
+                                                authority: String,
+                                                creationTimeMs: UInt64,
+                                                ttlMs: UInt64?,
+                                                nonce: UInt32?,
+                                                registration: OfflineDeviceAttestationRegistration,
+                                                metadata: [String: ToriiJSONValue],
+                                                signingKey: SigningKey) throws -> SignedTransactionEnvelope {
+        let instruction = try encodeInstruction(
+            wireName: OfflineNoteV2TypeNames.registerDeviceAttestationInstruction,
+            typeName: OfflineNoteV2TypeNames.registerDeviceAttestationInstruction,
+            modelPayload: OfflineNoteV2Encoding.encodeDeviceAttestationRegistration(registration)
+        )
+        return try encodeTransaction(
+            chainId: chainId,
+            authority: authority,
+            creationTimeMs: creationTimeMs,
+            ttlMs: ttlMs,
+            nonce: nonce,
+            instructionPayload: instruction,
+            metadata: metadata,
+            signingKey: signingKey
+        )
+    }
+
     private static func encodeInstruction(wireName: String,
                                           typeName: String,
                                           modelPayload: Data) -> Data {
-        var concreteInstruction = OfflineNoritoWriter()
+        var concreteInstruction = OfflineCompactNoritoWriter()
         concreteInstruction.writeField(modelPayload)
         let framedInstruction = noritoEncode(
             typeName: typeName,
             payload: concreteInstruction.data,
-            flags: 0
+            flags: NoritoHeader.compactLen
         )
 
         var instructionBox = OfflineNoritoWriter()
@@ -268,6 +293,36 @@ extension SwiftTransactionEncoder {
             signingKey: signingKey
         )
     }
+
+    static func encodeRegisterOfflineDeviceAttestation(request: RegisterOfflineDeviceAttestationRequest,
+                                                       keypair: Keypair,
+                                                       creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
+        return try encodeRegisterOfflineDeviceAttestation(
+            request: request,
+            signingKey: signingKey,
+            creationTimeMs: creationTimeMs
+        )
+    }
+
+    static func encodeRegisterOfflineDeviceAttestation(request: RegisterOfflineDeviceAttestationRequest,
+                                                       signingKey: SigningKey,
+                                                       creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+        let ids = try TransactionInputValidator.validate(
+            chainId: request.chainId,
+            authorityId: request.authority
+        )
+        return try OfflineNoteV2SwiftNoritoEncoder.encodeRegisterDeviceAttestation(
+            chainId: ids.chainId,
+            authority: ids.authorityId,
+            creationTimeMs: creationTimeMs,
+            ttlMs: request.ttlMs,
+            nonce: request.nonce,
+            registration: request.registration,
+            metadata: request.metadata,
+            signingKey: signingKey
+        )
+    }
 }
 
 public extension IrohaSDK {
@@ -325,6 +380,24 @@ public extension IrohaSDK {
         )
     }
 
+    func buildRegisterOfflineDeviceAttestation(request: RegisterOfflineDeviceAttestationRequest,
+                                               keypair: Keypair) throws -> SignedTransactionEnvelope {
+        try SwiftTransactionEncoder.encodeRegisterOfflineDeviceAttestation(
+            request: request,
+            keypair: keypair,
+            creationTimeMs: creationTimeProvider()
+        )
+    }
+
+    func buildRegisterOfflineDeviceAttestation(request: RegisterOfflineDeviceAttestationRequest,
+                                               signingKey: SigningKey) throws -> SignedTransactionEnvelope {
+        try SwiftTransactionEncoder.encodeRegisterOfflineDeviceAttestation(
+            request: request,
+            signingKey: signingKey,
+            creationTimeMs: creationTimeProvider()
+        )
+    }
+
     func submit(issueOfflineNoteV2 request: IssueOfflineNoteV2Request,
                 keypair: Keypair,
                 completion: @Sendable @escaping (Error?) -> Void) throws {
@@ -367,6 +440,20 @@ public extension IrohaSDK {
         submit(envelope: envelope, completion: completion)
     }
 
+    func submit(registerOfflineDeviceAttestation request: RegisterOfflineDeviceAttestationRequest,
+                keypair: Keypair,
+                completion: @Sendable @escaping (Error?) -> Void) throws {
+        let envelope = try buildRegisterOfflineDeviceAttestation(request: request, keypair: keypair)
+        submit(envelope: envelope, completion: completion)
+    }
+
+    func submit(registerOfflineDeviceAttestation request: RegisterOfflineDeviceAttestationRequest,
+                signingKey: SigningKey,
+                completion: @Sendable @escaping (Error?) -> Void) throws {
+        let envelope = try buildRegisterOfflineDeviceAttestation(request: request, signingKey: signingKey)
+        submit(envelope: envelope, completion: completion)
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
     func submit(issueOfflineNoteV2 request: IssueOfflineNoteV2Request,
                 keypair: Keypair) async throws {
@@ -401,5 +488,17 @@ public extension IrohaSDK {
     func submit(auditOfflineNoteV2 request: AuditOfflineNoteV2Request,
                 signingKey: SigningKey) async throws {
         try await submit(envelope: buildAuditOfflineNoteV2(request: request, signingKey: signingKey))
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func submit(registerOfflineDeviceAttestation request: RegisterOfflineDeviceAttestationRequest,
+                keypair: Keypair) async throws {
+        try await submit(envelope: buildRegisterOfflineDeviceAttestation(request: request, keypair: keypair))
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func submit(registerOfflineDeviceAttestation request: RegisterOfflineDeviceAttestationRequest,
+                signingKey: SigningKey) async throws {
+        try await submit(envelope: buildRegisterOfflineDeviceAttestation(request: request, signingKey: signingKey))
     }
 }

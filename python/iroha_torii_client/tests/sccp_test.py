@@ -455,6 +455,16 @@ def test_package_root_eth_source_material_uses_mainnet_bridge_config_guard() -> 
         )
     with pytest.raises(
         TypeError,
+        match="sourceBridgeEmitterCodeHash must not match sourceBridgeNetworkId",
+    ):
+        iroha_torii_client_package.normalize_sccp_source_verifier_material(
+            {
+                **input_value,
+                "source_bridge_emitter_code_hash": SCCP_ETH_MAINNET_NETWORK_ID,
+            }
+        )
+    with pytest.raises(
+        TypeError,
         match="sourceBridgeConfigHash must match ETH source bridge config fields",
     ):
         iroha_torii_client_package.normalize_sccp_source_verifier_material(
@@ -7883,6 +7893,14 @@ def test_binds_source_adapter_deployment_context_for_ui_provers() -> None:
                 "source_adapter_deployment_receipt_hash": SCCP_ZERO_HASH_V1,
             }
         )
+    # Receipt-only deployment bindings must fail, not only deployment-only bindings.
+    with pytest.raises(TypeError, match="must both be zero or both be non-zero"):
+        normalize_sccp_source_adapter_deployment_binding(
+            {
+                "source_adapter_deployment_hash": SCCP_ZERO_HASH_V1,
+                "source_adapter_deployment_receipt_hash": HEX32_B,
+            }
+        )
     with pytest.raises(TypeError, match="must differ from sourceAdapterDeploymentReceiptHash"):
         normalize_sccp_source_adapter_deployment_binding(
             {
@@ -8374,6 +8392,16 @@ def test_derives_source_material_and_deployment_record_hashes_for_ui_tooling() -
             {
                 **sample_source_record_input(SCCP_DOMAIN_ETH),
                 "owner_address": "0x" + "22" * 20,
+            }
+        )
+    with pytest.raises(
+        TypeError,
+        match="sourceBridgeEmitterCodeHash must not match sourceBridgeNetworkId",
+    ):
+        normalize_sccp_source_verifier_material(
+            {
+                **sample_source_record_input(SCCP_DOMAIN_ETH),
+                "source_bridge_emitter_code_hash": SCCP_ETH_MAINNET_NETWORK_ID,
             }
         )
     with pytest.raises(

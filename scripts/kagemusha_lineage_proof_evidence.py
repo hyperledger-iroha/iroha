@@ -137,13 +137,18 @@ def _validate_command(command: str) -> list[str]:
     )
 
 
-def _validate_elapsed_seconds(value: float) -> list[str]:
-    if not math.isfinite(value) or value <= 0:
+def _validate_elapsed_seconds(value: Any) -> list[str]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return ["--elapsed-seconds must be a positive finite number"]
+    elapsed_seconds = float(value)
+    if not math.isfinite(elapsed_seconds) or elapsed_seconds <= 0:
         return ["--elapsed-seconds must be a positive finite number"]
     return []
 
 
-def _validate_generated_at_utc(value: str) -> list[str]:
+def _validate_generated_at_utc(value: Any) -> list[str]:
+    if not isinstance(value, str) or value == "":
+        return ["--generated-at-utc must be a non-empty string"]
     if device_lab.SIGNED_AT_UTC_RE.fullmatch(value) is None:
         return ["--generated-at-utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ"]
     return []
@@ -151,8 +156,13 @@ def _validate_generated_at_utc(value: str) -> list[str]:
 
 def _validate_generated_at_future_skew(
     generated_at: dt.datetime | None,
-    max_future_skew_seconds: int,
+    max_future_skew_seconds: Any,
 ) -> list[str]:
+    if isinstance(max_future_skew_seconds, bool) or not isinstance(
+        max_future_skew_seconds,
+        int,
+    ):
+        return ["--max-generated-at-future-skew-seconds must be a non-negative integer"]
     if max_future_skew_seconds < 0:
         return ["--max-generated-at-future-skew-seconds must be non-negative"]
     if generated_at is None:
@@ -232,22 +242,25 @@ def build_evidence(
     artifact_dir: Path,
     proof_log: Path,
     command: str,
-    elapsed_seconds: float,
-    generated_at_utc: str,
-    max_generated_at_future_skew_seconds: int = (
+    elapsed_seconds: Any,
+    generated_at_utc: Any,
+    max_generated_at_future_skew_seconds: Any = (
         readiness.DEFAULT_MAX_SIGNED_AT_FUTURE_SKEW_SECONDS
     ),
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """Build a Reserved-lineage proof evidence document from local artifacts."""
 
     errors: list[str] = []
-    errors.extend(_validate_generated_at_utc(generated_at_utc))
-    generated_at, timestamp_error = readiness.parse_utc_timestamp(
-        generated_at_utc,
-        "--generated-at-utc",
-    )
-    if timestamp_error is not None:
-        errors.append(timestamp_error["message"])
+    generated_at_errors = _validate_generated_at_utc(generated_at_utc)
+    errors.extend(generated_at_errors)
+    generated_at: dt.datetime | None = None
+    if not generated_at_errors:
+        generated_at, timestamp_error = readiness.parse_utc_timestamp(
+            generated_at_utc,
+            "--generated-at-utc",
+        )
+        if timestamp_error is not None:
+            errors.append(timestamp_error["message"])
     errors.extend(
         _validate_generated_at_future_skew(
             generated_at,

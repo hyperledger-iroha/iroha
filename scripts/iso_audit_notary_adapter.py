@@ -760,58 +760,60 @@ def _ensure_output_directory(path: Path, label: str) -> None:
         raise AdapterError(
             f"{label} must not point to checked-in ISO fixture artifacts"
         )
-    _reject_symlinked_existing_ancestors(path)
+    _reject_symlinked_existing_ancestors(path, display_label=label)
     if path.exists() or path.is_symlink():
         mode = path.lstat().st_mode
         if stat.S_ISLNK(mode):
-            raise AdapterError(f"{label} {path} must not be a symlink")
+            raise AdapterError(f"{label} must not be a symlink")
         if not stat.S_ISDIR(mode):
-            raise AdapterError(f"{label} {path} must be a directory")
+            raise AdapterError(f"{label} must be a directory")
         return
     path.mkdir(parents=True, exist_ok=True)
     mode = path.lstat().st_mode
     if stat.S_ISLNK(mode):
-        raise AdapterError(f"{label} {path} must not be a symlink")
+        raise AdapterError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(mode):
-        raise AdapterError(f"{label} {path} must be a directory")
+        raise AdapterError(f"{label} must be a directory")
 
 
-def _ensure_output_file_target(path: Path) -> None:
+def _ensure_output_file_target(path: Path, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else str(path)
     if path.exists() or path.is_symlink():
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode):
-            raise AdapterError(f"{path} must not be a symlink")
+            raise AdapterError(f"{label} must not be a symlink")
         if not stat.S_ISREG(metadata.st_mode):
-            raise AdapterError(f"{path} must be a regular file")
+            raise AdapterError(f"{label} must be a regular file")
         if metadata.st_nlink > 1:
-            raise AdapterError(f"{path} must not be hard-linked")
+            raise AdapterError(f"{label} must not be hard-linked")
 
 
-def _write_text_output(path: Path, text: str) -> None:
-    _reject_output_path_smuggling(path, "output path")
+def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else "output path"
+    _reject_output_path_smuggling(path, label)
     if _path_is_repository_iso_fixture(str(path)):
         raise AdapterError(
-            "output path must not point to checked-in ISO fixture artifacts"
+            f"{label} must not point to checked-in ISO fixture artifacts"
         )
-    _reject_symlinked_existing_ancestors(path.parent)
+    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except FileExistsError as error:
-        raise AdapterError(f"{path.parent} must be a directory") from error
+        raise AdapterError(f"{label} must be a directory") from error
     parent_mode = path.parent.lstat().st_mode
     if stat.S_ISLNK(parent_mode):
-        raise AdapterError(f"{path.parent} must not be a symlink")
+        raise AdapterError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(parent_mode):
-        raise AdapterError(f"{path.parent} must be a directory")
-    _ensure_output_file_target(path)
+        raise AdapterError(f"{label} must be a directory")
+    _ensure_output_file_target(path, display_label=label)
     parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
         parent_fd = os.open(path.parent, parent_flags | nofollow)
     except OSError as error:
         if error.errno == errno.ELOOP:
-            raise AdapterError(f"{path.parent} must not be a symlink") from error
-        raise AdapterError(f"{path.parent} must be a directory") from error
+            raise AdapterError(f"{label} must not be a symlink") from error
+        raise AdapterError(f"{label} must be a directory") from error
 
     fd = -1
     leaf_digest = hashlib.sha256(path.name.encode("utf-8", "surrogatepass")).hexdigest()
@@ -824,15 +826,15 @@ def _write_text_output(path: Path, text: str) -> None:
             tmp_created = True
         except OSError as error:
             if error.errno == errno.ELOOP:
-                raise AdapterError(f"{path} temp file must not be a symlink") from error
+                raise AdapterError(f"{label} temp file must not be a symlink") from error
             raise AdapterError(
-                f"cannot open temporary output for {path}: {error.strerror}"
+                f"cannot open temporary output for {label}: {error.strerror}"
             ) from error
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
-            raise AdapterError(f"{path} temp file must be a regular file")
+            raise AdapterError(f"{label} temp file must be a regular file")
         if opened.st_nlink > 1:
-            raise AdapterError(f"{path} temp file must not be hard-linked")
+            raise AdapterError(f"{label} temp file must not be hard-linked")
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = -1
             handle.write(text)
@@ -1526,7 +1528,7 @@ def verify_anchor_file(
     _reject_raw_output_path_smuggling(str(anchor_path), "anchor path")
     if _path_is_repository_iso_fixture(str(anchor_path)):
         raise AdapterError(
-            f"{anchor_path} anchor path must not point to checked-in ISO fixture artifacts"
+            f"{anchor_label} must not point to checked-in ISO fixture artifacts"
         )
     anchor_value, raw = _load_json_bytes(anchor_path, display_label=anchor_label)
     if not isinstance(anchor_value, dict):
@@ -1583,19 +1585,20 @@ def verify_anchor_file(
         expected_name = f"{index_sha256}.notary.json"
         if relative_anchor.name != expected_name:
             raise AdapterError(
-                f"{anchor_path} filename must be digest-addressed as {expected_name}"
+                f"{anchor_label} filename must be digest-addressed as {expected_name}"
             )
 
     latest = export_dir / LATEST_ANCHOR_FILE
     if anchor_path.resolve() == latest.resolve():
         digest_anchor = anchors_dir / f"{index_sha256}.notary.json"
         if not digest_anchor.exists():
-            raise AdapterError(f"{latest} has no digest-addressed peer {digest_anchor}")
+            raise AdapterError(f"{anchor_label} latest anchor has no digest-addressed peer")
         if _read_regular_file(
             digest_anchor,
             max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES,
+            path_label=f"{anchor_label} digest-addressed peer",
         ) != raw:
-            raise AdapterError(f"{latest} differs from digest-addressed peer {digest_anchor}")
+            raise AdapterError(f"{anchor_label} latest anchor differs from digest-addressed peer")
 
     return VerifiedAnchor(
         path=anchor_path,
@@ -2126,7 +2129,11 @@ def write_receipt(receipt_dir: Path, anchor: VerifiedAnchor, result: PublishResu
     _ensure_output_directory(receipt_dir, "receipt_dir")
     receipt = receipt_value(anchor, result)
     path = receipt_output_path(receipt_dir, anchor, result.endpoint)
-    _write_text_output(path, json.dumps(receipt, indent=2, sort_keys=False) + "\n")
+    _write_text_output(
+        path,
+        json.dumps(receipt, indent=2, sort_keys=False) + "\n",
+        display_label="receipt output",
+    )
     return path
 
 
@@ -2193,9 +2200,14 @@ def run(args: argparse.Namespace) -> int:
     if not endpoints:
         raise AdapterError("at least one --endpoint is required unless --dry-run is set")
     _ensure_output_directory(receipt_dir, "receipt_dir")
+    receipt_offset = 0
     for anchor in anchors:
         for endpoint in endpoints:
-            _ensure_output_file_target(receipt_output_path(receipt_dir, anchor, endpoint))
+            _ensure_output_file_target(
+                receipt_output_path(receipt_dir, anchor, endpoint),
+                display_label=f"receipt_output[{receipt_offset}]",
+            )
+            receipt_offset += 1
 
     failures = 0
     receipts: list[str] = []

@@ -59,7 +59,11 @@ done
 echo "[+] Using iOS deployment target (device): $IPHONEOS_DEPLOYMENT_TARGET" >&2
 echo "[+] Using iOS deployment target (simulator): $IPHONESIMULATOR_DEPLOYMENT_TARGET" >&2
 
-rm -rf "$CARGO_BUILD_DIR_BASE" "$STAGE_DIR" "$OUT_DIR/NoritoBridge.xcframework"
+if [[ "${NORITO_BRIDGE_PRESERVE_CARGO_TARGETS:-0}" == "1" ]]; then
+  rm -rf "$STAGE_DIR" "$OUT_DIR/NoritoBridge.xcframework"
+else
+  rm -rf "$CARGO_BUILD_DIR_BASE" "$STAGE_DIR" "$OUT_DIR/NoritoBridge.xcframework"
+fi
 mkdir -p "$STAGE_DIR" "$OUT_DIR"
 
 DEVICE_TRIPLE="aarch64-apple-ios"

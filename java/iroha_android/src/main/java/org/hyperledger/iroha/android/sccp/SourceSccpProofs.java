@@ -4678,6 +4678,11 @@ public final class SourceSccpProofs {
         throw new IllegalArgumentException(
             "sourceBridgeNetworkId must be Ethereum mainnet chain id");
       }
+      if (Arrays.equals(
+          normalizedSourceBridgeEmitterCodeHash, normalizedSourceBridgeNetworkId)) {
+        throw new IllegalArgumentException(
+            "sourceBridgeEmitterCodeHash must not match sourceBridgeNetworkId");
+      }
       if (!Arrays.equals(
           normalizedSourceBridgeConfigHash,
           ethSourceBridgeConfigHash(

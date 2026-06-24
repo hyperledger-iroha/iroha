@@ -4754,6 +4754,13 @@ final class SccpSolanaProverTests: XCTestCase {
         )) { error in
             XCTAssertEqual(error as? SolanaSccpProverError, .sourceAdapterDeploymentBindingMismatch)
         }
+        // Receipt-only deployment bindings must fail, not only deployment-only bindings.
+        XCTAssertThrowsError(try normalizeSccpSourceAdapterDeploymentBinding(
+            sourceAdapterDeploymentHash: sccpZeroHashV1,
+            sourceAdapterDeploymentReceiptHash: String(repeating: "cd", count: 32)
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .sourceAdapterDeploymentBindingMismatch)
+        }
         XCTAssertThrowsError(try normalizeSccpSourceAdapterDeploymentBinding(
             sourceAdapterDeploymentHash: String(repeating: "ab", count: 32),
             sourceAdapterDeploymentReceiptHash: String(repeating: "ab", count: 32)
@@ -4951,6 +4958,21 @@ final class SccpSolanaProverTests: XCTestCase {
             )
         ) { error in
             XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("sourceBridgeNetworkId"))
+        }
+        XCTAssertThrowsError(
+            try canonicalSccpSourceVerifierMaterialBytes(
+                sourceDomain: sccpDomainEthereum,
+                sourceTrustAnchorHash: "0x" + String(repeating: "44", count: 32),
+                consensusVerifierHash: "0x" + String(repeating: "55", count: 32),
+                messageInclusionVerifierHash: "0x" + String(repeating: "66", count: 32),
+                finalityPolicyHash: "0x" + String(repeating: "88", count: 32),
+                bridgeAddress: "0x" + String(repeating: "11", count: 20),
+                sourceBridgeEmitterCodeHash: sccpEthereumMainnetNetworkId,
+                networkId: sccpEthereumMainnetNetworkId,
+                configHash: "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b"
+            )
+        ) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("sourceBridgeEmitterCodeHash"))
         }
         XCTAssertThrowsError(
             try canonicalSccpSourceVerifierMaterialBytes(

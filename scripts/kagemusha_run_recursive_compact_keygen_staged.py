@@ -78,6 +78,30 @@ def _wrapper_exit_status(command_status: int) -> int:
     return 0 if command_status == 0 else 1
 
 
+def _absolute_repo_root(repo_root: Path) -> Path:
+    """Return ``repo_root`` as an absolute path without resolving aliases."""
+
+    return repo_root if repo_root.is_absolute() else Path.cwd() / repo_root
+
+
+def _child_env_with_repo_binaries(repo_root: Path) -> dict[str, str]:
+    """Return a child environment that can find locally built Iroha binaries."""
+
+    env = os.environ.copy()
+    absolute_repo_root = _absolute_repo_root(repo_root)
+    local_bins = [
+        str(absolute_repo_root / "target" / "release"),
+        str(absolute_repo_root / "target" / "debug"),
+    ]
+    existing_path = env.get("PATH", "")
+    env["PATH"] = (
+        os.pathsep.join([*local_bins, existing_path])
+        if existing_path
+        else os.pathsep.join(local_bins)
+    )
+    return env
+
+
 def _validate_report_command(
     value: object,
     label: str,
@@ -433,6 +457,10 @@ def _preflight_paths(args: argparse.Namespace) -> tuple[Path | None, list[str]]:
     if staged_root is not None:
         errors.extend(validate_directory_path(staged_root, "--staged-root", must_exist=False))
     errors.extend(
+        str(item["message"])
+        for item in readiness.validate_repo_root_path(args.repo_root)
+    )
+    errors.extend(
         validate_directory_path(
             args.staged_artifact_dir,
             "--staged-artifact-dir",
@@ -519,6 +547,38 @@ def _unlink_replace_outputs(staged_artifact_dir: Path) -> list[str]:
                 f"staged recursive compact key output {name}",
             )
         )
+    return errors
+
+
+def _unlink_temp_output_for_replace(path: Path, label: str) -> list[str]:
+    temp_path = path.parent / f".{path.name}.staged-runner.tmp"
+    temp_identity, identity_errors = _regular_file_identity_for_unlink(
+        temp_path,
+        f"{label} temporary output",
+    )
+    if identity_errors or temp_identity is None:
+        return identity_errors
+    return _cleanup_temp_output(temp_path, label, temp_identity)
+
+
+def _unlink_replace_temp_outputs(args: argparse.Namespace) -> list[str]:
+    errors: list[str] = []
+    for path, label in (
+        (
+            args.staged_artifact_dir / GENERATOR_LOG_FILENAME,
+            "staged recursive compact key generator log",
+        ),
+        (
+            args.staged_artifact_dir / RUN_REPORT_FILENAME,
+            "staged recursive compact key run report",
+        ),
+        (
+            args.staged_artifact_dir / EXECUTION_REPORT_FILENAME,
+            "staged recursive compact key execution report",
+        ),
+        (args.exit_file, "staged keygen exit marker"),
+    ):
+        errors.extend(_unlink_temp_output_for_replace(path, label))
     return errors
 
 
@@ -770,16 +830,26 @@ def _run_command_to_log(
     log_path: Path,
     *,
     heartbeat_interval_seconds: float = STAGED_COMMAND_HEARTBEAT_SECONDS,
+    executable_repo_root: Path | None = None,
 ) -> int:
     """Run compact keygen with child output owned directly by ``log_path``."""
 
+    child_env = (
+        _child_env_with_repo_binaries(executable_repo_root)
+        if executable_repo_root is not None
+        else None
+    )
     with log_path.open("xb") as log_handle:
         os.fchmod(log_handle.fileno(), 0o600)
+        popen_kwargs = {}
+        if child_env is not None:
+            popen_kwargs["env"] = child_env
         process = subprocess.Popen(
             command,
             cwd=cwd,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
+            **popen_kwargs,
         )
         started = time.monotonic()
         while True:
@@ -1313,6 +1383,7 @@ def run_staged_keygen(
         return 1, errors
     if args.replace:
         replace_errors = _unlink_replace_outputs(args.staged_artifact_dir)
+        replace_errors.extend(_unlink_replace_temp_outputs(args))
         if replace_errors:
             return 1, replace_errors
     elif args.resume_keygen and _has_any_staged_output(args):
@@ -1334,7 +1405,12 @@ def run_staged_keygen(
         exit_code = (
             runner(command, staged_root, temp_log)
             if runner is not None
-            else _run_command_to_log(command, staged_root, temp_log)
+            else _run_command_to_log(
+                command,
+                staged_root,
+                temp_log,
+                executable_repo_root=args.repo_root,
+            )
         )
     except OSError:
         temp_identity, temp_identity_errors = _regular_file_identity_for_unlink(
@@ -1398,6 +1474,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "and the real process exit marker."
         )
     )
+    parser.add_argument("--repo-root", type=Path, default=Path("."))
     parser.add_argument("--staged-artifact-dir", type=Path, default=DEFAULT_STAGED_ARTIFACT_DIR)
     parser.add_argument("--exit-file", type=Path, default=DEFAULT_EXIT_FILE)
     parser.add_argument(
