@@ -29,8 +29,8 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
 
 /** Torii-backed issuer client for Offline Note wallet loads. */
 public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClient {
-  private static final String KEYS_REFILL_PATH = "/v1/offline/keys/refill";
-  private static final String NOTES_ISSUE_PATH = "/v1/offline/notes/issue";
+  private static final String KEYS_REFILL_PATH = "/v1/offline/v2/keys/refill";
+  private static final String NOTES_ISSUE_PATH = "/v1/offline/v2/notes/issue";
 
   private final ToriiCanonicalRequestAuth canonicalAuth;
   private final OfflineNoteIssuerDeviceBindingProvider deviceBindingProvider;

@@ -3,6 +3,8 @@ package org.hyperledger.iroha.sdk.offline
 import java.math.BigDecimal
 import java.math.BigInteger
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.util.Base64
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.address.AccountAddressException
 import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
@@ -30,11 +32,23 @@ object OfflineNoteV2 {
         "iroha:offline-note:audit-public-inputs"
     const val DEVICE_ATTESTATION_CHALLENGE_DOMAIN: String =
         "iroha:offline-note:device-attestation-challenge:v1"
+    const val DEVICE_ATTESTATION_EVIDENCE_PREFIX: String =
+        "offline-device-attestation-evidence-v1"
     const val RECURSIVE_BACKEND: String = "halo2/ipa"
     const val RECURSIVE_VERIFIER_NAME: String = "offline-note-v2-recursive-v1"
     const val RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1: String =
         "{\"schema\":\"offline_note_recursive\",\"public_inputs\":[\"public_inputs_hash_limb0\",\"public_inputs_hash_limb1\",\"public_inputs_hash_limb2\",\"public_inputs_hash_limb3\",\"proof_mode\",\"input_count\",\"output_count\",\"input_amount_sum\",\"output_amount_sum\",\"input_nullifier_sum_limb0\",\"output_commitment_sum_limb0\",\"key_certificate_payload_hash_limb0\",\"source_or_token_limb0\",\"input_claim_hash_sum_limb0\",\"output_claim_hash_sum_limb0\",\"reserved_zero\"]}"
     const val KEY_CERTIFICATE_VERSION: Int = 1
+    const val IOS_APP_ATTEST_PLATFORM: String = "ios-appattest"
+    const val IOS_APP_ATTEST_ASSERTION_SCHEME: String = "apple-appattest-counter-v1"
+    const val IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM: String = "app-attest-p256"
+    const val IOS_APP_ATTEST_LEGACY_PLATFORM: String = "ios-app-attest"
+    const val IOS_APP_ATTEST_LEGACY_ASSERTION_SCHEME: String = "apple-app-attest-v1"
+    const val IOS_APP_ATTEST_LEGACY_ASSERTION_KEY_ALGORITHM: String = "ecdsa-p256-sha256"
+    const val ANDROID_KEYMINT_PLATFORM: String = "android-keymint"
+    const val ANDROID_KEYMINT_ASSERTION_SCHEME: String =
+        "android-keymint-ecdsa-p256-usage-limit-v1"
+    const val ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM: String = "ecdsa-p256-sha256"
 
     private const val MULTISIG_POLICY_VERSION_V1 = 1
     private const val MAX_NUMERIC_SCALE = 28
@@ -45,6 +59,14 @@ object OfflineNoteV2 {
     private const val MODE_REDEEM = 1L
     private const val MODE_AUDIT = 2L
     private val MAX_U64: BigInteger = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
+    private val P256_FIELD_PRIME: BigInteger =
+        BigInteger("FFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF", 16)
+    private val P256_B: BigInteger =
+        BigInteger("5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B", 16)
+    private val P256_TWO: BigInteger = BigInteger.valueOf(2L)
+    private val P256_THREE: BigInteger = BigInteger.valueOf(3L)
+    private val DEVICE_ATTESTATION_EVIDENCE_PREFIX_BYTES: ByteArray =
+        DEVICE_ATTESTATION_EVIDENCE_PREFIX.toByteArray(StandardCharsets.UTF_8)
 
     private const val KEY_CERTIFICATE_SCHEMA =
         "iroha_data_model::offline::model::OfflineNoteKeyCertificate"
@@ -463,9 +485,18 @@ object OfflineNoteV2 {
                 "unsupported key certificate payload domain"
             }
             requireCertificateCore(version, accountId, _publicKey, oneUse)
+            requireAttestationIdentity(keyId, deviceId)
             require(assertionUsageCountLimit == null || assertionUsageCountLimit >= 0) {
                 "assertion usage count limit must be non-negative"
             }
+            requireKeyCertificateProfile(
+                platform = platform,
+                keyId = keyId,
+                assertionScheme = assertionScheme,
+                assertionKeyAlgorithm = assertionKeyAlgorithm,
+                assertionPublicKey = _assertionPublicKey,
+                assertionUsageCountLimit = assertionUsageCountLimit,
+            )
         }
 
         fun publicKey(): ByteArray = _publicKey.copyOf()
@@ -494,10 +525,19 @@ object OfflineNoteV2 {
 
         init {
             requireCertificateCore(version, accountId, _publicKey, oneUse)
+            requireAttestationIdentity(keyId, deviceId)
             require(_issuerSignature.size == 64) { "issuer signature must be 64 bytes" }
             require(assertionUsageCountLimit == null || assertionUsageCountLimit >= 0) {
                 "assertion usage count limit must be non-negative"
             }
+            requireKeyCertificateProfile(
+                platform = platform,
+                keyId = keyId,
+                assertionScheme = assertionScheme,
+                assertionKeyAlgorithm = assertionKeyAlgorithm,
+                assertionPublicKey = _assertionPublicKey,
+                assertionUsageCountLimit = assertionUsageCountLimit,
+            )
         }
 
         fun publicKey(): ByteArray = _publicKey.copyOf()
@@ -562,10 +602,25 @@ object OfflineNoteV2 {
 
         init {
             requireCertificateCore(version, accountId, _publicKey, oneUse)
+            requireAttestationIdentity(keyId, deviceId)
+            requireOptionalAttestationMetadata(
+                iosTeamId = iosTeamId,
+                iosBundleId = iosBundleId,
+                iosEnvironment = iosEnvironment,
+                androidPackageName = androidPackageName,
+            )
             assetDefinitionId?.let { AssetDefinitionIdEncoder.parseAddressBytes(it) }
             require(assertionUsageCountLimit == null || assertionUsageCountLimit >= 0) {
                 "assertion usage count limit must be non-negative"
             }
+            requireDeviceAttestationProfile(
+                platform = platform,
+                keyId = keyId,
+                assertionScheme = assertionScheme,
+                assertionKeyAlgorithm = assertionKeyAlgorithm,
+                assertionPublicKey = _assertionPublicKey,
+                assertionUsageCountLimit = assertionUsageCountLimit,
+            )
             if (_androidSigningCertificateSha256 != null) {
                 require(_androidSigningCertificateSha256.size == 32) {
                     "android_signing_certificate_sha256 must be 32 bytes"
@@ -590,6 +645,7 @@ object OfflineNoteV2 {
             }
             _attestationReportHash = resolvedReportHash
 
+            requireDeviceAttestationEvidenceEnvelope(_evidence, resolvedReportHash)
             val expectedEvidenceHash = hash(_evidence)
             val resolvedEvidenceHash = evidenceHash?.copyOf() ?: expectedEvidenceHash
             requireHash(resolvedEvidenceHash, "evidence_hash")
@@ -2008,6 +2064,169 @@ object OfflineNoteV2 {
         encodeAccountIdPayload(accountId)
     }
 
+    private fun requireAttestationIdentity(keyId: String, deviceId: String) {
+        require(keyId.trim().isNotEmpty()) { "attestation key_id must not be empty" }
+        require(keyId.trim() == keyId) { "attestation key_id must not contain surrounding whitespace" }
+        require(deviceId.trim().isNotEmpty()) { "attestation device_id must not be empty" }
+        require(deviceId.trim() == deviceId) { "attestation device_id must not contain surrounding whitespace" }
+    }
+
+    private fun requireOptionalAttestationMetadata(
+        iosTeamId: String?,
+        iosBundleId: String?,
+        iosEnvironment: String?,
+        androidPackageName: String?,
+    ) {
+        listOf(
+            "ios_team_id" to iosTeamId,
+            "ios_bundle_id" to iosBundleId,
+            "ios_environment" to iosEnvironment,
+            "android_package_name" to androidPackageName,
+        ).forEach { (field, value) ->
+            if (value != null) {
+                require(value.trim().isNotEmpty()) { "$field must not be empty when present" }
+                require(value.trim() == value) { "$field must not contain surrounding whitespace" }
+            }
+        }
+    }
+
+    private fun requireDeviceAttestationProfile(
+        platform: String,
+        keyId: String,
+        assertionScheme: String,
+        assertionKeyAlgorithm: String,
+        assertionPublicKey: ByteArray,
+        assertionUsageCountLimit: Int?,
+    ) {
+        requireP256AssertionPublicKey(assertionPublicKey)
+        when (platform) {
+            IOS_APP_ATTEST_PLATFORM -> {
+                requireIosAppAttestRegistrationKeyId(keyId)
+                requireIosAppAttestProfile(
+                    assertionScheme,
+                    assertionKeyAlgorithm,
+                    assertionUsageCountLimit,
+                )
+            }
+            ANDROID_KEYMINT_PLATFORM -> requireAndroidKeyMintProfile(
+                keyId,
+                assertionScheme,
+                assertionKeyAlgorithm,
+                assertionPublicKey,
+                assertionUsageCountLimit,
+            )
+            else -> throw IllegalArgumentException("unsupported device attestation platform: $platform")
+        }
+    }
+
+    private fun requireKeyCertificateProfile(
+        platform: String,
+        keyId: String,
+        assertionScheme: String,
+        assertionKeyAlgorithm: String,
+        assertionPublicKey: ByteArray,
+        assertionUsageCountLimit: Int?,
+    ) {
+        requireP256AssertionPublicKey(assertionPublicKey)
+        when (platform) {
+            IOS_APP_ATTEST_PLATFORM -> requireIosAppAttestProfile(
+                assertionScheme,
+                assertionKeyAlgorithm,
+                assertionUsageCountLimit,
+            )
+            IOS_APP_ATTEST_LEGACY_PLATFORM -> {
+                require(assertionScheme == IOS_APP_ATTEST_LEGACY_ASSERTION_SCHEME) {
+                    "legacy iOS App Attest assertion scheme must be $IOS_APP_ATTEST_LEGACY_ASSERTION_SCHEME"
+                }
+                require(assertionKeyAlgorithm == IOS_APP_ATTEST_LEGACY_ASSERTION_KEY_ALGORITHM) {
+                    "legacy iOS App Attest assertion key algorithm must be $IOS_APP_ATTEST_LEGACY_ASSERTION_KEY_ALGORITHM"
+                }
+                require(assertionUsageCountLimit == null) {
+                    "legacy iOS App Attest assertion usage count limit must be absent"
+                }
+            }
+            ANDROID_KEYMINT_PLATFORM -> requireAndroidKeyMintProfile(
+                keyId,
+                assertionScheme,
+                assertionKeyAlgorithm,
+                assertionPublicKey,
+                assertionUsageCountLimit,
+            )
+            else -> throw IllegalArgumentException("unsupported key certificate platform: $platform")
+        }
+    }
+
+    private fun requireIosAppAttestRegistrationKeyId(keyId: String) {
+        val decoded = try {
+            Base64.getDecoder().decode(keyId)
+        } catch (error: IllegalArgumentException) {
+            throw IllegalArgumentException(
+                "iOS App Attest key_id must be canonical standard base64 credential bytes",
+                error,
+            )
+        }
+        require(decoded.isNotEmpty() && Base64.getEncoder().encodeToString(decoded) == keyId) {
+            "iOS App Attest key_id must be canonical standard base64 credential bytes"
+        }
+    }
+
+    private fun requireIosAppAttestProfile(
+        assertionScheme: String,
+        assertionKeyAlgorithm: String,
+        assertionUsageCountLimit: Int?,
+    ) {
+        require(assertionScheme == IOS_APP_ATTEST_ASSERTION_SCHEME) {
+            "iOS App Attest assertion scheme must be $IOS_APP_ATTEST_ASSERTION_SCHEME"
+        }
+        require(assertionKeyAlgorithm == IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM) {
+            "iOS App Attest assertion key algorithm must be $IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM"
+        }
+        require(assertionUsageCountLimit == null) {
+            "iOS App Attest assertion usage count limit must be absent"
+        }
+    }
+
+    private fun requireAndroidKeyMintProfile(
+        keyId: String,
+        assertionScheme: String,
+        assertionKeyAlgorithm: String,
+        assertionPublicKey: ByteArray,
+        assertionUsageCountLimit: Int?,
+    ) {
+        require(assertionScheme == ANDROID_KEYMINT_ASSERTION_SCHEME) {
+            "Android KeyMint assertion scheme must be $ANDROID_KEYMINT_ASSERTION_SCHEME"
+        }
+        require(assertionKeyAlgorithm == ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM) {
+            "Android KeyMint assertion key algorithm must be $ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM"
+        }
+        require(assertionUsageCountLimit == 1) {
+            "Android KeyMint assertion usage count limit must be exactly 1"
+        }
+        require(keyId == hexLower(sha256(assertionPublicKey))) {
+            "Android KeyMint key_id must be lowercase hex SHA-256 of the assertion public key"
+        }
+    }
+
+    private fun requireP256AssertionPublicKey(assertionPublicKey: ByteArray) {
+        require(assertionPublicKey.size == 65 && assertionPublicKey[0] == 0x04.toByte()) {
+            "assertion public key must be an uncompressed P-256 SEC1 point"
+        }
+        val x = BigInteger(1, assertionPublicKey.copyOfRange(1, 33))
+        val y = BigInteger(1, assertionPublicKey.copyOfRange(33, 65))
+        require(x.signum() >= 0 && x.compareTo(P256_FIELD_PRIME) < 0) {
+            "assertion public key x-coordinate must be in the P-256 field"
+        }
+        require(y.signum() >= 0 && y.compareTo(P256_FIELD_PRIME) < 0) {
+            "assertion public key y-coordinate must be in the P-256 field"
+        }
+        val lhs = y.modPow(P256_TWO, P256_FIELD_PRIME)
+        val rhs = x.modPow(P256_THREE, P256_FIELD_PRIME)
+            .subtract(P256_THREE.multiply(x))
+            .add(P256_B)
+            .mod(P256_FIELD_PRIME)
+        require(lhs == rhs) { "assertion public key must be a valid P-256 point" }
+    }
+
     private fun requireHash(value: ByteArray, field: String) {
         require(value.size == 32) { "$field must be 32 bytes" }
         require((value[value.size - 1].toInt() and 1) == 1) {
@@ -2019,6 +2238,23 @@ object OfflineNoteV2 {
         require(values.isNotEmpty()) { "$field must not be empty" }
         for (i in values.indices) {
             requireHash(values[i], "$field[$i]")
+        }
+    }
+
+    private fun requireDeviceAttestationEvidenceEnvelope(evidence: ByteArray, reportHash: ByteArray) {
+        val prefix = DEVICE_ATTESTATION_EVIDENCE_PREFIX_BYTES
+        require(evidence.size == prefix.size + reportHash.size) {
+            "device attestation evidence envelope must bind attestation_report_hash"
+        }
+        for (i in prefix.indices) {
+            require(evidence[i] == prefix[i]) {
+                "device attestation evidence envelope must bind attestation_report_hash"
+            }
+        }
+        for (i in reportHash.indices) {
+            require(evidence[prefix.size + i] == reportHash[i]) {
+                "device attestation evidence envelope must bind attestation_report_hash"
+            }
         }
     }
 
@@ -2063,6 +2299,8 @@ object OfflineNoteV2 {
 
     private fun hexLower(bytes: ByteArray): String =
         bytes.joinToString(separator = "") { "%02x".format(it.toInt() and 0xFF) }
+
+    private fun sha256(bytes: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(bytes)
 
     private class ParsedAssetId(
         val accountId: String,

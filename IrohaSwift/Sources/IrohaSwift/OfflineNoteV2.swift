@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 public enum OfflineNoteV2Constants {
     public static let keyCertificatePayloadDomain = "iroha:offline-note:key-certificate-payload"
@@ -6,10 +7,20 @@ public enum OfflineNoteV2Constants {
     public static let redeemPublicInputsDomain = "iroha:offline-note:redeem-public-inputs"
     public static let auditPublicInputsDomain = "iroha:offline-note:audit-public-inputs"
     public static let deviceAttestationChallengeDomain = "iroha:offline-note:device-attestation-challenge:v1"
+    public static let deviceAttestationEvidencePrefix = "offline-device-attestation-evidence-v1"
     public static let recursiveBackend = "halo2/ipa"
     public static let recursiveVerifierName = "offline-note-v2-recursive-v1"
     public static let recursivePublicInputsSchemaV1 = #"{"schema":"offline_note_recursive","public_inputs":["public_inputs_hash_limb0","public_inputs_hash_limb1","public_inputs_hash_limb2","public_inputs_hash_limb3","proof_mode","input_count","output_count","input_amount_sum","output_amount_sum","input_nullifier_sum_limb0","output_commitment_sum_limb0","key_certificate_payload_hash_limb0","source_or_token_limb0","input_claim_hash_sum_limb0","output_claim_hash_sum_limb0","reserved_zero"]}"#
     public static let keyCertificateVersion: UInt16 = 1
+    public static let iosAppAttestPlatform = "ios-appattest"
+    public static let iosAppAttestAssertionScheme = "apple-appattest-counter-v1"
+    public static let iosAppAttestAssertionKeyAlgorithm = "app-attest-p256"
+    public static let iosAppAttestLegacyPlatform = "ios-app-attest"
+    public static let iosAppAttestLegacyAssertionScheme = "apple-app-attest-v1"
+    public static let iosAppAttestLegacyAssertionKeyAlgorithm = "ecdsa-p256-sha256"
+    public static let androidKeyMintPlatform = "android-keymint"
+    public static let androidKeyMintAssertionScheme = "android-keymint-ecdsa-p256-usage-limit-v1"
+    public static let androidKeyMintAssertionKeyAlgorithm = "ecdsa-p256-sha256"
 
     public static var recursivePublicInputsSchemaHash: Data {
         IrohaHash.hash(Data(recursivePublicInputsSchemaV1.utf8))
@@ -37,6 +48,7 @@ public enum OfflineNoteV2Error: Error, LocalizedError, Equatable {
     case invalidDigestLength(field: String, expected: Int, actual: Int)
     case unsupportedRecursiveProofBackend(expected: String, actual: String)
     case unsupportedDomain(field: String, expected: String, actual: String)
+    case unsupportedDeviceAttestationProfile(String)
 
     public var errorDescription: String? {
         switch self {
@@ -80,6 +92,8 @@ public enum OfflineNoteV2Error: Error, LocalizedError, Equatable {
             return "Offline V2 recursive proof backend must be \(expected), got \(actual)."
         case let .unsupportedDomain(field, expected, actual):
             return "\(field) must be \(expected), got \(actual)."
+        case let .unsupportedDeviceAttestationProfile(reason):
+            return "Unsupported Offline V2 device attestation profile: \(reason)."
         }
     }
 }
@@ -142,6 +156,13 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
             publicKey: publicKey,
             oneUse: oneUse
         )
+        try OfflineNoteV2Validation.validateAttestationIdentity(keyId: keyId, deviceId: deviceId)
+        try OfflineNoteV2Validation.validateOptionalAttestationMetadata(
+            iosTeamId: iosTeamId,
+            iosBundleId: iosBundleId,
+            iosEnvironment: iosEnvironment,
+            androidPackageName: androidPackageName
+        )
         if let assetDefinitionId, AssetDefinitionAddress.decode(assetDefinitionId) == nil {
             throw OfflineNoritoError.invalidAssetId(assetDefinitionId)
         }
@@ -153,6 +174,14 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
                 actual: androidSigningCertificateSha256.count
             )
         }
+        try Self.validateAttestationProfile(
+            platform: platform,
+            keyId: keyId,
+            assertionScheme: assertionScheme,
+            assertionKeyAlgorithm: assertionKeyAlgorithm,
+            assertionPublicKey: assertionPublicKey,
+            assertionUsageCountLimit: assertionUsageCountLimit
+        )
         try OfflineNoteV2Validation.validateHash(recentBlockHash, field: "recent_block_hash")
 
         let resolvedChallengeHash = try Self.computeChallengeHash(
@@ -193,6 +222,10 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
             throw OfflineNoteV2Error.deviceAttestationHashMismatch(field: "attestation_report_hash")
         }
 
+        try OfflineNoteV2Validation.validateAttestationEvidenceEnvelope(
+            evidence,
+            attestationReportHash: resolvedAttestationReportHash
+        )
         let resolvedEvidenceHash = evidenceHash ?? IrohaHash.hash(evidence)
         try OfflineNoteV2Validation.validateHash(resolvedEvidenceHash, field: "evidence_hash")
         guard resolvedEvidenceHash == IrohaHash.hash(evidence) else {
@@ -224,6 +257,22 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
         self.recentBlockHeight = recentBlockHeight
         self.recentBlockHash = recentBlockHash
         self.expiresAtMs = expiresAtMs
+    }
+
+    private static func validateAttestationProfile(platform: String,
+                                                   keyId: String,
+                                                   assertionScheme: String,
+                                                   assertionKeyAlgorithm: String,
+                                                   assertionPublicKey: Data,
+                                                   assertionUsageCountLimit: UInt32?) throws {
+        try OfflineNoteV2Validation.validateDeviceAttestationProfile(
+            platform: platform,
+            keyId: keyId,
+            assertionScheme: assertionScheme,
+            assertionKeyAlgorithm: assertionKeyAlgorithm,
+            assertionPublicKey: assertionPublicKey,
+            assertionUsageCountLimit: assertionUsageCountLimit
+        )
     }
 
     public func canonicalChallengeHash() throws -> Data {
@@ -477,6 +526,15 @@ public struct OfflineNoteKeyCertificatePayloadV2: Equatable, Sendable {
             publicKey: publicKey,
             oneUse: oneUse
         )
+        try OfflineNoteV2Validation.validateAttestationIdentity(keyId: keyId, deviceId: deviceId)
+        try OfflineNoteV2Validation.validateKeyCertificateProfile(
+            platform: platform,
+            keyId: keyId,
+            assertionScheme: assertionScheme,
+            assertionKeyAlgorithm: assertionKeyAlgorithm,
+            assertionPublicKey: assertionPublicKey,
+            assertionUsageCountLimit: assertionUsageCountLimit
+        )
         self.domain = domain
         self.version = version
         self.platform = platform
@@ -530,6 +588,15 @@ public struct OfflineNoteKeyCertificateV2: Equatable, Sendable {
             accountId: accountId,
             publicKey: publicKey,
             oneUse: oneUse
+        )
+        try OfflineNoteV2Validation.validateAttestationIdentity(keyId: keyId, deviceId: deviceId)
+        try OfflineNoteV2Validation.validateKeyCertificateProfile(
+            platform: platform,
+            keyId: keyId,
+            assertionScheme: assertionScheme,
+            assertionKeyAlgorithm: assertionKeyAlgorithm,
+            assertionPublicKey: assertionPublicKey,
+            assertionUsageCountLimit: assertionUsageCountLimit
         )
         guard issuerSignature.count == 64 else {
             throw OfflineNoteV2Error.invalidIssuerSignatureLength(expected: 64, actual: issuerSignature.count)
@@ -1148,6 +1215,18 @@ enum OfflineNoteV2Validation {
         }
     }
 
+    static func validateAttestationEvidenceEnvelope(_ evidence: Data,
+                                                    attestationReportHash: Data) throws {
+        let prefix = Data(OfflineNoteV2Constants.deviceAttestationEvidencePrefix.utf8)
+        guard evidence.count == prefix.count + attestationReportHash.count,
+              Data(evidence.prefix(prefix.count)) == prefix,
+              Data(evidence.suffix(attestationReportHash.count)) == attestationReportHash else {
+            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
+                "evidence envelope must be deviceAttestationEvidencePrefix || attestation_report_hash"
+            )
+        }
+    }
+
     static func validateCertificateCore(version: UInt16,
                                         accountId: String,
                                         publicKey: Data,
@@ -1162,6 +1241,178 @@ enum OfflineNoteV2Validation {
             throw OfflineNoteV2Error.invalidNotePublicKeyLength(expected: 32, actual: publicKey.count)
         }
         _ = try OfflineNorito.encodeAccountId(accountId)
+    }
+
+    static func validateAttestationIdentity(keyId: String, deviceId: String) throws {
+        let trimmedKeyId = keyId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedDeviceId = deviceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKeyId.isEmpty else {
+            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile("attestation key_id must not be empty")
+        }
+        guard trimmedKeyId == keyId else {
+            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
+                "attestation key_id must not contain surrounding whitespace"
+            )
+        }
+        guard !trimmedDeviceId.isEmpty else {
+            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile("attestation device_id must not be empty")
+        }
+        guard trimmedDeviceId == deviceId else {
+            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
+                "attestation device_id must not contain surrounding whitespace"
+            )
+        }
+    }
+
+    static func validateOptionalAttestationMetadata(iosTeamId: String?,
+                                                    iosBundleId: String?,
+                                                    iosEnvironment: String?,
+                                                    androidPackageName: String?) throws {
+        for (field, value) in [
+            ("ios_team_id", iosTeamId),
+            ("ios_bundle_id", iosBundleId),
+            ("ios_environment", iosEnvironment),
+            ("android_package_name", androidPackageName)
+        ] {
+            try validateOptionalAttestationMetadataValue(value, field: field)
+        }
+    }
+
+    private static func validateOptionalAttestationMetadataValue(_ value: String?,
+                                                                 field: String) throws {
+        guard let value else {
+            return
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
+                "\(field) must not be empty when present"
+            )
+        }
+        guard trimmed == value else {
+            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
+                "\(field) must not contain surrounding whitespace"
+            )
+        }
+    }
+
+    static func validateDeviceAttestationProfile(platform: String,
+                                                 keyId: String,
+                                                 assertionScheme: String,
+                                                 assertionKeyAlgorithm: String,
+                                                 assertionPublicKey: Data,
+                                                 assertionUsageCountLimit: UInt32?) throws {
+        try validateP256AssertionPublicKey(assertionPublicKey)
+        switch platform {
+        case OfflineNoteV2Constants.iosAppAttestPlatform:
+            try validateIosAppAttestRegistrationKeyId(keyId)
+            try validateIosAppAttestProfile(
+                assertionScheme: assertionScheme,
+                assertionKeyAlgorithm: assertionKeyAlgorithm,
+                assertionUsageCountLimit: assertionUsageCountLimit
+            )
+        case OfflineNoteV2Constants.androidKeyMintPlatform:
+            try validateAndroidKeyMintProfile(
+                keyId: keyId,
+                assertionScheme: assertionScheme,
+                assertionKeyAlgorithm: assertionKeyAlgorithm,
+                assertionPublicKey: assertionPublicKey,
+                assertionUsageCountLimit: assertionUsageCountLimit
+            )
+        default:
+            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile("unsupported platform \(platform)")
+        }
+    }
+
+    static func validateKeyCertificateProfile(platform: String,
+                                              keyId: String,
+                                              assertionScheme: String,
+                                              assertionKeyAlgorithm: String,
+                                              assertionPublicKey: Data,
+                                              assertionUsageCountLimit: UInt32?) throws {
+        try validateP256AssertionPublicKey(assertionPublicKey)
+        switch platform {
+        case OfflineNoteV2Constants.iosAppAttestPlatform:
+            try validateIosAppAttestProfile(
+                assertionScheme: assertionScheme,
+                assertionKeyAlgorithm: assertionKeyAlgorithm,
+                assertionUsageCountLimit: assertionUsageCountLimit
+            )
+        case OfflineNoteV2Constants.iosAppAttestLegacyPlatform:
+            guard assertionScheme == OfflineNoteV2Constants.iosAppAttestLegacyAssertionScheme,
+                  assertionKeyAlgorithm == OfflineNoteV2Constants.iosAppAttestLegacyAssertionKeyAlgorithm,
+                  assertionUsageCountLimit == nil else {
+                throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
+                    "legacy iOS App Attest certificates require \(OfflineNoteV2Constants.iosAppAttestLegacyAssertionScheme), \(OfflineNoteV2Constants.iosAppAttestLegacyAssertionKeyAlgorithm), and no assertion usage limit"
+                )
+            }
+        case OfflineNoteV2Constants.androidKeyMintPlatform:
+            try validateAndroidKeyMintProfile(
+                keyId: keyId,
+                assertionScheme: assertionScheme,
+                assertionKeyAlgorithm: assertionKeyAlgorithm,
+                assertionPublicKey: assertionPublicKey,
+                assertionUsageCountLimit: assertionUsageCountLimit
+            )
+        default:
+            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile("unsupported platform \(platform)")
+        }
+    }
+
+    private static func validateIosAppAttestRegistrationKeyId(_ keyId: String) throws {
+        guard let decoded = Data(base64Encoded: keyId),
+              !decoded.isEmpty,
+              decoded.base64EncodedString() == keyId else {
+            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
+                "iOS App Attest key_id must be canonical standard base64 credential bytes"
+            )
+        }
+    }
+
+    private static func validateIosAppAttestProfile(assertionScheme: String,
+                                                    assertionKeyAlgorithm: String,
+                                                    assertionUsageCountLimit: UInt32?) throws {
+        guard assertionScheme == OfflineNoteV2Constants.iosAppAttestAssertionScheme,
+              assertionKeyAlgorithm == OfflineNoteV2Constants.iosAppAttestAssertionKeyAlgorithm,
+              assertionUsageCountLimit == nil else {
+            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
+                "iOS App Attest requires \(OfflineNoteV2Constants.iosAppAttestAssertionScheme), \(OfflineNoteV2Constants.iosAppAttestAssertionKeyAlgorithm), and no assertion usage limit"
+            )
+        }
+    }
+
+    private static func validateAndroidKeyMintProfile(keyId: String,
+                                                      assertionScheme: String,
+                                                      assertionKeyAlgorithm: String,
+                                                      assertionPublicKey: Data,
+                                                      assertionUsageCountLimit: UInt32?) throws {
+        guard assertionScheme == OfflineNoteV2Constants.androidKeyMintAssertionScheme,
+              assertionKeyAlgorithm == OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm,
+              assertionUsageCountLimit == 1 else {
+            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
+                "Android KeyMint requires \(OfflineNoteV2Constants.androidKeyMintAssertionScheme), \(OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm), and assertion usage limit 1"
+            )
+        }
+        let expectedKeyId = Data(SHA256.hash(data: assertionPublicKey)).hexLowercased()
+        guard keyId == expectedKeyId else {
+            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
+                "Android KeyMint key_id must be lowercase hex SHA-256 of the assertion public key"
+            )
+        }
+    }
+
+    private static func validateP256AssertionPublicKey(_ assertionPublicKey: Data) throws {
+        guard assertionPublicKey.count == 65,
+              assertionPublicKey.first == 0x04 else {
+            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
+                "assertion public key must be an uncompressed P-256 SEC1 point"
+            )
+        }
+        guard (try? P256.Signing.PublicKey(x963Representation: assertionPublicKey)) != nil else {
+            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
+                "assertion public key must be a valid P-256 point"
+            )
+        }
     }
 }
 

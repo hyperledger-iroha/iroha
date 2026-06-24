@@ -49,9 +49,9 @@ use norito::json::Value;
 use super::{
     Error, Execute,
     asset::isi::{
-        NumericAssetTransferSourcePolicy, apply_numeric_asset_transfer_delta,
-        assert_numeric_spec_with, prepare_outbound_asset_transfer_control_update,
-        update_control_record,
+        NumericAssetTransferSourcePolicy, apply_resolved_numeric_asset_transfer_delta,
+        assert_numeric_spec_with, ensure_numeric_asset_transfer_policies,
+        prepare_outbound_asset_transfer_control_update, update_control_record,
     },
 };
 use crate::{
@@ -198,14 +198,20 @@ fn transfer_numeric_asset_for_escrow(
     amount: &Numeric,
     source_policy: NumericAssetTransferSourcePolicy,
 ) -> Result<TransferDeltaTranscript, Error> {
-    let control_update =
-        prepare_outbound_asset_transfer_control_update(state_transaction, source_id, amount)?;
-    let (source_id, destination_id, delta) = apply_numeric_asset_transfer_delta(
+    let (source_id, destination_id) = ensure_numeric_asset_transfer_policies(
         state_transaction,
         source_id,
         destination_id,
         amount,
         source_policy,
+    )?;
+    let control_update =
+        prepare_outbound_asset_transfer_control_update(state_transaction, &source_id, amount)?;
+    let delta = apply_resolved_numeric_asset_transfer_delta(
+        state_transaction,
+        &source_id,
+        &destination_id,
+        amount,
     )?;
     if let Some(record) = control_update {
         update_control_record(state_transaction, source_id.account(), record)?;
@@ -2929,6 +2935,147 @@ mod tests {
         );
         assert_eq!(
             balance(&tx, &record.custody, &asset_definition),
+            Numeric::zero()
+        );
+    }
+
+    #[test]
+    fn asset_lock_uses_restricted_definition_home_dataspace_from_universal_route() {
+        let source = fixture_account("lock-home-source");
+        let destination = fixture_account("lock-home-destination");
+        let observer = fixture_account("lock-home-observer");
+        let asset_definition = fixture_asset_definition_id();
+        let escrow_id = fixture_escrow_id("lock-definition-home");
+        let home_dataspace = iroha_data_model::nexus::DataSpaceId::new(7);
+        let asset_definition_entry = AssetDefinition::numeric(asset_definition.clone())
+            .with_name("XOR".to_owned())
+            .with_balance_scope_policy(
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            )
+            .build(&source);
+        let source_asset_id = AssetId::with_scope(
+            asset_definition.clone(),
+            source.clone(),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(home_dataspace),
+        );
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(100_u32, 0));
+        let mut world = crate::state::World::with_assets(
+            [Domain::new(asset_definition.domain().clone()).build(&source)],
+            [
+                Account::new(source.clone()).build(&source),
+                Account::new(destination.clone()).build(&destination),
+                Account::new(observer.clone()).build(&observer),
+            ],
+            [asset_definition_entry],
+            [source_asset],
+            [],
+        );
+        let alias: iroha_data_model::asset::AssetDefinitionAlias =
+            "xor#paynet".parse().expect("asset alias");
+        world
+            .asset_definition_aliases
+            .insert(alias.clone(), asset_definition.clone());
+        world.asset_definition_alias_bindings.insert(
+            asset_definition.clone(),
+            crate::state::AssetDefinitionAliasBindingRecord {
+                alias,
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 0,
+            },
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: home_dataspace,
+                alias: "paynet".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let mut block = state.block(block_header(1_000));
+        block.nexus.dataspace_catalog = catalog.clone();
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = catalog.clone();
+        tx.world.dataspace_catalog = catalog;
+        tx.current_dataspace_id = Some(iroha_data_model::nexus::DataSpaceId::UNIVERSAL);
+        tx.world.current_dataspace_id = Some(iroha_data_model::nexus::DataSpaceId::UNIVERSAL);
+        seed_test_call_hash(&mut tx, 0xC9);
+
+        OpenAssetLock::new(
+            escrow_id,
+            asset_definition.clone(),
+            destination.clone(),
+            Numeric::new(40_u32, 0),
+        )
+        .execute(&source, &mut tx)
+        .expect("open restricted asset lock through universal route");
+
+        let record = escrow_record(&tx, &escrow_id);
+        let custody_asset_id = AssetId::with_scope(
+            asset_definition.clone(),
+            record.custody.clone(),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(home_dataspace),
+        );
+        assert_eq!(
+            tx.world
+                .asset(&source_asset_id)
+                .expect("source balance remains in definition home dataspace")
+                .value()
+                .clone()
+                .into_inner(),
+            Numeric::new(60_u32, 0)
+        );
+        assert_eq!(
+            tx.world
+                .asset(&custody_asset_id)
+                .expect("custody balance is created in definition home dataspace")
+                .value()
+                .clone()
+                .into_inner(),
+            Numeric::new(40_u32, 0)
+        );
+        let universal_custody_asset_id = AssetId::with_scope(
+            asset_definition.clone(),
+            record.custody.clone(),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(
+                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            ),
+        );
+        assert!(
+            tx.world.asset(&universal_custody_asset_id).is_err(),
+            "native lock custody must not fall back to universal dataspace"
+        );
+
+        DrawdownAssetLock::new(escrow_id, Numeric::new(40_u32, 0))
+            .execute(&destination, &mut tx)
+            .expect("draw down restricted asset lock");
+
+        let destination_asset_id = AssetId::with_scope(
+            asset_definition,
+            destination,
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(home_dataspace),
+        );
+        assert_eq!(
+            tx.world
+                .asset(&destination_asset_id)
+                .expect("destination balance is settled in definition home dataspace")
+                .value()
+                .clone()
+                .into_inner(),
+            Numeric::new(40_u32, 0)
+        );
+        assert_eq!(
+            tx.world
+                .asset(&custody_asset_id)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(|_| Numeric::zero()),
             Numeric::zero()
         );
     }

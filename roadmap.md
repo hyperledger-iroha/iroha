@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-23
+Last updated: 2026-06-24
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -16,8 +16,9 @@ and completed history lives in [`status.md`](./status.md).
   middleware path preserves signed receipt admission while rejecting
   contradictory client profile and usage-limit binding fields before Torii
   issues a one-use certificate. The
-  on-chain path carries raw platform report/evidence bytes, binds them to
-  replay digests, anchors the challenge to recent ledger state, validates Apple
+  on-chain path carries raw platform reports plus deterministic evidence
+  envelopes, binds them to replay digests, anchors the challenge to recent ledger
+  state, validates Apple
   App Attest CBOR/authenticator data/nonce-extension/X.509 chains with
   duplicate-key rejection and Android KeyMint certificate
   arrays/challenge/security-level/app-identity extensions with duplicate

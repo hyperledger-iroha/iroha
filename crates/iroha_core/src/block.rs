@@ -114,7 +114,7 @@ fn taira_legacy_replay_confidential_digest(
     expected: Option<ConfidentialFeatureDigest>,
     actual: Option<ConfidentialFeatureDigest>,
 ) -> bool {
-    const LEGACY_TAIRA_ZK_POLICY_HASHES: [[u8; 32]; 3] = [
+    const LEGACY_TAIRA_ZK_POLICY_HASHES: [[u8; 32]; 4] = [
         [
             58, 93, 1, 255, 203, 247, 226, 108, 208, 94, 24, 239, 224, 183, 177, 199, 66, 237, 206,
             11, 155, 190, 1, 59, 169, 3, 161, 188, 185, 184, 245, 105,
@@ -126,6 +126,10 @@ fn taira_legacy_replay_confidential_digest(
         [
             6, 56, 47, 173, 129, 176, 103, 189, 91, 113, 130, 211, 80, 254, 226, 208, 22, 148, 210,
             194, 47, 87, 152, 25, 162, 34, 156, 2, 45, 189, 111, 213,
+        ],
+        [
+            127, 253, 243, 16, 56, 84, 148, 21, 121, 38, 145, 202, 29, 204, 49, 113, 127, 74, 95,
+            145, 75, 228, 201, 193, 47, 33, 181, 167, 92, 108, 248, 61,
         ],
     ];
 
@@ -19274,6 +19278,22 @@ mod tests {
         assert!(taira_legacy_replay_confidential_digest(
             Some(expected),
             Some(actual)
+        ));
+
+        let height_2584_policy_hash = [
+            127, 253, 243, 16, 56, 84, 148, 21, 121, 38, 145, 202, 29, 204, 49, 113, 127, 74, 95,
+            145, 75, 228, 201, 193, 47, 33, 181, 167, 92, 108, 248, 61,
+        ];
+        let actual_height_2584 = ConfidentialFeatureDigest::new(
+            expected.vk_set_hash,
+            expected.poseidon_params_id,
+            expected.pedersen_params_id,
+            expected.conf_rules_version,
+            Some(height_2584_policy_hash),
+        );
+        assert!(taira_legacy_replay_confidential_digest(
+            Some(expected),
+            Some(actual_height_2584)
         ));
 
         let mut mismatched_vk = actual;

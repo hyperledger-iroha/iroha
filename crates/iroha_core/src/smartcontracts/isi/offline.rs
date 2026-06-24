@@ -4,6 +4,7 @@ use super::prelude::*;
 use crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with;
 use std::{
     collections::{BTreeSet, HashSet},
+    io::Cursor,
     sync::LazyLock,
 };
 
@@ -40,6 +41,7 @@ use iroha_data_model::{
     zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
 };
 use iroha_primitives::numeric::Numeric;
+use p256::PublicKey as P256PublicKey;
 use sha2::{Digest as _, Sha256};
 use x509_parser::{
     extensions::ParsedExtension,
@@ -358,7 +360,11 @@ pub mod isi {
     const OFFLINE_NOTE_ATTESTATION_CHALLENGE_DOMAIN: &str = "offline-note-attestation-challenge";
     const OFFLINE_NOTE_ATTESTATION_REPORT_DOMAIN: &str = "offline-note-attestation-report";
     const OFFLINE_NOTE_ATTESTATION_EVIDENCE_DOMAIN: &str = "offline-note-attestation-evidence";
+    const OFFLINE_ATTESTATION_EVIDENCE_PREFIX: &[u8] = b"offline-device-attestation-evidence-v1";
     const OFFLINE_NOTE_ATTESTATION_RECENT_BLOCK_WINDOW: u64 = 128;
+    const OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST_LEGACY: &str = "ios-app-attest";
+    const OFFLINE_ATTESTATION_IOS_LEGACY_ASSERTION_SCHEME: &str = "apple-app-attest-v1";
+    const OFFLINE_ATTESTATION_IOS_LEGACY_ASSERTION_ALGORITHM: &str = "ecdsa-p256-sha256";
     const OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST: &str = "ios-appattest";
     const OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT: &str = "android-keymint";
     const OFFLINE_ATTESTATION_IOS_ASSERTION_SCHEME: &str = "apple-appattest-counter-v1";
@@ -576,6 +582,11 @@ pub mod isi {
         }
 
         fn read_tlv_full(&mut self) -> Result<(DerTag, &'a [u8]), Error> {
+            let (tag, value, _) = self.read_tlv_full_with_raw()?;
+            Ok((tag, value))
+        }
+
+        fn read_tlv_full_with_raw(&mut self) -> Result<(DerTag, &'a [u8], &'a [u8]), Error> {
             if self.offset >= self.input.len() {
                 return Err(labeled_invariant(
                     "invalid_attestation",
@@ -583,12 +594,14 @@ pub mod isi {
                 )
                 .into());
             }
+            let start = self.offset;
             let first_byte = self.input[self.offset];
             self.offset += 1;
             let mut number = u32::from(first_byte & 0x1F);
             if number == 0x1F {
                 number = 0;
                 let mut octets = 0usize;
+                let mut first_high_tag_octet = true;
                 loop {
                     if self.offset >= self.input.len() || octets >= 5 {
                         return Err(labeled_invariant(
@@ -600,10 +613,25 @@ pub mod isi {
                     let byte = self.input[self.offset];
                     self.offset += 1;
                     octets += 1;
+                    if first_high_tag_octet && byte & 0x7F == 0 {
+                        return Err(labeled_invariant(
+                            "invalid_attestation",
+                            "attestation extension DER high-tag number is non-canonical",
+                        )
+                        .into());
+                    }
+                    first_high_tag_octet = false;
                     number = (number << 7) | u32::from(byte & 0x7F);
                     if byte & 0x80 == 0 {
                         break;
                     }
+                }
+                if number < 31 {
+                    return Err(labeled_invariant(
+                        "invalid_attestation",
+                        "attestation extension DER high-tag number is non-canonical",
+                    )
+                    .into());
                 }
             }
             let length = self.read_length()?;
@@ -622,6 +650,7 @@ pub mod isi {
             }
             let value = &self.input[self.offset..end];
             self.offset = end;
+            let raw = &self.input[start..end];
             Ok((
                 DerTag {
                     class_bits: first_byte & 0xC0,
@@ -630,6 +659,7 @@ pub mod isi {
                     first_byte,
                 },
                 value,
+                raw,
             ))
         }
 
@@ -654,6 +684,14 @@ pub mod isi {
                 )
                 .into());
             }
+            let first_length_octet = self.input[self.offset];
+            if first_length_octet == 0 || (octets == 1 && first_length_octet < 0x80) {
+                return Err(labeled_invariant(
+                    "invalid_attestation",
+                    "attestation extension DER length encoding is non-canonical",
+                )
+                .into());
+            }
             let mut length = 0usize;
             for _ in 0..octets {
                 length = (length << 8) | usize::from(self.input[self.offset]);
@@ -664,7 +702,24 @@ pub mod isi {
     }
 
     fn der_integer_to_i64(bytes: &[u8]) -> Result<i64, Error> {
-        if bytes.is_empty() || bytes.len() > 8 || bytes[0] & 0x80 != 0 {
+        if bytes.is_empty() || bytes.len() > 8 {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                "attestation extension integer is out of range",
+            )
+            .into());
+        }
+        if bytes.len() > 1
+            && ((bytes[0] == 0 && bytes[1] & 0x80 == 0)
+                || (bytes[0] == 0xFF && bytes[1] & 0x80 != 0))
+        {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                "attestation extension integer encoding is non-canonical",
+            )
+            .into());
+        }
+        if bytes[0] & 0x80 != 0 {
             return Err(labeled_invariant(
                 "invalid_attestation",
                 "attestation extension integer is out of range",
@@ -756,7 +811,16 @@ pub mod isi {
             )
             .into());
         }
-        Ok(trimmed.to_owned())
+        if trimmed != value {
+            return Err(labeled_invariant(
+                "invalid_attestation_policy",
+                format!(
+                    "Offline device attestation policy {field} must not contain surrounding whitespace"
+                ),
+            )
+            .into());
+        }
+        Ok(value.to_owned())
     }
 
     fn normalize_sha256_digest(digest: &[u8], field: &str) -> Result<[u8; 32], Error> {
@@ -837,7 +901,9 @@ pub mod isi {
             }
             let certificate = parse_x509_certificate_der(&root.der)?;
             validate_x509_certificate_critical_extensions(&certificate)?;
-            validate_x509_certificate_time(&certificate, evaluation_time)?;
+            if trusted_root_is_active(root, block_unix_timestamp_ms) {
+                validate_x509_certificate_time(&certificate, evaluation_time)?;
+            }
             if !x509_certificate_is_ca(&certificate)? {
                 return Err(labeled_invariant(
                     "invalid_attestation_policy",
@@ -1221,16 +1287,45 @@ pub mod isi {
         })
     }
 
-    fn x509_extension_value(certificate: &X509Certificate<'_>, oid: &str) -> Option<Vec<u8>> {
-        certificate
+    fn x509_unique_extension_value(
+        certificate: &X509Certificate<'_>,
+        oid: &str,
+        duplicate_message: &'static str,
+    ) -> Result<Option<Vec<u8>>, Error> {
+        let mut matches = certificate
             .extensions()
             .iter()
-            .find(|extension| extension.oid.to_string() == oid)
-            .map(|extension| extension.value.to_vec())
+            .filter(|extension| extension.oid.to_string() == oid);
+        let first = matches.next().map(|extension| extension.value.to_vec());
+        if matches.next().is_some() {
+            return Err(labeled_invariant("invalid_attestation", duplicate_message).into());
+        }
+        Ok(first)
     }
 
     fn x509_subject_public_key_bytes(certificate: &X509Certificate<'_>) -> Vec<u8> {
         certificate.public_key().subject_public_key.data.to_vec()
+    }
+
+    fn validate_attestation_protocol_string(
+        subject: &'static str,
+        field: &'static str,
+        value: &str,
+        error_label: &'static str,
+    ) -> Result<(), InstructionExecutionError> {
+        if value.trim().is_empty() {
+            return Err(labeled_invariant(
+                error_label,
+                format!("{subject} {field} must be non-empty"),
+            ));
+        }
+        if value.trim() != value {
+            return Err(labeled_invariant(
+                error_label,
+                format!("{subject} {field} must not contain surrounding whitespace"),
+            ));
+        }
+        Ok(())
     }
 
     fn validate_offline_note_key_certificate(
@@ -1247,6 +1342,31 @@ pub mod isi {
                 "offline note operation requires a compact one-use key certificate with a matching hardware usage limit",
             ));
         }
+        for (field, value) in [
+            ("platform", certificate.platform.as_str()),
+            ("key_id", certificate.key_id.as_str()),
+            ("device_id", certificate.device_id.as_str()),
+            ("assertion_scheme", certificate.assertion_scheme.as_str()),
+            (
+                "assertion_key_algorithm",
+                certificate.assertion_key_algorithm.as_str(),
+            ),
+        ] {
+            validate_attestation_protocol_string(
+                "offline note certificate",
+                field,
+                value,
+                "invalid_issuer_cert",
+            )?;
+        }
+        if certificate.assertion_public_key.is_empty() {
+            return Err(labeled_invariant(
+                "invalid_issuer_cert",
+                "offline note certificate assertion_public_key must be non-empty",
+            ));
+        }
+        validate_offline_note_key_certificate_profile(certificate)?;
+        validate_offline_note_key_certificate_assertion_public_key(certificate)?;
         if certificate.public_key.is_empty() {
             return Err(labeled_invariant(
                 "invalid_issuer_cert",
@@ -1260,6 +1380,62 @@ pub mod isi {
             )
         })?;
         Ok(())
+    }
+
+    fn validate_offline_note_key_certificate_profile(
+        certificate: &OfflineNoteKeyCertificate,
+    ) -> Result<(), InstructionExecutionError> {
+        let valid = match certificate.platform.as_str() {
+            OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST_LEGACY => {
+                certificate.assertion_scheme == OFFLINE_ATTESTATION_IOS_LEGACY_ASSERTION_SCHEME
+                    && certificate.assertion_key_algorithm
+                        == OFFLINE_ATTESTATION_IOS_LEGACY_ASSERTION_ALGORITHM
+                    && certificate.assertion_usage_count_limit.is_none()
+            }
+            OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST => {
+                certificate.assertion_scheme == OFFLINE_ATTESTATION_IOS_ASSERTION_SCHEME
+                    && certificate.assertion_key_algorithm
+                        == OFFLINE_ATTESTATION_IOS_ASSERTION_ALGORITHM
+                    && certificate.assertion_usage_count_limit.is_none()
+            }
+            OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT => {
+                certificate.assertion_scheme == OFFLINE_ATTESTATION_ANDROID_ASSERTION_SCHEME
+                    && certificate.assertion_key_algorithm
+                        == OFFLINE_ATTESTATION_ANDROID_ASSERTION_ALGORITHM
+                    && certificate.assertion_usage_count_limit == Some(1)
+            }
+            _ => false,
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(labeled_invariant(
+                "invalid_issuer_cert",
+                "offline note certificate hardware assertion profile is unsupported",
+            ))
+        }
+    }
+
+    fn validate_offline_note_key_certificate_assertion_public_key(
+        certificate: &OfflineNoteKeyCertificate,
+    ) -> Result<(), InstructionExecutionError> {
+        if certificate.assertion_public_key.len()
+            != OFFLINE_ATTESTATION_P256_UNCOMPRESSED_PUBLIC_KEY_LEN
+            || certificate.assertion_public_key.first() != Some(&0x04)
+        {
+            return Err(labeled_invariant(
+                "invalid_issuer_cert",
+                "offline note certificate assertion_public_key must be an uncompressed P-256 SEC1 key",
+            ));
+        }
+        P256PublicKey::from_sec1_bytes(&certificate.assertion_public_key)
+            .map(|_| ())
+            .map_err(|_| {
+                labeled_invariant(
+                    "invalid_issuer_cert",
+                    "offline note certificate assertion_public_key must be a valid uncompressed P-256 SEC1 point",
+                )
+            })
     }
 
     fn is_offline_note_transparent_backend(backend: &str) -> bool {
@@ -2694,16 +2870,7 @@ pub mod isi {
     fn validate_offline_attestation_platform_profile(
         registration: &OfflineDeviceAttestationRegistration,
     ) -> Result<(), Error> {
-        if registration.assertion_public_key.len()
-            != OFFLINE_ATTESTATION_P256_UNCOMPRESSED_PUBLIC_KEY_LEN
-            || registration.assertion_public_key.first() != Some(&0x04)
-        {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "offline device attestation assertion public key must be an uncompressed P-256 SEC1 key",
-            )
-            .into());
-        }
+        validate_p256_uncompressed_public_key(&registration.assertion_public_key)?;
 
         match registration.platform.as_str() {
             OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST => {
@@ -2742,6 +2909,68 @@ pub mod isi {
         }
 
         Ok(())
+    }
+
+    fn validate_optional_attestation_metadata_string(
+        value: Option<&str>,
+        field: &'static str,
+    ) -> Result<(), Error> {
+        let Some(value) = value else {
+            return Ok(());
+        };
+        if value.trim().is_empty() {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                format!("offline device attestation {field} must not be empty when present"),
+            )
+            .into());
+        }
+        if value.trim() != value {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                format!(
+                    "offline device attestation {field} must not contain surrounding whitespace"
+                ),
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn validate_offline_attestation_optional_metadata(
+        registration: &OfflineDeviceAttestationRegistration,
+    ) -> Result<(), Error> {
+        for (field, value) in [
+            ("ios_team_id", registration.ios_team_id.as_deref()),
+            ("ios_bundle_id", registration.ios_bundle_id.as_deref()),
+            ("ios_environment", registration.ios_environment.as_deref()),
+            (
+                "android_package_name",
+                registration.android_package_name.as_deref(),
+            ),
+        ] {
+            validate_optional_attestation_metadata_string(value, field)?;
+        }
+        Ok(())
+    }
+
+    fn validate_p256_uncompressed_public_key(public_key: &[u8]) -> Result<(), Error> {
+        if public_key.len() != OFFLINE_ATTESTATION_P256_UNCOMPRESSED_PUBLIC_KEY_LEN
+            || public_key.first() != Some(&0x04)
+        {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                "offline device attestation assertion public key must be an uncompressed P-256 SEC1 key",
+            )
+            .into());
+        }
+        P256PublicKey::from_sec1_bytes(public_key).map(|_| ()).map_err(|_| {
+            labeled_invariant(
+                "invalid_attestation",
+                "offline device attestation assertion public key must be a valid uncompressed P-256 SEC1 point",
+            )
+            .into()
+        })
     }
 
     fn cbor_text_key_value<'a>(
@@ -2840,18 +3069,28 @@ pub mod isi {
         })
     }
 
+    fn decode_cbor_value_exact(
+        input: &[u8],
+        parse_message: &str,
+        trailing_message: &str,
+    ) -> Result<ciborium::value::Value, Error> {
+        let mut cursor = Cursor::new(input);
+        let value: ciborium::value::Value = ciborium::de::from_reader(&mut cursor)
+            .map_err(|_| labeled_invariant("invalid_attestation", parse_message.to_owned()))?;
+        if cursor.position() != input.len() as u64 {
+            return Err(labeled_invariant("invalid_attestation", trailing_message).into());
+        }
+        Ok(value)
+    }
+
     fn parse_ios_app_attest_report(
         registration: &OfflineDeviceAttestationRegistration,
     ) -> Result<IosAppAttestReport, Error> {
-        let value: ciborium::value::Value = ciborium::de::from_reader(
-            registration.attestation_report.as_slice(),
-        )
-        .map_err(|_| {
-            labeled_invariant(
-                "invalid_attestation",
-                "iOS App Attest report must be a CBOR attestation object",
-            )
-        })?;
+        let value = decode_cbor_value_exact(
+            &registration.attestation_report,
+            "iOS App Attest report must be a CBOR attestation object",
+            "iOS App Attest report has trailing CBOR bytes",
+        )?;
         let ciborium::value::Value::Map(map) = value else {
             return Err(labeled_invariant(
                 "invalid_attestation",
@@ -3028,9 +3267,9 @@ pub mod isi {
         bundle_id: &str,
         environment: &str,
     ) -> bool {
-        policy.team_id.trim().eq_ignore_ascii_case(team_id)
-            && policy.bundle_id.trim() == bundle_id
-            && policy.environment.trim().eq_ignore_ascii_case(environment)
+        policy.team_id.eq_ignore_ascii_case(team_id)
+            && policy.bundle_id == bundle_id
+            && policy.environment.eq_ignore_ascii_case(environment)
     }
 
     fn ensure_ios_app_allowed_by_policy(
@@ -3062,7 +3301,6 @@ pub mod isi {
         let package_name = registration
             .android_package_name
             .as_deref()
-            .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
             .ok_or_else(|| {
@@ -3104,7 +3342,7 @@ pub mod isi {
         package_name: &str,
         signing_digest: &[u8; 32],
     ) -> bool {
-        policy.package_name.trim() == package_name
+        policy.package_name == package_name
             && policy
                 .signing_certificate_sha256
                 .iter()
@@ -3131,6 +3369,20 @@ pub mod isi {
             "Android KeyMint app identity is not allowed by Offline device attestation policy",
         )
         .into())
+    }
+
+    fn validate_android_key_id(
+        registration: &OfflineDeviceAttestationRegistration,
+    ) -> Result<(), Error> {
+        let expected_key_id = hex::encode(sha256_bytes(&registration.assertion_public_key));
+        if registration.key_id != expected_key_id {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                "Android KeyMint key_id must be lowercase hex SHA-256 of the assertion public key",
+            )
+            .into());
+        }
+        Ok(())
     }
 
     fn extract_der_octet_string(input: &[u8], depth: usize) -> Result<Vec<u8>, Error> {
@@ -3165,13 +3417,11 @@ pub mod isi {
         cose_key_bytes: &[u8],
         expected_public_key: &[u8],
     ) -> Result<(), Error> {
-        let value: ciborium::value::Value =
-            ciborium::de::from_reader(cose_key_bytes).map_err(|_| {
-                labeled_invariant(
-                    "invalid_attestation",
-                    "iOS App Attest credential public key must be CBOR",
-                )
-            })?;
+        let value = decode_cbor_value_exact(
+            cose_key_bytes,
+            "iOS App Attest credential public key must be CBOR",
+            "iOS App Attest credential public key has trailing CBOR bytes",
+        )?;
         let ciborium::value::Value::Map(map) = value else {
             return Err(labeled_invariant(
                 "invalid_attestation",
@@ -3262,15 +3512,8 @@ pub mod isi {
             .into());
         }
 
-        let expected_key_id = BASE64_STANDARD
-            .decode(registration.key_id.as_bytes())
-            .map_err(|_| {
-                labeled_invariant(
-                    "invalid_attestation",
-                    "iOS App Attest key_id must be standard base64 credential bytes",
-                )
-            })?;
-        if expected_key_id.is_empty() || auth_data.credential_id != expected_key_id {
+        let expected_key_id = decode_canonical_ios_app_attest_key_id(&registration.key_id)?;
+        if auth_data.credential_id != expected_key_id {
             return Err(labeled_invariant(
                 "invalid_attestation",
                 "iOS App Attest credential id does not match key_id",
@@ -3305,13 +3548,17 @@ pub mod isi {
             )
             .into());
         }
-        let nonce_extension = x509_extension_value(&leaf, OFFLINE_ATTESTATION_APP_ATTEST_NONCE_OID)
-            .ok_or_else(|| {
-                labeled_invariant(
-                    "invalid_attestation",
-                    "iOS App Attest certificate is missing the nonce extension",
-                )
-            })?;
+        let nonce_extension = x509_unique_extension_value(
+            &leaf,
+            OFFLINE_ATTESTATION_APP_ATTEST_NONCE_OID,
+            "iOS App Attest certificate contains duplicate nonce extensions",
+        )?
+        .ok_or_else(|| {
+            labeled_invariant(
+                "invalid_attestation",
+                "iOS App Attest certificate is missing the nonce extension",
+            )
+        })?;
         let nonce = extract_der_octet_string(&nonce_extension, 0)?;
         let expected_nonce = sha256_concat(&report.auth_data, registration.challenge_hash.as_ref());
         if nonce != expected_nonce {
@@ -3324,18 +3571,33 @@ pub mod isi {
         Ok(())
     }
 
+    fn decode_canonical_ios_app_attest_key_id(
+        key_id: &str,
+    ) -> Result<Vec<u8>, InstructionExecutionError> {
+        let decoded = BASE64_STANDARD
+            .decode(key_id.as_bytes())
+            .map_err(|_| invalid_ios_app_attest_key_id())?;
+        if decoded.is_empty() || BASE64_STANDARD.encode(&decoded) != key_id {
+            return Err(invalid_ios_app_attest_key_id());
+        }
+        Ok(decoded)
+    }
+
+    fn invalid_ios_app_attest_key_id() -> InstructionExecutionError {
+        labeled_invariant(
+            "invalid_attestation",
+            "iOS App Attest key_id must be canonical standard base64 credential bytes",
+        )
+    }
+
     fn parse_android_keymint_report(
         registration: &OfflineDeviceAttestationRegistration,
     ) -> Result<AndroidKeyMintReport, Error> {
-        let value: ciborium::value::Value = ciborium::de::from_reader(
-            registration.attestation_report.as_slice(),
-        )
-        .map_err(|_| {
-            labeled_invariant(
-                "invalid_attestation",
-                "Android KeyMint report must be a CBOR certificate array",
-            )
-        })?;
+        let value = decode_cbor_value_exact(
+            &registration.attestation_report,
+            "Android KeyMint report must be a CBOR certificate array",
+            "Android KeyMint report has trailing CBOR bytes",
+        )?;
         let ciborium::value::Value::Array(certificates) = value else {
             return Err(labeled_invariant(
                 "invalid_attestation",
@@ -3401,6 +3663,18 @@ pub mod isi {
         Ok(value)
     }
 
+    fn validate_der_set_element_order<'a>(
+        previous: &mut Option<&'a [u8]>,
+        current: &'a [u8],
+        message: &str,
+    ) -> Result<(), Error> {
+        if previous.is_some_and(|previous| previous > current) {
+            return Err(labeled_invariant("invalid_attestation", message.to_owned()).into());
+        }
+        *previous = Some(current);
+        Ok(())
+    }
+
     fn parse_android_attestation_application_id(
         input: &[u8],
     ) -> Result<AndroidAttestationApplicationId, Error> {
@@ -3418,8 +3692,22 @@ pub mod isi {
         let mut packages = Vec::new();
         let mut seen_packages = HashSet::new();
         let mut package_reader = DerReader::new(package_set);
+        let mut previous_package_der = None;
         while package_reader.has_remaining() {
-            let mut info_reader = DerReader::new(package_reader.read_expected(0x30)?);
+            let (tag, package_der, raw_package_der) = package_reader.read_tlv_full_with_raw()?;
+            if tag.first_byte != 0x30 {
+                return Err(labeled_invariant(
+                    "invalid_attestation",
+                    "attestation extension DER has an unexpected DER tag",
+                )
+                .into());
+            }
+            validate_der_set_element_order(
+                &mut previous_package_der,
+                raw_package_der,
+                "Android KeyMint attestation package SET elements are not DER sorted",
+            )?;
+            let mut info_reader = DerReader::new(package_der);
             let package_name_bytes = info_reader.read_octet_string()?;
             let _version = info_reader.read_integer()?;
             if info_reader.has_remaining() {
@@ -3455,8 +3743,21 @@ pub mod isi {
         let mut signature_digests = Vec::new();
         let mut seen_signature_digests = HashSet::new();
         let mut signature_reader = DerReader::new(signature_set);
+        let mut previous_signature_der = None;
         while signature_reader.has_remaining() {
-            let digest = signature_reader.read_octet_string()?;
+            let (tag, digest, raw_signature_der) = signature_reader.read_tlv_full_with_raw()?;
+            if tag.first_byte != 0x04 {
+                return Err(labeled_invariant(
+                    "invalid_attestation",
+                    "attestation extension DER has an unexpected DER tag",
+                )
+                .into());
+            }
+            validate_der_set_element_order(
+                &mut previous_signature_der,
+                raw_signature_der,
+                "Android KeyMint attestation signing-digest SET elements are not DER sorted",
+            )?;
             if digest.len() != 32 {
                 return Err(labeled_invariant(
                     "invalid_attestation",
@@ -3473,7 +3774,7 @@ pub mod isi {
                 )
                 .into());
             }
-            signature_digests.push(digest);
+            signature_digests.push(digest.to_vec());
         }
 
         if packages.is_empty() || signature_digests.is_empty() {
@@ -3518,6 +3819,7 @@ pub mod isi {
                         .into());
                     }
                 }
+
                 OFFLINE_ATTESTATION_ANDROID_TAG_ALL_APPLICATIONS => {
                     if all_applications {
                         return Err(labeled_invariant(
@@ -3646,14 +3948,17 @@ pub mod isi {
             )
         })?;
         let attested_certificate = parse_x509_certificate_der(attested_certificate_der)?;
-        let extension_value =
-            x509_extension_value(&attested_certificate, OFFLINE_ATTESTATION_ANDROID_KEY_OID)
-                .ok_or_else(|| {
-                    labeled_invariant(
-                        "invalid_attestation",
-                        "Android KeyMint leaf certificate is missing the attestation extension",
-                    )
-                })?;
+        let extension_value = x509_unique_extension_value(
+            &attested_certificate,
+            OFFLINE_ATTESTATION_ANDROID_KEY_OID,
+            "Android KeyMint leaf certificate contains duplicate attestation extensions",
+        )?
+        .ok_or_else(|| {
+            labeled_invariant(
+                "invalid_attestation",
+                "Android KeyMint leaf certificate is missing the attestation extension",
+            )
+        })?;
         let key_description = parse_android_key_description(&extension_value)?;
         if key_description.attestation_challenge != registration.challenge_hash.as_ref() {
             return Err(labeled_invariant(
@@ -3723,6 +4028,7 @@ pub mod isi {
             )
             .into());
         }
+        validate_android_key_id(registration)?;
         Ok(())
     }
 
@@ -3784,6 +4090,19 @@ pub mod isi {
             )
             .into());
         }
+        if registration.evidence.len() != OFFLINE_ATTESTATION_EVIDENCE_PREFIX.len() + Hash::LENGTH
+            || !registration
+                .evidence
+                .starts_with(OFFLINE_ATTESTATION_EVIDENCE_PREFIX)
+            || &registration.evidence[OFFLINE_ATTESTATION_EVIDENCE_PREFIX.len()..]
+                != registration.attestation_report_hash.as_ref()
+        {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                "offline device attestation evidence envelope must bind the attestation report hash",
+            )
+            .into());
+        }
         Ok(())
     }
 
@@ -3804,16 +4123,23 @@ pub mod isi {
             )
             .into());
         }
-        if registration.key_id.is_empty()
-            || registration.device_id.is_empty()
-            || registration.assertion_scheme.is_empty()
-            || registration.assertion_key_algorithm.is_empty()
-        {
-            return Err(labeled_invariant(
+        for (field, value) in [
+            ("platform", registration.platform.as_str()),
+            ("key_id", registration.key_id.as_str()),
+            ("device_id", registration.device_id.as_str()),
+            ("assertion_scheme", registration.assertion_scheme.as_str()),
+            (
+                "assertion_key_algorithm",
+                registration.assertion_key_algorithm.as_str(),
+            ),
+        ] {
+            validate_attestation_protocol_string(
+                "offline device attestation",
+                field,
+                value,
                 "invalid_attestation",
-                "offline device attestation identity fields must be non-empty",
             )
-            .into());
+            .map_err(Error::from)?;
         }
         if registration.assertion_public_key.is_empty() {
             return Err(labeled_invariant(
@@ -3834,6 +4160,7 @@ pub mod isi {
             .into());
         }
         validate_offline_attestation_platform_profile(registration)?;
+        validate_offline_attestation_optional_metadata(registration)?;
         validate_offline_attestation_evidence_bytes(registration)?;
         let expected_challenge_hash = registration.canonical_challenge_hash().map_err(|err| {
             labeled_invariant(
@@ -5030,7 +5357,7 @@ pub mod isi {
         use rcgen::{
             BasicConstraints, CertificateParams, CertifiedIssuer, CustomExtension,
             DistinguishedName, DnType, IsCa, KeyPair as RcgenKeyPair, KeyUsagePurpose,
-            PKCS_ECDSA_P256_SHA256,
+            PKCS_ECDSA_P256_SHA256, date_time_ymd,
         };
 
         fn fixture_key_pair(seed: u8) -> KeyPair {
@@ -5065,16 +5392,116 @@ pub mod isi {
             );
         }
 
+        #[test]
+        fn attestation_der_reader_rejects_non_canonical_length() {
+            let mut reader = DerReader::new(&[0x04, 0x81, 0x01, 0x00]);
+
+            let err = reader
+                .read_octet_string()
+                .expect_err("DER long-form length for a short value must reject");
+            assert_offline_rejection(err, "invalid_attestation", "non-canonical");
+        }
+
+        #[test]
+        fn attestation_der_reader_rejects_non_canonical_high_tag_number() {
+            let cases: &[&[u8]] = &[&[0xBF, 0x80, 0x1F, 0x00], &[0xBF, 0x1E, 0x00]];
+
+            for input in cases {
+                let mut reader = DerReader::new(input);
+                match reader.read_tlv_full() {
+                    Ok(_) => panic!("DER must reject non-canonical high-tag numbers"),
+                    Err(err) => {
+                        assert_offline_rejection(err, "invalid_attestation", "non-canonical")
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn attestation_der_integer_rejects_non_canonical_positive_encoding() {
+            let err = der_integer_to_i64(&[0x00, 0x7F])
+                .expect_err("DER INTEGER must reject unnecessary leading zero");
+            assert_offline_rejection(err, "invalid_attestation", "non-canonical");
+        }
+
+        #[test]
+        fn attestation_der_integer_rejects_non_canonical_negative_encoding() {
+            let err = der_integer_to_i64(&[0xFF, 0x80])
+                .expect_err("DER INTEGER must reject unnecessary leading 0xff");
+            assert_offline_rejection(err, "invalid_attestation", "non-canonical");
+        }
+
+        fn test_der_wrap(tag: u8, content: Vec<u8>) -> Vec<u8> {
+            let len = u8::try_from(content.len()).expect("test DER content length fits short form");
+            let mut der = Vec::with_capacity(content.len() + 2);
+            der.push(tag);
+            der.push(len);
+            der.extend_from_slice(&content);
+            der
+        }
+
+        fn test_der_octet_string(content: &[u8]) -> Vec<u8> {
+            test_der_wrap(0x04, content.to_vec())
+        }
+
+        fn test_der_android_package_info(package_name: &str) -> Vec<u8> {
+            let mut content = test_der_octet_string(package_name.as_bytes());
+            content.extend_from_slice(&[0x02, 0x01, 0x01]);
+            test_der_wrap(0x30, content)
+        }
+
+        fn test_android_application_id_der(
+            package_set: Vec<u8>,
+            signature_set: Vec<u8>,
+        ) -> Vec<u8> {
+            let mut content = package_set;
+            content.extend_from_slice(&signature_set);
+            test_der_wrap(0x30, content)
+        }
+
+        #[test]
+        fn android_attestation_application_id_rejects_unsorted_der_sets() {
+            let mut packages = test_der_android_package_info("z");
+            packages.extend_from_slice(&test_der_android_package_info("a"));
+            let package_set = test_der_wrap(0x31, packages);
+            let signature_set = test_der_wrap(0x31, test_der_octet_string(&[0xC3; 32]));
+
+            let err = match parse_android_attestation_application_id(
+                &test_android_application_id_der(package_set, signature_set),
+            ) {
+                Ok(_) => panic!("unsorted Android package SET must reject"),
+                Err(err) => err,
+            };
+            assert_offline_rejection(err, "invalid_attestation", "package SET");
+
+            let package_set = test_der_wrap(
+                0x31,
+                test_der_android_package_info(ANDROID_TEST_PACKAGE_NAME),
+            );
+            let mut signatures = test_der_octet_string(&[0xFF; 32]);
+            signatures.extend_from_slice(&test_der_octet_string(&[0x00; 32]));
+            let signature_set = test_der_wrap(0x31, signatures);
+
+            let err = match parse_android_attestation_application_id(
+                &test_android_application_id_der(package_set, signature_set),
+            ) {
+                Ok(_) => panic!("unsorted Android signing-digest SET must reject"),
+                Err(err) => err,
+            };
+            assert_offline_rejection(err, "invalid_attestation", "signing-digest SET");
+        }
+
         fn fixed_bytes(label: &[u8]) -> [u8; 32] {
             Hash::new(label).into()
         }
 
         fn sample_p256_assertion_public_key() -> Vec<u8> {
-            let mut public_key = Vec::with_capacity(65);
-            public_key.push(0x04);
-            public_key.extend_from_slice(&[0x11; 32]);
-            public_key.extend_from_slice(&[0x22; 32]);
-            public_key
+            hex::decode(concat!(
+                "04",
+                "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296",
+                "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5",
+            ))
+            .expect("sample P-256 base point decodes")
         }
 
         fn sample_app_attest_cose_key(assertion_public_key: &[u8]) -> Vec<u8> {
@@ -5130,6 +5557,32 @@ pub mod isi {
 
         fn test_attestation_root() -> CertifiedIssuer<'static, RcgenKeyPair> {
             test_attestation_root_with_common_name(TRUSTED_TEST_ATTESTATION_ROOT_CN)
+        }
+
+        fn test_attestation_root_der_with_validity(
+            common_name: &str,
+            not_before_year: i32,
+            not_after_year: i32,
+        ) -> Vec<u8> {
+            let root_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
+                .expect("test root key generation");
+            let mut root_name = DistinguishedName::new();
+            root_name.push(DnType::CommonName, common_name);
+            let mut root_params = CertificateParams::default();
+            root_params.distinguished_name = root_name;
+            root_params.not_before = date_time_ymd(not_before_year, 1, 1);
+            root_params.not_after = date_time_ymd(not_after_year, 1, 1);
+            root_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+            root_params.key_usages = vec![
+                KeyUsagePurpose::KeyCertSign,
+                KeyUsagePurpose::DigitalSignature,
+                KeyUsagePurpose::CrlSign,
+            ];
+            CertifiedIssuer::self_signed(root_params, root_key)
+                .expect("test root certificate")
+                .der()
+                .as_ref()
+                .to_vec()
         }
 
         fn test_leaf_params(
@@ -5357,6 +5810,29 @@ pub mod isi {
             ios_environment: &str,
             root_common_name: &str,
         ) -> Vec<u8> {
+            sample_ios_app_attest_report_with_nonce_extension_count(
+                leaf_key,
+                key_id,
+                challenge_hash,
+                ios_team_id,
+                ios_bundle_id,
+                ios_environment,
+                root_common_name,
+                1,
+            )
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn sample_ios_app_attest_report_with_nonce_extension_count(
+            leaf_key: &RcgenKeyPair,
+            key_id: &[u8],
+            challenge_hash: &Hash,
+            ios_team_id: &str,
+            ios_bundle_id: &str,
+            ios_environment: &str,
+            root_common_name: &str,
+            nonce_extension_count: usize,
+        ) -> Vec<u8> {
             let assertion_public_key = leaf_key.public_key_raw();
             let cose_key = sample_app_attest_cose_key(assertion_public_key);
             let mut auth_data = Vec::new();
@@ -5377,11 +5853,12 @@ pub mod isi {
             auth_data.extend_from_slice(key_id);
             auth_data.extend_from_slice(&cose_key);
             let root = test_attestation_root_with_common_name(root_common_name);
-            let nonce_extension = app_attest_nonce_extension(&auth_data, challenge_hash);
-            let leaf =
-                test_leaf_params("Iroha Offline App Attest Test Leaf", vec![nonce_extension])
-                    .signed_by(leaf_key, &root)
-                    .expect("test App Attest leaf certificate");
+            let nonce_extensions = (0..nonce_extension_count)
+                .map(|_| app_attest_nonce_extension(&auth_data, challenge_hash))
+                .collect();
+            let leaf = test_leaf_params("Iroha Offline App Attest Test Leaf", nonce_extensions)
+                .signed_by(leaf_key, &root)
+                .expect("test App Attest leaf certificate");
             let att_stmt = vec![(
                 ciborium::value::Value::Text("x5c".to_owned()),
                 ciborium::value::Value::Array(vec![
@@ -5430,10 +5907,17 @@ pub mod isi {
             leaf_key: &RcgenKeyPair,
             keymint_extension: CustomExtension,
         ) -> Vec<u8> {
+            sample_android_keymint_report_with_extensions(leaf_key, vec![keymint_extension])
+        }
+
+        fn sample_android_keymint_report_with_extensions(
+            leaf_key: &RcgenKeyPair,
+            keymint_extensions: Vec<CustomExtension>,
+        ) -> Vec<u8> {
             let root = test_attestation_root();
             let leaf = test_leaf_params(
                 "Iroha Offline Android KeyMint Test Leaf",
-                vec![keymint_extension],
+                keymint_extensions,
             )
             .signed_by(leaf_key, &root)
             .expect("test Android KeyMint leaf certificate");
@@ -5606,6 +6090,112 @@ pub mod isi {
             refresh_attestation_hashes(registration);
         }
 
+        fn refresh_ios_attestation_material_with_key_id_override(
+            registration: &mut OfflineDeviceAttestationRegistration,
+            key_id: &[u8],
+        ) {
+            let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
+                .expect("test iOS attestation key generation");
+            registration.assertion_public_key = leaf_key.public_key_raw().to_vec();
+            registration.key_id = BASE64_STANDARD.encode(key_id);
+            refresh_attestation_challenge(registration);
+            registration.attestation_report = sample_ios_app_attest_report(
+                &leaf_key,
+                key_id,
+                &registration.challenge_hash,
+                registration.ios_team_id.as_deref().unwrap_or("TEAMID1234"),
+                registration
+                    .ios_bundle_id
+                    .as_deref()
+                    .unwrap_or("jp.co.soramitsu.iroha.offline"),
+                registration
+                    .ios_environment
+                    .as_deref()
+                    .unwrap_or(OFFLINE_ATTESTATION_IOS_ENV_PRODUCTION),
+                TRUSTED_TEST_ATTESTATION_ROOT_CN,
+            );
+            refresh_attestation_hashes(registration);
+        }
+
+        fn refresh_ios_attestation_material_with_noncanonical_key_id(
+            registration: &mut OfflineDeviceAttestationRegistration,
+        ) {
+            let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
+                .expect("test iOS attestation key generation");
+            registration.assertion_public_key = leaf_key.public_key_raw().to_vec();
+            let key_id = sha256_bytes(&registration.assertion_public_key);
+            registration.key_id =
+                noncanonical_single_padding_base64_alias(&BASE64_STANDARD.encode(key_id));
+            refresh_attestation_challenge(registration);
+            registration.attestation_report = sample_ios_app_attest_report(
+                &leaf_key,
+                &key_id,
+                &registration.challenge_hash,
+                registration.ios_team_id.as_deref().unwrap_or("TEAMID1234"),
+                registration
+                    .ios_bundle_id
+                    .as_deref()
+                    .unwrap_or("jp.co.soramitsu.iroha.offline"),
+                registration
+                    .ios_environment
+                    .as_deref()
+                    .unwrap_or(OFFLINE_ATTESTATION_IOS_ENV_PRODUCTION),
+                TRUSTED_TEST_ATTESTATION_ROOT_CN,
+            );
+            refresh_attestation_hashes(registration);
+        }
+
+        fn noncanonical_single_padding_base64_alias(canonical: &str) -> String {
+            const ALPHABET: &[u8; 64] =
+                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            let mut alias = canonical.as_bytes().to_vec();
+            assert!(
+                alias.ends_with(b"=") && !alias.ends_with(b"=="),
+                "expected single-padding base64 text"
+            );
+            let target = alias
+                .len()
+                .checked_sub(2)
+                .expect("single-padding base64 has a symbol before padding");
+            let index = ALPHABET
+                .iter()
+                .position(|symbol| *symbol == alias[target])
+                .expect("canonical base64 symbol is in the standard alphabet");
+            alias[target] = ALPHABET[(index & !0b11) | ((index + 1) & 0b11)];
+            let alias = String::from_utf8(alias).expect("base64 alphabet is UTF-8");
+            assert_ne!(alias, canonical);
+            alias
+        }
+
+        fn refresh_ios_attestation_material_with_duplicate_nonce_extension(
+            registration: &mut OfflineDeviceAttestationRegistration,
+        ) {
+            let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
+                .expect("test iOS attestation key generation");
+            registration.assertion_public_key = leaf_key.public_key_raw().to_vec();
+            let key_id = sha256_bytes(&registration.assertion_public_key);
+            registration.key_id = BASE64_STANDARD.encode(key_id);
+            refresh_attestation_challenge(registration);
+            registration.attestation_report =
+                sample_ios_app_attest_report_with_nonce_extension_count(
+                    &leaf_key,
+                    &key_id,
+                    &registration.challenge_hash,
+                    registration.ios_team_id.as_deref().unwrap_or("TEAMID1234"),
+                    registration
+                        .ios_bundle_id
+                        .as_deref()
+                        .unwrap_or("jp.co.soramitsu.iroha.offline"),
+                    registration
+                        .ios_environment
+                        .as_deref()
+                        .unwrap_or(OFFLINE_ATTESTATION_IOS_ENV_PRODUCTION),
+                    TRUSTED_TEST_ATTESTATION_ROOT_CN,
+                    2,
+                );
+            refresh_attestation_hashes(registration);
+        }
+
         fn duplicate_ios_attestation_report_text_key(
             registration: &mut OfflineDeviceAttestationRegistration,
             key: &str,
@@ -5649,6 +6239,56 @@ pub mod isi {
                 false,
                 true,
             );
+        }
+
+        fn refresh_android_attestation_material_with_key_id_override(
+            registration: &mut OfflineDeviceAttestationRegistration,
+            key_id: String,
+        ) {
+            registration.android_package_name = Some(ANDROID_TEST_PACKAGE_NAME.to_owned());
+            registration.android_signing_certificate_sha256 =
+                Some(ANDROID_TEST_SIGNING_CERT_SHA256.to_vec());
+            let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
+                .expect("test Android attestation key generation");
+            registration.assertion_public_key = leaf_key.public_key_raw().to_vec();
+            registration.key_id = key_id;
+            refresh_attestation_challenge(registration);
+            registration.attestation_report = sample_android_keymint_report_with_options(
+                &leaf_key,
+                &registration.challenge_hash,
+                true,
+                ANDROID_TEST_PACKAGE_NAME,
+                &ANDROID_TEST_SIGNING_CERT_SHA256,
+                Some(1),
+                false,
+                true,
+            );
+            refresh_attestation_hashes(registration);
+        }
+
+        fn refresh_android_attestation_material_with_uppercase_key_id(
+            registration: &mut OfflineDeviceAttestationRegistration,
+        ) {
+            registration.android_package_name = Some(ANDROID_TEST_PACKAGE_NAME.to_owned());
+            registration.android_signing_certificate_sha256 =
+                Some(ANDROID_TEST_SIGNING_CERT_SHA256.to_vec());
+            let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
+                .expect("test Android attestation key generation");
+            registration.assertion_public_key = leaf_key.public_key_raw().to_vec();
+            registration.key_id =
+                hex::encode_upper(sha256_bytes(&registration.assertion_public_key));
+            refresh_attestation_challenge(registration);
+            registration.attestation_report = sample_android_keymint_report_with_options(
+                &leaf_key,
+                &registration.challenge_hash,
+                true,
+                ANDROID_TEST_PACKAGE_NAME,
+                &ANDROID_TEST_SIGNING_CERT_SHA256,
+                Some(1),
+                false,
+                true,
+            );
+            refresh_attestation_hashes(registration);
         }
 
         #[allow(clippy::too_many_arguments)]
@@ -5745,9 +6385,43 @@ pub mod isi {
             refresh_attestation_hashes(registration);
         }
 
+        fn refresh_android_attestation_material_with_duplicate_leaf_extension(
+            registration: &mut OfflineDeviceAttestationRegistration,
+        ) {
+            registration.android_package_name = Some(ANDROID_TEST_PACKAGE_NAME.to_owned());
+            registration.android_signing_certificate_sha256 =
+                Some(ANDROID_TEST_SIGNING_CERT_SHA256.to_vec());
+            let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
+                .expect("test Android attestation key generation");
+            registration.assertion_public_key = leaf_key.public_key_raw().to_vec();
+            registration.key_id = hex::encode(sha256_bytes(&registration.assertion_public_key));
+            refresh_attestation_challenge(registration);
+            let keymint_extensions = vec![
+                android_keymint_extension(
+                    &registration.challenge_hash,
+                    true,
+                    ANDROID_TEST_PACKAGE_NAME,
+                    &ANDROID_TEST_SIGNING_CERT_SHA256,
+                    Some(1),
+                    false,
+                ),
+                android_keymint_extension(
+                    &registration.challenge_hash,
+                    true,
+                    ANDROID_TEST_PACKAGE_NAME,
+                    &ANDROID_TEST_SIGNING_CERT_SHA256,
+                    Some(1),
+                    false,
+                ),
+            ];
+            registration.attestation_report =
+                sample_android_keymint_report_with_extensions(&leaf_key, keymint_extensions);
+            refresh_attestation_hashes(registration);
+        }
+
         fn refresh_attestation_hashes(registration: &mut OfflineDeviceAttestationRegistration) {
             registration.attestation_report_hash = Hash::new(&registration.attestation_report);
-            let mut evidence = b"offline-device-attestation-evidence-v1".to_vec();
+            let mut evidence = OFFLINE_ATTESTATION_EVIDENCE_PREFIX.to_vec();
             evidence.extend_from_slice(registration.attestation_report_hash.as_ref());
             registration.evidence = evidence;
             registration.evidence_hash = Hash::new(&registration.evidence);
@@ -6046,15 +6720,15 @@ pub mod isi {
                 .expect("fixture public key must be valid");
             let mut certificate = OfflineNoteKeyCertificate {
                 version: iroha_data_model::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
-                platform: "offline-unit-test".to_owned(),
+                platform: OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST.to_owned(),
                 key_id: key_id.to_owned(),
                 device_id: "offline-unit-device".to_owned(),
                 account_id,
                 public_key: public_key.to_vec(),
-                assertion_scheme: "unit-test-one-use".to_owned(),
-                assertion_key_algorithm: "ed25519-test".to_owned(),
-                assertion_public_key: public_key.to_vec(),
-                assertion_usage_count_limit: Some(1),
+                assertion_scheme: OFFLINE_ATTESTATION_IOS_ASSERTION_SCHEME.to_owned(),
+                assertion_key_algorithm: OFFLINE_ATTESTATION_IOS_ASSERTION_ALGORITHM.to_owned(),
+                assertion_public_key: sample_p256_assertion_public_key(),
+                assertion_usage_count_limit: None,
                 one_use: true,
                 issuer_signature: checked_signature(issuer.private_key(), b"placeholder"),
             };
@@ -6172,6 +6846,33 @@ pub mod isi {
             let err = execute_policy_update_for_tests(policy)
                 .expect_err("invalid attestation policy must reject");
             assert_offline_rejection(err, "invalid_attestation_policy", detail);
+        }
+
+        fn assert_attestation_registration_rejects_preseeded_replay_marker(
+            marker_key: impl FnOnce(&OfflineDeviceAttestationRegistration) -> Hash,
+        ) {
+            let (state, recent_block_height, recent_block_hash) = state_with_attestation_anchor();
+            let certificate = sample_certificate();
+            let registration =
+                attestation_registration(&certificate, recent_block_height, recent_block_hash);
+            let authority = registration.account_id.clone();
+            let replay_key = marker_key(&registration);
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            transaction
+                .world
+                .offline_note_replay_keys
+                .insert(replay_key, ());
+
+            let err = RegisterOfflineDeviceAttestation::new(registration)
+                .execute(&authority, &mut transaction)
+                .expect_err("preseeded replay marker must reject registration");
+            assert_offline_rejection(
+                err,
+                "duplicate_attestation",
+                "certificate or evidence material",
+            );
         }
 
         fn android_attestation_registration(
@@ -8390,10 +9091,328 @@ pub mod isi {
             assert!(validate_offline_note_key_certificate(&certificate).is_err());
 
             certificate.assertion_usage_count_limit = Some(1);
+            assert!(validate_offline_note_key_certificate(&certificate).is_err());
+
+            certificate.platform = OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT.to_owned();
+            certificate.assertion_scheme = OFFLINE_ATTESTATION_ANDROID_ASSERTION_SCHEME.to_owned();
+            certificate.assertion_key_algorithm =
+                OFFLINE_ATTESTATION_ANDROID_ASSERTION_ALGORITHM.to_owned();
             assert!(validate_offline_note_key_certificate(&certificate).is_ok());
 
             certificate.public_key.clear();
             assert!(validate_offline_note_key_certificate(&certificate).is_err());
+        }
+
+        #[test]
+        fn key_certificate_rejects_blank_hardware_attestation_identity() {
+            let cases: [(&str, fn(&mut OfflineNoteKeyCertificate)); 6] = [
+                ("platform", |certificate: &mut OfflineNoteKeyCertificate| {
+                    certificate.platform = "   ".to_owned();
+                }),
+                ("key_id", |certificate: &mut OfflineNoteKeyCertificate| {
+                    certificate.key_id.clear();
+                }),
+                (
+                    "device_id",
+                    |certificate: &mut OfflineNoteKeyCertificate| {
+                        certificate.device_id = "\t".to_owned();
+                    },
+                ),
+                (
+                    "assertion_scheme",
+                    |certificate: &mut OfflineNoteKeyCertificate| {
+                        certificate.assertion_scheme.clear();
+                    },
+                ),
+                (
+                    "assertion_key_algorithm",
+                    |certificate: &mut OfflineNoteKeyCertificate| {
+                        certificate.assertion_key_algorithm = " ".to_owned();
+                    },
+                ),
+                (
+                    "assertion_public_key",
+                    |certificate: &mut OfflineNoteKeyCertificate| {
+                        certificate.assertion_public_key.clear();
+                    },
+                ),
+            ];
+
+            for (field, mutate) in cases {
+                let mut certificate = sample_certificate();
+                mutate(&mut certificate);
+                let err = validate_offline_note_key_certificate(&certificate)
+                    .expect_err("blank hardware attestation identity must reject");
+                assert_offline_rejection(err.into(), "invalid_issuer_cert", field);
+            }
+        }
+
+        #[test]
+        fn key_certificate_rejects_padded_hardware_attestation_identity() {
+            let cases: [(&str, fn(&mut OfflineNoteKeyCertificate)); 5] = [
+                ("platform", |certificate: &mut OfflineNoteKeyCertificate| {
+                    certificate.platform =
+                        format!(" {OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST}");
+                }),
+                ("key_id", |certificate: &mut OfflineNoteKeyCertificate| {
+                    certificate.key_id = format!("{} ", certificate.key_id);
+                }),
+                (
+                    "device_id",
+                    |certificate: &mut OfflineNoteKeyCertificate| {
+                        certificate.device_id = format!("\t{}", certificate.device_id);
+                    },
+                ),
+                (
+                    "assertion_scheme",
+                    |certificate: &mut OfflineNoteKeyCertificate| {
+                        certificate.assertion_scheme = format!("{} ", certificate.assertion_scheme);
+                    },
+                ),
+                (
+                    "assertion_key_algorithm",
+                    |certificate: &mut OfflineNoteKeyCertificate| {
+                        certificate.assertion_key_algorithm =
+                            format!("\n{}", certificate.assertion_key_algorithm);
+                    },
+                ),
+            ];
+
+            for (field, mutate) in cases {
+                let mut certificate = sample_certificate();
+                mutate(&mut certificate);
+                let err = validate_offline_note_key_certificate(&certificate)
+                    .expect_err("padded hardware attestation identity must reject");
+                assert_offline_rejection(err.into(), "invalid_issuer_cert", field);
+            }
+        }
+
+        #[test]
+        fn key_certificate_rejects_unsupported_hardware_assertion_profiles() {
+            let cases: [(&str, fn(&mut OfflineNoteKeyCertificate)); 4] = [
+                (
+                    "unsupported",
+                    |certificate: &mut OfflineNoteKeyCertificate| {
+                        certificate.platform = "offline-unit-test".to_owned();
+                        certificate.assertion_scheme = "unit-test-one-use".to_owned();
+                        certificate.assertion_key_algorithm = "ed25519-test".to_owned();
+                        certificate.assertion_usage_count_limit = Some(1);
+                    },
+                ),
+                ("splice", |certificate: &mut OfflineNoteKeyCertificate| {
+                    certificate.platform = OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST.to_owned();
+                    certificate.assertion_scheme =
+                        OFFLINE_ATTESTATION_ANDROID_ASSERTION_SCHEME.to_owned();
+                    certificate.assertion_key_algorithm =
+                        OFFLINE_ATTESTATION_ANDROID_ASSERTION_ALGORITHM.to_owned();
+                    certificate.assertion_usage_count_limit = Some(1);
+                }),
+                (
+                    "ios usage",
+                    |certificate: &mut OfflineNoteKeyCertificate| {
+                        certificate.assertion_usage_count_limit = Some(1);
+                    },
+                ),
+                (
+                    "android missing usage",
+                    |certificate: &mut OfflineNoteKeyCertificate| {
+                        certificate.platform =
+                            OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT.to_owned();
+                        certificate.assertion_scheme =
+                            OFFLINE_ATTESTATION_ANDROID_ASSERTION_SCHEME.to_owned();
+                        certificate.assertion_key_algorithm =
+                            OFFLINE_ATTESTATION_ANDROID_ASSERTION_ALGORITHM.to_owned();
+                        certificate.assertion_usage_count_limit = None;
+                    },
+                ),
+            ];
+
+            for (_case, mutate) in cases {
+                let mut certificate = sample_certificate();
+                mutate(&mut certificate);
+                let err = validate_offline_note_key_certificate(&certificate)
+                    .expect_err("unsupported hardware assertion profile must reject");
+                assert_offline_rejection(err.into(), "invalid_issuer_cert", "profile");
+            }
+        }
+
+        #[test]
+        fn key_certificate_rejects_off_curve_assertion_public_key() {
+            let mut certificate = sample_certificate();
+            certificate.assertion_public_key = vec![0; 65];
+            certificate.assertion_public_key[0] = 0x04;
+
+            let err = validate_offline_note_key_certificate(&certificate)
+                .expect_err("off-curve certificate assertion key must reject");
+            assert_offline_rejection(
+                err.into(),
+                "invalid_issuer_cert",
+                "valid uncompressed P-256",
+            );
+        }
+
+        #[test]
+        fn offline_device_attestation_registration_rejects_blank_identity_fields() {
+            let cases: [(&str, fn(&mut OfflineDeviceAttestationRegistration)); 5] = [
+                (
+                    "platform",
+                    |registration: &mut OfflineDeviceAttestationRegistration| {
+                        registration.platform = "   ".to_owned();
+                    },
+                ),
+                (
+                    "key_id",
+                    |registration: &mut OfflineDeviceAttestationRegistration| {
+                        registration.key_id = "\n".to_owned();
+                    },
+                ),
+                (
+                    "device_id",
+                    |registration: &mut OfflineDeviceAttestationRegistration| {
+                        registration.device_id.clear();
+                    },
+                ),
+                (
+                    "assertion_scheme",
+                    |registration: &mut OfflineDeviceAttestationRegistration| {
+                        registration.assertion_scheme = "\t".to_owned();
+                    },
+                ),
+                (
+                    "assertion_key_algorithm",
+                    |registration: &mut OfflineDeviceAttestationRegistration| {
+                        registration.assertion_key_algorithm = " ".to_owned();
+                    },
+                ),
+            ];
+
+            for (field, mutate) in cases {
+                let (state, recent_block_height, recent_block_hash) =
+                    state_with_attestation_anchor();
+                let certificate = sample_certificate();
+                let mut registration =
+                    attestation_registration(&certificate, recent_block_height, recent_block_hash);
+                mutate(&mut registration);
+                let authority = registration.account_id.clone();
+                let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+                let mut block = state.block(header);
+                let mut transaction = block.transaction();
+
+                let err = RegisterOfflineDeviceAttestation::new(registration)
+                    .execute(&authority, &mut transaction)
+                    .expect_err("blank device attestation identity field must reject");
+                assert_offline_rejection(err, "invalid_attestation", field);
+            }
+        }
+
+        #[test]
+        fn offline_device_attestation_registration_rejects_padded_identity_fields() {
+            let cases: [(&str, fn(&mut OfflineDeviceAttestationRegistration)); 5] = [
+                (
+                    "platform",
+                    |registration: &mut OfflineDeviceAttestationRegistration| {
+                        registration.platform =
+                            format!("{OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST} ");
+                    },
+                ),
+                (
+                    "key_id",
+                    |registration: &mut OfflineDeviceAttestationRegistration| {
+                        registration.key_id = format!(" {}", registration.key_id);
+                    },
+                ),
+                (
+                    "device_id",
+                    |registration: &mut OfflineDeviceAttestationRegistration| {
+                        registration.device_id = format!("{}\n", registration.device_id);
+                    },
+                ),
+                (
+                    "assertion_scheme",
+                    |registration: &mut OfflineDeviceAttestationRegistration| {
+                        registration.assertion_scheme =
+                            format!("\t{}", registration.assertion_scheme);
+                    },
+                ),
+                (
+                    "assertion_key_algorithm",
+                    |registration: &mut OfflineDeviceAttestationRegistration| {
+                        registration.assertion_key_algorithm =
+                            format!("{} ", registration.assertion_key_algorithm);
+                    },
+                ),
+            ];
+
+            for (field, mutate) in cases {
+                let (state, recent_block_height, recent_block_hash) =
+                    state_with_attestation_anchor();
+                let certificate = sample_certificate();
+                let mut registration =
+                    attestation_registration(&certificate, recent_block_height, recent_block_hash);
+                mutate(&mut registration);
+                let authority = registration.account_id.clone();
+                let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+                let mut block = state.block(header);
+                let mut transaction = block.transaction();
+
+                let err = RegisterOfflineDeviceAttestation::new(registration)
+                    .execute(&authority, &mut transaction)
+                    .expect_err("padded device attestation identity field must reject");
+                assert_offline_rejection(err, "invalid_attestation", field);
+            }
+        }
+
+        #[test]
+        fn offline_device_attestation_registration_rejects_padded_app_metadata() {
+            let cases: [(&str, fn(&mut OfflineDeviceAttestationRegistration)); 4] = [
+                (
+                    "ios_team_id",
+                    |registration: &mut OfflineDeviceAttestationRegistration| {
+                        registration.ios_team_id = Some(" TEAMID1234 ".to_owned());
+                    },
+                ),
+                (
+                    "ios_bundle_id",
+                    |registration: &mut OfflineDeviceAttestationRegistration| {
+                        registration.ios_bundle_id =
+                            Some("\tjp.co.soramitsu.iroha.offline".to_owned());
+                    },
+                ),
+                (
+                    "ios_environment",
+                    |registration: &mut OfflineDeviceAttestationRegistration| {
+                        registration.ios_environment = Some("production\n".to_owned());
+                    },
+                ),
+                (
+                    "android_package_name",
+                    |registration: &mut OfflineDeviceAttestationRegistration| {
+                        registration.android_package_name =
+                            Some(" jp.co.soramitsu.iroha.offline ".to_owned());
+                    },
+                ),
+            ];
+
+            for (field, mutate) in cases {
+                let (state, recent_block_height, recent_block_hash) =
+                    state_with_attestation_anchor();
+                let mut registration = if field == "android_package_name" {
+                    android_attestation_registration(recent_block_height, recent_block_hash)
+                } else {
+                    let certificate = sample_certificate();
+                    attestation_registration(&certificate, recent_block_height, recent_block_hash)
+                };
+                mutate(&mut registration);
+                let authority = registration.account_id.clone();
+                let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+                let mut block = state.block(header);
+                let mut transaction = block.transaction();
+
+                let err = RegisterOfflineDeviceAttestation::new(registration)
+                    .execute(&authority, &mut transaction)
+                    .expect_err("padded attestation app metadata field must reject");
+                assert_offline_rejection(err, "invalid_attestation", field);
+            }
         }
 
         #[test]
@@ -8453,6 +9472,62 @@ pub mod isi {
                 err.to_string().contains("duplicate_attestation"),
                 "unexpected error: {err}"
             );
+        }
+
+        #[test]
+        fn offline_device_attestation_registration_rejects_preseeded_certificate_marker() {
+            assert_attestation_registration_rejects_preseeded_replay_marker(|registration| {
+                offline_note_attested_certificate_key(
+                    &registration
+                        .key_certificate_payload_hash()
+                        .expect("certificate hash"),
+                )
+            });
+        }
+
+        #[test]
+        fn offline_device_attestation_registration_rejects_preseeded_challenge_marker() {
+            assert_attestation_registration_rejects_preseeded_replay_marker(|registration| {
+                offline_note_attestation_challenge_key(&registration.challenge_hash)
+            });
+        }
+
+        #[test]
+        fn offline_device_attestation_registration_rejects_preseeded_report_marker() {
+            assert_attestation_registration_rejects_preseeded_replay_marker(|registration| {
+                offline_note_attestation_report_key(&registration.attestation_report_hash)
+            });
+        }
+
+        #[test]
+        fn offline_device_attestation_registration_rejects_preseeded_evidence_marker() {
+            assert_attestation_registration_rejects_preseeded_replay_marker(|registration| {
+                offline_note_attestation_evidence_key(&registration.evidence_hash)
+            });
+        }
+
+        #[test]
+        fn offline_device_attestation_registration_invalid_attempt_does_not_consume_replay_markers()
+        {
+            let (state, recent_block_height, recent_block_hash) = state_with_attestation_anchor();
+            let certificate = sample_certificate();
+            let registration =
+                attestation_registration(&certificate, recent_block_height, recent_block_hash);
+            let mut invalid_registration = registration.clone();
+            invalid_registration.attestation_report.push(0xFF);
+            let authority = registration.account_id.clone();
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let err = RegisterOfflineDeviceAttestation::new(invalid_registration)
+                .execute(&authority, &mut transaction)
+                .expect_err("invalid registration must reject");
+            assert_offline_rejection(err, "invalid_attestation", "report hash");
+
+            RegisterOfflineDeviceAttestation::new(registration)
+                .execute(&authority, &mut transaction)
+                .expect("valid registration must still succeed after a failed attempt");
         }
 
         #[test]
@@ -8714,6 +9789,37 @@ pub mod isi {
         }
 
         #[test]
+        fn offline_device_attestation_registration_rejects_off_curve_assertion_key() {
+            let (state, recent_block_height, recent_block_hash) = state_with_attestation_anchor();
+            let certificate = sample_certificate();
+            let mut registration =
+                attestation_registration(&certificate, recent_block_height, recent_block_hash);
+            registration.assertion_public_key = vec![0; 65];
+            registration.assertion_public_key[0] = 0x04;
+            refresh_attestation_challenge(&mut registration);
+            let authority = registration.account_id.clone();
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let err = RegisterOfflineDeviceAttestation::new(registration)
+                .execute(&authority, &mut transaction)
+                .expect_err("off-curve assertion key must reject");
+            assert_offline_rejection(err, "invalid_attestation", "valid uncompressed P-256");
+        }
+
+        #[test]
+        fn app_attest_cose_key_rejects_trailing_cbor_bytes() {
+            let public_key = sample_p256_assertion_public_key();
+            let mut cose_key = sample_app_attest_cose_key(&public_key);
+            cose_key.push(0xF6);
+
+            let err = validate_app_attest_cose_p256_key(&cose_key, &public_key)
+                .expect_err("COSE key with trailing CBOR data must reject");
+            assert_offline_rejection(err, "invalid_attestation", "trailing CBOR bytes");
+        }
+
+        #[test]
         fn offline_device_attestation_registration_rejects_report_hash_mismatch() {
             let (state, recent_block_height, recent_block_hash) = state_with_attestation_anchor();
             let certificate = sample_certificate();
@@ -8732,13 +9838,35 @@ pub mod isi {
         }
 
         #[test]
+        fn offline_device_attestation_registration_rejects_forged_evidence_envelope() {
+            let (state, recent_block_height, recent_block_hash) = state_with_attestation_anchor();
+            let certificate = sample_certificate();
+            let mut registration =
+                attestation_registration(&certificate, recent_block_height, recent_block_hash);
+            registration.evidence = OFFLINE_ATTESTATION_EVIDENCE_PREFIX.to_vec();
+            registration
+                .evidence
+                .extend_from_slice(&[0xA5; Hash::LENGTH]);
+            registration.evidence_hash = Hash::new(&registration.evidence);
+            let authority = registration.account_id.clone();
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let err = RegisterOfflineDeviceAttestation::new(registration)
+                .execute(&authority, &mut transaction)
+                .expect_err("evidence envelope that does not bind report hash must reject");
+            assert_offline_rejection(err, "invalid_attestation", "evidence envelope");
+        }
+
+        #[test]
         fn offline_device_attestation_registration_rejects_malformed_ios_report() {
             let (state, recent_block_height, recent_block_hash) = state_with_attestation_anchor();
             let certificate = sample_certificate();
             let mut registration =
                 attestation_registration(&certificate, recent_block_height, recent_block_hash);
             registration.attestation_report = b"not-cbor".to_vec();
-            registration.attestation_report_hash = Hash::new(&registration.attestation_report);
+            refresh_attestation_hashes(&mut registration);
             let authority = registration.account_id.clone();
             let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
@@ -8748,6 +9876,25 @@ pub mod isi {
                 .execute(&authority, &mut transaction)
                 .expect_err("malformed iOS App Attest report must reject");
             assert_offline_rejection(err, "invalid_attestation", "CBOR attestation object");
+        }
+
+        #[test]
+        fn offline_device_attestation_registration_rejects_ios_report_trailing_cbor_bytes() {
+            let (state, recent_block_height, recent_block_hash) = state_with_attestation_anchor();
+            let certificate = sample_certificate();
+            let mut registration =
+                attestation_registration(&certificate, recent_block_height, recent_block_hash);
+            registration.attestation_report.push(0xF6);
+            refresh_attestation_hashes(&mut registration);
+            let authority = registration.account_id.clone();
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let err = RegisterOfflineDeviceAttestation::new(registration)
+                .execute(&authority, &mut transaction)
+                .expect_err("iOS App Attest report with trailing CBOR data must reject");
+            assert_offline_rejection(err, "invalid_attestation", "trailing CBOR bytes");
         }
 
         #[test]
@@ -8774,7 +9921,9 @@ pub mod isi {
             let certificate = sample_certificate();
             let mut registration =
                 attestation_registration(&certificate, recent_block_height, recent_block_hash);
-            registration.assertion_public_key[1] ^= 0x01;
+            let wrong_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
+                .expect("test App Attest wrong key generation");
+            registration.assertion_public_key = wrong_key.public_key_raw().to_vec();
             refresh_attestation_challenge(&mut registration);
             let authority = registration.account_id.clone();
             let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -8785,6 +9934,98 @@ pub mod isi {
                 .execute(&authority, &mut transaction)
                 .expect_err("App Attest credential key mismatch must reject");
             assert_offline_rejection(err, "invalid_attestation", "credential public key");
+        }
+
+        #[test]
+        fn offline_device_attestation_registration_rejects_ios_malformed_key_id() {
+            let (state, recent_block_height, recent_block_hash) = state_with_attestation_anchor();
+            let certificate = sample_certificate();
+            let mut registration =
+                attestation_registration(&certificate, recent_block_height, recent_block_hash);
+            registration.key_id = "not standard base64!".to_owned();
+            refresh_attestation_challenge(&mut registration);
+            let authority = registration.account_id.clone();
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let err = RegisterOfflineDeviceAttestation::new(registration)
+                .execute(&authority, &mut transaction)
+                .expect_err("malformed App Attest key_id must reject");
+            assert_offline_rejection(err, "invalid_attestation", "standard base64");
+        }
+
+        #[test]
+        fn offline_device_attestation_registration_rejects_ios_noncanonical_key_id() {
+            let (state, recent_block_height, recent_block_hash) = state_with_attestation_anchor();
+            let certificate = sample_certificate();
+            let mut registration =
+                attestation_registration(&certificate, recent_block_height, recent_block_hash);
+            refresh_ios_attestation_material_with_noncanonical_key_id(&mut registration);
+            let authority = registration.account_id.clone();
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let err = RegisterOfflineDeviceAttestation::new(registration)
+                .execute(&authority, &mut transaction)
+                .expect_err("non-canonical App Attest key_id must reject");
+            assert_offline_rejection(err, "invalid_attestation", "canonical standard base64");
+        }
+
+        #[test]
+        fn offline_device_attestation_registration_rejects_ios_credential_id_mismatch() {
+            let (state, recent_block_height, recent_block_hash) = state_with_attestation_anchor();
+            let certificate = sample_certificate();
+            let mut registration =
+                attestation_registration(&certificate, recent_block_height, recent_block_hash);
+            registration.key_id = BASE64_STANDARD.encode([0x77; 32]);
+            refresh_attestation_challenge(&mut registration);
+            let authority = registration.account_id.clone();
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let err = RegisterOfflineDeviceAttestation::new(registration)
+                .execute(&authority, &mut transaction)
+                .expect_err("App Attest credential id mismatch must reject");
+            assert_offline_rejection(err, "invalid_attestation", "credential id");
+        }
+
+        #[test]
+        fn offline_device_attestation_registration_rejects_ios_duplicate_nonce_extension() {
+            let (state, recent_block_height, recent_block_hash) = state_with_attestation_anchor();
+            let certificate = sample_certificate();
+            let mut registration =
+                attestation_registration(&certificate, recent_block_height, recent_block_hash);
+            refresh_ios_attestation_material_with_duplicate_nonce_extension(&mut registration);
+            let authority = registration.account_id.clone();
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let err = RegisterOfflineDeviceAttestation::new(registration)
+                .execute(&authority, &mut transaction)
+                .expect_err("App Attest duplicate nonce extensions must reject");
+            assert_offline_rejection(err, "invalid_attestation", "duplicate nonce extensions");
+        }
+
+        #[test]
+        fn offline_device_attestation_registration_rejects_ios_key_id_public_key_hash_mismatch() {
+            let (state, recent_block_height, recent_block_hash) = state_with_attestation_anchor();
+            let certificate = sample_certificate();
+            let mut registration =
+                attestation_registration(&certificate, recent_block_height, recent_block_hash);
+            refresh_ios_attestation_material_with_key_id_override(&mut registration, &[0x77; 32]);
+            let authority = registration.account_id.clone();
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let err = RegisterOfflineDeviceAttestation::new(registration)
+                .execute(&authority, &mut transaction)
+                .expect_err("App Attest key_id public key hash mismatch must reject");
+            assert_offline_rejection(err, "invalid_attestation", "public key hash");
         }
 
         #[test]
@@ -8933,6 +10174,47 @@ pub mod isi {
         }
 
         #[test]
+        fn offline_device_attestation_policy_ignores_x509_time_for_inactive_root() {
+            let mut policy = default_policy_for_tests();
+            policy
+                .trusted_roots
+                .push(OfflineDeviceAttestationTrustedRoot {
+                    platform: OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST.to_owned(),
+                    der: test_attestation_root_der_with_validity(
+                        "Iroha Offline Attestation Inactive Expired Root",
+                        1999,
+                        2000,
+                    ),
+                    not_before_ms: Some(1),
+                    not_after_ms: Some(2),
+                });
+
+            execute_policy_update_for_tests(policy)
+                .expect("inactive out-of-time root must not invalidate active policy roots");
+        }
+
+        #[test]
+        fn offline_device_attestation_policy_rejects_active_root_outside_x509_time() {
+            let mut policy = default_policy_for_tests();
+            policy
+                .trusted_roots
+                .push(OfflineDeviceAttestationTrustedRoot {
+                    platform: OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST.to_owned(),
+                    der: test_attestation_root_der_with_validity(
+                        "Iroha Offline Attestation Active Expired Root",
+                        1999,
+                        2000,
+                    ),
+                    not_before_ms: None,
+                    not_after_ms: None,
+                });
+
+            let err = execute_policy_update_for_tests(policy)
+                .expect_err("active out-of-time root must reject");
+            assert_offline_rejection(err, "invalid_attestation", "block timestamp");
+        }
+
+        #[test]
         fn offline_device_attestation_policy_rejects_zero_revocation_digest() {
             let mut policy = default_policy_for_tests();
             policy.revoked_certificate_sha256.push(vec![0; 32]);
@@ -8979,6 +10261,94 @@ pub mod isi {
             }];
 
             assert_policy_update_rejected(policy, "invalid signing digest");
+        }
+
+        #[test]
+        fn offline_device_attestation_policy_rejects_zero_android_signing_digest() {
+            let mut policy = default_policy_for_tests();
+            policy.android_apps = vec![OfflineAndroidAppAttestationPolicy {
+                package_name: ANDROID_TEST_PACKAGE_NAME.to_owned(),
+                signing_certificate_sha256: vec![vec![0; 32]],
+            }];
+
+            assert_policy_update_rejected(policy, "invalid signing digest");
+        }
+
+        #[test]
+        fn offline_device_attestation_policy_rejects_duplicate_ios_app_identity() {
+            let mut policy = default_policy_for_tests();
+            policy.ios_apps = vec![
+                OfflineIosAppAttestationPolicy {
+                    team_id: "teamid1234".to_owned(),
+                    bundle_id: "jp.co.soramitsu.iroha.offline".to_owned(),
+                    environment: "production".to_owned(),
+                },
+                OfflineIosAppAttestationPolicy {
+                    team_id: "TEAMID1234".to_owned(),
+                    bundle_id: "jp.co.soramitsu.iroha.offline".to_owned(),
+                    environment: "PRODUCTION".to_owned(),
+                },
+            ];
+
+            assert_policy_update_rejected(policy, "duplicate iOS app identity");
+        }
+
+        #[test]
+        fn offline_device_attestation_policy_rejects_padded_ios_app_identity() {
+            let mut policy = default_policy_for_tests();
+            policy.ios_apps = vec![OfflineIosAppAttestationPolicy {
+                team_id: " TEAMID1234 ".to_owned(),
+                bundle_id: "jp.co.soramitsu.iroha.offline".to_owned(),
+                environment: "production".to_owned(),
+            }];
+
+            assert_policy_update_rejected(policy, "surrounding whitespace");
+        }
+
+        #[test]
+        fn offline_device_attestation_policy_rejects_invalid_ios_environment() {
+            let mut policy = default_policy_for_tests();
+            policy.ios_apps = vec![OfflineIosAppAttestationPolicy {
+                team_id: "TEAMID1234".to_owned(),
+                bundle_id: "jp.co.soramitsu.iroha.offline".to_owned(),
+                environment: "staging".to_owned(),
+            }];
+
+            assert_policy_update_rejected(policy, "production or development");
+        }
+
+        #[test]
+        fn offline_device_attestation_policy_rejects_duplicate_android_app_identity() {
+            let mut policy = default_policy_for_tests();
+            policy.android_apps = vec![
+                OfflineAndroidAppAttestationPolicy {
+                    package_name: ANDROID_TEST_PACKAGE_NAME.to_owned(),
+                    signing_certificate_sha256: vec![
+                        vec![0x11; 32],
+                        ANDROID_TEST_SIGNING_CERT_SHA256.to_vec(),
+                    ],
+                },
+                OfflineAndroidAppAttestationPolicy {
+                    package_name: ANDROID_TEST_PACKAGE_NAME.to_owned(),
+                    signing_certificate_sha256: vec![
+                        ANDROID_TEST_SIGNING_CERT_SHA256.to_vec(),
+                        vec![0x11; 32],
+                    ],
+                },
+            ];
+
+            assert_policy_update_rejected(policy, "duplicate Android app identity");
+        }
+
+        #[test]
+        fn offline_device_attestation_policy_rejects_padded_android_app_identity() {
+            let mut policy = default_policy_for_tests();
+            policy.android_apps = vec![OfflineAndroidAppAttestationPolicy {
+                package_name: format!(" {ANDROID_TEST_PACKAGE_NAME} "),
+                signing_certificate_sha256: vec![ANDROID_TEST_SIGNING_CERT_SHA256.to_vec()],
+            }];
+
+            assert_policy_update_rejected(policy, "surrounding whitespace");
         }
 
         #[test]
@@ -9092,9 +10462,7 @@ pub mod isi {
                 OFFLINE_ATTESTATION_ANDROID_ASSERTION_ALGORITHM.to_owned();
             registration.assertion_usage_count_limit = Some(1);
             registration.attestation_report = b"not-cbor".to_vec();
-            registration.attestation_report_hash = Hash::new(&registration.attestation_report);
-            registration.evidence = b"android-evidence".to_vec();
-            registration.evidence_hash = Hash::new(&registration.evidence);
+            refresh_attestation_hashes(&mut registration);
             refresh_attestation_challenge(&mut registration);
             let authority = registration.account_id.clone();
             let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -9105,6 +10473,24 @@ pub mod isi {
                 .execute(&authority, &mut transaction)
                 .expect_err("malformed Android KeyMint report must reject");
             assert_offline_rejection(err, "invalid_attestation", "CBOR certificate array");
+        }
+
+        #[test]
+        fn offline_device_attestation_registration_rejects_android_report_trailing_cbor_bytes() {
+            let (state, recent_block_height, recent_block_hash) = state_with_attestation_anchor();
+            let mut registration =
+                android_attestation_registration(recent_block_height, recent_block_hash);
+            registration.attestation_report.push(0xF6);
+            refresh_attestation_hashes(&mut registration);
+            let authority = registration.account_id.clone();
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let err = RegisterOfflineDeviceAttestation::new(registration)
+                .execute(&authority, &mut transaction)
+                .expect_err("Android KeyMint report with trailing CBOR data must reject");
+            assert_offline_rejection(err, "invalid_attestation", "trailing CBOR bytes");
         }
 
         #[test]
@@ -9196,6 +10582,27 @@ pub mod isi {
                 .execute(&authority, &mut transaction)
                 .expect_err("Android KeyMint leaf without attestation extension must reject");
             assert_offline_rejection(err, "invalid_attestation", "leaf certificate");
+        }
+
+        #[test]
+        fn offline_device_attestation_registration_rejects_android_duplicate_keymint_extension() {
+            let (state, recent_block_height, recent_block_hash) = state_with_attestation_anchor();
+            let mut registration =
+                android_attestation_registration(recent_block_height, recent_block_hash);
+            refresh_android_attestation_material_with_duplicate_leaf_extension(&mut registration);
+            let authority = registration.account_id.clone();
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let err = RegisterOfflineDeviceAttestation::new(registration)
+                .execute(&authority, &mut transaction)
+                .expect_err("Android duplicate KeyMint extensions must reject");
+            assert_offline_rejection(
+                err,
+                "invalid_attestation",
+                "duplicate attestation extensions",
+            );
         }
 
         #[test]
@@ -9485,6 +10892,43 @@ pub mod isi {
         }
 
         #[test]
+        fn offline_device_attestation_registration_rejects_android_key_id_mismatch() {
+            let (state, recent_block_height, recent_block_hash) = state_with_attestation_anchor();
+            let mut registration =
+                android_attestation_registration(recent_block_height, recent_block_hash);
+            refresh_android_attestation_material_with_key_id_override(
+                &mut registration,
+                "00".repeat(32),
+            );
+            let authority = registration.account_id.clone();
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let err = RegisterOfflineDeviceAttestation::new(registration)
+                .execute(&authority, &mut transaction)
+                .expect_err("Android KeyMint key_id substitution must reject");
+            assert_offline_rejection(err, "invalid_attestation", "key_id");
+        }
+
+        #[test]
+        fn offline_device_attestation_registration_rejects_android_uppercase_key_id() {
+            let (state, recent_block_height, recent_block_hash) = state_with_attestation_anchor();
+            let mut registration =
+                android_attestation_registration(recent_block_height, recent_block_hash);
+            refresh_android_attestation_material_with_uppercase_key_id(&mut registration);
+            let authority = registration.account_id.clone();
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let err = RegisterOfflineDeviceAttestation::new(registration)
+                .execute(&authority, &mut transaction)
+                .expect_err("Android KeyMint uppercase key_id must reject");
+            assert_offline_rejection(err, "invalid_attestation", "lowercase hex");
+        }
+
+        #[test]
         fn offline_device_attestation_registration_rejects_android_app_disallowed_by_policy() {
             let (state, recent_block_height, recent_block_hash) = state_with_attestation_anchor();
             let registration =
@@ -9591,12 +11035,12 @@ pub mod isi {
                 .expect("first registration records evidence marker");
             let err = RegisterOfflineDeviceAttestation::new(second_registration)
                 .execute(&authority, &mut transaction)
-                .expect_err("reused evidence must reject even under a new key id");
-            assert_offline_rejection(err, "duplicate_attestation", "evidence material");
+                .expect_err("reused evidence must not bind a new key id registration");
+            assert_offline_rejection(err, "invalid_attestation", "evidence envelope");
         }
 
         #[test]
-        fn offline_device_attestation_registration_rejects_reused_certificate_with_new_evidence() {
+        fn offline_device_attestation_registration_rejects_certificate_evidence_substitution() {
             let (state, recent_block_height, recent_block_hash) = state_with_attestation_anchor();
             let certificate = sample_certificate();
             let first_registration =
@@ -9614,8 +11058,8 @@ pub mod isi {
                 .expect("first registration records certificate marker");
             let err = RegisterOfflineDeviceAttestation::new(second_registration)
                 .execute(&authority, &mut transaction)
-                .expect_err("same attested certificate must not be registered twice");
-            assert_offline_rejection(err, "duplicate_attestation", "certificate or evidence");
+                .expect_err("same attested certificate cannot be paired with arbitrary evidence");
+            assert_offline_rejection(err, "invalid_attestation", "evidence envelope");
         }
 
         #[test]

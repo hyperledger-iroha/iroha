@@ -380,19 +380,34 @@ fn read_frames(path: &Path) -> io::Result<Vec<QueuePlanJournalFrameV1>> {
 mod tests {
     use std::{fs::OpenOptions, io::Write};
 
-    use iroha_data_model::{isi::Log, transaction::TransactionBuilder};
+    use iroha_data_model::{
+        asset::AssetDefinitionId,
+        domain::DomainId,
+        escrow::EscrowId,
+        isi::{InstructionBox, Log, escrow::OpenAssetLock},
+        name::Name,
+        transaction::TransactionBuilder,
+    };
     use iroha_logger::Level;
     use iroha_test_samples::gen_account_in;
 
     use super::*;
 
     fn record(label: &str) -> QueuePlanJournalRecordV1 {
+        let instruction: InstructionBox = Log::new(Level::INFO, label.to_owned()).into();
+        record_with_instruction(label, instruction)
+    }
+
+    fn record_with_instruction(
+        label: &str,
+        instruction: InstructionBox,
+    ) -> QueuePlanJournalRecordV1 {
         let chain_id = "00000000-0000-0000-0000-000000000000"
             .parse()
             .expect("chain id");
         let (account_id, keypair) = gen_account_in(label);
         let tx = TransactionBuilder::new(chain_id, account_id)
-            .with_instructions([Log::new(Level::INFO, label.to_owned())])
+            .with_instructions([instruction])
             .sign(keypair.private_key());
         let accepted = crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx));
         QueuePlanJournalRecordV1::new(
@@ -402,6 +417,23 @@ mod tests {
             accepted.entrypoint_bytes(),
             42,
         )
+    }
+
+    fn asset_lock_record(label: &str) -> QueuePlanJournalRecordV1 {
+        let escrow_id = EscrowId::new(Hash::new(format!("{label}-asset-lock")));
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
+            "xor".parse::<Name>().expect("asset name"),
+        );
+        let (destination, _) = gen_account_in(&format!("{label}-destination"));
+        let instruction: InstructionBox = OpenAssetLock::new(
+            escrow_id,
+            asset_definition,
+            destination,
+            iroha_primitives::numeric::Numeric::from(20_u64),
+        )
+        .into();
+        record_with_instruction(label, instruction)
     }
 
     #[test]
@@ -428,6 +460,24 @@ mod tests {
         }
         let journal = QueuePlanJournal::open(&path, 1024 * 1024, true).expect("reopen journal");
         assert_eq!(journal.replay().expect("replay"), vec![second]);
+    }
+
+    #[test]
+    fn journal_replays_asset_lock_instruction_records() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("queue-plan-asset-lock.norito");
+        let record = asset_lock_record("asset-lock");
+        {
+            let mut journal =
+                QueuePlanJournal::open(&path, 1024 * 1024, true).expect("open journal");
+            let flush = journal
+                .put_deferred_flush(record.clone())
+                .expect("put asset lock");
+            journal.flush_deferred(flush).expect("flush journal");
+        }
+
+        let journal = QueuePlanJournal::open(&path, 1024 * 1024, true).expect("reopen journal");
+        assert_eq!(journal.replay().expect("replay"), vec![record]);
     }
 
     #[test]
