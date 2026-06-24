@@ -2276,15 +2276,13 @@ mod tests {
             &artifacts.blind_rotation_key,
         )
         .expect("decode blind-rotation artifact");
-        let mut bootstrap_key = iroha_crypto::bootstrap_key_from_seed(
+        let bootstrap_key = iroha_crypto::full_bootstrap_key_from_material_v1(
             &params,
             &public_key,
             "zk-stark-bfv-full-bootstrap-refresh-key",
-            b"zk-stark-bfv-full-bootstrap-refresh-seed",
+            material.clone(),
         )
-        .expect("bootstrap refresh key");
-        bootstrap_key.mode = iroha_crypto::BfvBootstrapKeyMode::FullBootstrapV1;
-        bootstrap_key.full_bootstrap_material = Some(material.clone());
+        .expect("full-bootstrap key");
         let plaintext = iroha_crypto::encode_packed_plaintext_slots(
             &params,
             &(0..usize::from(params.polynomial_degree))
