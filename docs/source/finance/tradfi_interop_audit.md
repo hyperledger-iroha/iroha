@@ -458,8 +458,11 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   reject reused pending direct download URLs, including cross-summary reuse,
   reject percent escapes in official ISO catalogue/download coordinates, and
   require archive catalogue URLs to use canonical raw `page=<nonzero decimal>`
-  queries. Each pending source `message_name` must use canonical ISO-style
-  CamelCase plus a `VNN` suffix matching the `message_def_id` version segment.
+  queries. Each pending source `message_name` must be unique and use canonical
+  ISO-style CamelCase plus a `VNN` suffix matching the `message_def_id` version
+  segment, and each pending source `submitting_organisation` must be a canonical
+  comma-space-separated organisation label without URL/contact delimiters,
+  semicolon path parameters, placeholder names, or slash/path smuggling.
 - Updated OpenAPI and MCP submission surfaces to expose profile selection.
 - Added `scripts/iso_rail_gateway_adapter.py`, an operator-side file-drop
   adapter for live rail gateway ingress. Each inbound `*.xml` must have a

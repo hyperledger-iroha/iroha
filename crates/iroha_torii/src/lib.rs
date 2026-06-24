@@ -10025,6 +10025,13 @@ fn zk_ivm_prove_job_id_with_rng<R: rand::rand_core::TryCryptoRng>(
     Ok(hex::encode(job_id_bytes))
 }
 
+fn zk_ivm_synthetic_signer() -> Result<iroha_crypto::KeyPair, String> {
+    // Local proof derivation replaces the signed authority before use; this
+    // signer only satisfies transaction construction for non-broadcast payloads.
+    iroha_crypto::KeyPair::try_from_seed(vec![0x5d; 32], iroha_crypto::Algorithm::Ed25519)
+        .map_err(|err| format!("failed to derive synthetic IVM transaction signer: {err}"))
+}
+
 fn zk_ivm_prove_gc_jobs_at(
     jobs: &DashMap<String, ZkIvmProveJobState>,
     now_ms: u64,
@@ -10323,14 +10330,14 @@ async fn handler_zk_ivm_derive(
     let bytecode = req.bytecode;
     let proved = tokio::task::spawn_blocking(
         move || -> Result<iroha_data_model::transaction::IvmProved, String> {
-            let kp = iroha_crypto::KeyPair::random();
+            let synthetic_signer = zk_ivm_synthetic_signer()?;
             let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
                 chain_id,
                 authority.clone(),
             )
             .with_metadata(metadata)
             .with_executable(iroha_data_model::transaction::Executable::Ivm(bytecode))
-            .try_sign(kp.private_key())
+            .try_sign(synthetic_signer.private_key())
             .map_err(|err| format!("failed to sign synthetic IVM derive transaction: {err}"))?
             // Proof derivation needs a stable authority, but signature validity is not required here.
             .with_authority(authority);
@@ -10621,13 +10628,14 @@ async fn handler_zk_ivm_prove(
                     .get(parsed.header_len..)
                     .ok_or_else(|| "invalid IVM header (missing code body)".to_owned())?;
                 let code_hash = iroha_crypto::Hash::new(body);
+                let synthetic_signer = zk_ivm_synthetic_signer()?;
                 let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
                     chain_id,
                     authority.clone(),
                 )
                 .with_metadata(metadata.clone())
                 .with_executable(iroha_data_model::transaction::Executable::Ivm(bytecode.clone()))
-                .try_sign(iroha_crypto::KeyPair::random().private_key())
+                .try_sign(synthetic_signer.private_key())
                 .map_err(|err| format!("failed to sign synthetic IVM prove transaction: {err}"))?
                 // Proof derivation needs stable authority; signature validity is not required.
                 .with_authority(authority.clone());
@@ -43368,11 +43376,11 @@ pub(crate) mod tests_runtime_handlers {
         checked_torii_test_keypair(vec![seed; 32], algorithm, context)
     }
 
-    fn checked_torii_test_ed25519_keypair(seed: u8, context: &'static str) -> KeyPair {
+    pub(crate) fn checked_torii_test_ed25519_keypair(seed: u8, context: &'static str) -> KeyPair {
         checked_torii_test_keypair_from_seed_byte(seed, Algorithm::Ed25519, context)
     }
 
-    fn checked_torii_test_account_id(seed: u8, context: &'static str) -> AccountId {
+    pub(crate) fn checked_torii_test_account_id(seed: u8, context: &'static str) -> AccountId {
         AccountId::new(
             checked_torii_test_ed25519_keypair(seed, context)
                 .public_key()
@@ -44058,7 +44066,10 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn torii_ram_lfe_uses_config_runtime() {
         let mut cfg = crate::test_utils::mk_minimal_root_cfg();
-        let signer = KeyPair::random();
+        let signer = checked_torii_test_ed25519_keypair(
+            0x9f,
+            "derive Torii RAM-LFE config signer fixture key",
+        );
         cfg.torii.ram_lfe = Some(iroha_config::parameters::actual::ToriiRamLfe {
             programs: vec![iroha_config::parameters::actual::ToriiRamLfeProgram {
                 program_id: "phone_retail".parse().expect("program id"),
@@ -57361,7 +57372,14 @@ pub(crate) mod tests_runtime_handlers {
 
         let mut app = mk_app_state_for_tests_with_world(world_with_account(&ALICE_ID));
         let bridge_signer = app.da_receipt_signer.clone();
-        let local_peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let local_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x68,
+                "derive internal Torii proxy local peer fixture key",
+            )
+            .public_key()
+            .clone(),
+        );
         Arc::get_mut(&mut app)
             .expect("unique app state")
             .torii_proxy_bridge_signer = bridge_signer.clone();
@@ -57460,7 +57478,14 @@ pub(crate) mod tests_runtime_handlers {
             request_id: Hash::new(b"internal-torii-proxy-read-unsigned"),
             hop_count: 1,
             max_hops: 3,
-            visited_peer_ids: vec![PeerId::from(KeyPair::random().public_key().clone())],
+            visited_peer_ids: vec![PeerId::from(
+                checked_torii_test_ed25519_keypair(
+                    0x69,
+                    "derive unsigned internal Torii proxy visited peer fixture key",
+                )
+                .public_key()
+                .clone(),
+            )],
             request: ToriiProxyRequestKindV1::Read(super::torii_read_request(
                 ToriiReadEndpointV1::AccountGet,
                 RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -57490,8 +57515,22 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
     async fn forward_incoming_torii_proxy_request_returns_route_unavailable_when_hops_exhausted() {
-        let local_peer_id = PeerId::from(KeyPair::random().public_key().clone());
-        let sender_peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let local_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x68,
+                "derive internal Torii proxy local peer fixture key",
+            )
+            .public_key()
+            .clone(),
+        );
+        let sender_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x6a,
+                "derive internal Torii proxy sender peer fixture key",
+            )
+            .public_key()
+            .clone(),
+        );
         let mut app = mk_app_state_for_tests();
         Arc::get_mut(&mut app)
             .expect("unique app state")
@@ -57530,14 +57569,32 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
     async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
-        let local_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let authoritative_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let sender_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let local_keypair = checked_torii_test_keypair_from_seed_byte(
+            0x6b,
+            Algorithm::BlsNormal,
+            "derive internal Torii forward local peer fixture key",
+        );
+        let authoritative_keypair = checked_torii_test_keypair_from_seed_byte(
+            0x6c,
+            Algorithm::BlsNormal,
+            "derive internal Torii forward authoritative peer fixture key",
+        );
+        let sender_keypair = checked_torii_test_keypair_from_seed_byte(
+            0x6d,
+            Algorithm::BlsNormal,
+            "derive internal Torii forward sender peer fixture key",
+        );
         let local_peer_id = PeerId::from(local_keypair.public_key().clone());
         let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
         let sender_peer_id = PeerId::from(sender_keypair.public_key().clone());
-        let authoritative_validator = AccountId::new(KeyPair::random().public_key().clone());
-        let sender_validator = AccountId::new(KeyPair::random().public_key().clone());
+        let authoritative_validator = checked_torii_test_account_id(
+            0x6e,
+            "derive internal Torii forward authoritative validator fixture key",
+        );
+        let sender_validator = checked_torii_test_account_id(
+            0x6f,
+            "derive internal Torii forward sender validator fixture key",
+        );
         let mut app = mk_app_state_for_tests();
         {
             let app_mut = Arc::get_mut(&mut app).expect("unique app state");
@@ -57664,7 +57721,15 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn validate_incoming_soracloud_proxy_request_authority_accepts_generated_hf_primary() {
-        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let primary_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x70,
+                "derive generated-HF incoming proxy primary fixture key",
+            )
+            .public_key()
+            .clone(),
+        )
+        .to_string();
         let (world, service_name, service_version) =
             seed_generated_hf_public_world(&primary_peer_id);
         let mut app = mk_app_state_for_tests_with_world(world);
@@ -57698,7 +57763,15 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn validate_incoming_soracloud_proxy_request_authority_rejects_commitment_mismatch() {
-        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let primary_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x70,
+                "derive generated-HF incoming proxy primary fixture key",
+            )
+            .public_key()
+            .clone(),
+        )
+        .to_string();
         let (world, service_name, service_version) =
             seed_generated_hf_public_world(&primary_peer_id);
         let mut app = mk_app_state_for_tests_with_world(world);
@@ -57739,7 +57812,17 @@ pub(crate) mod tests_runtime_handlers {
             .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
             snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
             state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
-            local_peer_id: Some(PeerId::from(KeyPair::random().public_key().clone()).to_string()),
+            local_peer_id: Some(
+                PeerId::from(
+                    checked_torii_test_ed25519_keypair(
+                        0x72,
+                        "derive non-generated incoming proxy local fixture key",
+                    )
+                    .public_key()
+                    .clone(),
+                )
+                .to_string(),
+            ),
             result: Err(
                 iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
                     SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -57770,8 +57853,24 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn validate_incoming_soracloud_proxy_request_authority_rejects_non_primary_peer() {
-        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
-        let local_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let primary_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x70,
+                "derive generated-HF incoming proxy primary fixture key",
+            )
+            .public_key()
+            .clone(),
+        )
+        .to_string();
+        let local_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x71,
+                "derive generated-HF incoming proxy local fixture key",
+            )
+            .public_key()
+            .clone(),
+        )
+        .to_string();
         let (world, service_name, service_version) =
             seed_generated_hf_public_world(&primary_peer_id);
         let mut app = mk_app_state_for_tests_with_world(world);
@@ -57804,7 +57903,15 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn incoming_proxy_authority_failure_requests_generated_hf_reconcile() {
-        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let primary_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x70,
+                "derive generated-HF incoming proxy primary fixture key",
+            )
+            .public_key()
+            .clone(),
+        )
+        .to_string();
         let (world, service_name, service_version) =
             seed_generated_hf_public_world(&primary_peer_id);
         let local_peer_id =
@@ -57856,7 +57963,15 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn incoming_proxy_forward_failure_reports_remote_primary_health_and_requests_reconcile_once()
      {
-        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let primary_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x70,
+                "derive generated-HF incoming proxy primary fixture key",
+            )
+            .public_key()
+            .clone(),
+        )
+        .to_string();
         let (world, service_name, service_version) =
             seed_generated_hf_public_world(&primary_peer_id);
         let local_peer_id =
@@ -57931,7 +58046,12 @@ pub(crate) mod tests_runtime_handlers {
             iroha_core::IrohaNetwork::closed_for_tests(),
             Peer::new(
                 "127.0.0.1:1337".parse().expect("valid peer address"),
-                KeyPair::random().public_key().clone(),
+                checked_torii_test_ed25519_keypair(
+                    0x73,
+                    "derive generated-HF incoming proxy sender fixture key",
+                )
+                .public_key()
+                .clone(),
             ),
             incoming_request,
         )
@@ -57967,7 +58087,15 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn resolve_incoming_soracloud_proxy_forward_target_returns_primary() {
-        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let primary_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x70,
+                "derive generated-HF incoming proxy primary fixture key",
+            )
+            .public_key()
+            .clone(),
+        )
+        .to_string();
         let (world, service_name, service_version) =
             seed_generated_hf_public_world(&primary_peer_id);
         let local_peer_id =
@@ -58004,8 +58132,24 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn resolve_incoming_soracloud_proxy_forward_target_rejects_unassigned_receiver() {
-        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
-        let local_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let primary_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x70,
+                "derive generated-HF incoming proxy primary fixture key",
+            )
+            .public_key()
+            .clone(),
+        )
+        .to_string();
+        let local_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x71,
+                "derive generated-HF incoming proxy local fixture key",
+            )
+            .public_key()
+            .clone(),
+        )
+        .to_string();
         let (world, service_name, service_version) =
             seed_generated_hf_public_world(&primary_peer_id);
         let mut app = mk_app_state_for_tests_with_world(world);
@@ -58042,7 +58186,15 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn resolve_incoming_soracloud_proxy_forward_target_rejects_invalid_request() {
-        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let primary_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x70,
+                "derive generated-HF incoming proxy primary fixture key",
+            )
+            .public_key()
+            .clone(),
+        )
+        .to_string();
         let (world, service_name, service_version) =
             seed_generated_hf_public_world(&primary_peer_id);
         let mut app = mk_app_state_for_tests_with_world(world);
@@ -58078,8 +58230,22 @@ pub(crate) mod tests_runtime_handlers {
     async fn soracloud_proxy_response_ignores_unexpected_responder_and_keeps_pending_request() {
         let app = mk_app_state_for_tests();
         let request_id = Hash::new(b"soracloud-proxy-unexpected-peer");
-        let expected_peer_id = PeerId::from(KeyPair::random().public_key().clone());
-        let responder_peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let expected_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x74,
+                "derive Soracloud proxy expected responder fixture key",
+            )
+            .public_key()
+            .clone(),
+        );
+        let responder_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x75,
+                "derive Soracloud proxy unexpected responder fixture key",
+            )
+            .public_key()
+            .clone(),
+        );
         let (tx, rx) = tokio::sync::oneshot::channel();
         let mut rx = Box::pin(rx);
         app.soracloud_proxy_pending.lock().await.insert(
@@ -58180,7 +58346,15 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn unexpected_assigned_proxy_responder_requests_generated_hf_reconcile() {
-        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let primary_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x70,
+                "derive generated-HF incoming proxy primary fixture key",
+            )
+            .public_key()
+            .clone(),
+        )
+        .to_string();
         let (world, service_name, service_version) =
             seed_generated_hf_public_world(&primary_peer_id);
         let unexpected_peer_id =
@@ -58192,7 +58366,17 @@ pub(crate) mod tests_runtime_handlers {
             .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
             snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
             state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
-            local_peer_id: Some(PeerId::from(KeyPair::random().public_key().clone()).to_string()),
+            local_peer_id: Some(
+                PeerId::from(
+                    checked_torii_test_ed25519_keypair(
+                        0x76,
+                        "derive generated-HF unexpected responder local fixture key",
+                    )
+                    .public_key()
+                    .clone(),
+                )
+                .to_string(),
+            ),
             result: Err(
                 iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
                     SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -58270,7 +58454,14 @@ pub(crate) mod tests_runtime_handlers {
     async fn soracloud_proxy_response_rejects_unsupported_schema() {
         let app = mk_app_state_for_tests();
         let request_id = Hash::new(b"soracloud-proxy-unsupported-schema");
-        let responder_peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let responder_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x77,
+                "derive Soracloud proxy unsupported schema responder fixture key",
+            )
+            .public_key()
+            .clone(),
+        );
         let (tx, rx) = tokio::sync::oneshot::channel();
         app.soracloud_proxy_pending.lock().await.insert(
             request_id,
@@ -58323,7 +58514,10 @@ pub(crate) mod tests_runtime_handlers {
     async fn torii_proxy_network_message_dispatch_resolves_pending_response() {
         let app = mk_app_state_for_tests();
         let request_id = Hash::new(b"torii-proxy-dispatch");
-        let responder_keypair = KeyPair::random();
+        let responder_keypair = checked_torii_test_ed25519_keypair(
+            0x78,
+            "derive Torii proxy response dispatcher responder fixture key",
+        );
         let responder_peer_id = PeerId::from(responder_keypair.public_key().clone());
         let responder_peer = Peer::new(
             "127.0.0.1:1337".parse().expect("valid peer address"),
@@ -58372,7 +58566,14 @@ pub(crate) mod tests_runtime_handlers {
     async fn process_incoming_torii_proxy_response_marks_late_responses_once() {
         let app = mk_app_state_for_tests();
         let request_id = Hash::new(b"torii-proxy-late-response");
-        let responder_peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let responder_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x79,
+                "derive Torii proxy late-response responder fixture key",
+            )
+            .public_key()
+            .clone(),
+        );
         super::mark_torii_proxy_request_completed(&app, request_id).await;
 
         let response = ToriiProxyResponseV1 {
@@ -58418,8 +58619,21 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn soracloud_proxy_failure_reports_remote_primary_health() {
-        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
-        let local_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let primary_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x7a,
+                "derive generated-HF proxy primary fixture key",
+            )
+            .public_key()
+            .clone(),
+        )
+        .to_string();
+        let local_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(0x7b, "derive generated-HF proxy local fixture key")
+                .public_key()
+                .clone(),
+        )
+        .to_string();
         let (world, service_name, service_version) =
             seed_generated_hf_public_world(&primary_peer_id);
         let captured_proxy_failures = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -58468,7 +58682,15 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn validate_generated_hf_proxy_response_authority_accepts_matching_receipt() {
-        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let primary_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x7a,
+                "derive generated-HF proxy primary fixture key",
+            )
+            .public_key()
+            .clone(),
+        )
+        .to_string();
         let (world, service_name, service_version) =
             seed_generated_hf_public_world(&primary_peer_id);
         let request = sample_generated_hf_infer_request(service_name, service_version);
@@ -58487,7 +58709,15 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn validate_generated_hf_proxy_response_authority_rejects_mismatched_receipt() {
-        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let primary_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x7a,
+                "derive generated-HF proxy primary fixture key",
+            )
+            .public_key()
+            .clone(),
+        )
+        .to_string();
         let (world, service_name, service_version) =
             seed_generated_hf_public_world(&primary_peer_id);
         let request = sample_generated_hf_infer_request(service_name, service_version);
@@ -58497,8 +58727,17 @@ pub(crate) mod tests_runtime_handlers {
             .runtime_receipt
             .as_mut()
             .expect("generated HF proxy receipt")
-            .selected_peer_id =
-            Some(PeerId::from(KeyPair::random().public_key().clone()).to_string());
+            .selected_peer_id = Some(
+            PeerId::from(
+                checked_torii_test_ed25519_keypair(
+                    0x7c,
+                    "derive generated-HF proxy mismatched receipt fixture key",
+                )
+                .public_key()
+                .clone(),
+            )
+            .to_string(),
+        );
 
         let error = super::validate_generated_hf_proxy_response_authority(
             &app,
@@ -58514,7 +58753,15 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn validate_generated_hf_proxy_response_authority_rejects_result_commitment_mismatch() {
-        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let primary_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x7a,
+                "derive generated-HF proxy primary fixture key",
+            )
+            .public_key()
+            .clone(),
+        )
+        .to_string();
         let (world, service_name, service_version) =
             seed_generated_hf_public_world(&primary_peer_id);
         let request = sample_generated_hf_infer_request(service_name, service_version);
@@ -58540,8 +58787,21 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn proxy_validation_failure_reports_remote_primary_health_and_requests_reconcile() {
-        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
-        let local_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let primary_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x7a,
+                "derive generated-HF proxy primary fixture key",
+            )
+            .public_key()
+            .clone(),
+        )
+        .to_string();
+        let local_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(0x7b, "derive generated-HF proxy local fixture key")
+                .public_key()
+                .clone(),
+        )
+        .to_string();
         let (world, service_name, service_version) =
             seed_generated_hf_public_world(&primary_peer_id);
         let captured_proxy_failures = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -58570,8 +58830,17 @@ pub(crate) mod tests_runtime_handlers {
             .runtime_receipt
             .as_mut()
             .expect("generated HF proxy receipt")
-            .selected_peer_id =
-            Some(PeerId::from(KeyPair::random().public_key().clone()).to_string());
+            .selected_peer_id = Some(
+            PeerId::from(
+                checked_torii_test_ed25519_keypair(
+                    0x7c,
+                    "derive generated-HF proxy mismatched receipt fixture key",
+                )
+                .public_key()
+                .clone(),
+            )
+            .to_string(),
+        );
         let error = super::validate_generated_hf_proxy_response_authority(
             &app,
             &request,
@@ -58618,8 +58887,21 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn proxy_execution_failure_reports_remote_primary_health_and_requests_reconcile() {
-        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
-        let local_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let primary_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x7a,
+                "derive generated-HF proxy primary fixture key",
+            )
+            .public_key()
+            .clone(),
+        )
+        .to_string();
+        let local_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(0x7b, "derive generated-HF proxy local fixture key")
+                .public_key()
+                .clone(),
+        )
+        .to_string();
         let (world, service_name, service_version) =
             seed_generated_hf_public_world(&primary_peer_id);
         let captured_proxy_failures = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -58680,7 +58962,15 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn execute_soracloud_local_read_via_proxy_missing_p2p_does_not_blame_primary() {
-        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let primary_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x7a,
+                "derive generated-HF proxy primary fixture key",
+            )
+            .public_key()
+            .clone(),
+        )
+        .to_string();
         let (world, service_name, service_version) =
             seed_generated_hf_public_world(&primary_peer_id);
         let local_peer_id =
@@ -58744,7 +59034,15 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn soracloud_routing_failure_requests_generated_hf_reconcile() {
-        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let primary_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x7a,
+                "derive generated-HF proxy primary fixture key",
+            )
+            .public_key()
+            .clone(),
+        )
+        .to_string();
         let (world, service_name, service_version) =
             seed_generated_hf_public_world(&primary_peer_id);
         let captured_reconcile_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -58995,8 +59293,14 @@ pub(crate) mod tests_runtime_handlers {
     #[test]
     fn soracloud_hosted_http_topology_section_reports_authoritative_counts() {
         let mut world = seed_public_soracloud_world();
-        let validator_two = AccountId::new(KeyPair::random().public_key().clone());
-        let validator_three = AccountId::new(KeyPair::random().public_key().clone());
+        let validator_two = checked_torii_test_account_id(
+            0x7d,
+            "derive hosted HTTP topology second validator fixture key",
+        );
+        let validator_three = checked_torii_test_account_id(
+            0x7e,
+            "derive hosted HTTP topology third validator fixture key",
+        );
 
         world
             .soracloud_inrou_host_capabilities_mut_for_testing()
@@ -60251,7 +60555,10 @@ pub(crate) mod tests_runtime_handlers {
 
     #[test]
     fn accept_transaction_signature_failure_sets_code_and_header() {
-        let kp = iroha_crypto::KeyPair::random();
+        let kp = checked_torii_test_ed25519_keypair(
+            0x7f,
+            "derive accept-transaction signature failure fixture key",
+        );
         let chain: ChainId = "chain".parse().unwrap();
         let authority = AccountId::of(kp.public_key().clone());
         let tx = TransactionBuilder::new(chain, authority).sign(kp.private_key());
@@ -60949,7 +61256,8 @@ mod tests {
     use crate::{
         limits,
         tests_runtime_handlers::{
-            app_auth_test_guard, mk_app_state_for_tests, mk_app_state_for_tests_with_iso_bridge,
+            app_auth_test_guard, checked_torii_test_account_id, checked_torii_test_ed25519_keypair,
+            mk_app_state_for_tests, mk_app_state_for_tests_with_iso_bridge,
             mk_app_state_for_tests_with_options, mk_app_state_for_tests_with_world, negotiated,
             record_latest_committed_header_for_test, signed_app_headers, world_with_account,
         },
@@ -61047,7 +61355,8 @@ mod tests {
     }
 
     fn sample_iso_bridge_config(alias: &str, account_id: &AccountId) -> actual::IsoBridge {
-        let signer_keypair = KeyPair::random();
+        let signer_keypair =
+            checked_torii_test_ed25519_keypair(0x80, "derive ISO bridge signer fixture key");
         actual::IsoBridge {
             enabled: true,
             dedupe_ttl_secs: 30,
@@ -61327,7 +61636,10 @@ mod tests {
     }
 
     fn dummy_output_opening_for_access_test() -> RamLfeOutputOpening {
-        let signer = KeyPair::random();
+        let signer = checked_torii_test_ed25519_keypair(
+            0x81,
+            "derive RAM-LFE dummy output opening fixture key",
+        );
         let payload = RamLfeOutputOpeningPayload {
             program_id: "access_test".parse().expect("program id"),
             input_ciphertext_hash: Hash::new(b"access-test-input"),
@@ -61728,7 +62040,10 @@ mod tests {
     #[tokio::test]
     async fn multisig_approvals_authority_routes_stay_separate_from_jwt_only_routes() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
+        let key_pair = checked_torii_test_ed25519_keypair(
+            0x82,
+            "derive multisig approvals authority fixture key",
+        );
         let account_id = AccountId::new(key_pair.public_key().clone());
         let mut app = mk_app_state_for_tests_with_world(world_with_account(&account_id));
         let app_state = Arc::get_mut(&mut app).expect("unique app state");
@@ -61806,7 +62121,7 @@ mod tests {
     }
 
     fn sample_ivm_prove_authority() -> AccountId {
-        AccountId::new(KeyPair::random().public_key().clone())
+        checked_torii_test_account_id(0x83, "derive ZK IVM prove authority fixture key")
     }
 
     fn sample_ivm_prove_metadata() -> iroha_data_model::metadata::Metadata {
@@ -61961,8 +62276,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_accepts_unsigned_request() {
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x84,
+            "derive alias resolve unsigned authority fixture key",
+        );
         let alias_label = AccountAlias::new(
             "banking".parse().expect("label"),
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
@@ -62008,7 +62325,10 @@ mod tests {
             .enqueue_repair_report(&report)
             .expect("enqueue report");
 
-        let worker_key = KeyPair::random();
+        let worker_key = checked_torii_test_ed25519_keypair(
+            0x85,
+            "derive Sorafs signed repair worker fixture key",
+        );
         let worker_id = AccountId::new(worker_key.public_key().clone());
         let worker_id_literal = worker_id.to_string();
         grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
@@ -62076,7 +62396,10 @@ mod tests {
             .enqueue_repair_report(&report)
             .expect("enqueue report");
 
-        let worker_key = KeyPair::random();
+        let worker_key = checked_torii_test_ed25519_keypair(
+            0x86,
+            "derive Sorafs alias repair worker fixture key",
+        );
         let worker_id = AccountId::new(worker_key.public_key().clone());
         grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
         bind_account_alias_for_test(&app, &worker_id, "repair@universal");
@@ -62123,7 +62446,10 @@ mod tests {
             .enqueue_repair_report(&report)
             .expect("enqueue report");
 
-        let worker_key = KeyPair::random();
+        let worker_key = checked_torii_test_ed25519_keypair(
+            0x87,
+            "derive Sorafs missing-permission repair worker fixture key",
+        );
         let worker_id = AccountId::of(worker_key.public_key().clone());
         let worker_id_literal = worker_id.to_string();
 
@@ -62171,7 +62497,10 @@ mod tests {
             .enqueue_repair_report(&report)
             .expect("enqueue report");
 
-        let worker_key = KeyPair::random();
+        let worker_key = checked_torii_test_ed25519_keypair(
+            0x88,
+            "derive Sorafs digest-mismatch repair worker fixture key",
+        );
         let worker_id = AccountId::of(worker_key.public_key().clone());
         let worker_id_literal = worker_id.to_string();
         grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
@@ -62213,7 +62542,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_returns_not_found_for_unknown_alias() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x89,
+            "derive alias resolve missing-alias authority fixture key",
+        );
         let authority_account = Account::new(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
         let request = routing::AliasResolveRequestDto {
@@ -62243,7 +62575,10 @@ mod tests {
     #[tokio::test]
     async fn alias_resolve_service_rejects_non_account_target_as_conflict() {
         let service = AliasService::new();
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let owner = checked_torii_test_account_id(
+            0x8a,
+            "derive alias resolve custom-target owner fixture key",
+        );
         let alias_input = "customalias";
         let alias = Name::from_str(&normalise_alias(alias_input)).expect("valid alias");
         service
@@ -62271,7 +62606,10 @@ mod tests {
     #[tokio::test]
     async fn alias_resolve_index_service_rejects_non_account_target_as_conflict() {
         let service = AliasService::new();
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let owner = checked_torii_test_account_id(
+            0x8b,
+            "derive alias resolve index custom-target owner fixture key",
+        );
         let alias = Name::from_str("assetalias").expect("valid alias");
         service
             .storage()
@@ -62297,7 +62635,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_allows_unsigned_request_without_permission() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x8c,
+            "derive alias resolve permissionless authority fixture key",
+        );
         let authority_account = Account::new(authority.clone()).build(&authority);
         let domain_id: DomainId = DomainId::try_new("centralbank", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
@@ -62335,7 +62676,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_routes_to_matching_dataspace_instead_of_local_default_miss() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x8d,
+            "derive alias resolve secondary-dataspace authority fixture key",
+        );
         let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         configure_multiple_dataspace_routes_for_test(&mut app);
         bind_account_alias_for_test(&app, &authority, "merchant@secondary");
@@ -62393,7 +62737,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_allows_unsigned_request_for_restricted_target_dataspace() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x8e,
+            "derive alias resolve restricted-dataspace authority fixture key",
+        );
         let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-resolve-denied"));
         let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
             &authority,
@@ -62438,7 +62785,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_reads_local_binding_when_dataspace_has_no_lane() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x8f,
+            "derive alias resolve no-lane authority fixture key",
+        );
         let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
             NonZeroU32::new(1).expect("nonzero lane count"),
@@ -62499,7 +62849,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_returns_route_unavailable_when_authoritative_route_is_offline() {
-        let authority_keypair = KeyPair::random();
+        let authority_keypair = checked_torii_test_ed25519_keypair(
+            0x90,
+            "derive alias resolve offline-route authority fixture key",
+        );
         let authority = AccountId::new(authority_keypair.public_key().clone());
         let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-resolve-offline"));
         let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
@@ -62543,7 +62896,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_rejects_empty_alias() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x95,
+            "derive alias resolve empty-alias authority fixture key",
+        );
         let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         let request = routing::AliasResolveRequestDto {
             alias: "   ".to_string(),
@@ -62570,7 +62926,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_rejects_malformed_alias_literal() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x96,
+            "derive alias resolve malformed-alias authority fixture key",
+        );
         let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         let request = routing::AliasResolveRequestDto {
             alias: "merchant@missing-dataspace".to_string(),
@@ -62600,7 +62959,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_rejects_malformed_json_body() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x97,
+            "derive alias resolve malformed-json authority fixture key",
+        );
         let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
 
         let err = handler_alias_resolve(
@@ -62626,7 +62988,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_lookup_by_account_lists_primary_and_secondary_aliases() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0xa0,
+            "derive alias lookup primary-secondary authority fixture key",
+        );
         let primary_label = AccountAlias::new(
             "banking".parse().expect("label"),
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
@@ -62695,7 +63060,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_lookup_by_account_filters_by_dataspace_and_domain() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0xa1,
+            "derive alias lookup filtered authority fixture key",
+        );
         let primary_label = AccountAlias::new(
             "banking".parse().expect("label"),
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
@@ -62748,10 +63116,12 @@ mod tests {
 
     #[tokio::test]
     async fn alias_lookup_by_account_returns_not_found_for_unknown_account() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority =
+            checked_torii_test_account_id(0xa2, "derive alias lookup known authority fixture key");
         let authority_account = Account::new(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
-        let missing = AccountId::new(KeyPair::random().public_key().clone());
+        let missing =
+            checked_torii_test_account_id(0xa3, "derive alias lookup missing account fixture key");
         let request = routing::AliasLookupByAccountRequestDto {
             account_id: missing.to_string(),
             dataspace: None,
@@ -62776,7 +63146,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_lookup_by_account_rejects_invalid_account_id() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0xa4,
+            "derive alias lookup invalid-account authority fixture key",
+        );
         let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         let request = routing::AliasLookupByAccountRequestDto {
             account_id: "not-an-account".to_string(),
@@ -62810,7 +63183,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_lookup_by_account_rejects_empty_account_id() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0xa5,
+            "derive alias lookup empty-account authority fixture key",
+        );
         let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         let request = routing::AliasLookupByAccountRequestDto {
             account_id: "   ".to_string(),
@@ -62841,7 +63217,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_lookup_by_account_rejects_malformed_json_body() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0xa6,
+            "derive alias lookup malformed-json authority fixture key",
+        );
         let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
 
         let err = handler_alias_lookup_by_account(
@@ -62869,7 +63248,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_lookup_by_account_merges_cross_dataspace_aliases_and_recomputes_total() {
-        let authority_keypair = KeyPair::random();
+        let authority_keypair = checked_torii_test_ed25519_keypair(
+            0xa7,
+            "derive alias lookup fanout authority fixture key",
+        );
         let authority = AccountId::new(authority_keypair.public_key().clone());
         let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-lookup-fanout"));
         let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
@@ -62937,7 +63319,10 @@ mod tests {
     #[tokio::test]
     async fn alias_lookup_by_account_warns_when_denied_routes_are_skipped_but_public_aliases_resolve()
      {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0xa8,
+            "derive alias lookup denied-routes warning authority fixture key",
+        );
         let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-warning-fanout"));
         let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
             &authority,
@@ -62996,7 +63381,10 @@ mod tests {
     #[tokio::test]
     async fn alias_lookup_by_account_returns_permission_denied_when_only_hidden_routes_can_resolve()
     {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0xa9,
+            "derive alias lookup hidden-route authority fixture key",
+        );
         let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-denied-fanout"));
         let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
             &authority,
@@ -63045,7 +63433,10 @@ mod tests {
     #[tokio::test]
     async fn alias_lookup_by_account_returns_empty_fanout_result_when_offline_route_has_no_reachable_aliases()
      {
-        let authority_keypair = KeyPair::random();
+        let authority_keypair = checked_torii_test_ed25519_keypair(
+            0xaa,
+            "derive alias lookup offline fanout authority fixture key",
+        );
         let authority = AccountId::new(authority_keypair.public_key().clone());
         let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-lookup-offline"));
         let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
@@ -63119,7 +63510,10 @@ mod tests {
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         );
         let domain_id: DomainId = DomainId::try_new("centralbank", "universal").expect("domain id");
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0xab,
+            "derive alias resolve account-label fallback authority fixture key",
+        );
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let authority_account = Account::new(authority.clone()).build(&authority);
         let account_id = authority.clone();
@@ -63190,7 +63584,10 @@ mod tests {
             )),
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         );
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0xac,
+            "derive alias resolve rekey-record fallback authority fixture key",
+        );
         let authority_account = Account::new(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
         {
@@ -63240,7 +63637,10 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn contract_alias_resolve_returns_not_found_for_unknown_alias() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0xad,
+            "derive contract alias missing authority fixture key",
+        );
         let authority_account = Account::new(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
         let request = routing::ContractAliasResolveRequestDto {
@@ -63261,7 +63661,10 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn contract_alias_resolve_returns_bound_contract() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0xae,
+            "derive contract alias bound authority fixture key",
+        );
         let authority_account = Account::new(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
@@ -63306,9 +63709,13 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn ram_lfe_program_policies_list_registered_program() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority =
+            checked_torii_test_account_id(0xb0, "derive RAM-LFE policy-list authority fixture key");
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let signer = KeyPair::random();
+        let signer = checked_torii_test_ed25519_keypair(
+            0xb1,
+            "derive RAM-LFE policy-list signer fixture key",
+        );
         let (_policy, program_policy) =
             sample_programmed_identifier_policy(&authority, &signer, &policy_id);
         let mut app = mk_app_state_for_tests();
@@ -63395,9 +63802,11 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn ram_lfe_execute_returns_receipt() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority =
+            checked_torii_test_account_id(0xb2, "derive RAM-LFE execute authority fixture key");
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let signer = KeyPair::random();
+        let signer =
+            checked_torii_test_ed25519_keypair(0xb3, "derive RAM-LFE execute signer fixture key");
         let (_policy, program_policy) =
             sample_programmed_identifier_policy(&authority, &signer, &policy_id);
         let mut app = mk_app_state_for_tests();
@@ -63468,9 +63877,15 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn ram_lfe_receipt_verify_reports_valid_receipt_and_output_match() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0xb4,
+            "derive RAM-LFE receipt-valid authority fixture key",
+        );
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let signer = KeyPair::random();
+        let signer = checked_torii_test_ed25519_keypair(
+            0xb5,
+            "derive RAM-LFE receipt-valid signer fixture key",
+        );
         let (_policy, program_policy) =
             sample_programmed_identifier_policy(&authority, &signer, &policy_id);
         let mut app = mk_app_state_for_tests();
@@ -63537,9 +63952,15 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn ram_lfe_receipt_verify_rejects_expired_receipt() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0xb6,
+            "derive RAM-LFE receipt-expired authority fixture key",
+        );
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let signer = KeyPair::random();
+        let signer = checked_torii_test_ed25519_keypair(
+            0xb7,
+            "derive RAM-LFE receipt-expired signer fixture key",
+        );
         let (_policy, program_policy) =
             sample_programmed_identifier_policy(&authority, &signer, &policy_id);
         let mut app = mk_app_state_for_tests();
@@ -63609,7 +64030,10 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn identifier_policies_lists_registered_policy() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x10,
+            "derive identifier policy-list authority fixture key",
+        );
         let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone())
@@ -63621,7 +64045,10 @@ mod tests {
         let mut app = mk_app_state_for_tests_with_world(world);
 
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let signer = KeyPair::random();
+        let signer = checked_torii_test_ed25519_keypair(
+            0x11,
+            "derive identifier policy-list signer fixture key",
+        );
         let (policy, program_policy) = sample_identifier_policy(&authority, &signer, &policy_id);
         let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
         resolver.register_program_runtime(
@@ -63682,7 +64109,10 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn identifier_policies_expose_programmed_ram_fhe_profile() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x12,
+            "derive programmed identifier policy authority fixture key",
+        );
         let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone())
@@ -63694,7 +64124,10 @@ mod tests {
         let mut app = mk_app_state_for_tests_with_world(world);
 
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let signer = KeyPair::random();
+        let signer = checked_torii_test_ed25519_keypair(
+            0x13,
+            "derive programmed identifier policy signer fixture key",
+        );
         let (policy, program_policy) =
             sample_programmed_identifier_policy(&authority, &signer, &policy_id);
         let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
@@ -63789,7 +64222,10 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn identifier_resolve_returns_bound_account() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x14,
+            "derive identifier resolve bound authority fixture key",
+        );
         let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory"));
@@ -63800,7 +64236,10 @@ mod tests {
         let mut app = mk_app_state_for_tests_with_world(world);
 
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let signer = KeyPair::random();
+        let signer = checked_torii_test_ed25519_keypair(
+            0x15,
+            "derive identifier resolve bound signer fixture key",
+        );
         let (policy, program_policy) =
             sample_programmed_identifier_policy(&authority, &signer, &policy_id);
         let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
@@ -63907,7 +64346,10 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x16,
+            "derive identifier resolve programmed authority fixture key",
+        );
         let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory-programmed"));
@@ -63918,7 +64360,10 @@ mod tests {
         let mut app = mk_app_state_for_tests_with_world(world);
 
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let signer = KeyPair::random();
+        let signer = checked_torii_test_ed25519_keypair(
+            0x17,
+            "derive identifier resolve programmed signer fixture key",
+        );
         let (policy, program_policy) =
             sample_programmed_identifier_policy(&authority, &signer, &policy_id);
         let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
@@ -64011,7 +64456,10 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn identifier_resolve_accepts_bfv_encrypted_input() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x18,
+            "derive identifier resolve BFV authority fixture key",
+        );
         let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory-encrypted"));
         let account = Account::new(authority.clone())
@@ -64021,7 +64469,10 @@ mod tests {
         let mut app = mk_app_state_for_tests_with_world(world);
 
         let policy_id: IdentifierPolicyId = "string#retail".parse().expect("policy id");
-        let signer = KeyPair::random();
+        let signer = checked_torii_test_ed25519_keypair(
+            0x19,
+            "derive identifier resolve BFV signer fixture key",
+        );
         let public_parameters = shared_sdk_identifier_bfv_public_parameters(&policy_id);
         let (policy, program_policy) = sample_identifier_policy_with_public_parameters(
             &authority,
@@ -64126,7 +64577,10 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn identifier_resolve_rejects_malformed_bfv_without_panicking() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x1a,
+            "derive malformed identifier BFV authority fixture key",
+        );
         let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
         let world = World::with(
             [Domain::new(domain_id).build(&authority)],
@@ -64136,7 +64590,10 @@ mod tests {
         let mut app = mk_app_state_for_tests_with_world(world);
 
         let policy_id: IdentifierPolicyId = "string#retail".parse().expect("policy id");
-        let signer = KeyPair::random();
+        let signer = checked_torii_test_ed25519_keypair(
+            0x1b,
+            "derive malformed identifier BFV signer fixture key",
+        );
         let public_parameters = shared_sdk_identifier_bfv_public_parameters(&policy_id);
         let (policy, program_policy) = sample_identifier_policy_with_public_parameters(
             &authority,
@@ -64250,7 +64707,10 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn identifier_claim_receipt_normalizes_phone_input() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x1c,
+            "derive identifier claim receipt authority fixture key",
+        );
         let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory-claim"));
         let domain = Domain::new(domain_id.clone()).build(&authority);
@@ -64261,7 +64721,10 @@ mod tests {
         let mut app = mk_app_state_for_tests_with_world(world);
 
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let signer = KeyPair::random();
+        let signer = checked_torii_test_ed25519_keypair(
+            0x1d,
+            "derive identifier claim receipt signer fixture key",
+        );
         let (policy, program_policy) =
             sample_programmed_identifier_policy(&authority, &signer, &policy_id);
         let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
@@ -64336,7 +64799,10 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn identifier_receipt_lookup_returns_persisted_claim() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x1e,
+            "derive identifier receipt lookup authority fixture key",
+        );
         let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory-receipt-lookup"));
         let account = Account::new(authority.clone())
@@ -64346,7 +64812,10 @@ mod tests {
         let mut app = mk_app_state_for_tests_with_world(world);
 
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let signer = KeyPair::random();
+        let signer = checked_torii_test_ed25519_keypair(
+            0x1f,
+            "derive identifier receipt lookup signer fixture key",
+        );
         let (policy, program_policy) =
             sample_programmed_identifier_policy(&authority, &signer, &policy_id);
         let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
@@ -64456,7 +64925,8 @@ mod tests {
 
     #[tokio::test]
     async fn asset_alias_resolve_returns_definition_fields() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority =
+            checked_torii_test_account_id(0x01, "derive asset alias definition fixture key");
         let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain id");
         let definition_id = AssetDefinitionId::new(
             domain_id.clone(),
@@ -64508,7 +64978,7 @@ mod tests {
 
     #[tokio::test]
     async fn asset_alias_resolve_accepts_short_form_alias() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(0x02, "derive short asset alias fixture key");
         let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain id");
         let definition_id = AssetDefinitionId::new(
             domain_id.clone(),
@@ -64558,7 +65028,8 @@ mod tests {
 
     #[tokio::test]
     async fn asset_definition_get_returns_full_definition_by_base58_id() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority =
+            checked_torii_test_account_id(0x03, "derive asset definition get fixture key");
         let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain id");
         let definition_id = AssetDefinitionId::new(
             domain_id.clone(),
@@ -64614,7 +65085,8 @@ mod tests {
 
     #[tokio::test]
     async fn asset_alias_resolve_returns_not_found_after_grace() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority =
+            checked_torii_test_account_id(0x04, "derive expired asset alias fixture key");
         let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain id");
         let definition_id = AssetDefinitionId::new(
             domain_id.clone(),
@@ -64656,7 +65128,8 @@ mod tests {
 
     #[tokio::test]
     async fn asset_definition_get_reports_expired_pending_cleanup_status_after_grace() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority =
+            checked_torii_test_account_id(0x05, "derive expired asset definition get fixture key");
         let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain id");
         let definition_id = AssetDefinitionId::new(
             domain_id.clone(),
@@ -64708,7 +65181,8 @@ mod tests {
 
     #[tokio::test]
     async fn parse_asset_definition_id_rejects_alias_after_grace() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority =
+            checked_torii_test_account_id(0x06, "derive parse expired asset alias fixture key");
         let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain id");
         let definition_id = AssetDefinitionId::new(
             domain_id.clone(),
@@ -64747,7 +65221,7 @@ mod tests {
 
     #[tokio::test]
     async fn parse_asset_definition_id_accepts_base58_and_alias_literals() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(0x07, "derive parse asset alias fixture key");
         let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain id");
         let long_id = AssetDefinitionId::new(
             domain_id.clone(),
@@ -64825,7 +65299,8 @@ mod tests {
     #[tokio::test]
     async fn resolve_tx_history_allowed_asset_definition_id_accepts_base58_literal_without_local_definition()
      {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority =
+            checked_torii_test_account_id(0x08, "derive tx-history base58 asset fixture key");
         let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain id");
         let expected = AssetDefinitionId::new(
             domain_id.clone(),
@@ -64849,7 +65324,8 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_tx_history_allowed_asset_definition_id_keeps_alias_selectors_strict() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority =
+            checked_torii_test_account_id(0x09, "derive tx-history strict alias fixture key");
         let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
@@ -66155,7 +66631,8 @@ mod tests {
 
     #[tokio::test]
     async fn zk_ivm_derive_returns_proved_payload_without_gas_used() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority =
+            checked_torii_test_account_id(0xfd, "derive ZK IVM derive authority fixture key");
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
@@ -66699,7 +67176,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_index_accepts_unsigned_request() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x0a,
+            "derive alias resolve-index unsigned authority fixture key",
+        );
         let alias_label = AccountAlias::new(
             "banking".parse().expect("label"),
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
@@ -66737,7 +67217,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_index_rejects_malformed_json_body() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x0b,
+            "derive alias resolve-index malformed body authority fixture key",
+        );
         let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
 
         let err = handler_alias_resolve_index(
@@ -66765,7 +67248,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_index_warns_when_denied_routes_are_skipped_but_public_alias_resolves() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x0c,
+            "derive alias resolve-index denied-route warning fixture key",
+        );
         let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-index-warning-fanout"));
         let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
             &authority,
@@ -67032,7 +67518,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_index_returns_on_chain_alias_record() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x0d,
+            "derive alias resolve-index on-chain authority fixture key",
+        );
         let alias_label = AccountAlias::new(
             "banking".parse().expect("label"),
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
@@ -67082,7 +67571,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_index_fanout_returns_single_match_from_reachable_dataspace() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x0e,
+            "derive alias resolve-index fanout authority fixture key",
+        );
         let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         configure_multiple_dataspace_routes_for_test(&mut app);
         bind_account_alias_for_test(&app, &authority, "merchant@secondary");
@@ -67131,7 +67623,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_index_fanout_returns_route_conflict_for_incompatible_bindings() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x0f,
+            "derive alias resolve-index route-conflict authority fixture key",
+        );
         let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         configure_multiple_dataspace_routes_for_test(&mut app);
         bind_account_alias_for_test(&app, &authority, "merchant@universal");
@@ -67171,7 +67666,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_index_returns_not_found_when_index_is_missing() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x20,
+            "derive alias resolve-index missing authority fixture key",
+        );
         let authority_account = Account::new(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
         let request = routing::AliasResolveIndexRequestDto { index: 0 };
@@ -67195,7 +67693,10 @@ mod tests {
     #[tokio::test]
     async fn alias_resolve_index_returns_permission_denied_when_denied_routes_block_miss_fallback()
     {
-        let authority_keypair = KeyPair::random();
+        let authority_keypair = checked_torii_test_ed25519_keypair(
+            0x21,
+            "derive alias resolve-index signed authority fixture key",
+        );
         let authority = AccountId::new(authority_keypair.public_key().clone());
         let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-index-miss-offline"));
         let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
@@ -67259,7 +67760,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_index_returns_permission_denied_when_only_hidden_routes_can_resolve() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_torii_test_account_id(
+            0x22,
+            "derive alias resolve-index hidden-route authority fixture key",
+        );
         let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-index-denied-fanout"));
         let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
             &authority,
@@ -67473,7 +67977,10 @@ mod tests {
         let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
             crate::app_auth::CanonicalRequestAuthConfig::default(),
         );
-        let key_pair = KeyPair::random();
+        let key_pair = checked_torii_test_ed25519_keypair(
+            0x23,
+            "derive Soracloud signed mutation replay fixture key",
+        );
         let account_id = AccountId::new(key_pair.public_key().clone());
         let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
             crate::tests_runtime_handlers::world_with_account(&account_id),
@@ -67555,7 +68062,10 @@ mod tests {
             StatusCode::OK.into_response()
         }
 
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = checked_torii_test_account_id(
+            0x40,
+            "derive Soracloud signed mutation body-cap fixture key",
+        );
         let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
             crate::tests_runtime_handlers::world_with_account(&account_id),
         );
@@ -67609,7 +68119,10 @@ mod tests {
         let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
             crate::app_auth::CanonicalRequestAuthConfig::default(),
         );
-        let key_pair = KeyPair::random();
+        let key_pair = checked_torii_test_ed25519_keypair(
+            0x41,
+            "derive Soracloud signed mutation rate-limit fixture key",
+        );
         let account_id = AccountId::new(key_pair.public_key().clone());
         let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
             crate::tests_runtime_handlers::world_with_account(&account_id),
@@ -67662,7 +68175,10 @@ mod tests {
 
     #[test]
     fn soracloud_signed_mutation_route_groups_cover_load_gate_paths() {
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = checked_torii_test_account_id(
+            0x42,
+            "derive Soracloud signed mutation route-group fixture key",
+        );
         let mut headers = HeaderMap::new();
         headers.insert(
             axum::http::header::ORIGIN,
@@ -67706,7 +68222,10 @@ mod tests {
         let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
             crate::app_auth::CanonicalRequestAuthConfig::default(),
         );
-        let key_pair = KeyPair::random();
+        let key_pair = checked_torii_test_ed25519_keypair(
+            0x43,
+            "derive Soracloud signed mutation inflight fixture key",
+        );
         let account_id = AccountId::new(key_pair.public_key().clone());
         let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
             crate::tests_runtime_handlers::world_with_account(&account_id),
@@ -67818,7 +68337,8 @@ mod tests {
         let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
             crate::app_auth::CanonicalRequestAuthConfig::default(),
         );
-        let key_pair = KeyPair::random();
+        let key_pair =
+            checked_torii_test_ed25519_keypair(0x44, "derive ZK attachment tenant fixture key");
         let account_id = AccountId::new(key_pair.public_key().clone());
         let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
             crate::tests_runtime_handlers::world_with_account(&account_id),
@@ -68002,12 +68522,12 @@ fn conn_scheme_flags_websocket_upgrade() {
 mod peer_telemetry_tests {
     use std::{collections::HashSet, str::FromStr};
 
-    use iroha_crypto::KeyPair;
     use iroha_data_model::peer::Peer;
     use tokio::sync::watch;
 
     use super::{OnlinePeersProvider, collect_peer_urls};
     use crate::telemetry::peers::ToriiUrl;
+    use crate::tests_runtime_handlers::checked_torii_test_ed25519_keypair;
 
     #[test]
     fn collect_peer_urls_requires_configured_urls() {
@@ -68016,11 +68536,21 @@ mod peer_telemetry_tests {
 
         let peer_a = Peer::new(
             "127.0.0.1:1337".parse().expect("valid socket address"),
-            KeyPair::random().public_key().clone(),
+            checked_torii_test_ed25519_keypair(
+                0xfe,
+                "derive peer telemetry first peer fixture key",
+            )
+            .public_key()
+            .clone(),
         );
         let peer_b = Peer::new(
             "10.0.0.5:8080".parse().expect("valid socket address"),
-            KeyPair::random().public_key().clone(),
+            checked_torii_test_ed25519_keypair(
+                0xff,
+                "derive peer telemetry second peer fixture key",
+            )
+            .public_key()
+            .clone(),
         );
 
         tx.send(HashSet::from([peer_a.clone(), peer_b.clone()]))
@@ -68041,7 +68571,12 @@ mod peer_telemetry_tests {
 
         let peer = Peer::new(
             "127.0.0.1:1337".parse().expect("valid socket address"),
-            KeyPair::random().public_key().clone(),
+            checked_torii_test_ed25519_keypair(
+                0xfd,
+                "derive peer telemetry configured peer fixture key",
+            )
+            .public_key()
+            .clone(),
         );
         tx.send(HashSet::from([peer]))
             .expect("watch update should succeed");

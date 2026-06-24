@@ -812,9 +812,9 @@ Map<String, String> headers =
 Signatures cover the canonical method/path/query/body layout plus freshness
 metadata, matching the Rust verifier Torii uses on app-facing endpoints.
 
-Offline issuer POST endpoints (`/v1/offline/keys/refill`,
-`/v1/offline/notes/issue`, `/v1/offline/notes/redeem`, and
-`/v1/offline/audit`) carry auth in the JSON body instead of `X-Iroha-*`
+Offline V2 issuer POST endpoints (`/v1/offline/v2/keys/refill`,
+`/v1/offline/v2/notes/issue`, `/v1/offline/v2/notes/redeem`, and
+`/v1/offline/v2/audit`) carry auth in the JSON body instead of `X-Iroha-*`
 headers. Use `CanonicalRequestSigner.withBodySignature(...)` to add
 `account_id`, `timestamp_ms`, `nonce`, and `signature_base64` to a request
 body. Multisig callers should build the canonical request witness separately
@@ -1181,7 +1181,8 @@ Licensed under the Apache License, Version 2.0. See `LICENSE` for details.
 The SDK exposes a lightweight `OfflineToriiClient` for the maintained Offline
 readiness surface. Torii also keeps issuer POST endpoints for key refill and
 note issuance: wallets derive the Offline Note commitment locally and pass
-the bare 64-character `note_commitment` hex to `/v1/offline/notes/issue`.
+the bare 64-character `note_commitment` hex to
+`/v1/offline/v2/notes/issue`.
 Torii issues that exact commitment and returns settlement lineage metadata;
 `settlement.entry_hash` is no longer used as the note commitment. Redemption
 and audit payloads are submitted as direct transaction instructions.

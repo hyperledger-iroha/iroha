@@ -478,14 +478,105 @@ private enum SwiftNexusTransferPayloadEncoder {
     private static let instructionWireName = "iroha.transfer"
     private static let transferBoxTypeName = "iroha_data_model::isi::transfer::TransferBox"
     private static let transferBoxAssetDiscriminant: UInt32 = 2
+    private static let feeSponsorMetadataKey = "fee_sponsor"
+
+    private struct TransferInstructionInput {
+        let sourceAssetID: String
+        let quantity: String
+        let destinationAccountID: String
+    }
 
     static func encode(input: NexusTransferInput,
                        chainId: String,
                        authority: String) throws -> Data {
-        let instruction = try encodeTransferInstruction(input: input)
+        let instruction = TransferInstructionInput(
+            sourceAssetID: input.sourceAssetID,
+            quantity: input.quantity,
+            destinationAccountID: input.destinationAccountID
+        )
+        return try encodePayload(
+            instructions: [instruction],
+            chainId: chainId,
+            authority: authority,
+            creationTimeMs: input.creationTimeMs ?? currentTimeMillis(),
+            ttlMs: input.ttlMs,
+            nonce: input.nonce,
+            metadata: input.metadata.mapValues { .string($0) }
+        )
+    }
+
+    static func encodeValidationFeeTransfer(request: ValidationFeeTransferRequest,
+                                            chainId: String,
+                                            authority: String,
+                                            destinationAccountID: String,
+                                            treasuryAccountID: String,
+                                            principalAssetDefinitionID: String,
+                                            feeAssetDefinitionID: String,
+                                            creationTimeMs: UInt64) throws -> Data {
+        let normalizedPolicyHash = try normalizedValidationFeePolicyHash(request.policyHashHex)
+        guard request.policyVersion > 0 else {
+            throw ValidationFeeTransferRequestError.invalidPolicyVersion
+        }
+        let principalAssetID = try sourceAssetID(
+            assetDefinitionID: principalAssetDefinitionID,
+            authority: authority
+        )
+        let feeAssetID = try sourceAssetID(
+            assetDefinitionID: feeAssetDefinitionID,
+            authority: authority
+        )
+        let instructions = [
+            TransferInstructionInput(
+                sourceAssetID: principalAssetID,
+                quantity: request.principal.quantity,
+                destinationAccountID: destinationAccountID
+            ),
+            TransferInstructionInput(
+                sourceAssetID: feeAssetID,
+                quantity: request.feeQuantity,
+                destinationAccountID: treasuryAccountID
+            ),
+        ]
+        var metadata = request.transactionMetadata
+        metadata[IrohaValidationFeeTransactionMetadataKey.policyVersion] = .number(Double(request.policyVersion))
+        metadata[IrohaValidationFeeTransactionMetadataKey.policyHash] = .string(normalizedPolicyHash)
+        metadata[IrohaValidationFeeTransactionMetadataKey.instructionIndex] = .number(1)
+        if let feeSponsor = request.principal.feeSponsor?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !feeSponsor.isEmpty {
+            metadata[feeSponsorMetadataKey] = .string(feeSponsor)
+        }
+        if let memo = request.principal.description?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !memo.isEmpty,
+           metadata["memo"] == nil {
+            metadata["memo"] = .string(memo)
+        }
+        return try encodePayload(
+            instructions: instructions,
+            chainId: chainId,
+            authority: authority,
+            creationTimeMs: creationTimeMs,
+            ttlMs: request.principal.ttlMs,
+            nonce: request.principal.nonce,
+            metadata: metadata
+        )
+    }
+
+    private static func encodePayload(instructions instructionInputs: [TransferInstructionInput],
+                                      chainId: String,
+                                      authority: String,
+                                      creationTimeMs: UInt64,
+                                      ttlMs: UInt64?,
+                                      nonce: UInt32?,
+                                      metadata: [String: ToriiJSONValue]) throws -> Data {
+        guard !instructionInputs.isEmpty else {
+            throw NexusAppError(code: "empty_transfer_instructions",
+                                message: "At least one transfer instruction is required.")
+        }
         var instructions = OfflineCompactNoritoWriter()
-        instructions.writeUInt64LE(1)
-        instructions.writeField(instruction)
+        instructions.writeUInt64LE(UInt64(instructionInputs.count))
+        for input in instructionInputs {
+            instructions.writeField(try encodeTransferInstruction(input: input))
+        }
 
         var executable = OfflineCompactNoritoWriter()
         executable.writeUInt32LE(0)
@@ -494,19 +585,25 @@ private enum SwiftNexusTransferPayloadEncoder {
         var payload = OfflineCompactNoritoWriter()
         payload.writeField(encodeChainId(chainId))
         payload.writeField(try encodeAccountId(authority))
-        payload.writeField(OfflineCompactNorito.encodeUInt64(input.creationTimeMs ?? currentTimeMillis()))
+        payload.writeField(OfflineCompactNorito.encodeUInt64(creationTimeMs))
         payload.writeField(executable.data)
-        payload.writeField(try OfflineCompactNorito.encodeOption(input.ttlMs, encode: OfflineCompactNorito.encodeUInt64))
-        payload.writeField(try OfflineCompactNorito.encodeOption(input.nonce, encode: OfflineCompactNorito.encodeUInt32))
-        payload.writeField(try encodeMetadata(input.metadata.mapValues { .string($0) }))
+        payload.writeField(try OfflineCompactNorito.encodeOption(ttlMs, encode: OfflineCompactNorito.encodeUInt64))
+        payload.writeField(try OfflineCompactNorito.encodeOption(nonce, encode: OfflineCompactNorito.encodeUInt32))
+        payload.writeField(try encodeMetadata(metadata))
         return payload.data
     }
 
     static func encodeInstructionBox(input: NexusTransferInput) throws -> Data {
-        try encodeTransferInstruction(input: input)
+        try encodeTransferInstruction(
+            input: TransferInstructionInput(
+                sourceAssetID: input.sourceAssetID,
+                quantity: input.quantity,
+                destinationAccountID: input.destinationAccountID
+            )
+        )
     }
 
-    private static func encodeTransferInstruction(input: NexusTransferInput) throws -> Data {
+    private static func encodeTransferInstruction(input: TransferInstructionInput) throws -> Data {
         var transfer = OfflineCompactNoritoWriter()
         transfer.writeField(try encodeAssetId(input.sourceAssetID))
         transfer.writeField(try encodeNumeric(input.quantity))
@@ -611,6 +708,96 @@ private enum SwiftNexusTransferPayloadEncoder {
 
     private static func currentTimeMillis() -> UInt64 {
         UInt64((Date().timeIntervalSince1970 * 1_000).rounded())
+    }
+
+    private static func sourceAssetID(assetDefinitionID: String, authority: String) throws -> String {
+        let marker = "#dataspace:"
+        let candidate: String
+        if let markerRange = assetDefinitionID.range(of: marker) {
+            let definition = String(assetDefinitionID[..<markerRange.lowerBound])
+            let scope = String(assetDefinitionID[markerRange.lowerBound...])
+            candidate = "\(definition)#\(authority)\(scope)"
+        } else {
+            candidate = "\(assetDefinitionID)#\(authority)"
+        }
+        return try OfflineNorito.canonicalAssetIdLiteral(candidate)
+    }
+
+    private static func normalizedValidationFeePolicyHash(_ value: String) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hexDigits = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+        guard trimmed == value,
+              trimmed.count == 64,
+              trimmed.unicodeScalars.allSatisfy({ hexDigits.contains($0) }) else {
+            throw ValidationFeeTransferRequestError.malformedPolicyHash(value)
+        }
+        return trimmed.lowercased()
+    }
+}
+
+extension SwiftTransactionEncoder {
+    static func encodeValidationFeeTransfer(request: ValidationFeeTransferRequest,
+                                            keypair: Keypair,
+                                            creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
+        return try encodeValidationFeeTransfer(
+            request: request,
+            signingKey: signingKey,
+            creationTimeMs: creationTimeMs
+        )
+    }
+
+    static func encodeValidationFeeTransfer(request: ValidationFeeTransferRequest,
+                                            signingKey: SigningKey,
+                                            creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+        guard signingKey.algorithm == .ed25519 else {
+            throw SwiftTransactionEncoderError.unsupportedSigningAlgorithm(signingKey.algorithm)
+        }
+        let principal = request.principal
+        let ids = try TransactionInputValidator.validate(
+            chainId: principal.chainId,
+            authorityId: principal.authority,
+            assetDefinitionId: principal.assetDefinitionId,
+            accountIds: [
+                .init(field: "destination", value: principal.destination),
+                .init(field: "treasury", value: request.treasuryAccountId),
+            ]
+        )
+        let feeIds = try TransactionInputValidator.validate(
+            chainId: principal.chainId,
+            authorityId: principal.authority,
+            assetDefinitionId: request.feeAssetDefinitionId
+        )
+        guard let principalAssetDefinitionID = ids.assetDefinitionId else {
+            throw TransactionInputError.emptyAssetDefinitionId
+        }
+        guard let feeAssetDefinitionID = feeIds.assetDefinitionId else {
+            throw TransactionInputError.emptyAssetDefinitionId
+        }
+        let destination = ids.accountIds["destination"] ?? principal.destination
+        let treasury = ids.accountIds["treasury"] ?? request.treasuryAccountId
+        let payload = try SwiftNexusTransferPayloadEncoder.encodeValidationFeeTransfer(
+            request: request,
+            chainId: ids.chainId,
+            authority: ids.authorityId,
+            destinationAccountID: destination,
+            treasuryAccountID: treasury,
+            principalAssetDefinitionID: principalAssetDefinitionID,
+            feeAssetDefinitionID: feeAssetDefinitionID,
+            creationTimeMs: creationTimeMs
+        )
+        let payloadHash = IrohaHash.hash(payload)
+        let signature = try signingKey.sign(payloadHash)
+        let signable = NexusSignableTransaction(
+            payloadBytes: payload,
+            payloadHashHex: payloadHash.hexLowercase(),
+            authority: ids.authorityId,
+            signingPublicKey: try signingKey.publicKey()
+        )
+        return try SwiftNexusTransactionCodec().finalizeSignedTransaction(
+            signable: signable,
+            signature: NexusWalletSignature(signature: signature)
+        )
     }
 }
 

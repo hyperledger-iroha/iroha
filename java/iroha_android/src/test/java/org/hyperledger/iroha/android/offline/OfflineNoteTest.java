@@ -3198,9 +3198,9 @@ public final class OfflineNoteTest {
     assertEquals("settlement-entry-hash", response.settlementEntryHashHex(), "settlement hash");
     assertEquals(2L, executor.requests.size(), "issuer request count");
     assertEquals(
-        "/v1/offline/keys/refill", executor.requests.get(0).uri().getPath(), "refill path");
+        "/v1/offline/v2/keys/refill", executor.requests.get(0).uri().getPath(), "refill path");
     assertEquals(
-        "/v1/offline/notes/issue", executor.requests.get(1).uri().getPath(), "issue path");
+        "/v1/offline/v2/notes/issue", executor.requests.get(1).uri().getPath(), "issue path");
     for (final TransportRequest request : executor.requests) {
       assertTrue(
           request.headers().keySet().stream()
@@ -5042,13 +5042,13 @@ public final class OfflineNoteTest {
       final Map<String, Object> body = requestBody(request);
       final Map<String, Object> response = new LinkedHashMap<>();
       switch (request.uri().getPath()) {
-        case "/v1/offline/keys/refill" -> {
+        case "/v1/offline/v2/keys/refill" -> {
           response.put("operation_id", string(body, "operation_id"));
           response.put("lineage_state", lineageState(0, "0"));
           response.put("key_certificate", certificateWithExpiry());
           response.put("key_certificates", List.of(certificateWithExpiry()));
         }
-        case "/v1/offline/notes/issue" -> {
+        case "/v1/offline/v2/notes/issue" -> {
           response.put("operation_id", string(body, "operation_id"));
           response.put("settlement", Map.of("entry_hash", "settlement-entry-hash"));
           response.put("lineage_state", lineageState(1, "5"));

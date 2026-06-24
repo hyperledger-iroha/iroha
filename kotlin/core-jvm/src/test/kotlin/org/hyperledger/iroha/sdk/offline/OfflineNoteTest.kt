@@ -2888,8 +2888,8 @@ class OfflineNoteTest {
         assertEquals(hex(commitment), hex(response.noteCommitment()))
         assertEquals("settlement-entry-hash", response.settlementEntryHashHex)
         assertEquals(2, executor.requests.size)
-        assertEquals("/v1/offline/keys/refill", executor.requests[0].uri.path)
-        assertEquals("/v1/offline/notes/issue", executor.requests[1].uri.path)
+        assertEquals("/v1/offline/v2/keys/refill", executor.requests[0].uri.path)
+        assertEquals("/v1/offline/v2/notes/issue", executor.requests[1].uri.path)
         for (request in executor.requests) {
             assertFalse(request.headers.keys.any { it.startsWith("X-Iroha-", ignoreCase = true) })
         }
@@ -4842,13 +4842,13 @@ class OfflineNoteTest {
             requests.add(request)
             val body = requestBody(request)
             val response = when (request.uri.path) {
-                "/v1/offline/keys/refill" -> linkedMapOf<String, Any?>(
+                "/v1/offline/v2/keys/refill" -> linkedMapOf<String, Any?>(
                     "operation_id" to string(body, "operation_id"),
                     "lineage_state" to lineageState(0, "0"),
                     "key_certificate" to certificateWithExpiry(),
                     "key_certificates" to listOf(certificateWithExpiry()),
                 )
-                "/v1/offline/notes/issue" -> linkedMapOf<String, Any?>(
+                "/v1/offline/v2/notes/issue" -> linkedMapOf<String, Any?>(
                     "operation_id" to string(body, "operation_id"),
                     "settlement" to linkedMapOf("entry_hash" to "settlement-entry-hash"),
                     "lineage_state" to lineageState(1, "5"),

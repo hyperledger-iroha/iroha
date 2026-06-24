@@ -6022,6 +6022,19 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 lambda manifest: (
                     manifest["pending_schema_sources"].append(pending_schema_source()),
                     manifest["pending_schema_sources"].append(
+                        pending_schema_source("bazz.001.001.01")
+                    ),
+                    manifest["pending_schema_sources"][1]["source"].__setitem__(
+                        "download_url",
+                        "https://www.iso20022.org/message/12346/download",
+                    ),
+                ),
+                "pending_schema_sources contains duplicate message_name values",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"].append(
                         pending_schema_source("barr.001.001.02")
                     ),
                     manifest["pending_schema_sources"][1]["source"].__setitem__(

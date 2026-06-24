@@ -3224,6 +3224,7 @@ def verify_manifest(
             pending["source"]["download_url"],
             pending["source"]["download_type"],
             pending["source"]["message_name"],
+            pending["source"]["submitting_organisation"],
         )
         for pending in pending_schema_sources
     ]
@@ -3237,6 +3238,13 @@ def verify_manifest(
     if len(pending_download_urls) != len(set(pending_download_urls)):
         raise FixtureManifestError(
             f"{label}.pending_schema_sources contains duplicate download_url values"
+        )
+    pending_message_names = [
+        pending["source"]["message_name"] for pending in pending_schema_sources
+    ]
+    if len(pending_message_names) != len(set(pending_message_names)):
+        raise FixtureManifestError(
+            f"{label}.pending_schema_sources contains duplicate message_name values"
         )
     pending_message_id_list = [
         pending["message_def_id"] for pending in pending_schema_sources

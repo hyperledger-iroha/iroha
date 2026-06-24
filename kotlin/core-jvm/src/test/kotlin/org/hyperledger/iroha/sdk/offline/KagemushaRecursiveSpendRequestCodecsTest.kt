@@ -162,7 +162,17 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             recursiveSpendLineageWitnessWithTrailingPreviousProofField() to
                 "Trailing bytes after lineageWitness.previousRecursiveProofs",
             recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField() to
-                "Trailing bytes after verifier key id",
+                "Trailing bytes after lineageWitness.previousRecursiveProofs.verifierKeyId",
+            recursiveSpendLineageWitnessWithPreviousProofField(1, ByteArray(0)) to
+                "lineageWitness.previousRecursiveProofs.proof_public_inputs empty recursive proof inputs",
+            recursiveSpendLineageWitnessWithPreviousProofField(2, ByteArray(32)) to
+                "lineageWitness.previousRecursiveProofs.proof_public_inputs_hash must be non-zero",
+            recursiveSpendLineageWitnessWithPreviousProofField(2, ByteArray(32) { 0x44 }) to
+                "lineageWitness.previousRecursiveProofs.proof_public_inputs_hash mismatch",
+            recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg") to
+                "lineageWitness.previousRecursiveProofs.proof_backend unsupported recursive proof backend",
+            recursiveSpendLineageWitnessWithEmptyPreviousProofBytes() to
+                "lineageWitness.previousRecursiveProofs.proof_bytes empty recursive proof",
         )
         for ((archive, expected) in malformedWitnesses) {
             val error = assertFailsWith<IllegalArgumentException> {
@@ -401,10 +411,17 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             Triple(4, ByteArray(32), "bundle.accumulator.final_root"),
             Triple(4, init.initialRoot, "bundle.accumulator.final_root"),
             Triple(2, fixedArrayPayload(0x01, 15), "asset must be exactly 16 bytes"),
+            Triple(2, countPrefixedFixedArrayPayload(0x01, 16), "asset byte field length must be 1"),
             Triple(2, fixedArrayPayload(0x01, 17), "asset must be exactly 16 bytes"),
             Triple(3, fixedArrayPayload(0x02, 31), "initial_root must be exactly 32 bytes"),
+            Triple(
+                3,
+                countPrefixedFixedArrayPayload(0x02, 32),
+                "initial_root byte field length must be 1",
+            ),
             Triple(3, fixedArrayPayload(0x02, 33), "initial_root must be exactly 32 bytes"),
             Triple(4, fixedArrayPayload(0x03, 31), "final_root must be exactly 32 bytes"),
+            Triple(4, countPrefixedFixedArrayPayload(0x03, 32), "final_root byte field length must be 1"),
             Triple(4, fixedArrayPayload(0x03, 33), "final_root must be exactly 32 bytes"),
             Triple(
                 6,
@@ -425,8 +442,52 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             ),
             Triple(7, ByteArray(32), "bundle.accumulator.lineage_digest"),
             Triple(8, ByteArray(32) { 0x7d.toByte() }, "bundle.accumulator.aggregation_transcript_digest"),
+            Triple(8, ByteArray(32), "bundle.accumulator.aggregation_transcript_digest"),
+            Triple(7, fixedArrayPayload(0x07, 31), "lineage_digest must be exactly 32 bytes"),
+            Triple(7, countPrefixedFixedArrayPayload(0x07, 32), "lineage_digest byte field length must be 1"),
+            Triple(7, fixedArrayPayload(0x07, 33), "lineage_digest must be exactly 32 bytes"),
+            Triple(9, ByteArray(32), "bundle.accumulator.nullifier_digest"),
+            Triple(10, ByteArray(32), "bundle.accumulator.output_commitment_digest"),
+            Triple(11, ByteArray(32), "bundle.accumulator.fold_digest"),
+            Triple(12, ByteArray(32), "bundle.accumulator.recursive_proof_chain_digest"),
+            Triple(13, ByteArray(32), "bundle.accumulator.transition_profile_binding_digest"),
             Triple(14, ByteArray(32) { 0x7e.toByte() }, "bundle.accumulator.append_opening_preflight_digest"),
+            Triple(
+                14,
+                fixedArrayPayload(0x0e, 31),
+                "append_opening_preflight_digest must be exactly 32 bytes",
+            ),
+            Triple(
+                14,
+                countPrefixedFixedArrayPayload(0x0e, 32),
+                "append_opening_preflight_digest byte field length must be 1",
+            ),
+            Triple(
+                14,
+                fixedArrayPayload(0x0e, 33),
+                "append_opening_preflight_digest must be exactly 32 bytes",
+            ),
             Triple(15, ByteArray(32) { 0x7f.toByte() }, "bundle.accumulator.append_boundary_digest"),
+            Triple(16, ByteArray(32), "bundle.accumulator.verifier_params_fingerprint"),
+            Triple(17, ByteArray(32), "bundle.accumulator.fixed_window_table_schedule_digest"),
+            Triple(18, ByteArray(32), "bundle.accumulator.fixed_window_shared_table_manifest_digest"),
+            Triple(19, ByteArray(32), "bundle.accumulator.fixed_window_table_base_digest"),
+            Triple(20, ByteArray(32), "bundle.accumulator.verifier_witness_batch_digest"),
+            Triple(
+                20,
+                fixedArrayPayload(0x14, 31),
+                "verifier_witness_batch_digest must be exactly 32 bytes",
+            ),
+            Triple(
+                20,
+                countPrefixedFixedArrayPayload(0x14, 32),
+                "verifier_witness_batch_digest byte field length must be 1",
+            ),
+            Triple(
+                20,
+                fixedArrayPayload(0x14, 33),
+                "verifier_witness_batch_digest must be exactly 32 bytes",
+            ),
             Triple(21, byteArrayOf(3, 0, 0, 0), "bundle.accumulator.verifier_opening_len"),
         )
         malformedAccumulatorFields.forEach { (fieldIndex, replacement, expectedMessage) ->
@@ -1532,6 +1593,8 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 "pallasOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes",
             pallasOpenEnvelopeVectorArchive { it.domainTagPayload = fixedArrayPayload(0x72, 32) } to
                 "pallasOpenEnvelopes[0].domain_tag must be exactly 32 bytes",
+            pallasOpenEnvelopeVectorArchive { it.trailingEnvelopeBytes = byteArrayOf(0x7f) } to
+                "Trailing bytes after pallasOpenEnvelopes[0]",
             pallasOpenEnvelopeVectorArchiveWithPayload(byteArrayOf(0x00)) to "Unexpected end of data",
         )
         for ((archive, expectedMessage) in malformedPallasOpenArchives) {
@@ -2464,6 +2527,76 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         )
     }
 
+    private fun recursiveSpendLineageWitnessWithPreviousProofField(
+        fieldIndex: Int,
+        replacement: ByteArray,
+    ): ByteArray {
+        val fields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+            ),
+        ).toMutableList()
+        val previousProofs = sequencePayloads(fields[3]).toMutableList()
+        assertTrue(previousProofs.isNotEmpty())
+        val previousProofFields = fieldPayloads(previousProofs[0]).toMutableList()
+        previousProofFields[fieldIndex] = replacement.copyOf()
+        previousProofs[0] = encodeFields(previousProofFields)
+        fields[3] = encodeSequence(previousProofs)
+        return NoritoCodec.encode(
+            encodeFields(fields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun recursiveSpendLineageWitnessWithPreviousProofBoxBackend(proofBackend: String): ByteArray {
+        val fields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+            ),
+        ).toMutableList()
+        val previousProofs = sequencePayloads(fields[3]).toMutableList()
+        assertTrue(previousProofs.isNotEmpty())
+        val previousProofFields = fieldPayloads(previousProofs[0]).toMutableList()
+        val proofBoxFields = fieldPayloads(previousProofFields[3]).toMutableList()
+        proofBoxFields[0] = testStringPayload(proofBackend)
+        previousProofFields[3] = encodeFields(proofBoxFields)
+        previousProofs[0] = encodeFields(previousProofFields)
+        fields[3] = encodeSequence(previousProofs)
+        return NoritoCodec.encode(
+            encodeFields(fields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun recursiveSpendLineageWitnessWithEmptyPreviousProofBytes(): ByteArray {
+        val fields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+            ),
+        ).toMutableList()
+        val previousProofs = sequencePayloads(fields[3]).toMutableList()
+        assertTrue(previousProofs.isNotEmpty())
+        val previousProofFields = fieldPayloads(previousProofs[0]).toMutableList()
+        val proofBoxFields = fieldPayloads(previousProofFields[3]).toMutableList()
+        proofBoxFields[1] = testPayload { writeUInt(0, 64) }
+        previousProofFields[3] = encodeFields(proofBoxFields)
+        previousProofs[0] = encodeFields(previousProofFields)
+        fields[3] = encodeSequence(previousProofs)
+        return NoritoCodec.encode(
+            encodeFields(fields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
     private fun recursiveSpendBundleWithTrailingAccumulatorField(): ByteArray {
         val bundleFields = fieldPayloads(
             compactPayload(
@@ -2820,6 +2953,12 @@ class KagemushaRecursiveSpendRequestCodecsTest {
 
     private fun fixedArrayPayload(value: Int, count: Int): ByteArray =
         encodeFields(List(count) { byteArrayOf(value.toByte()) })
+
+    private fun countPrefixedFixedArrayPayload(value: Int, count: Int): ByteArray =
+        testPayload {
+            writeUInt(count.toLong(), 64)
+            writeBytes(fixedArrayPayload(value, count))
+        }
 
     private fun testStringPayload(value: String): ByteArray =
         testPayload { writeTestString(this, value) }

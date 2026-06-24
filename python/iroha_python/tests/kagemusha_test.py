@@ -483,6 +483,78 @@ def _recursive_spend_lineage_witness_with_trailing_previous_verifier_key_id_fiel
     )
 
 
+def _recursive_spend_lineage_witness_with_previous_proof_field(
+    field_index: int,
+    replacement: bytes,
+) -> bytes:
+    payload = _kagemusha_archive_payload(
+        _shared_recursive_spend_archive("lineage_witness_append_result"),
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
+    )
+    fields = _read_all_fields(payload)
+    previous_proofs = _read_sequence_fields(fields[3])
+    assert previous_proofs
+    previous_proof_fields = _read_all_fields(previous_proofs[0])
+    previous_proof_fields[field_index] = replacement
+    previous_proofs[0] = _encode_test_fields(previous_proof_fields)
+    fields[3] = _encode_sequence_fields(previous_proofs)
+    return _kagemusha_norito_frame_from_schema_hash(
+        kagemusha._norito_schema_hash(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME
+        ),
+        _encode_test_fields(fields),
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+
+
+def _recursive_spend_lineage_witness_with_previous_proof_box_backend(
+    proof_backend: str,
+) -> bytes:
+    payload = _kagemusha_archive_payload(
+        _shared_recursive_spend_archive("lineage_witness_append_result"),
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
+    )
+    fields = _read_all_fields(payload)
+    previous_proofs = _read_sequence_fields(fields[3])
+    assert previous_proofs
+    previous_proof_fields = _read_all_fields(previous_proofs[0])
+    proof_box_fields = _read_all_fields(previous_proof_fields[3])
+    proof_box_fields[0] = kagemusha._kagemusha_string(proof_backend)
+    previous_proof_fields[3] = _encode_test_fields(proof_box_fields)
+    previous_proofs[0] = _encode_test_fields(previous_proof_fields)
+    fields[3] = _encode_sequence_fields(previous_proofs)
+    return _kagemusha_norito_frame_from_schema_hash(
+        kagemusha._norito_schema_hash(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME
+        ),
+        _encode_test_fields(fields),
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+
+
+def _recursive_spend_lineage_witness_with_empty_previous_proof_bytes() -> bytes:
+    payload = _kagemusha_archive_payload(
+        _shared_recursive_spend_archive("lineage_witness_append_result"),
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
+    )
+    fields = _read_all_fields(payload)
+    previous_proofs = _read_sequence_fields(fields[3])
+    assert previous_proofs
+    previous_proof_fields = _read_all_fields(previous_proofs[0])
+    proof_box_fields = _read_all_fields(previous_proof_fields[3])
+    proof_box_fields[1] = (0).to_bytes(8, "little")
+    previous_proof_fields[3] = _encode_test_fields(proof_box_fields)
+    previous_proofs[0] = _encode_test_fields(previous_proof_fields)
+    fields[3] = _encode_sequence_fields(previous_proofs)
+    return _kagemusha_norito_frame_from_schema_hash(
+        kagemusha._norito_schema_hash(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME
+        ),
+        _encode_test_fields(fields),
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+
+
 def _recursive_spend_bundle_with_trailing_accumulator_field() -> bytes:
     payload = _kagemusha_archive_payload(
         _shared_recursive_spend_archive("init_bundle"),
@@ -3065,20 +3137,72 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
             r"bundle\.accumulator\.hop_count",
         ),
         (7, bytes(32), r"bundle\.accumulator\.lineage_digest"),
+        (7, _fixed_array_payload(0x07, 31), r"bundle\.accumulator\.lineage_digest"),
+        (
+            7,
+            _count_prefixed_fixed_array_payload(0x07, 32),
+            r"bundle\.accumulator\.lineage_digest",
+        ),
+        (7, _fixed_array_payload(0x07, 33), r"bundle\.accumulator\.lineage_digest"),
         (
             8,
             bytes([0x7D]) * 32,
             r"bundle\.accumulator\.aggregation_transcript_digest",
         ),
+        (8, bytes(32), r"bundle\.accumulator\.aggregation_transcript_digest"),
+        (9, bytes(32), r"bundle\.accumulator\.nullifier_digest"),
+        (10, bytes(32), r"bundle\.accumulator\.output_commitment_digest"),
+        (11, bytes(32), r"bundle\.accumulator\.fold_digest"),
+        (12, bytes(32), r"bundle\.accumulator\.recursive_proof_chain_digest"),
+        (13, bytes(32), r"bundle\.accumulator\.transition_profile_binding_digest"),
         (
             14,
             bytes([0x7E]) * 32,
             r"bundle\.accumulator\.append_opening_preflight_digest",
         ),
         (
+            14,
+            _fixed_array_payload(0x0E, 31),
+            r"bundle\.accumulator\.append_opening_preflight_digest",
+        ),
+        (
+            14,
+            _count_prefixed_fixed_array_payload(0x0E, 32),
+            r"bundle\.accumulator\.append_opening_preflight_digest",
+        ),
+        (
+            14,
+            _fixed_array_payload(0x0E, 33),
+            r"bundle\.accumulator\.append_opening_preflight_digest",
+        ),
+        (
             15,
             bytes([0x7F]) * 32,
             r"bundle\.accumulator\.append_boundary_digest",
+        ),
+        (16, bytes(32), r"bundle\.accumulator\.verifier_params_fingerprint"),
+        (17, bytes(32), r"bundle\.accumulator\.fixed_window_table_schedule_digest"),
+        (
+            18,
+            bytes(32),
+            r"bundle\.accumulator\.fixed_window_shared_table_manifest_digest",
+        ),
+        (19, bytes(32), r"bundle\.accumulator\.fixed_window_table_base_digest"),
+        (20, bytes(32), r"bundle\.accumulator\.verifier_witness_batch_digest"),
+        (
+            20,
+            _fixed_array_payload(0x14, 31),
+            r"bundle\.accumulator\.verifier_witness_batch_digest",
+        ),
+        (
+            20,
+            _count_prefixed_fixed_array_payload(0x14, 32),
+            r"bundle\.accumulator\.verifier_witness_batch_digest",
+        ),
+        (
+            20,
+            _fixed_array_payload(0x14, 33),
+            r"bundle\.accumulator\.verifier_witness_batch_digest",
         ),
         (21, (3).to_bytes(4, "little"), r"bundle\.accumulator\.verifier_opening_len"),
     )
@@ -3491,6 +3615,29 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
         (
             _recursive_spend_lineage_witness_with_trailing_previous_verifier_key_id_field(),
             r"lineage_witness\.previous_recursive_proofs\.verifier_key_id",
+        ),
+        (
+            _recursive_spend_lineage_witness_with_previous_proof_field(1, b""),
+            r"lineage_witness\.previous_recursive_proofs\.proof_public_inputs",
+        ),
+        (
+            _recursive_spend_lineage_witness_with_previous_proof_field(2, bytes(32)),
+            r"lineage_witness\.previous_recursive_proofs\.proof_public_inputs_hash",
+        ),
+        (
+            _recursive_spend_lineage_witness_with_previous_proof_field(
+                2,
+                b"\x44" * 32,
+            ),
+            r"lineage_witness\.previous_recursive_proofs\.proof_public_inputs_hash",
+        ),
+        (
+            _recursive_spend_lineage_witness_with_previous_proof_box_backend("halo2/kzg"),
+            r"lineage_witness\.previous_recursive_proofs\.proof_backend",
+        ),
+        (
+            _recursive_spend_lineage_witness_with_empty_previous_proof_bytes(),
+            r"lineage_witness\.previous_recursive_proofs\.proof_bytes",
         ),
     )
     for lineage_witness_archive, expected_error in malformed_lineage_witnesses:

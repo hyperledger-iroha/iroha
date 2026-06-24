@@ -3100,6 +3100,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertIn("xsd.blocked_source_reused", codes)
             self.assertIn("xsd.blocked_source_digest_reused", codes)
             self.assertIn("xsd.pending_source_message_id_reused", codes)
+            self.assertIn("xsd.pending_source_message_name_reused", codes)
             self.assertIn("xsd.pending_source_reused", codes)
             self.assertIn("xsd.pending_source_download_url_reused", codes)
             self.assertIn("xsd.fixture_message_id_reused", codes)
@@ -3117,6 +3118,52 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     for key in xsd_summary
                 )
             )
+
+    def test_xsd_pending_source_message_names_cannot_be_reused_across_summaries(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_one = write_strict_xsd_summary(root / "xsd-one")
+            xsd_two = write_strict_xsd_summary(root / "xsd-two")
+            first_summary = json.loads(xsd_one.read_text(encoding="utf-8"))
+            first_summary["pending_schema_sources"] = [
+                xsd_test.pending_schema_source("barr.001.001.01")
+            ]
+            first_summary["pending_schema_source_count"] = 1
+            refresh_digest(first_summary)
+            write_json(xsd_one, first_summary)
+            second_summary = json.loads(xsd_two.read_text(encoding="utf-8"))
+            second_summary["verified_at"] = "2026-06-04T00:00:01+00:00"
+            second_summary["pending_schema_sources"] = [
+                xsd_test.pending_schema_source("bazz.001.001.01")
+            ]
+            second_summary["pending_schema_sources"][0]["source"][
+                "download_url"
+            ] = "https://www.iso20022.org/message/12346/download"
+            second_summary["pending_schema_source_count"] = 1
+            refresh_digest(second_summary)
+            write_json(xsd_two, second_summary)
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+
+            rc, stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(xsd_one),
+                    "--xsd-summary",
+                    str(xsd_two),
+                    "--evidence-summary",
+                    str(evidence_summary),
+                ]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            summary = json.loads(stdout)
+            codes = {blocker["code"] for blocker in summary["blockers"]}
+            self.assertIn("xsd.pending_source_message_name_reused", codes)
+            self.assertNotIn("xsd.pending_source_message_id_reused", codes)
+            self.assertNotIn("xsd.pending_source_reused", codes)
+            self.assertNotIn("xsd.pending_source_download_url_reused", codes)
 
     def test_xsd_material_paths_cannot_reuse_other_xsd_roles(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -3788,6 +3835,13 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     }
                 ],
             )
+            unique_blocker_messages = [
+                blocker["message"]
+                for blocker in result["blockers"]
+                if blocker["code"] == "xsd.unreviewed_profile_schema_message_ids"
+            ]
+            self.assertTrue(unique_blocker_messages)
+            self.assertIn("pending-source evidence", unique_blocker_messages[0])
             self.assertEqual(
                 [entry["message_def_id"] for entry in warning_entries],
                 ["barr.001.001.01"],
@@ -6490,6 +6544,21 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 ],
             )
             blocker_cases.append((duplicate_source, "xsd.pending_source_duplicate"))
+
+            duplicate_message_name = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            attach_pending_sources(
+                duplicate_message_name,
+                [
+                    xsd_test.pending_schema_source("barr.001.001.01"),
+                    xsd_test.pending_schema_source("bazz.001.001.01"),
+                ],
+            )
+            duplicate_message_name["pending_schema_sources"][1]["source"][
+                "download_url"
+            ] = "https://www.iso20022.org/message/12346/download"
+            blocker_cases.append(
+                (duplicate_message_name, "xsd.pending_source_message_name_duplicate")
+            )
 
             duplicate_download_url = json.loads(xsd_summary.read_text(encoding="utf-8"))
             attach_pending_sources(

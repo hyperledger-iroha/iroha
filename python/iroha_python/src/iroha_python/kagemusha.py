@@ -2601,6 +2601,10 @@ def _kagemusha_read_recursive_proof_circuit_id_with_context(
     )
     _kagemusha_require_portable_id(backend, verifier_backend_context)
     if backend != KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND:
+        if proof_backend_context == "bundle.proof_backend":
+            raise ValueError(
+                f"bundle.proof_backend unsupported recursive proof backend: {backend}"
+            )
         raise ValueError(
             f"{proof_backend_context} unsupported recursive proof backend: {backend}"
         )

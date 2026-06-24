@@ -10683,8 +10683,12 @@ const validateNativeEvmProverParityFixture = (
 
 function assertProductionNativeEvmProverParitySchema(parityReport, profile) {
   if (parityReport.schema !== profile.paritySchema) {
+    const parityBytesLabel =
+      profile?.domain === SCCP_DOMAIN_BSC
+        ? "crossSdkParityBytes"
+        : "crossSdkFixtureParityBytes";
     throw new TypeError(
-      `crossSdkParityBytes schema must be ${profile.paritySchema}; legacy fixture schema ${profile.parityFixtureSchema} is not valid for verified production native EVM prover artifacts`,
+      `${parityBytesLabel} schema must be ${profile.paritySchema}; legacy fixture schema ${profile.parityFixtureSchema} is not valid for verified production native EVM prover artifacts`,
     );
   }
 }
@@ -12427,9 +12431,13 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
     "crossSdkParityBytes/cross_sdk_parity_bytes/parityReportBytes/parity_report_bytes",
     profile,
   );
+  const crossSdkParityBytesLabel =
+    profile?.domain === SCCP_DOMAIN_BSC
+      ? "crossSdkParityBytes"
+      : "crossSdkFixtureParityBytes";
   const crossSdkParityBytes = requiredNativeEvmProverArtifactBytes(
     input,
-    "crossSdkParityBytes",
+    crossSdkParityBytesLabel,
     "crossSdkParityBytes",
     "cross_sdk_parity_bytes",
     "parityReportBytes",
@@ -12467,7 +12475,7 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
   );
   const crossSdkParityHash = sha256Hex32(
     crossSdkParityBytes,
-    "crossSdkParityBytes",
+    crossSdkParityBytesLabel,
   );
   const nativeProverSelfTestHash = sha256Hex32(
     nativeProverSelfTestBytes,
@@ -12500,7 +12508,7 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
     nativeEvmProverBundleCrossSdkParityAuditHash(nativeProverBundle, profile)
   ) {
     throw new TypeError(
-      "crossSdkParityBytes sha256 must match nativeProverBundle auditHashes cross-SDK parity hash",
+      `${crossSdkParityBytesLabel} sha256 must match nativeProverBundle auditHashes cross-SDK parity hash`,
     );
   }
   if (
@@ -12536,7 +12544,7 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
   );
   assertNativeEvmProverArtifactHasProductionSize(
     crossSdkParityBytes,
-    "crossSdkParityBytes",
+    crossSdkParityBytesLabel,
     SCCP_NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1,
   );
   assertNativeEvmProverArtifactHasProductionSize(
@@ -12570,7 +12578,7 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
   );
   assertNativeEvmProverArtifactHasNoForbiddenDependencyMarkers(
     crossSdkParityBytes,
-    "crossSdkParityBytes",
+    crossSdkParityBytesLabel,
   );
   assertNativeEvmProverArtifactHasNoForbiddenDependencyMarkers(
     nativeProverSelfTestBytes,
@@ -12815,11 +12823,15 @@ const verifyNativeEvmProverArtifactsFromBundle = async (
     "verifierKeyBytes",
     { ...sharedMetadata, role: "verifierKey" },
   );
+  const crossSdkParityBytesLabel =
+    profile?.domain === SCCP_DOMAIN_BSC
+      ? "crossSdkParityBytes"
+      : "crossSdkFixtureParityBytes";
   const crossSdkParityBytes = await resolveNativeEvmProverArtifactBytes(
     resolver,
     nativeProverBundle.crossSdkParityArtifact ??
       nativeProverBundle.crossSdkFixtureParityArtifact,
-    "crossSdkParityBytes",
+    crossSdkParityBytesLabel,
     { ...sharedMetadata, role: "crossSdkParityArtifact" },
   );
   const nativeProverSelfTestBytes = await resolveNativeEvmProverArtifactBytes(
@@ -42755,6 +42767,13 @@ const rejectMismatchedEthSourceBridgeConfigHash = (material) => {
   if (material.sourceBridgeNetworkId !== SCCP_ETH_MAINNET_NETWORK_ID) {
     throw new TypeError(
       "sourceBridgeNetworkId must be Ethereum mainnet chain id",
+    );
+  }
+  if (
+    material.sourceBridgeEmitterCodeHash === material.sourceBridgeNetworkId
+  ) {
+    throw new TypeError(
+      "sourceBridgeEmitterCodeHash must not match sourceBridgeNetworkId",
     );
   }
   if (material.sourceBridgeOwnerAddress !== "0x") {

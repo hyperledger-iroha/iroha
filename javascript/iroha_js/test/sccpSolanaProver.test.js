@@ -8265,6 +8265,15 @@ test("binds source adapter deployment context for UI provers", () => {
       }),
     /must both be zero or both be non-zero/,
   );
+  // Receipt-only deployment bindings must fail, not only deployment-only bindings.
+  assert.throws(
+    () =>
+      normalizeSccpSourceAdapterDeploymentBinding({
+        sourceAdapterDeploymentHash: SCCP_ZERO_HASH_V1,
+        sourceAdapterDeploymentReceiptHash: HEX32_B,
+      }),
+    /must both be zero or both be non-zero/,
+  );
   assert.throws(
     () =>
       normalizeSccpSourceAdapterDeploymentBinding({
@@ -8889,6 +8898,14 @@ test("derives SCCP source material and deployment record hashes for UI tooling",
         networkId: `0x${"33".repeat(32)}`,
       }),
     /sourceBridgeNetworkId must be Ethereum mainnet chain id/,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
+        ...sampleSourceRecordInput(SCCP_DOMAIN_ETH),
+        sourceBridgeEmitterCodeHash: SCCP_ETH_MAINNET_NETWORK_ID,
+      }),
+    /sourceBridgeEmitterCodeHash must not match sourceBridgeNetworkId/,
   );
   assert.throws(
     () =>

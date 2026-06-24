@@ -3720,6 +3720,7 @@ impl StateBlock<'_> {
             &state_transaction.world,
             state_transaction.block_height(),
         )?;
+        crate::validation_fee::enforce_validation_fee_admission(tx, state_transaction)?;
 
         if !is_heartbeat {
             enforce_fraud_policy(

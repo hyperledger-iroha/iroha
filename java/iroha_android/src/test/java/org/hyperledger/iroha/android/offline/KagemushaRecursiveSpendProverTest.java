@@ -1426,7 +1426,22 @@ public final class KagemushaRecursiveSpendProverTest {
         "Trailing bytes after lineageWitness.previousRecursiveProofs");
     assertLineageWitnessTrailingFieldRejected(
         recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),
-        "Trailing bytes after verifier key id");
+        "Trailing bytes after lineageWitness.previousRecursiveProofs.verifierKeyId");
+    assertLineageWitnessTrailingFieldRejected(
+        recursiveSpendLineageWitnessWithPreviousProofField(1, new byte[0]),
+        "lineageWitness.previousRecursiveProofs.proof_public_inputs empty recursive proof inputs");
+    assertLineageWitnessTrailingFieldRejected(
+        recursiveSpendLineageWitnessWithPreviousProofField(2, new byte[32]),
+        "lineageWitness.previousRecursiveProofs.proof_public_inputs_hash must be non-zero");
+    assertLineageWitnessTrailingFieldRejected(
+        recursiveSpendLineageWitnessWithPreviousProofField(2, repeat((byte) 0x44, 32)),
+        "lineageWitness.previousRecursiveProofs.proof_public_inputs_hash mismatch");
+    assertLineageWitnessTrailingFieldRejected(
+        recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg"),
+        "lineageWitness.previousRecursiveProofs.proof_backend unsupported recursive proof backend");
+    assertLineageWitnessTrailingFieldRejected(
+        recursiveSpendLineageWitnessWithEmptyPreviousProofBytes(),
+        "lineageWitness.previousRecursiveProofs.proof_bytes empty recursive proof");
 
     final KagemushaRecursiveSpendRequestCodecs.SpendBundleSummary init =
         KagemushaRecursiveSpendRequestCodecs.decodeBundle(
@@ -1620,10 +1635,25 @@ public final class KagemushaRecursiveSpendProverTest {
       {4, new byte[32], "bundle.accumulator.final_root"},
       {4, init.initialRoot(), "bundle.accumulator.final_root"},
       {2, fixedArrayPayload((byte) 0x01, 15), "asset must be exactly 16 bytes"},
+      {
+        2,
+        countPrefixedFixedArrayPayload((byte) 0x01, 16),
+        "asset byte field length must be 1"
+      },
       {2, fixedArrayPayload((byte) 0x01, 17), "asset must be exactly 16 bytes"},
       {3, fixedArrayPayload((byte) 0x02, 31), "initial_root must be exactly 32 bytes"},
+      {
+        3,
+        countPrefixedFixedArrayPayload((byte) 0x02, 32),
+        "initial_root byte field length must be 1"
+      },
       {3, fixedArrayPayload((byte) 0x02, 33), "initial_root must be exactly 32 bytes"},
       {4, fixedArrayPayload((byte) 0x03, 31), "final_root must be exactly 32 bytes"},
+      {
+        4,
+        countPrefixedFixedArrayPayload((byte) 0x03, 32),
+        "final_root byte field length must be 1"
+      },
       {4, fixedArrayPayload((byte) 0x03, 33), "final_root must be exactly 32 bytes"},
       {
         6,
@@ -1646,8 +1676,56 @@ public final class KagemushaRecursiveSpendProverTest {
       },
       {7, new byte[32], "bundle.accumulator.lineage_digest"},
       {8, repeat((byte) 0x7d, 32), "bundle.accumulator.aggregation_transcript_digest"},
+      {8, new byte[32], "bundle.accumulator.aggregation_transcript_digest"},
+      {7, fixedArrayPayload((byte) 0x07, 31), "lineage_digest must be exactly 32 bytes"},
+      {
+        7,
+        countPrefixedFixedArrayPayload((byte) 0x07, 32),
+        "lineage_digest byte field length must be 1"
+      },
+      {7, fixedArrayPayload((byte) 0x07, 33), "lineage_digest must be exactly 32 bytes"},
+      {9, new byte[32], "bundle.accumulator.nullifier_digest"},
+      {10, new byte[32], "bundle.accumulator.output_commitment_digest"},
+      {11, new byte[32], "bundle.accumulator.fold_digest"},
+      {12, new byte[32], "bundle.accumulator.recursive_proof_chain_digest"},
+      {13, new byte[32], "bundle.accumulator.transition_profile_binding_digest"},
       {14, repeat((byte) 0x7e, 32), "bundle.accumulator.append_opening_preflight_digest"},
+      {
+        14,
+        fixedArrayPayload((byte) 0x0e, 31),
+        "append_opening_preflight_digest must be exactly 32 bytes"
+      },
+      {
+        14,
+        countPrefixedFixedArrayPayload((byte) 0x0e, 32),
+        "append_opening_preflight_digest byte field length must be 1"
+      },
+      {
+        14,
+        fixedArrayPayload((byte) 0x0e, 33),
+        "append_opening_preflight_digest must be exactly 32 bytes"
+      },
       {15, repeat((byte) 0x7f, 32), "bundle.accumulator.append_boundary_digest"},
+      {16, new byte[32], "bundle.accumulator.verifier_params_fingerprint"},
+      {17, new byte[32], "bundle.accumulator.fixed_window_table_schedule_digest"},
+      {18, new byte[32], "bundle.accumulator.fixed_window_shared_table_manifest_digest"},
+      {19, new byte[32], "bundle.accumulator.fixed_window_table_base_digest"},
+      {20, new byte[32], "bundle.accumulator.verifier_witness_batch_digest"},
+      {
+        20,
+        fixedArrayPayload((byte) 0x14, 31),
+        "verifier_witness_batch_digest must be exactly 32 bytes"
+      },
+      {
+        20,
+        countPrefixedFixedArrayPayload((byte) 0x14, 32),
+        "verifier_witness_batch_digest byte field length must be 1"
+      },
+      {
+        20,
+        fixedArrayPayload((byte) 0x14, 33),
+        "verifier_witness_batch_digest must be exactly 32 bytes"
+      },
       {21, new byte[] {3, 0, 0, 0}, "bundle.accumulator.verifier_opening_len"},
     };
     for (final Object[] malformedAccumulatorField : malformedAccumulatorFields) {
@@ -2641,6 +2719,8 @@ public final class KagemushaRecursiveSpendProverTest {
           "pallasOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"},
       {pallasOpenEnvelopeVectorArchive(spec -> spec.domainTagPayload = fixedArrayPayload((byte) 0x72, 32)),
           "pallasOpenEnvelopes[0].domain_tag must be exactly 32 bytes"},
+      {pallasOpenEnvelopeVectorArchive(spec -> spec.trailingEnvelopeBytes = new byte[] {0x7f}),
+          "Trailing bytes after pallasOpenEnvelopes[0]"},
       {pallasOpenEnvelopeVectorArchiveWithPayload(new byte[] {0x00}), "Unexpected end of data"}
     };
     for (final Object[] malformed : malformedPallasOpenArchives) {
@@ -3983,6 +4063,72 @@ public final class KagemushaRecursiveSpendProverTest {
         NoritoHeader.COMPACT_LEN);
   }
 
+  private static byte[] recursiveSpendLineageWitnessWithPreviousProofField(
+      final int fieldIndex, final byte[] replacement) {
+    final List<byte[]> fields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS)));
+    final List<byte[]> previousProofs = new ArrayList<>(sequencePayloads(fields.get(3)));
+    assert !previousProofs.isEmpty();
+    final List<byte[]> previousProofFields = new ArrayList<>(fieldPayloads(previousProofs.get(0)));
+    previousProofFields.set(fieldIndex, Arrays.copyOf(replacement, replacement.length));
+    previousProofs.set(0, encodeFields(previousProofFields));
+    fields.set(3, encodeSequence(previousProofs));
+    return NoritoCodec.encode(
+        encodeFields(fields),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] recursiveSpendLineageWitnessWithPreviousProofBoxBackend(
+      final String proofBackend) {
+    final List<byte[]> fields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS)));
+    final List<byte[]> previousProofs = new ArrayList<>(sequencePayloads(fields.get(3)));
+    assert !previousProofs.isEmpty();
+    final List<byte[]> previousProofFields = new ArrayList<>(fieldPayloads(previousProofs.get(0)));
+    final List<byte[]> proofBoxFields = new ArrayList<>(fieldPayloads(previousProofFields.get(3)));
+    proofBoxFields.set(0, kagemushaNoritoString(proofBackend, TEST_NORITO_COMPACT_LEN_FLAG));
+    previousProofFields.set(3, encodeFields(proofBoxFields));
+    previousProofs.set(0, encodeFields(previousProofFields));
+    fields.set(3, encodeSequence(previousProofs));
+    return NoritoCodec.encode(
+        encodeFields(fields),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] recursiveSpendLineageWitnessWithEmptyPreviousProofBytes() {
+    final List<byte[]> fields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS)));
+    final List<byte[]> previousProofs = new ArrayList<>(sequencePayloads(fields.get(3)));
+    assert !previousProofs.isEmpty();
+    final List<byte[]> previousProofFields = new ArrayList<>(fieldPayloads(previousProofs.get(0)));
+    final List<byte[]> proofBoxFields = new ArrayList<>(fieldPayloads(previousProofFields.get(3)));
+    proofBoxFields.set(1, testPayload(encoder -> encoder.writeUInt(0, 64)));
+    previousProofFields.set(3, encodeFields(proofBoxFields));
+    previousProofs.set(0, encodeFields(previousProofFields));
+    fields.set(3, encodeSequence(previousProofs));
+    return NoritoCodec.encode(
+        encodeFields(fields),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
   private static byte[] recursiveSpendBundleWithTrailingAccumulatorField() {
     final List<byte[]> bundleFields =
         new ArrayList<>(
@@ -4361,6 +4507,14 @@ public final class KagemushaRecursiveSpendProverTest {
     return encodeFields(fields);
   }
 
+  private static byte[] countPrefixedFixedArrayPayload(final byte value, final int count) {
+    return testPayload(
+        encoder -> {
+          encoder.writeUInt(count, 64);
+          encoder.writeBytes(fixedArrayPayload(value, count));
+        });
+  }
+
   private static List<byte[]> sequencePayloads(final byte[] payload) {
     final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.COMPACT_LEN);
     final long count = decoder.readUInt(64);
@@ -4553,7 +4707,7 @@ public final class KagemushaRecursiveSpendProverTest {
     final IllegalArgumentException error =
         captureIllegalArgument(
             () -> KagemushaRecursiveSpendRequestCodecs.lineageWitnessHasReservedPreviousProof(archive));
-    assert expected.equals(error.getMessage());
+    assert expected.equals(error.getMessage()) : error.getMessage();
   }
 
   private static IllegalArgumentException captureIllegalArgument(final Runnable runnable) {

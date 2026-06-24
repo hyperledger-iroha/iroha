@@ -248,6 +248,87 @@ def account_address(seed: int, discriminant: int = 0x02F1) -> str:
     )
 
 
+def test_submit_transaction_draft_result_wait_false_preserves_hash_after_submit_timeout() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+
+    class FakeEnvelope:
+        hash = bytes.fromhex("ab" * 32)
+
+    envelope = FakeEnvelope()
+    client._sign_transaction_draft = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: envelope
+    )
+
+    def fake_submit(_envelope: object) -> object:
+        raise requests.Timeout("submit timed out")
+
+    client.submit_transaction_envelope = fake_submit  # type: ignore[method-assign]
+    client.wait_for_transaction_status = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: pytest.fail("wait=False must not poll status")
+    )
+
+    result = client._submit_transaction_draft_result(
+        object(),  # type: ignore[arg-type]
+        private_key_hex="11" * 32,
+        wait=False,
+    )
+
+    assert result["hash"] == "ab" * 32
+    assert result["envelope"] is envelope
+    assert result["submission"] == {
+        "ok": False,
+        "status": "submission_timeout_pending_status",
+        "error": "submit timed out",
+    }
+    assert "terminal" not in result
+
+
+def test_submit_transaction_draft_result_wait_true_raises_submit_timeout() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+
+    class FakeEnvelope:
+        hash = bytes.fromhex("cd" * 32)
+
+    client._sign_transaction_draft = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: FakeEnvelope()
+    )
+
+    def fake_submit(_envelope: object) -> object:
+        raise requests.Timeout("submit timed out")
+
+    client.submit_transaction_envelope = fake_submit  # type: ignore[method-assign]
+
+    with pytest.raises(requests.Timeout, match="submit timed out"):
+        client._submit_transaction_draft_result(
+            object(),  # type: ignore[arg-type]
+            private_key_hex="11" * 32,
+            wait=True,
+        )
+
+
+def test_submit_transaction_draft_result_wait_false_does_not_hide_rejection() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+
+    class FakeEnvelope:
+        hash = bytes.fromhex("ef" * 32)
+
+    client._sign_transaction_draft = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: FakeEnvelope()
+    )
+
+    def fake_submit(_envelope: object) -> object:
+        raise RuntimeError("signature rejected")
+
+    client.submit_transaction_envelope = fake_submit  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="signature rejected"):
+        client._submit_transaction_draft_result(
+            object(),  # type: ignore[arg-type]
+            private_key_hex="11" * 32,
+            wait=False,
+        )
+
+
 def test_account_exists_falls_back_to_listing_on_route_unavailable() -> None:
     session = FakeSession(
         [

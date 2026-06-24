@@ -1189,6 +1189,71 @@ function recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField() {
   );
 }
 
+function recursiveSpendLineageWitnessWithPreviousProofField(fieldIndex, replacement) {
+  const fields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("lineage_witness_append_result")),
+  );
+  const previousProofs = kagemushaReadSequenceFields(fields[3]);
+  assert.ok(previousProofs.length > 0);
+  const previousProofFields = kagemushaReadNoritoFields(previousProofs[0]);
+  previousProofFields[fieldIndex] = Buffer.from(replacement);
+  previousProofs[0] = Buffer.concat(
+    previousProofFields.map((field) => kagemushaNoritoField(field)),
+  );
+  fields[3] = kagemushaEncodeSequenceFields(previousProofs);
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME),
+    Buffer.concat(fields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendLineageWitnessWithPreviousProofBoxBackend(proofBackend) {
+  const fields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("lineage_witness_append_result")),
+  );
+  const previousProofs = kagemushaReadSequenceFields(fields[3]);
+  assert.ok(previousProofs.length > 0);
+  const previousProofFields = kagemushaReadNoritoFields(previousProofs[0]);
+  const proofBoxFields = kagemushaReadNoritoFields(previousProofFields[3]);
+  proofBoxFields[0] = kagemushaNoritoString(proofBackend);
+  previousProofFields[3] = Buffer.concat(
+    proofBoxFields.map((field) => kagemushaNoritoField(field)),
+  );
+  previousProofs[0] = Buffer.concat(
+    previousProofFields.map((field) => kagemushaNoritoField(field)),
+  );
+  fields[3] = kagemushaEncodeSequenceFields(previousProofs);
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME),
+    Buffer.concat(fields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendLineageWitnessWithEmptyPreviousProofBytes() {
+  const fields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("lineage_witness_append_result")),
+  );
+  const previousProofs = kagemushaReadSequenceFields(fields[3]);
+  assert.ok(previousProofs.length > 0);
+  const previousProofFields = kagemushaReadNoritoFields(previousProofs[0]);
+  const proofBoxFields = kagemushaReadNoritoFields(previousProofFields[3]);
+  proofBoxFields[1] = u64LE(0);
+  previousProofFields[3] = Buffer.concat(
+    proofBoxFields.map((field) => kagemushaNoritoField(field)),
+  );
+  previousProofs[0] = Buffer.concat(
+    previousProofFields.map((field) => kagemushaNoritoField(field)),
+  );
+  fields[3] = kagemushaEncodeSequenceFields(previousProofs);
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME),
+    Buffer.concat(fields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
 function recursiveSpendBundleWithTrailingAccumulatorField() {
   const bundleFields = kagemushaReadNoritoFields(
     kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("init_bundle")),
@@ -4757,6 +4822,31 @@ test("package dist Kagemusha recursive spend typed requests reject malformed blo
       "lineageWitness.previousRecursiveProofs.verifierKeyId",
       /lineageWitness\.previousRecursiveProofs\.verifierKeyId/,
     ],
+    [
+      recursiveSpendLineageWitnessWithPreviousProofField(1, Buffer.alloc(0)),
+      "lineageWitness.previousRecursiveProofs.proof_public_inputs",
+      /lineageWitness\.previousRecursiveProofs\.proof_public_inputs/,
+    ],
+    [
+      recursiveSpendLineageWitnessWithPreviousProofField(2, Buffer.alloc(32)),
+      "lineageWitness.previousRecursiveProofs.proof_public_inputs_hash",
+      /lineageWitness\.previousRecursiveProofs\.proof_public_inputs_hash/,
+    ],
+    [
+      recursiveSpendLineageWitnessWithPreviousProofField(2, Buffer.alloc(32, 0x44)),
+      "lineageWitness.previousRecursiveProofs.proof_public_inputs_hash",
+      /lineageWitness\.previousRecursiveProofs\.proof_public_inputs_hash/,
+    ],
+    [
+      recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg"),
+      "lineageWitness.previousRecursiveProofs.proof_backend",
+      /lineageWitness\.previousRecursiveProofs\.proof_backend/,
+    ],
+    [
+      recursiveSpendLineageWitnessWithEmptyPreviousProofBytes(),
+      "lineageWitness.previousRecursiveProofs.proof_bytes",
+      /lineageWitness\.previousRecursiveProofs\.proof_bytes/,
+    ],
   ];
   for (const [lineageWitnessArchive, expectedField, expectedError] of malformedLineageWitnesses) {
     assert.throws(
@@ -5052,6 +5142,14 @@ test("package dist Kagemusha recursive spend bundle rejects invalid accumulator 
     [4, kagemushaFixedArrayPayload(0x03, 33), "finalRoot", null],
     [4, kagemushaCountPrefixedFixedArrayPayload(0x03, 32), "finalRoot", null],
     [7, Buffer.alloc(32), "bundle.accumulator.lineage_digest", null],
+    [7, kagemushaFixedArrayPayload(0x07, 31), "bundle.accumulator.lineage_digest", null],
+    [7, kagemushaFixedArrayPayload(0x07, 33), "bundle.accumulator.lineage_digest", null],
+    [
+      7,
+      kagemushaCountPrefixedFixedArrayPayload(0x07, 32),
+      "bundle.accumulator.lineage_digest",
+      null,
+    ],
     [
       8,
       Buffer.alloc(32, 0x7d),
@@ -5059,8 +5157,37 @@ test("package dist Kagemusha recursive spend bundle rejects invalid accumulator 
       null,
     ],
     [
+      8,
+      Buffer.alloc(32),
+      "bundle.accumulator.aggregation_transcript_digest",
+      null,
+    ],
+    [9, Buffer.alloc(32), "bundle.accumulator.nullifier_digest", null],
+    [10, Buffer.alloc(32), "bundle.accumulator.output_commitment_digest", null],
+    [11, Buffer.alloc(32), "bundle.accumulator.fold_digest", null],
+    [12, Buffer.alloc(32), "bundle.accumulator.recursive_proof_chain_digest", null],
+    [13, Buffer.alloc(32), "bundle.accumulator.transition_profile_binding_digest", null],
+    [
       14,
       Buffer.alloc(32, 0x7e),
+      "bundle.accumulator.append_opening_preflight_digest",
+      null,
+    ],
+    [
+      14,
+      kagemushaFixedArrayPayload(0x0e, 31),
+      "bundle.accumulator.append_opening_preflight_digest",
+      null,
+    ],
+    [
+      14,
+      kagemushaFixedArrayPayload(0x0e, 33),
+      "bundle.accumulator.append_opening_preflight_digest",
+      null,
+    ],
+    [
+      14,
+      kagemushaCountPrefixedFixedArrayPayload(0x0e, 32),
       "bundle.accumulator.append_opening_preflight_digest",
       null,
     ],
@@ -5068,6 +5195,39 @@ test("package dist Kagemusha recursive spend bundle rejects invalid accumulator 
       15,
       Buffer.alloc(32, 0x7f),
       "bundle.accumulator.append_boundary_digest",
+      null,
+    ],
+    [16, Buffer.alloc(32), "bundle.accumulator.verifier_params_fingerprint", null],
+    [
+      17,
+      Buffer.alloc(32),
+      "bundle.accumulator.fixed_window_table_schedule_digest",
+      null,
+    ],
+    [
+      18,
+      Buffer.alloc(32),
+      "bundle.accumulator.fixed_window_shared_table_manifest_digest",
+      null,
+    ],
+    [19, Buffer.alloc(32), "bundle.accumulator.fixed_window_table_base_digest", null],
+    [20, Buffer.alloc(32), "bundle.accumulator.verifier_witness_batch_digest", null],
+    [
+      20,
+      kagemushaFixedArrayPayload(0x14, 31),
+      "bundle.accumulator.verifier_witness_batch_digest",
+      null,
+    ],
+    [
+      20,
+      kagemushaFixedArrayPayload(0x14, 33),
+      "bundle.accumulator.verifier_witness_batch_digest",
+      null,
+    ],
+    [
+      20,
+      kagemushaCountPrefixedFixedArrayPayload(0x14, 32),
+      "bundle.accumulator.verifier_witness_batch_digest",
       null,
     ],
     [21, kagemushaU32Payload(3), "bundle.accumulator.verifier_opening_len", null],
@@ -11051,7 +11211,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
         },
         { destinationBinding: ethereumMainnetBinding },
       ),
-    /crossSdkParityBytes must be at least 128 bytes/u,
+    /crossSdkFixtureParityBytes must be at least 128 bytes/u,
   );
   const tinySelfTestFixtureBytesForFloor = Buffer.from("{}", "utf8");
   const tinySelfTestBundle = hashConsistentNativeProverBundle({
@@ -11858,6 +12018,14 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
         networkId: `0x${"33".repeat(32)}`,
       }),
     /sourceBridgeNetworkId must be Ethereum mainnet chain id/u,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
+        ...material,
+        sourceBridgeEmitterCodeHash: SCCP_ETH_MAINNET_NETWORK_ID,
+      }),
+    /sourceBridgeEmitterCodeHash must not match sourceBridgeNetworkId/u,
   );
   assert.throws(
     () =>

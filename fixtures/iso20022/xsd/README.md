@@ -66,7 +66,10 @@ they must use byte-stable official `www.iso20022.org` catalogue and download
 paths with no percent escapes, archive catalogue URLs must use the canonical
 raw `page=<nonzero decimal>` query, canonical ISO-style message names ending in
 `VNN` with suffixes that match their `message_def_id` versions, unique
-`message_def_id` and direct download URL values, and a current missing
+`message_def_id`, message-name, and direct download URL values, canonical
+submitting organisation labels with only bounded ISO-style punctuation and no
+URL/contact,
+semicolon, placeholder, or path-smuggling material, and a current missing
 schema/profile gap. XML
 fixture entries that record a reviewed
 `missing_schema_reason` must not use a `message_def_id` that already has a

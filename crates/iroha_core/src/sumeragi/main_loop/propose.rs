@@ -723,7 +723,12 @@ impl Actor {
         }
     }
 
-    fn vote_locked_frontier_recovery_ready(&self, height: u64, view: u64, now: Instant) -> bool {
+    pub(super) fn vote_locked_frontier_recovery_ready(
+        &self,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) -> bool {
         let Some(lock) = self.same_height_vote_lock_blocking_candidate(height, view, None) else {
             return false;
         };
@@ -1619,11 +1624,17 @@ impl Actor {
         {
             return false;
         }
-        let min_yield_age = self
+        let quorum_yield_age = self
             .quorum_timeout(self.runtime_da_enabled())
+            .max(Duration::from_millis(1));
+        let fast_recovery_yield_age =
+            super::reschedule::near_quorum_payload_timeout(self.rebroadcast_cooldown())
+                .min(quorum_yield_age)
+                .max(Duration::from_millis(1));
+        let standard_yield_age = quorum_yield_age
             .max(self.frontier_slot_lag_window())
             .max(Duration::from_millis(1));
-        let hard_yield_age = min_yield_age.saturating_mul(3);
+        let hard_yield_age = standard_yield_age.saturating_mul(3);
         let owner_qc_observed =
             self.same_height_block_has_recoverable_qc(owner_hash, height, owner_view);
         let owner_slot_evidence = self
@@ -1737,7 +1748,16 @@ impl Actor {
                         );
                     }
                 }
-                let stale_unprotected_owner = owner_age >= min_yield_age && !protected_owner;
+                let yield_age = if same_height_recovery_view
+                    && !owner_qc_observed
+                    && !frontier_commit_qc_observed
+                    && !owner_pending_commit_qc_observed
+                {
+                    fast_recovery_yield_age
+                } else {
+                    standard_yield_age
+                };
+                let stale_unprotected_owner = owner_age >= yield_age && !protected_owner;
                 let recovery_exhausted = owner_age >= hard_yield_age;
                 if (stale_unprotected_owner || recovery_exhausted)
                     && !owner_qc_observed
@@ -1756,6 +1776,9 @@ impl Actor {
                         owner_view,
                         owner = %owner_hash,
                         owner_age_ms = owner_age.as_millis(),
+                        min_yield_age_ms = yield_age.as_millis(),
+                        fast_yield_age_ms = fast_recovery_yield_age.as_millis(),
+                        standard_yield_age_ms = standard_yield_age.as_millis(),
                         hard_yield_age_ms = hard_yield_age.as_millis(),
                         queue_len = pending_queue_len,
                         frontier_commit_qc_observed,
@@ -1790,6 +1813,8 @@ impl Actor {
                         .is_some_and(PendingBlock::commit_qc_observed),
                     owner_slot_present = owner_slot_evidence.is_some(),
                     owner_slot_age_ms = ?owner_slot_evidence.map(|(age, _, _)| age.as_millis()),
+                    fast_yield_age_ms = fast_recovery_yield_age.as_millis(),
+                    standard_yield_age_ms = standard_yield_age.as_millis(),
                     hard_yield_age_ms = hard_yield_age.as_millis(),
                     owner_qc_observed,
                     owner_pending_commit_qc_observed,
@@ -1850,6 +1875,15 @@ impl Actor {
                     self.frontier_slot_competing_quorum_locked_for_view(slot, view),
                 )
             });
+        let yield_age = if same_height_recovery_view
+            && !owner_qc_observed
+            && !frontier_commit_qc_observed
+            && !owner_pending_commit_qc_observed
+        {
+            fast_recovery_yield_age
+        } else {
+            standard_yield_age
+        };
         let frontier_commit_qc_blocks_yield = frontier_commit_qc_observed && !recovery_exhausted;
         let competing_quorum_blocks_yield =
             competing_quorum_locked && !new_view_qc_supersedes_owner;
@@ -1875,7 +1909,9 @@ impl Actor {
                     owner = %owner_hash,
                     owner_age_ms = owner_age.as_millis(),
                     recovery_age_ms = recovery_age.map(|age| age.as_millis()),
-                    min_yield_age_ms = min_yield_age.as_millis(),
+                    min_yield_age_ms = yield_age.as_millis(),
+                    fast_yield_age_ms = fast_recovery_yield_age.as_millis(),
+                    standard_yield_age_ms = standard_yield_age.as_millis(),
                     hard_yield_age_ms = hard_yield_age.as_millis(),
                     recovery_exhausted,
                     owner_qc_observed,
@@ -1895,7 +1931,7 @@ impl Actor {
             }
             return false;
         }
-        if owner_age < min_yield_age && !recovery_exhausted {
+        if owner_age < yield_age && !recovery_exhausted {
             if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
                 ProposalDeferWarningKind::FrontierOwnerYieldBlocked,
                 height,
@@ -1911,7 +1947,9 @@ impl Actor {
                     owner = %owner_hash,
                     owner_age_ms = owner_age.as_millis(),
                     recovery_age_ms = recovery_age.map(|age| age.as_millis()),
-                    min_yield_age_ms = min_yield_age.as_millis(),
+                    min_yield_age_ms = yield_age.as_millis(),
+                    fast_yield_age_ms = fast_recovery_yield_age.as_millis(),
+                    standard_yield_age_ms = standard_yield_age.as_millis(),
                     suppressed_since_last,
                     "stale frontier owner yield blocked: owner still inside yield grace"
                 );
@@ -1940,7 +1978,9 @@ impl Actor {
                 owner = %owner_hash,
                 owner_age_ms = owner_age.as_millis(),
                 recovery_age_ms = recovery_age.map(|age| age.as_millis()),
-                min_yield_age_ms = min_yield_age.as_millis(),
+                min_yield_age_ms = yield_age.as_millis(),
+                fast_yield_age_ms = fast_recovery_yield_age.as_millis(),
+                standard_yield_age_ms = standard_yield_age.as_millis(),
                 tx_count,
                 requeued,
                 failures,
@@ -1956,7 +1996,9 @@ impl Actor {
                 owner = %owner_hash,
                 owner_age_ms = owner_age.as_millis(),
                 recovery_age_ms = recovery_age.map(|age| age.as_millis()),
-                min_yield_age_ms = min_yield_age.as_millis(),
+                min_yield_age_ms = yield_age.as_millis(),
+                fast_yield_age_ms = fast_recovery_yield_age.as_millis(),
+                standard_yield_age_ms = standard_yield_age.as_millis(),
                 cleared_inflight = false,
                 queue_len = pending_queue_len,
                 "cleared stale frontier owner for fresh resilience proposal"
@@ -5730,7 +5772,19 @@ impl Actor {
                                 && *deferred_hash == hint.block_hash
                         },
                     );
-                    if validation_inflight || commit_inflight || pending_processing || deferred_body
+                    let pending_processing_only = pending_processing
+                        && !validation_inflight
+                        && !commit_inflight
+                        && !deferred_body;
+                    let stale_pending_processing_only = pending_processing_only
+                        && cache_age.is_some_and(|age| {
+                            repair_window != Duration::ZERO && age >= repair_window
+                        });
+                    if (validation_inflight
+                        || commit_inflight
+                        || pending_processing
+                        || deferred_body)
+                        && !stale_pending_processing_only
                     {
                         self.subsystems.propose.pacemaker.next_deadline = now
                             .checked_add(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
@@ -5756,6 +5810,17 @@ impl Actor {
                             now,
                         );
                         return false;
+                    }
+                    if stale_pending_processing_only {
+                        warn!(
+                            height,
+                            view = view_idx,
+                            block = %hint.block_hash,
+                            queue_len = pending_queue_len,
+                            repair_window_ms = repair_window.as_millis(),
+                            cache_age_ms = cache_age.map(|age| age.as_millis()),
+                            "cached proposal has no live pending body; ignoring stale pending-processing marker before rotation"
+                        );
                     }
                 }
                 let repair_age = cached_hint.as_ref().and_then(|hint| {

@@ -50,6 +50,35 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             (
                 try Self.recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),
                 .invalidArchive("lineageWitness.previousRecursiveProofs.verifierKeyId")
+            ),
+            (
+                try Self.recursiveSpendLineageWitnessWithPreviousProofField(
+                    fieldIndex: 1,
+                    replacement: Data()
+                ),
+                .invalidArchive("lineageWitness.previousRecursiveProofs.proof_public_inputs")
+            ),
+            (
+                try Self.recursiveSpendLineageWitnessWithPreviousProofField(
+                    fieldIndex: 2,
+                    replacement: Data(repeating: 0, count: 32)
+                ),
+                .invalidArchive("lineageWitness.previousRecursiveProofs.proof_public_inputs_hash")
+            ),
+            (
+                try Self.recursiveSpendLineageWitnessWithPreviousProofField(
+                    fieldIndex: 2,
+                    replacement: Data(repeating: 0x44, count: 32)
+                ),
+                .invalidArchive("lineageWitness.previousRecursiveProofs.proof_public_inputs_hash")
+            ),
+            (
+                try Self.recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg"),
+                .invalidArchive("lineageWitness.previousRecursiveProofs.proof_backend")
+            ),
+            (
+                try Self.recursiveSpendLineageWitnessWithEmptyPreviousProofBytes(),
+                .invalidArchive("lineageWitness.previousRecursiveProofs.proof_bytes")
             )
         ]
         for (archive, expectedError) in malformedWitnesses {
@@ -364,9 +393,29 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             (6, Data([0, 0, 0, 0]), .invalidArchive("bundle.accumulator.hop_count")),
             (6, Data([65, 0, 0, 0]), .invalidArchive("bundle.accumulator.hop_count")),
             (7, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.lineage_digest")),
+            (7, Self.fixedArrayPayload(0x07, count: 31), .invalidArchive("fixedArray")),
+            (7, Self.countPrefixedFixedArrayPayload(0x07, count: 32), .invalidArchive("fixedArray")),
+            (7, Self.fixedArrayPayload(0x07, count: 33), .invalidArchive("fixedArray")),
             (8, Data(repeating: 0x7d, count: 32), .invalidArchive("bundle.accumulator.aggregation_transcript_digest")),
+            (8, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.aggregation_transcript_digest")),
+            (9, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.nullifier_digest")),
+            (10, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.output_commitment_digest")),
+            (11, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.fold_digest")),
+            (12, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.recursive_proof_chain_digest")),
+            (13, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.transition_profile_binding_digest")),
             (14, Data(repeating: 0x7e, count: 32), .invalidArchive("bundle.accumulator.append_opening_preflight_digest")),
+            (14, Self.fixedArrayPayload(0x0e, count: 31), .invalidArchive("fixedArray")),
+            (14, Self.countPrefixedFixedArrayPayload(0x0e, count: 32), .invalidArchive("fixedArray")),
+            (14, Self.fixedArrayPayload(0x0e, count: 33), .invalidArchive("fixedArray")),
             (15, Data(repeating: 0x7f, count: 32), .invalidArchive("bundle.accumulator.append_boundary_digest")),
+            (16, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.verifier_params_fingerprint")),
+            (17, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.fixed_window_table_schedule_digest")),
+            (18, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.fixed_window_shared_table_manifest_digest")),
+            (19, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.fixed_window_table_base_digest")),
+            (20, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.verifier_witness_batch_digest")),
+            (20, Self.fixedArrayPayload(0x14, count: 31), .invalidArchive("fixedArray")),
+            (20, Self.countPrefixedFixedArrayPayload(0x14, count: 32), .invalidArchive("fixedArray")),
+            (20, Self.fixedArrayPayload(0x14, count: 33), .invalidArchive("fixedArray")),
             (21, Data([3, 0, 0, 0]), .invalidArchive("bundle.accumulator.verifier_opening_len")),
         ]
         for (fieldIndex, replacement, expectedError) in malformedAccumulatorFields {
@@ -1285,6 +1334,74 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             noritoString("ignored-extra-previous-verifier-key-field", flags: NoritoHeader.compactLen)
         )
         previousProofFields[0] = encodeFields(verifierKeyIdFields, flags: NoritoHeader.compactLen)
+        previousProofs[0] = encodeFields(previousProofFields, flags: NoritoHeader.compactLen)
+        fields[3] = encodeSequence(previousProofs)
+        return noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.lineageWitnessWireName,
+            payload: encodeFields(fields, flags: NoritoHeader.compactLen),
+            flags: NoritoHeader.compactLen
+        )
+    }
+
+    private static func recursiveSpendLineageWitnessWithPreviousProofField(
+        fieldIndex: Int,
+        replacement: Data
+    ) throws -> Data {
+        let payload = try compactPayload(
+            sharedRecursiveSpendArchive(abi: .abi6, name: "lineage_witness_append_result"),
+            schema: KagemushaRecursiveSpendRequestCodecs.lineageWitnessWireName
+        )
+        var fields = try fieldPayloads(payload)
+        var previousProofs = try sequencePayloads(fields[3])
+        XCTAssertFalse(previousProofs.isEmpty)
+        var previousProofFields = try fieldPayloads(previousProofs[0])
+        previousProofFields[fieldIndex] = replacement
+        previousProofs[0] = encodeFields(previousProofFields, flags: NoritoHeader.compactLen)
+        fields[3] = encodeSequence(previousProofs)
+        return noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.lineageWitnessWireName,
+            payload: encodeFields(fields, flags: NoritoHeader.compactLen),
+            flags: NoritoHeader.compactLen
+        )
+    }
+
+    private static func recursiveSpendLineageWitnessWithPreviousProofBoxBackend(
+        _ proofBackend: String
+    ) throws -> Data {
+        let payload = try compactPayload(
+            sharedRecursiveSpendArchive(abi: .abi6, name: "lineage_witness_append_result"),
+            schema: KagemushaRecursiveSpendRequestCodecs.lineageWitnessWireName
+        )
+        var fields = try fieldPayloads(payload)
+        var previousProofs = try sequencePayloads(fields[3])
+        XCTAssertFalse(previousProofs.isEmpty)
+        var previousProofFields = try fieldPayloads(previousProofs[0])
+        var proofBoxFields = try fieldPayloads(previousProofFields[3])
+        proofBoxFields[0] = noritoString(proofBackend, flags: NoritoHeader.compactLen)
+        previousProofFields[3] = encodeFields(proofBoxFields, flags: NoritoHeader.compactLen)
+        previousProofs[0] = encodeFields(previousProofFields, flags: NoritoHeader.compactLen)
+        fields[3] = encodeSequence(previousProofs)
+        return noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.lineageWitnessWireName,
+            payload: encodeFields(fields, flags: NoritoHeader.compactLen),
+            flags: NoritoHeader.compactLen
+        )
+    }
+
+    private static func recursiveSpendLineageWitnessWithEmptyPreviousProofBytes() throws -> Data {
+        let payload = try compactPayload(
+            sharedRecursiveSpendArchive(abi: .abi6, name: "lineage_witness_append_result"),
+            schema: KagemushaRecursiveSpendRequestCodecs.lineageWitnessWireName
+        )
+        var fields = try fieldPayloads(payload)
+        var previousProofs = try sequencePayloads(fields[3])
+        XCTAssertFalse(previousProofs.isEmpty)
+        var previousProofFields = try fieldPayloads(previousProofs[0])
+        var proofBoxFields = try fieldPayloads(previousProofFields[3])
+        var emptyProofBytes = Data()
+        appendUInt64LE(0, to: &emptyProofBytes)
+        proofBoxFields[1] = emptyProofBytes
+        previousProofFields[3] = encodeFields(proofBoxFields, flags: NoritoHeader.compactLen)
         previousProofs[0] = encodeFields(previousProofFields, flags: NoritoHeader.compactLen)
         fields[3] = encodeSequence(previousProofs)
         return noritoEncode(

@@ -3657,6 +3657,14 @@ object SccpSourceProofs {
         }
         if (
             normalizedSourceDomain == DOMAIN_ETH &&
+            normalizedSourceBridgeEmitterCodeHash.contentEquals(normalizedSourceBridgeNetworkId)
+        ) {
+            throw IllegalArgumentException(
+                "sourceBridgeEmitterCodeHash must not match sourceBridgeNetworkId",
+            )
+        }
+        if (
+            normalizedSourceDomain == DOMAIN_ETH &&
             !normalizedSourceBridgeConfigHash.contentEquals(
                 ethSourceBridgeConfigHash(
                     normalizedSourceDomain,

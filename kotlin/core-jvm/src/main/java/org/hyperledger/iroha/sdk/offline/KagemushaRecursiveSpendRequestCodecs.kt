@@ -2564,6 +2564,7 @@ private data class VerifyingKeyIdParts(val backend: String, val name: String)
 
 private data class RecursiveProofDecodeContext(
     val trailingField: String,
+    val proofBoxTrailingField: String,
     val verifierTrailingField: String,
     val verifierBackendField: String,
     val verifierNameField: String,
@@ -2575,6 +2576,7 @@ private data class RecursiveProofDecodeContext(
     companion object {
         val bundle = RecursiveProofDecodeContext(
             trailingField = "recursive proof",
+            proofBoxTrailingField = "proof",
             verifierTrailingField = "verifier key id",
             verifierBackendField = "verifierKeyId.backend",
             verifierNameField = "verifierKeyId",
@@ -2586,6 +2588,7 @@ private data class RecursiveProofDecodeContext(
 
         val lineagePreviousProof = RecursiveProofDecodeContext(
             trailingField = "lineageWitness.previousRecursiveProofs",
+            proofBoxTrailingField = "lineageWitness.previousRecursiveProofs.proof",
             verifierTrailingField = "lineageWitness.previousRecursiveProofs.verifierKeyId",
             verifierBackendField = "lineageWitness.previousRecursiveProofs.verifierKeyId.backend",
             verifierNameField = "lineageWitness.previousRecursiveProofs.verifierKeyId.name",
@@ -2632,7 +2635,7 @@ private fun readProofBoxBackend(
     val decoder = NoritoDecoder(payload, flags)
     val backend = readField(decoder) { readString(it) }
     val proofBytes = readField(decoder) { readBytesVec(it) }
-    require(decoder.remaining() == 0) { "Trailing bytes after ${context.trailingField}" }
+    require(decoder.remaining() == 0) { "Trailing bytes after ${context.proofBoxTrailingField}" }
     requirePortableId(backend, "proof.backend")
     require(backend == KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND) {
         "${context.proofBackendField} unsupported recursive proof backend"

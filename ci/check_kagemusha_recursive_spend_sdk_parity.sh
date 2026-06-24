@@ -5367,6 +5367,7 @@ def check_recursive_compact_surface(texts, errors):
             '"pallasOpenEnvelopes[0] transcript_label must be non-empty"',
             '"pallasOpenEnvelopes[0] transcript_label exceeds 128 bytes"',
             '"pallasOpenEnvelopes[0].domain_tag is required"',
+            '"Trailing bytes after pallasOpenEnvelopes[0]"',
             '"Unexpected end of data"',
             "assertEquals(expectedMessage, archiveError.message)",
         ),
@@ -5383,6 +5384,8 @@ def check_recursive_compact_surface(texts, errors):
             '"pallasOpenEnvelopes[0] transcript_label must be non-empty"',
             'pallasOpenEnvelopeVectorArchive { it.transcriptLabel = "\\u00e9".repeat(65) } to',
             '"pallasOpenEnvelopes[0] transcript_label exceeds 128 bytes"',
+            "pallasOpenEnvelopeVectorArchive { it.trailingEnvelopeBytes = byteArrayOf(0x7f) } to",
+            '"Trailing bytes after pallasOpenEnvelopes[0]"',
         ),
         "Kotlin typed recursive spend Pallas archive malformed diagnostics",
         errors,
@@ -5570,6 +5573,7 @@ def check_recursive_compact_surface(texts, errors):
             '"pallasOpenEnvelopes[0] transcript_label must be non-empty"',
             '"pallasOpenEnvelopes[0] transcript_label exceeds 128 bytes"',
             '"pallasOpenEnvelopes[0].domain_tag is required"',
+            '"Trailing bytes after pallasOpenEnvelopes[0]"',
             '"Unexpected end of data"',
             "assert expectedMessage.equals(archiveError.getMessage());",
         ),
@@ -9690,7 +9694,7 @@ def check_javascript(texts, errors):
                 "kagemushaRequireRecursiveSpendAccumulatorRoots(initialRoot, finalRoot);",
                 "function kagemushaRequireRecursiveSpendAccumulatorRoots(initialRoot, finalRoot)",
                 "finalRoot.equals(initialRoot)",
-                "kagemushaRequireRecursiveSpendAccumulatorCorridor(",
+                "offset = kagemushaRequireRecursiveSpendAccumulatorCorridor(",
                 '"lineage_digest"',
                 '"aggregation_transcript_digest"',
                 '"append_opening_preflight_digest"',
@@ -10104,10 +10108,30 @@ def check_javascript(texts, errors):
             '[4, kagemushaFixedArrayPayload(0x03, 33), "finalRoot", null]',
             '[4, kagemushaCountPrefixedFixedArrayPayload(0x03, 32), "finalRoot", null]',
             '[7, Buffer.alloc(32), "bundle.accumulator.lineage_digest", null]',
+            '[7, kagemushaFixedArrayPayload(0x07, 31), "bundle.accumulator.lineage_digest", null]',
+            '[7, kagemushaFixedArrayPayload(0x07, 33), "bundle.accumulator.lineage_digest", null]',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x07, 32),\n      "bundle.accumulator.lineage_digest",',
             'Buffer.alloc(32, 0x7d)',
             '"bundle.accumulator.aggregation_transcript_digest"',
+            '      Buffer.alloc(32),\n      "bundle.accumulator.aggregation_transcript_digest",',
+            '[9, Buffer.alloc(32), "bundle.accumulator.nullifier_digest", null]',
+            '[10, Buffer.alloc(32), "bundle.accumulator.output_commitment_digest", null]',
+            '[11, Buffer.alloc(32), "bundle.accumulator.fold_digest", null]',
+            '[12, Buffer.alloc(32), "bundle.accumulator.recursive_proof_chain_digest", null]',
+            '[13, Buffer.alloc(32), "bundle.accumulator.transition_profile_binding_digest", null]',
             '"bundle.accumulator.append_opening_preflight_digest"',
+            '      kagemushaFixedArrayPayload(0x0e, 31),\n      "bundle.accumulator.append_opening_preflight_digest",',
+            '      kagemushaFixedArrayPayload(0x0e, 33),\n      "bundle.accumulator.append_opening_preflight_digest",',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x0e, 32),\n      "bundle.accumulator.append_opening_preflight_digest",',
             '"bundle.accumulator.append_boundary_digest"',
+            '[16, Buffer.alloc(32), "bundle.accumulator.verifier_params_fingerprint", null]',
+            '      Buffer.alloc(32),\n      "bundle.accumulator.fixed_window_table_schedule_digest",',
+            '      Buffer.alloc(32),\n      "bundle.accumulator.fixed_window_shared_table_manifest_digest",',
+            '[19, Buffer.alloc(32), "bundle.accumulator.fixed_window_table_base_digest", null]',
+            '[20, Buffer.alloc(32), "bundle.accumulator.verifier_witness_batch_digest", null]',
+            '      kagemushaFixedArrayPayload(0x14, 31),\n      "bundle.accumulator.verifier_witness_batch_digest",',
+            '      kagemushaFixedArrayPayload(0x14, 33),\n      "bundle.accumulator.verifier_witness_batch_digest",',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x14, 32),\n      "bundle.accumulator.verifier_witness_batch_digest",',
             '[21, kagemushaU32Payload(3), "bundle.accumulator.verifier_opening_len", null]',
         ),
         "JavaScript recursive spend bundle accumulator field-length guard tests",
@@ -10167,15 +10191,31 @@ def check_javascript(texts, errors):
             "recursiveSpendLineageWitnessWithTrailingPreviousProofsField",
             "recursiveSpendLineageWitnessWithTrailingPreviousProofField",
             "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField",
+            "recursiveSpendLineageWitnessWithPreviousProofField",
+            "recursiveSpendLineageWitnessWithPreviousProofBoxBackend",
+            "recursiveSpendLineageWitnessWithEmptyPreviousProofBytes",
             "recursiveSpendLineageWitnessWithTrailingField(),",
             "recursiveSpendLineageWitnessWithTrailingPreviousProofsField(),",
             "recursiveSpendLineageWitnessWithTrailingPreviousProofField(),",
             "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),",
+            "recursiveSpendLineageWitnessWithPreviousProofField(1, Buffer.alloc(0))",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, Buffer.alloc(32))",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, Buffer.alloc(32, 0x44))",
+            'recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg")',
+            "recursiveSpendLineageWitnessWithEmptyPreviousProofBytes()",
             '"lineageWitness.previousRecursiveProofs"',
             '"lineageWitness.previousRecursiveProofs.verifierKeyId"',
+            '"lineageWitness.previousRecursiveProofs.proof_public_inputs"',
+            '"lineageWitness.previousRecursiveProofs.proof_public_inputs_hash"',
+            '"lineageWitness.previousRecursiveProofs.proof_backend"',
+            '"lineageWitness.previousRecursiveProofs.proof_bytes"',
             "/lineageWitness has trailing bytes/",
             "/lineageWitness\\.previousRecursiveProofs/",
             "/lineageWitness\\.previousRecursiveProofs\\.verifierKeyId/",
+            "/lineageWitness\\.previousRecursiveProofs\\.proof_public_inputs/",
+            "/lineageWitness\\.previousRecursiveProofs\\.proof_public_inputs_hash/",
+            "/lineageWitness\\.previousRecursiveProofs\\.proof_backend/",
+            "/lineageWitness\\.previousRecursiveProofs\\.proof_bytes/",
             'kagemushaRequestCodecError("archive", expectedField, expectedError)',
         ),
         "JavaScript recursive spend lineage-witness trailing-field guard tests",
@@ -10928,10 +10968,30 @@ def check_javascript(texts, errors):
             '[4, kagemushaFixedArrayPayload(0x03, 33), "finalRoot", null]',
             '[4, kagemushaCountPrefixedFixedArrayPayload(0x03, 32), "finalRoot", null]',
             '[7, Buffer.alloc(32), "bundle.accumulator.lineage_digest", null]',
+            '[7, kagemushaFixedArrayPayload(0x07, 31), "bundle.accumulator.lineage_digest", null]',
+            '[7, kagemushaFixedArrayPayload(0x07, 33), "bundle.accumulator.lineage_digest", null]',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x07, 32),\n      "bundle.accumulator.lineage_digest",',
             'Buffer.alloc(32, 0x7d)',
             '"bundle.accumulator.aggregation_transcript_digest"',
+            '      Buffer.alloc(32),\n      "bundle.accumulator.aggregation_transcript_digest",',
+            '[9, Buffer.alloc(32), "bundle.accumulator.nullifier_digest", null]',
+            '[10, Buffer.alloc(32), "bundle.accumulator.output_commitment_digest", null]',
+            '[11, Buffer.alloc(32), "bundle.accumulator.fold_digest", null]',
+            '[12, Buffer.alloc(32), "bundle.accumulator.recursive_proof_chain_digest", null]',
+            '[13, Buffer.alloc(32), "bundle.accumulator.transition_profile_binding_digest", null]',
             '"bundle.accumulator.append_opening_preflight_digest"',
+            '      kagemushaFixedArrayPayload(0x0e, 31),\n      "bundle.accumulator.append_opening_preflight_digest",',
+            '      kagemushaFixedArrayPayload(0x0e, 33),\n      "bundle.accumulator.append_opening_preflight_digest",',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x0e, 32),\n      "bundle.accumulator.append_opening_preflight_digest",',
             '"bundle.accumulator.append_boundary_digest"',
+            '[16, Buffer.alloc(32), "bundle.accumulator.verifier_params_fingerprint", null]',
+            '      Buffer.alloc(32),\n      "bundle.accumulator.fixed_window_table_schedule_digest",',
+            '      Buffer.alloc(32),\n      "bundle.accumulator.fixed_window_shared_table_manifest_digest",',
+            '[19, Buffer.alloc(32), "bundle.accumulator.fixed_window_table_base_digest", null]',
+            '[20, Buffer.alloc(32), "bundle.accumulator.verifier_witness_batch_digest", null]',
+            '      kagemushaFixedArrayPayload(0x14, 31),\n      "bundle.accumulator.verifier_witness_batch_digest",',
+            '      kagemushaFixedArrayPayload(0x14, 33),\n      "bundle.accumulator.verifier_witness_batch_digest",',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x14, 32),\n      "bundle.accumulator.verifier_witness_batch_digest",',
             '[21, kagemushaU32Payload(3), "bundle.accumulator.verifier_opening_len", null]',
             'kagemushaRequestCodecError("archive", expectedField, expectedMessage)',
         ),
@@ -10983,15 +11043,31 @@ def check_javascript(texts, errors):
             "recursiveSpendLineageWitnessWithTrailingPreviousProofsField",
             "recursiveSpendLineageWitnessWithTrailingPreviousProofField",
             "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField",
+            "recursiveSpendLineageWitnessWithPreviousProofField",
+            "recursiveSpendLineageWitnessWithPreviousProofBoxBackend",
+            "recursiveSpendLineageWitnessWithEmptyPreviousProofBytes",
             "recursiveSpendLineageWitnessWithTrailingField(),",
             "recursiveSpendLineageWitnessWithTrailingPreviousProofsField(),",
             "recursiveSpendLineageWitnessWithTrailingPreviousProofField(),",
             "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),",
+            "recursiveSpendLineageWitnessWithPreviousProofField(1, Buffer.alloc(0))",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, Buffer.alloc(32))",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, Buffer.alloc(32, 0x44))",
+            'recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg")',
+            "recursiveSpendLineageWitnessWithEmptyPreviousProofBytes()",
             '"lineageWitness.previousRecursiveProofs"',
             '"lineageWitness.previousRecursiveProofs.verifierKeyId"',
+            '"lineageWitness.previousRecursiveProofs.proof_public_inputs"',
+            '"lineageWitness.previousRecursiveProofs.proof_public_inputs_hash"',
+            '"lineageWitness.previousRecursiveProofs.proof_backend"',
+            '"lineageWitness.previousRecursiveProofs.proof_bytes"',
             "/lineageWitness has trailing bytes/",
             "/lineageWitness\\.previousRecursiveProofs/",
             "/lineageWitness\\.previousRecursiveProofs\\.verifierKeyId/",
+            "/lineageWitness\\.previousRecursiveProofs\\.proof_public_inputs/",
+            "/lineageWitness\\.previousRecursiveProofs\\.proof_public_inputs_hash/",
+            "/lineageWitness\\.previousRecursiveProofs\\.proof_backend/",
+            "/lineageWitness\\.previousRecursiveProofs\\.proof_bytes/",
             'kagemushaRequestCodecError("archive", expectedField, expectedError)',
         ),
         "JavaScript package dist recursive spend lineage-witness trailing-field coverage",
@@ -12614,7 +12690,7 @@ def check_python(texts, errors):
             "_kagemusha_require_recursive_spend_accumulator_roots(initial_root, final_root)",
             "def _kagemusha_require_recursive_spend_accumulator_roots(",
             "final_root == initial_root",
-            "_kagemusha_require_recursive_spend_accumulator_corridor(",
+            "cursor = _kagemusha_require_recursive_spend_accumulator_corridor(",
             "def _kagemusha_require_recursive_spend_accumulator_corridor(",
             "\"lineage_digest\"",
             "\"aggregation_transcript_digest\"",
@@ -12880,10 +12956,30 @@ def check_python(texts, errors):
             "_count_prefixed_fixed_array_payload(0x03, 32)",
             '(4, _fixed_array_payload(0x03, 33), r"bundle\\.accumulator\\.final_root")',
             '(7, bytes(32), r"bundle\\.accumulator\\.lineage_digest")',
+            '(7, _fixed_array_payload(0x07, 31), r"bundle\\.accumulator\\.lineage_digest")',
+            "_count_prefixed_fixed_array_payload(0x07, 32)",
+            '(7, _fixed_array_payload(0x07, 33), r"bundle\\.accumulator\\.lineage_digest")',
             'bytes([0x7D]) * 32',
             r"bundle\.accumulator\.aggregation_transcript_digest",
+            '(8, bytes(32), r"bundle\\.accumulator\\.aggregation_transcript_digest")',
+            '(9, bytes(32), r"bundle\\.accumulator\\.nullifier_digest")',
+            '(10, bytes(32), r"bundle\\.accumulator\\.output_commitment_digest")',
+            '(11, bytes(32), r"bundle\\.accumulator\\.fold_digest")',
+            '(12, bytes(32), r"bundle\\.accumulator\\.recursive_proof_chain_digest")',
+            '(13, bytes(32), r"bundle\\.accumulator\\.transition_profile_binding_digest")',
             r"bundle\.accumulator\.append_opening_preflight_digest",
+            "_fixed_array_payload(0x0E, 31)",
+            "_count_prefixed_fixed_array_payload(0x0E, 32)",
+            "_fixed_array_payload(0x0E, 33)",
             r"bundle\.accumulator\.append_boundary_digest",
+            '(16, bytes(32), r"bundle\\.accumulator\\.verifier_params_fingerprint")',
+            '(17, bytes(32), r"bundle\\.accumulator\\.fixed_window_table_schedule_digest")',
+            r"bundle\.accumulator\.fixed_window_shared_table_manifest_digest",
+            '(19, bytes(32), r"bundle\\.accumulator\\.fixed_window_table_base_digest")',
+            '(20, bytes(32), r"bundle\\.accumulator\\.verifier_witness_batch_digest")',
+            "_fixed_array_payload(0x14, 31)",
+            "_count_prefixed_fixed_array_payload(0x14, 32)",
+            "_fixed_array_payload(0x14, 33)",
             '(21, (3).to_bytes(4, "little"), r"bundle\\.accumulator\\.verifier_opening_len")',
         ),
         "Python recursive spend bundle accumulator field-length guard tests",
@@ -12957,13 +13053,24 @@ def check_python(texts, errors):
             "def _recursive_spend_lineage_witness_with_trailing_previous_proofs_field(",
             "def _recursive_spend_lineage_witness_with_trailing_previous_proof_field(",
             "def _recursive_spend_lineage_witness_with_trailing_previous_verifier_key_id_field(",
+            "def _recursive_spend_lineage_witness_with_previous_proof_field(",
+            "def _recursive_spend_lineage_witness_with_previous_proof_box_backend(",
+            "def _recursive_spend_lineage_witness_with_empty_previous_proof_bytes(",
             "malformed_lineage_witnesses = (",
             "_recursive_spend_lineage_witness_with_trailing_field(), r\"lineage_witness\"",
             "_recursive_spend_lineage_witness_with_trailing_previous_proofs_field(),",
             "_recursive_spend_lineage_witness_with_trailing_previous_proof_field(),",
             "_recursive_spend_lineage_witness_with_trailing_previous_verifier_key_id_field(),",
+            "_recursive_spend_lineage_witness_with_previous_proof_field(1, b\"\")",
+            "_recursive_spend_lineage_witness_with_previous_proof_field(2, bytes(32))",
+            "_recursive_spend_lineage_witness_with_previous_proof_box_backend(\"halo2/kzg\")",
+            "_recursive_spend_lineage_witness_with_empty_previous_proof_bytes()",
             r"lineage_witness\.previous_recursive_proofs",
             r"lineage_witness\.previous_recursive_proofs\.verifier_key_id",
+            r"lineage_witness\.previous_recursive_proofs\.proof_public_inputs",
+            r"lineage_witness\.previous_recursive_proofs\.proof_public_inputs_hash",
+            r"lineage_witness\.previous_recursive_proofs\.proof_backend",
+            r"lineage_witness\.previous_recursive_proofs\.proof_bytes",
         ),
         "Python recursive spend lineage-witness trailing-field guard tests",
         errors,
@@ -14068,9 +14175,29 @@ def check_swift(texts, errors):
             "(4, Self.countPrefixedFixedArrayPayload(0x03, count: 32), .invalidArchive(\"fixedArray\"))",
             "(4, Self.encodeFields(Array(repeating: Data([0x03]), count: 33), flags: NoritoHeader.compactLen), .invalidArchive(\"fixedArray\"))",
             '(7, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.lineage_digest"))',
+            '(7, Self.fixedArrayPayload(0x07, count: 31), .invalidArchive("fixedArray"))',
+            '(7, Self.countPrefixedFixedArrayPayload(0x07, count: 32), .invalidArchive("fixedArray"))',
+            '(7, Self.fixedArrayPayload(0x07, count: 33), .invalidArchive("fixedArray"))',
             '(8, Data(repeating: 0x7d, count: 32), .invalidArchive("bundle.accumulator.aggregation_transcript_digest"))',
+            '(8, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.aggregation_transcript_digest"))',
+            '(9, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.nullifier_digest"))',
+            '(10, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.output_commitment_digest"))',
+            '(11, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.fold_digest"))',
+            '(12, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.recursive_proof_chain_digest"))',
+            '(13, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.transition_profile_binding_digest"))',
             '(14, Data(repeating: 0x7e, count: 32), .invalidArchive("bundle.accumulator.append_opening_preflight_digest"))',
+            '(14, Self.fixedArrayPayload(0x0e, count: 31), .invalidArchive("fixedArray"))',
+            '(14, Self.countPrefixedFixedArrayPayload(0x0e, count: 32), .invalidArchive("fixedArray"))',
+            '(14, Self.fixedArrayPayload(0x0e, count: 33), .invalidArchive("fixedArray"))',
             '(15, Data(repeating: 0x7f, count: 32), .invalidArchive("bundle.accumulator.append_boundary_digest"))',
+            '(16, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.verifier_params_fingerprint"))',
+            '(17, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.fixed_window_table_schedule_digest"))',
+            '(18, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.fixed_window_shared_table_manifest_digest"))',
+            '(19, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.fixed_window_table_base_digest"))',
+            '(20, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.verifier_witness_batch_digest"))',
+            '(20, Self.fixedArrayPayload(0x14, count: 31), .invalidArchive("fixedArray"))',
+            '(20, Self.countPrefixedFixedArrayPayload(0x14, count: 32), .invalidArchive("fixedArray"))',
+            '(20, Self.fixedArrayPayload(0x14, count: 33), .invalidArchive("fixedArray"))',
             '(21, Data([3, 0, 0, 0]), .invalidArchive("bundle.accumulator.verifier_opening_len"))',
         ),
         "Swift recursive spend bundle accumulator field-length guard tests",
@@ -14134,11 +14261,18 @@ def check_swift(texts, errors):
             "recursiveSpendLineageWitnessWithTrailingPreviousProofsField",
             "recursiveSpendLineageWitnessWithTrailingPreviousProofField",
             "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField",
+            "recursiveSpendLineageWitnessWithPreviousProofField",
+            "recursiveSpendLineageWitnessWithPreviousProofBoxBackend",
+            "recursiveSpendLineageWitnessWithEmptyPreviousProofBytes",
             "try Self.recursiveSpendLineageWitnessWithTrailingField()",
             "try Self.recursiveSpendLineageWitnessWithTrailingPreviousProofsField()",
             "try Self.recursiveSpendLineageWitnessWithTrailingPreviousProofField()",
             "try Self.recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField()",
             '.invalidArchive("lineageWitness.previousRecursiveProofs.verifierKeyId")',
+            '.invalidArchive("lineageWitness.previousRecursiveProofs.proof_public_inputs")',
+            '.invalidArchive("lineageWitness.previousRecursiveProofs.proof_public_inputs_hash")',
+            '.invalidArchive("lineageWitness.previousRecursiveProofs.proof_backend")',
+            '.invalidArchive("lineageWitness.previousRecursiveProofs.proof_bytes")',
         ),
         "Swift recursive spend lineage-witness trailing-field guard tests",
         errors,
@@ -16393,13 +16527,41 @@ def check_java_kotlin(texts, errors):
             'Triple(4, ByteArray(32), "bundle.accumulator.final_root")',
             'Triple(4, init.initialRoot, "bundle.accumulator.final_root")',
             'Triple(3, fixedArrayPayload(0x02, 31), "initial_root must be exactly 32 bytes")',
+            'Triple(2, countPrefixedFixedArrayPayload(0x01, 16), "asset byte field length must be 1")',
+            'countPrefixedFixedArrayPayload(0x02, 32)',
+            '"initial_root byte field length must be 1"',
+            'Triple(4, countPrefixedFixedArrayPayload(0x03, 32), "final_root byte field length must be 1")',
             'Triple(3, fixedArrayPayload(0x02, 33), "initial_root must be exactly 32 bytes")',
             'Triple(4, fixedArrayPayload(0x03, 31), "final_root must be exactly 32 bytes")',
             'Triple(4, fixedArrayPayload(0x03, 33), "final_root must be exactly 32 bytes")',
             'Triple(7, ByteArray(32), "bundle.accumulator.lineage_digest")',
             'Triple(8, ByteArray(32) { 0x7d.toByte() }, "bundle.accumulator.aggregation_transcript_digest")',
+            'Triple(8, ByteArray(32), "bundle.accumulator.aggregation_transcript_digest")',
+            'Triple(7, fixedArrayPayload(0x07, 31), "lineage_digest must be exactly 32 bytes")',
+            'Triple(7, countPrefixedFixedArrayPayload(0x07, 32), "lineage_digest byte field length must be 1")',
+            'Triple(7, fixedArrayPayload(0x07, 33), "lineage_digest must be exactly 32 bytes")',
+            'Triple(9, ByteArray(32), "bundle.accumulator.nullifier_digest")',
+            'Triple(10, ByteArray(32), "bundle.accumulator.output_commitment_digest")',
+            'Triple(11, ByteArray(32), "bundle.accumulator.fold_digest")',
+            'Triple(12, ByteArray(32), "bundle.accumulator.recursive_proof_chain_digest")',
+            'Triple(13, ByteArray(32), "bundle.accumulator.transition_profile_binding_digest")',
             'Triple(14, ByteArray(32) { 0x7e.toByte() }, "bundle.accumulator.append_opening_preflight_digest")',
+            'fixedArrayPayload(0x0e, 31)',
+            '"append_opening_preflight_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload(0x0e, 32)',
+            '"append_opening_preflight_digest byte field length must be 1"',
+            'fixedArrayPayload(0x0e, 33)',
             'Triple(15, ByteArray(32) { 0x7f.toByte() }, "bundle.accumulator.append_boundary_digest")',
+            'Triple(16, ByteArray(32), "bundle.accumulator.verifier_params_fingerprint")',
+            'Triple(17, ByteArray(32), "bundle.accumulator.fixed_window_table_schedule_digest")',
+            'Triple(18, ByteArray(32), "bundle.accumulator.fixed_window_shared_table_manifest_digest")',
+            'Triple(19, ByteArray(32), "bundle.accumulator.fixed_window_table_base_digest")',
+            'Triple(20, ByteArray(32), "bundle.accumulator.verifier_witness_batch_digest")',
+            'fixedArrayPayload(0x14, 31)',
+            '"verifier_witness_batch_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload(0x14, 32)',
+            '"verifier_witness_batch_digest byte field length must be 1"',
+            'fixedArrayPayload(0x14, 33)',
             'Triple(21, byteArrayOf(3, 0, 0, 0), "bundle.accumulator.verifier_opening_len")',
             "assertEquals(expectedMessage, malformedField.message)",
         ),
@@ -16548,13 +16710,26 @@ def check_java_kotlin(texts, errors):
             "recursiveSpendLineageWitnessWithTrailingPreviousProofsField",
             "recursiveSpendLineageWitnessWithTrailingPreviousProofField",
             "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField",
+            "recursiveSpendLineageWitnessWithPreviousProofField",
+            "recursiveSpendLineageWitnessWithPreviousProofBoxBackend",
+            "recursiveSpendLineageWitnessWithEmptyPreviousProofBytes",
             "recursiveSpendLineageWitnessWithTrailingField() to",
             "recursiveSpendLineageWitnessWithTrailingPreviousProofsField() to",
             "recursiveSpendLineageWitnessWithTrailingPreviousProofField() to",
             "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField() to",
+            "recursiveSpendLineageWitnessWithPreviousProofField(1, ByteArray(0)) to",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, ByteArray(32)) to",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, ByteArray(32) { 0x44 }) to",
+            'recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg") to',
+            "recursiveSpendLineageWitnessWithEmptyPreviousProofBytes() to",
             '"Trailing bytes after lineageWitness"',
             '"Trailing bytes after lineageWitness.previousRecursiveProofs"',
-            '"Trailing bytes after verifier key id"',
+            '"Trailing bytes after lineageWitness.previousRecursiveProofs.verifierKeyId"',
+            '"lineageWitness.previousRecursiveProofs.proof_public_inputs empty recursive proof inputs"',
+            '"lineageWitness.previousRecursiveProofs.proof_public_inputs_hash must be non-zero"',
+            '"lineageWitness.previousRecursiveProofs.proof_public_inputs_hash mismatch"',
+            '"lineageWitness.previousRecursiveProofs.proof_backend unsupported recursive proof backend"',
+            '"lineageWitness.previousRecursiveProofs.proof_bytes empty recursive proof"',
             "assertEquals(expected, error.message)",
         ),
         "Kotlin recursive spend lineage-witness trailing-field guard tests",
@@ -16640,13 +16815,44 @@ def check_java_kotlin(texts, errors):
             '{4, new byte[32], "bundle.accumulator.final_root"}',
             '{4, init.initialRoot(), "bundle.accumulator.final_root"}',
             '{3, fixedArrayPayload((byte) 0x02, 31), "initial_root must be exactly 32 bytes"}',
+            'countPrefixedFixedArrayPayload((byte) 0x01, 16)',
+            '"asset byte field length must be 1"',
+            'countPrefixedFixedArrayPayload((byte) 0x02, 32)',
+            '"initial_root byte field length must be 1"',
+            'countPrefixedFixedArrayPayload((byte) 0x03, 32)',
+            '"final_root byte field length must be 1"',
             '{3, fixedArrayPayload((byte) 0x02, 33), "initial_root must be exactly 32 bytes"}',
             '{4, fixedArrayPayload((byte) 0x03, 31), "final_root must be exactly 32 bytes"}',
             '{4, fixedArrayPayload((byte) 0x03, 33), "final_root must be exactly 32 bytes"}',
             '{7, new byte[32], "bundle.accumulator.lineage_digest"}',
             '{8, repeat((byte) 0x7d, 32), "bundle.accumulator.aggregation_transcript_digest"}',
+            '{8, new byte[32], "bundle.accumulator.aggregation_transcript_digest"}',
+            '{7, fixedArrayPayload((byte) 0x07, 31), "lineage_digest must be exactly 32 bytes"}',
+            'countPrefixedFixedArrayPayload((byte) 0x07, 32)',
+            '"lineage_digest byte field length must be 1"',
+            '{7, fixedArrayPayload((byte) 0x07, 33), "lineage_digest must be exactly 32 bytes"}',
+            '{9, new byte[32], "bundle.accumulator.nullifier_digest"}',
+            '{10, new byte[32], "bundle.accumulator.output_commitment_digest"}',
+            '{11, new byte[32], "bundle.accumulator.fold_digest"}',
+            '{12, new byte[32], "bundle.accumulator.recursive_proof_chain_digest"}',
+            '{13, new byte[32], "bundle.accumulator.transition_profile_binding_digest"}',
             '{14, repeat((byte) 0x7e, 32), "bundle.accumulator.append_opening_preflight_digest"}',
+            'fixedArrayPayload((byte) 0x0e, 31)',
+            '"append_opening_preflight_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload((byte) 0x0e, 32)',
+            '"append_opening_preflight_digest byte field length must be 1"',
+            'fixedArrayPayload((byte) 0x0e, 33)',
             '{15, repeat((byte) 0x7f, 32), "bundle.accumulator.append_boundary_digest"}',
+            '{16, new byte[32], "bundle.accumulator.verifier_params_fingerprint"}',
+            '{17, new byte[32], "bundle.accumulator.fixed_window_table_schedule_digest"}',
+            '{18, new byte[32], "bundle.accumulator.fixed_window_shared_table_manifest_digest"}',
+            '{19, new byte[32], "bundle.accumulator.fixed_window_table_base_digest"}',
+            '{20, new byte[32], "bundle.accumulator.verifier_witness_batch_digest"}',
+            'fixedArrayPayload((byte) 0x14, 31)',
+            '"verifier_witness_batch_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload((byte) 0x14, 32)',
+            '"verifier_witness_batch_digest byte field length must be 1"',
+            'fixedArrayPayload((byte) 0x14, 33)',
             '{21, new byte[] {3, 0, 0, 0}, "bundle.accumulator.verifier_opening_len"}',
             "assert expectedField.equals(malformedField.getMessage());",
         ),
@@ -16800,14 +17006,24 @@ def check_java_kotlin(texts, errors):
             "recursiveSpendLineageWitnessWithTrailingPreviousProofsField()",
             "recursiveSpendLineageWitnessWithTrailingPreviousProofField()",
             "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField()",
+            "recursiveSpendLineageWitnessWithPreviousProofField(1, new byte[0])",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, new byte[32])",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, repeat((byte) 0x44, 32))",
+            'recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg")',
+            "recursiveSpendLineageWitnessWithEmptyPreviousProofBytes()",
             'recursiveSpendLineageWitnessWithTrailingField(), "Trailing bytes after lineageWitness"',
             'recursiveSpendLineageWitnessWithTrailingPreviousProofsField(),\n        "Trailing bytes after lineageWitness.previousRecursiveProofs"',
             'recursiveSpendLineageWitnessWithTrailingPreviousProofField(),\n        "Trailing bytes after lineageWitness.previousRecursiveProofs"',
-            'recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),\n        "Trailing bytes after verifier key id"',
+            'recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),\n        "Trailing bytes after lineageWitness.previousRecursiveProofs.verifierKeyId"',
             '"Trailing bytes after lineageWitness"',
             '"Trailing bytes after lineageWitness.previousRecursiveProofs"',
-            '"Trailing bytes after verifier key id"',
-            "assert expected.equals(error.getMessage());",
+            '"Trailing bytes after lineageWitness.previousRecursiveProofs.verifierKeyId"',
+            '"lineageWitness.previousRecursiveProofs.proof_public_inputs empty recursive proof inputs"',
+            '"lineageWitness.previousRecursiveProofs.proof_public_inputs_hash must be non-zero"',
+            '"lineageWitness.previousRecursiveProofs.proof_public_inputs_hash mismatch"',
+            '"lineageWitness.previousRecursiveProofs.proof_backend unsupported recursive proof backend"',
+            '"lineageWitness.previousRecursiveProofs.proof_bytes empty recursive proof"',
+            "assert expected.equals(error.getMessage()) : error.getMessage();",
         ),
         "Android Java recursive spend lineage-witness trailing-field guard tests",
         errors,
@@ -33086,9 +33302,21 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
             "Kotlin recursive spend bundle accumulator field-length guard tests",
         ),
         (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            'Triple(2, countPrefixedFixedArrayPayload(0x01, 16), "asset byte field length must be 1")',
+            'Triple(2, fixedArrayPayload(0x01, 16), "asset byte field length must be 1")',
+            "Kotlin recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
             '{3, new byte[32], "bundle.accumulator.initial_root"}',
             '{3, repeat((byte) 0x01, 32), "bundle.accumulator.initial_root"}',
+            "Android Java recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            'countPrefixedFixedArrayPayload((byte) 0x01, 16)',
+            'fixedArrayPayload((byte) 0x01, 16)',
             "Android Java recursive spend bundle accumulator field-length guard tests",
         ),
         (
@@ -33151,38 +33379,74 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
     corridor_value_replacements = (
         (
             "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
-            '(7, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.lineage_digest"))',
-            '(7, Data(repeating: 1, count: 32), .invalidArchive("bundle.accumulator.lineage_digest"))',
+            '(9, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.nullifier_digest"))',
+            '(9, Data(repeating: 1, count: 32), .invalidArchive("bundle.accumulator.nullifier_digest"))',
+            "Swift recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            '(7, Self.fixedArrayPayload(0x07, count: 31), .invalidArchive("fixedArray"))',
+            '(7, Self.fixedArrayPayload(0x07, count: 32), .invalidArchive("fixedArray"))',
             "Swift recursive spend bundle accumulator field-length guard tests",
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
-            'Triple(7, ByteArray(32), "bundle.accumulator.lineage_digest")',
-            'Triple(7, ByteArray(32) { 1.toByte() }, "bundle.accumulator.lineage_digest")',
+            'Triple(9, ByteArray(32), "bundle.accumulator.nullifier_digest")',
+            'Triple(9, ByteArray(32) { 1.toByte() }, "bundle.accumulator.nullifier_digest")',
+            "Kotlin recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            'Triple(7, fixedArrayPayload(0x07, 31), "lineage_digest must be exactly 32 bytes")',
+            'Triple(7, fixedArrayPayload(0x07, 32), "lineage_digest must be exactly 32 bytes")',
             "Kotlin recursive spend bundle accumulator field-length guard tests",
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
-            '{7, new byte[32], "bundle.accumulator.lineage_digest"}',
-            '{7, repeat((byte) 0x01, 32), "bundle.accumulator.lineage_digest"}',
+            '{9, new byte[32], "bundle.accumulator.nullifier_digest"}',
+            '{9, repeat((byte) 0x01, 32), "bundle.accumulator.nullifier_digest"}',
+            "Android Java recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            '{7, fixedArrayPayload((byte) 0x07, 31), "lineage_digest must be exactly 32 bytes"}',
+            '{7, fixedArrayPayload((byte) 0x07, 32), "lineage_digest must be exactly 32 bytes"}',
             "Android Java recursive spend bundle accumulator field-length guard tests",
         ),
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
-            '[7, Buffer.alloc(32), "bundle.accumulator.lineage_digest", null]',
-            '[7, Buffer.alloc(32, 1), "bundle.accumulator.lineage_digest", null]',
+            '[9, Buffer.alloc(32), "bundle.accumulator.nullifier_digest", null]',
+            '[9, Buffer.alloc(32, 1), "bundle.accumulator.nullifier_digest", null]',
+            "JavaScript recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            '[7, kagemushaFixedArrayPayload(0x07, 31), "bundle.accumulator.lineage_digest", null]',
+            '[7, kagemushaFixedArrayPayload(0x07, 32), "bundle.accumulator.lineage_digest", null]',
             "JavaScript recursive spend bundle accumulator field-length guard tests",
         ),
         (
             "python/iroha_python/tests/kagemusha_test.py",
-            '(7, bytes(32), r"bundle\\.accumulator\\.lineage_digest")',
-            '(7, bytes([1]) * 32, r"bundle\\.accumulator\\.lineage_digest")',
+            '(9, bytes(32), r"bundle\\.accumulator\\.nullifier_digest")',
+            '(9, bytes([1]) * 32, r"bundle\\.accumulator\\.nullifier_digest")',
+            "Python recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            '(7, _fixed_array_payload(0x07, 31), r"bundle\\.accumulator\\.lineage_digest")',
+            '(7, _fixed_array_payload(0x07, 32), r"bundle\\.accumulator\\.lineage_digest")',
             "Python recursive spend bundle accumulator field-length guard tests",
         ),
         (
             "javascript/iroha_js/test/package_dist.test.js",
-            '[7, Buffer.alloc(32), "bundle.accumulator.lineage_digest", null]',
-            '[7, Buffer.alloc(32, 1), "bundle.accumulator.lineage_digest", null]',
+            '[9, Buffer.alloc(32), "bundle.accumulator.nullifier_digest", null]',
+            '[9, Buffer.alloc(32, 1), "bundle.accumulator.nullifier_digest", null]',
+            "JavaScript package dist recursive spend bundle accumulator field-length coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            '[7, kagemushaFixedArrayPayload(0x07, 31), "bundle.accumulator.lineage_digest", null]',
+            '[7, kagemushaFixedArrayPayload(0x07, 32), "bundle.accumulator.lineage_digest", null]',
             "JavaScript package dist recursive spend bundle accumulator field-length coverage",
         ),
     )
@@ -33219,8 +33483,8 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
         ),
         (
             "python/iroha_python/src/iroha_python/kagemusha.py",
-            "_kagemusha_require_recursive_spend_accumulator_corridor(",
-            "_kagemusha_skip_recursive_spend_accumulator_corridor(",
+            "cursor = _kagemusha_require_recursive_spend_accumulator_corridor(",
+            "cursor = _kagemusha_skip_recursive_spend_accumulator_corridor(",
             "Python typed recursive spend request codecs",
         ),
     )
@@ -33259,10 +33523,33 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
             "finalRoot",
         ),
     }
-    expected_labels = []
-    def add_expected_label(label: str) -> None:
-        if label not in expected_labels:
-            expected_labels.append(label)
+    expected_diagnostics = []
+    def add_expected_diagnostic(label: str, marker: str) -> None:
+        expected_diagnostics.append((label, marker))
+
+    def reported_guard_marker(marker: str) -> str:
+        for prefix in ("try ", "offset = ", "cursor = "):
+            if marker.startswith(prefix):
+                return marker[len(prefix):]
+        return marker
+
+    def field_length_diagnostic_lines(message: str, diagnostics) -> tuple[list[str], list[str]]:
+        lines = message.splitlines()
+        detected = []
+        missing = []
+        seen = set()
+        for label, marker in diagnostics:
+            match = next(
+                (line for line in lines if label in line and marker in line),
+                None,
+            )
+            if match is None:
+                missing.append(f"{label} missing {marker}")
+                continue
+            if match not in seen:
+                detected.append(match)
+                seen.add(match)
+        return detected, missing
 
     for target, (old, new, label) in replacements.items():
         updated = mutated[target].replace(old, new, 1)
@@ -33271,7 +33558,7 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
                 f"negative control failed: unable to mutate accumulator field-length vector in {target}"
             )
         mutated[target] = updated
-        add_expected_label(label)
+        add_expected_diagnostic(label, old)
         missing_markers = [marker for marker in field_label_markers[target] if marker not in updated]
         if missing_markers:
             raise SystemExit(
@@ -33287,7 +33574,7 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
                 f"negative control failed: unable to mutate accumulator fixed-array decoder in {target}"
             )
         mutated[target] = updated
-        add_expected_label(label)
+        add_expected_diagnostic(label, "missing pattern")
     for target, old, new, label in root_value_replacements:
         updated = mutated[target].replace(old, new, 1)
         if updated == mutated[target]:
@@ -33295,7 +33582,7 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
                 f"negative control failed: unable to mutate accumulator root-value vector in {target}"
             )
         mutated[target] = updated
-        add_expected_label(label)
+        add_expected_diagnostic(label, old)
     for target, old, new, label in root_implementation_replacements:
         updated = mutated[target].replace(old, new, 1)
         if updated == mutated[target]:
@@ -33303,7 +33590,7 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
                 f"negative control failed: unable to mutate accumulator root guard in {target}"
             )
         mutated[target] = updated
-        add_expected_label(label)
+        add_expected_diagnostic(label, reported_guard_marker(old))
     for target, old, new, label in corridor_value_replacements:
         updated = mutated[target].replace(old, new, 1)
         if updated == mutated[target]:
@@ -33311,7 +33598,7 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
                 f"negative control failed: unable to mutate accumulator corridor vector in {target}"
             )
         mutated[target] = updated
-        add_expected_label(label)
+        add_expected_diagnostic(label, old)
     for target, old, new, label in corridor_implementation_replacements:
         updated = mutated[target].replace(old, new, 1)
         if updated == mutated[target]:
@@ -33319,19 +33606,22 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
                 f"negative control failed: unable to mutate accumulator corridor guard in {target}"
             )
         mutated[target] = updated
-        add_expected_label(label)
+        add_expected_diagnostic(label, reported_guard_marker(old))
     try:
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        missing = [label for label in expected_labels if label not in message]
+        detected_messages, missing = field_length_diagnostic_lines(
+            message,
+            expected_diagnostics,
+        )
         if missing:
             raise SystemExit(
                 "negative control failed: SDK accumulator field-length vector drift was not detected for "
                 + ", ".join(missing)
             )
         print("negative control rejected SDK accumulator field-length vector drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
+        for detected_message in detected_messages:
             print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
@@ -33859,6 +34149,12 @@ if mode == "--negative-control-sdk-verify-lineage-record-preflight":
                 ),
                 (
                     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+                    '"Trailing bytes after pallasOpenEnvelopes[0]"',
+                    '"Trailing bytes after optional pallasOpenEnvelopes[0]"',
+                    "Kotlin typed recursive spend Pallas archive malformed diagnostics",
+                ),
+                (
+                    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
                     "assertEquals(expectedMessage, archiveError.message)",
                     "assertTrue(archiveError.message.orEmpty().contains(expectedMessage))",
                     "Kotlin typed recursive spend Pallas archive malformed diagnostics",
@@ -33903,6 +34199,12 @@ if mode == "--negative-control-sdk-verify-lineage-record-preflight":
                     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
                     '"pallasOpenEnvelopes[0].domain_tag is required"',
                     '"pallasOpenEnvelopes[0].domain_tag is optional"',
+                    "Android Java typed recursive spend Pallas archive malformed diagnostics",
+                ),
+                (
+                    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+                    '"Trailing bytes after pallasOpenEnvelopes[0]"',
+                    '"Trailing bytes after optional pallasOpenEnvelopes[0]"',
                     "Android Java typed recursive spend Pallas archive malformed diagnostics",
                 ),
                 (
@@ -34184,6 +34486,27 @@ if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
             "Swift recursive spend lineage-witness trailing-field guard tests",
         ),
         (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "try Self.recursiveSpendLineageWitnessWithPreviousProofField(\n"
+            "                    fieldIndex: 1,\n"
+            "                    replacement: Data()\n"
+            "                )",
+            'try Self.sharedRecursiveSpendArchive(abi: .abi6, name: "lineage_witness_append_result")',
+            "Swift recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            'try Self.recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg")',
+            'try Self.sharedRecursiveSpendArchive(abi: .abi6, name: "lineage_witness_append_result")',
+            "Swift recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "try Self.recursiveSpendLineageWitnessWithEmptyPreviousProofBytes()",
+            'try Self.sharedRecursiveSpendArchive(abi: .abi6, name: "lineage_witness_append_result")',
+            "Swift recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
             "recursiveSpendLineageWitnessWithTrailingField() to",
             'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result") to',
@@ -34204,6 +34527,24 @@ if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
             "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField() to",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result") to',
+            "Kotlin recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "recursiveSpendLineageWitnessWithPreviousProofField(1, ByteArray(0)) to",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result") to',
+            "Kotlin recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            'recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg") to',
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result") to',
+            "Kotlin recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "recursiveSpendLineageWitnessWithEmptyPreviousProofBytes() to",
             'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result") to',
             "Kotlin recursive spend lineage-witness trailing-field guard tests",
         ),
@@ -34233,14 +34574,32 @@ if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
-            "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),\n        \"Trailing bytes after verifier key id\"",
-            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),\n        "Trailing bytes after verifier key id"',
+            "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),\n        \"Trailing bytes after lineageWitness.previousRecursiveProofs.verifierKeyId\"",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),\n        "Trailing bytes after lineageWitness.previousRecursiveProofs.verifierKeyId"',
             "Android Java recursive spend lineage-witness trailing-field guard tests",
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
-            "assert expected.equals(error.getMessage());",
-            "assert error.getMessage().contains(expected);",
+            "recursiveSpendLineageWitnessWithPreviousProofField(1, new byte[0]),\n        \"lineageWitness.previousRecursiveProofs.proof_public_inputs empty recursive proof inputs\"",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),\n        "lineageWitness.previousRecursiveProofs.proof_public_inputs empty recursive proof inputs"',
+            "Android Java recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            'recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg"),\n        "lineageWitness.previousRecursiveProofs.proof_backend unsupported recursive proof backend"',
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),\n        "lineageWitness.previousRecursiveProofs.proof_backend unsupported recursive proof backend"',
+            "Android Java recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "recursiveSpendLineageWitnessWithEmptyPreviousProofBytes(),\n        \"lineageWitness.previousRecursiveProofs.proof_bytes empty recursive proof\"",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),\n        "lineageWitness.previousRecursiveProofs.proof_bytes empty recursive proof"',
+            "Android Java recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "assert expected.equals(error.getMessage()) : error.getMessage();",
+            "assert error.getMessage().contains(expected) : error.getMessage();",
             "Android Java recursive spend lineage-witness trailing-field guard tests",
         ),
         (
@@ -34264,6 +34623,24 @@ if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
             "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),",
+            'sharedRecursiveSpendArchive("lineage_witness_append_result"),',
+            "JavaScript recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "recursiveSpendLineageWitnessWithPreviousProofField(1, Buffer.alloc(0)),",
+            'sharedRecursiveSpendArchive("lineage_witness_append_result"),',
+            "JavaScript recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            'recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg"),',
+            'sharedRecursiveSpendArchive("lineage_witness_append_result"),',
+            "JavaScript recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "recursiveSpendLineageWitnessWithEmptyPreviousProofBytes(),",
             'sharedRecursiveSpendArchive("lineage_witness_append_result"),',
             "JavaScript recursive spend lineage-witness trailing-field guard tests",
         ),
@@ -34292,6 +34669,24 @@ if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
             "Python recursive spend lineage-witness trailing-field guard tests",
         ),
         (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_lineage_witness_with_previous_proof_field(1, b\"\")",
+            '_shared_recursive_spend_archive("lineage_witness_append_result")',
+            "Python recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_lineage_witness_with_previous_proof_box_backend(\"halo2/kzg\")",
+            '_shared_recursive_spend_archive("lineage_witness_append_result")',
+            "Python recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_lineage_witness_with_empty_previous_proof_bytes()",
+            '_shared_recursive_spend_archive("lineage_witness_append_result")',
+            "Python recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
             "javascript/iroha_js/test/package_dist.test.js",
             "recursiveSpendLineageWitnessWithTrailingField(),",
             'sharedRecursiveSpendAbi6Archive("lineage_witness_append_result"),',
@@ -34312,6 +34707,24 @@ if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
         (
             "javascript/iroha_js/test/package_dist.test.js",
             "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),",
+            'sharedRecursiveSpendAbi6Archive("lineage_witness_append_result"),',
+            "JavaScript package dist recursive spend lineage-witness trailing-field coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "recursiveSpendLineageWitnessWithPreviousProofField(1, Buffer.alloc(0)),",
+            'sharedRecursiveSpendAbi6Archive("lineage_witness_append_result"),',
+            "JavaScript package dist recursive spend lineage-witness trailing-field coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            'recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg"),',
+            'sharedRecursiveSpendAbi6Archive("lineage_witness_append_result"),',
+            "JavaScript package dist recursive spend lineage-witness trailing-field coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "recursiveSpendLineageWitnessWithEmptyPreviousProofBytes(),",
             'sharedRecursiveSpendAbi6Archive("lineage_witness_append_result"),',
             "JavaScript package dist recursive spend lineage-witness trailing-field coverage",
         ),

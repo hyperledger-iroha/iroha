@@ -4684,6 +4684,9 @@ private func normalizeSccpSourceMaterial(
         guard bridgeNetworkId == ethMainnetNetworkId else {
             throw SccpSourceProofHashError.invalidSourceMaterial("sourceBridgeNetworkId")
         }
+        guard bridgeEmitterCodeHash != bridgeNetworkId else {
+            throw SccpSourceProofHashError.invalidSourceMaterial("sourceBridgeEmitterCodeHash")
+        }
         guard bridgeConfigHash == ethSourceBridgeConfigHash(
             sourceDomain: sourceDomain,
             bridgeAddress: bridgeEmitterAddress,

@@ -3371,17 +3371,20 @@ def _verify_xsd_summary_entries(
     pending_source_refs: list[str] = []
     pending_source_download_urls: list[str] = []
     pending_source_messages: list[str] = []
+    pending_source_message_names: list[str] = []
     pending_sources: list[dict[str, Any]] = []
     for offset, pending_raw in enumerate(pending_schema_sources):
         label = f"{path}.pending_schema_sources[{offset}]"
         pending = _verify_pending_schema_source_summary(pending_raw, label)
         pending_source_messages.append(pending["message_def_id"])
+        pending_source_message_names.append(pending["source"]["message_name"])
         pending_source_download_urls.append(pending["source"]["download_url"])
         pending_source_refs.append(
             f"{pending['source']['catalogue_url']}#"
             f"{pending['source']['download_url']}#"
             f"{pending['source']['download_type']}:"
-            f"{pending['source']['message_name']}"
+            f"{pending['source']['message_name']}:"
+            f"{pending['source']['submitting_organisation']}"
         )
         pending_sources.append(pending)
     for message_def_id in sorted(set(pending_source_messages) & checked_schema_ids):
@@ -3403,6 +3406,14 @@ def _verify_xsd_summary_entries(
         label=f"{path}.pending_schema_sources.message_def_id",
         code="xsd.pending_source_message_id_duplicate",
         message="XSD summary repeats a pending schema source message_def_id",
+        path=path,
+        blockers=blockers,
+    )
+    _block_duplicate_strings(
+        pending_source_message_names,
+        label=f"{path}.pending_schema_sources.source.message_name",
+        code="xsd.pending_source_message_name_duplicate",
+        message="XSD summary repeats a pending schema source message_name",
         path=path,
         blockers=blockers,
     )
@@ -3674,6 +3685,9 @@ def _verify_xsd_summary_entries(
     summary["_validated_blocked_schema_source_digests"] = blocked_source_digests
     summary["_validated_pending_schema_sources"] = pending_sources
     summary["_validated_pending_schema_source_message_ids"] = pending_source_messages
+    summary["_validated_pending_schema_source_message_names"] = (
+        pending_source_message_names
+    )
     summary["_validated_pending_schema_source_refs"] = pending_source_refs
     summary["_validated_pending_schema_source_download_urls"] = (
         pending_source_download_urls
@@ -4983,7 +4997,8 @@ def verify_xsd_summary(
                 "message": (
                     f"{len(unreviewed_missing_profile_message_ids)} unique profile "
                     "message definitions are not schema-backed and have no reviewed "
-                    "missing-schema, schema-only, or blocked-source evidence"
+                    "missing-schema, schema-only, blocked-source, or pending-source "
+                    "evidence"
                 ),
                 "path": str(path),
                 "entries": unreviewed_missing_profile_message_ids,
@@ -5064,6 +5079,9 @@ def verify_xsd_summary(
         ],
         "_validated_pending_schema_source_message_ids": summary[
             "_validated_pending_schema_source_message_ids"
+        ],
+        "_validated_pending_schema_source_message_names": summary[
+            "_validated_pending_schema_source_message_names"
         ],
         "_validated_pending_schema_source_refs": summary[
             "_validated_pending_schema_source_refs"
@@ -6366,6 +6384,11 @@ def _block_cross_xsd_summary_reuse(
             "_validated_pending_schema_source_message_ids",
             "pending_schema_sources.message_def_id",
             "xsd.pending_source_message_id_reused",
+        ),
+        (
+            "_validated_pending_schema_source_message_names",
+            "pending_schema_sources.source.message_name",
+            "xsd.pending_source_message_name_reused",
         ),
         (
             "_validated_pending_schema_source_refs",

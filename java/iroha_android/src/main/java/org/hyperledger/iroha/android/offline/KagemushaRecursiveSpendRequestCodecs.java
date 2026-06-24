@@ -2597,15 +2597,20 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   }
 
   private static VerifyingKeyIdParts readVerifyingKeyId(final byte[] payload, final int flags) {
+    return readVerifyingKeyId(payload, flags, RecursiveProofDecodeContext.BUNDLE);
+  }
+
+  private static VerifyingKeyIdParts readVerifyingKeyId(
+      final byte[] payload, final int flags, final RecursiveProofDecodeContext context) {
     final NoritoDecoder decoder = new NoritoDecoder(payload, flags);
     final String backend = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
     final String name = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
-    require(decoder.remaining() == 0, "Trailing bytes after verifier key id");
-    requirePortableId(backend, "verifierKeyId.backend");
+    require(decoder.remaining() == 0, "Trailing bytes after " + context.verifierTrailingField);
+    requirePortableId(backend, context.verifierBackendField);
     require(
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND.equals(backend),
-        "bundle.proof_backend unsupported recursive proof backend");
-    requirePortableId(name, "verifierKeyId");
+        context.proofBackendField + " unsupported recursive proof backend");
+    requirePortableId(name, context.verifierNameField);
     return new VerifyingKeyIdParts(backend, name);
   }
 
@@ -2614,15 +2619,20 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   }
 
   private static String readProofBoxBackend(final byte[] payload, final int flags) {
+    return readProofBoxBackend(payload, flags, RecursiveProofDecodeContext.BUNDLE);
+  }
+
+  private static String readProofBoxBackend(
+      final byte[] payload, final int flags, final RecursiveProofDecodeContext context) {
     final NoritoDecoder decoder = new NoritoDecoder(payload, flags);
     final String backend = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
     final byte[] proofBytes = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readBytesVec);
-    require(decoder.remaining() == 0, "Trailing bytes after proof");
+    require(decoder.remaining() == 0, "Trailing bytes after " + context.proofBoxTrailingField);
     requirePortableId(backend, "proof.backend");
     require(
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND.equals(backend),
-        "bundle.proof_backend unsupported recursive proof backend");
-    require(proofBytes.length > 0, "bundle.proof_bytes empty recursive proof");
+        context.proofBackendField + " unsupported recursive proof backend");
+    require(proofBytes.length > 0, context.proofBytesField + " empty recursive proof");
     return backend;
   }
 
@@ -2640,6 +2650,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     static final RecursiveProofDecodeContext BUNDLE =
         new RecursiveProofDecodeContext(
             "recursive proof",
+            "proof",
             "verifier key id",
             "verifierKeyId.backend",
             "verifierKeyId",
@@ -2651,6 +2662,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     static final RecursiveProofDecodeContext LINEAGE_PREVIOUS_PROOF =
         new RecursiveProofDecodeContext(
             "lineageWitness.previousRecursiveProofs",
+            "lineageWitness.previousRecursiveProofs.proof",
             "lineageWitness.previousRecursiveProofs.verifierKeyId",
             "lineageWitness.previousRecursiveProofs.verifierKeyId.backend",
             "lineageWitness.previousRecursiveProofs.verifierKeyId.name",
@@ -2660,6 +2672,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
             "lineageWitness.previousRecursiveProofs.proof_bytes");
 
     final String trailingField;
+    final String proofBoxTrailingField;
     final String verifierTrailingField;
     final String verifierBackendField;
     final String verifierNameField;
@@ -2670,6 +2683,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
 
     RecursiveProofDecodeContext(
         final String trailingField,
+        final String proofBoxTrailingField,
         final String verifierTrailingField,
         final String verifierBackendField,
         final String verifierNameField,
@@ -2678,6 +2692,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         final String proofBackendField,
         final String proofBytesField) {
       this.trailingField = trailingField;
+      this.proofBoxTrailingField = proofBoxTrailingField;
       this.verifierTrailingField = verifierTrailingField;
       this.verifierBackendField = verifierBackendField;
       this.verifierNameField = verifierNameField;

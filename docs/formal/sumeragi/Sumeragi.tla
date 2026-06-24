@@ -11396,6 +11396,30 @@ CommittedSpecStepKeepsProgressActionsQuiescent ==
 CommittedSpecStepPreservesBudgetedRbcEvidence ==
   [] [CommittedSpecStepPreservesBudgetedRbcEvidenceStep]_vars
 
+CommittedStateAlwaysMatchesTerminalEnvelope ==
+  /\ CommitNeverRevoked
+  /\ CommittedPhaseAlwaysMatchesFinality
+  /\ CommitCertificateAlwaysMatchesFinality
+  /\ LiveCommitGateAlwaysMatchesFinality
+  /\ LiveCommitGateRbcEvidenceAlwaysMatches
+  /\ CommittedPhaseNeverLeaves
+  /\ CommittedConsensusStateNeverChanges
+  /\ CommittedOnlyGstObservationCanChange
+  /\ CommittedPreGstOnlyGstElapsedCanMove
+  /\ CommittedPreGstNextOnlyGstElapsed
+  /\ CommittedPreGstSpecStepStuttersOrObservesGst
+  /\ CommittedGstStateNeverChanges
+  /\ CommittedGstNeverEnablesActions
+  /\ CommittedGstOnlyAllowsStuttering
+  /\ CommittedGstSpecStepOnlyStutters
+  /\ CommittedSpecNonStutteringOnlyObservesGst
+  /\ CommittedSpecStepStuttersOrObservesGst
+  /\ CommittedSpecStepPreservesFinalityStack
+  /\ CommittedSpecStepOnlyChangesGstFlag
+  /\ CommittedSpecStepNeverRunsProtocolActions
+  /\ CommittedSpecStepKeepsProgressActionsQuiescent
+  /\ CommittedSpecStepPreservesBudgetedRbcEvidence
+
 CommitArtifactsOnlyInstallAtFinality ==
   [] [CommitArtifactsInstallOnlyAtFinalityStep]_vars
 
@@ -11588,6 +11612,18 @@ CommitViewNeverRegresses ==
 CommitEvidenceNeverRegresses ==
   [] [CommitEvidenceMonotonicStep]_vars
 
+PostFinalityStateAlwaysMatchesStabilityEnvelope ==
+  /\ CommitViewNeverChanges
+  /\ CommittedViewWitnessAlwaysStaysAtCommittedView
+  /\ CommitViewNeverLeadsCurrentView
+  /\ GstElapsedGateNeverBypassesPreGst
+  /\ GstElapsedStepAlwaysOnlySetsGst
+  /\ GstOnlyChangesByElapsed
+  /\ GstNeverRegresses
+  /\ ViewNeverRegresses
+  /\ CommitViewNeverRegresses
+  /\ CommitEvidenceNeverRegresses
+
 TimeoutTickGateNeverBypassesStalledProgress ==
   [] TimeoutTickGateMatchesStalledProgress
 
@@ -11683,6 +11719,77 @@ CommittedPhaseEntryAlwaysDisablesProgressActions ==
 
 CommittedPhaseEntryAlwaysCompletesCommittedDeliveryFromExactSource ==
   [] [CommittedPhaseEntryCompletesCommittedDeliveryFromExactSourceStep]_vars
+
+FinalityInstallationAlwaysMatchesCertifiedCommitEnvelope ==
+  /\ CommitArtifactsOnlyInstallAtFinality
+  /\ CommitArtifactsOnlyChangeByFinalitySource
+  /\ CommitArtifactsChangeAlwaysMatchesCertifiedFinalityStack
+  /\ CommitArtifactsChangeAlwaysCompletesCommittedDeliveryFromExactSource
+  /\ CommitArtifactsChangeAlwaysCommitsCurrentView
+  /\ CommitArtifactsChangeNeverChangesGst
+  /\ CommitArtifactsChangeOnlyLeavesGstElapsedGate
+  /\ FinalityLatchOnlySetsCompleteStack
+  /\ FinalityLatchAndArtifactsAlwaysChangeTogether
+  /\ CommittedPhaseOnlyEntersWithCompleteStack
+  /\ CommittedPhaseEntryAlwaysMatchesFinalityLatch
+  /\ FinalityLatchChangeOnlyEntersCommittedPhase
+  /\ FinalityLatchChangeAlwaysMatchesLiveCommitGateCrossing
+  /\ CommitCertificateWitnessesAlwaysInstallWithFinalityLatch
+  /\ CommitCertificateWitnessComponentsAlwaysChangeTogether
+  /\ CommitCertificateWitnessChangeAlwaysMatchesCertifiedFinalityStack
+  /\ CommitCertificateWitnessChangeAlwaysInstallsCommitViewWitness
+  /\ CommitCertificateWitnessChangeAlwaysCompletesCommittedDeliveryFromExactSource
+  /\ CommitCertificateWitnessChangeNeverChangesGst
+  /\ CommitCertificateWitnessChangeOnlyLeavesGstElapsedGate
+  /\ CommitViewWitnessOnlyChangesOnNonzeroFinality
+  /\ CommitViewWitnessAlwaysInstallsWithFinalityLatch
+  /\ CommitViewWitnessChangeAlwaysMatchesCertifiedFinalityStack
+  /\ CommitViewWitnessChangeAlwaysInstallsCommitCertificateWitnesses
+  /\ CommitViewWitnessChangeAlwaysCompletesCommittedDeliveryFromExactSource
+  /\ CommitViewWitnessChangeNeverChangesGst
+  /\ CommitViewWitnessChangeOnlyLeavesGstElapsedGate
+  /\ FinalityLatchNeverCarriesNewViewHandoff
+  /\ FinalityLatchOnlyComesFromCommitOrDelivery
+  /\ FinalityLatchChangeNeverChangesGst
+  /\ FinalityLatchChangeOnlyLeavesGstElapsedGate
+  /\ FinalityLatchSourceEffectsAlwaysExact
+  /\ FinalityLatchSourceQuorumGatesAlwaysHold
+  /\ FinalitySourceActionAlwaysCompletesCommittedDeliveryFromExactSource
+  /\ FinalitySourceActionAlwaysMatchesCertifiedSourceStack
+  /\ FinalitySourceActionAlwaysMatchesFinalityLatchChange
+  /\ FinalitySourceActionAlwaysMatchesCommittedPhaseEntry
+  /\ FinalitySourceActionAlwaysInstallsFinalityCertificateStack
+  /\ FinalitySourceActionSourceAlwaysIsCommitOrDelivery
+  /\ FinalitySourceActionSourceEffectsAlwaysExact
+  /\ FinalitySourceActionQuorumGatesAlwaysHold
+  /\ FinalitySourceActionAlwaysMatchesCommitArtifactsChange
+  /\ FinalitySourceActionAlwaysMatchesLiveCommitGateCrossing
+  /\ FinalitySourceActionAlwaysDisablesProgressAfterCommittedDelivery
+  /\ FinalitySourceActionNeverChangesGst
+  /\ FinalitySourceActionOnlyLeavesGstElapsedGate
+  /\ FinalitySourceActionAlwaysInstallsCommitCertificateWitnesses
+  /\ FinalitySourceActionAlwaysMatchesCommitCertificateWitnessChange
+  /\ FinalitySourceActionAlwaysMatchesCommitViewWitnessChange
+  /\ FinalitySourceActionAlwaysInstallsCommitViewWitness
+  /\ FinalitySourceActionNeverCarriesNewViewHandoff
+  /\ FinalitySourceActionAlwaysCommitsCurrentView
+  /\ FinalityLatchChangeAlwaysMatchesCertifiedSourceStack
+  /\ FinalityLatchChangeAlwaysCompletesCommittedDeliveryFromExactSource
+  /\ CommittedPhaseEntryOnlyByFinalitySource
+  /\ CommittedPhaseEntryAlwaysMatchesCertifiedFinalityStack
+  /\ CommittedPhaseEntryAlwaysInstallsCommitCertificateWitnesses
+  /\ CommittedPhaseEntryAlwaysMatchesCommitCertificateWitnessChange
+  /\ CommittedPhaseEntryAlwaysMatchesCommitViewWitnessChange
+  /\ CommittedPhaseEntryAlwaysInstallsCommitViewWitness
+  /\ CommittedPhaseEntryAlwaysMatchesLiveCommitGateCrossing
+  /\ CommittedPhaseEntryAlwaysMatchesCommitArtifactsChange
+  /\ CommittedPhaseEntryAlwaysMatchesExactFinalitySourceEffects
+  /\ CommittedPhaseEntryNeverCarriesNewViewHandoff
+  /\ CommittedPhaseEntryAlwaysCommitsCurrentView
+  /\ CommittedPhaseEntryNeverChangesGst
+  /\ CommittedPhaseEntryOnlyLeavesGstElapsedGate
+  /\ CommittedPhaseEntryAlwaysDisablesProgressActions
+  /\ CommittedPhaseEntryAlwaysCompletesCommittedDeliveryFromExactSource
 
 ViewQuorumEvidenceNeverDiverges ==
   [] ViewEvidenceMatchesActiveView

@@ -17476,7 +17476,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkAccumulatorFieldLengthVectorBranch,
-    /corridor_implementation_replacements[\s\S]*?kagemushaRequireRecursiveSpendAccumulatorCorridor\([\s\S]*?try requireAccumulatorCorridor\(&reader, hopCount: hopCount\)[\s\S]*?requireAccumulatorCorridor\(decoder, hopCount\)[\s\S]*?_kagemusha_require_recursive_spend_accumulator_corridor\(/u,
+    /corridor_implementation_replacements[\s\S]*?offset = kagemushaRequireRecursiveSpendAccumulatorCorridor\([\s\S]*?try requireAccumulatorCorridor\(&reader, hopCount: hopCount\)[\s\S]*?requireAccumulatorCorridor\(decoder, hopCount\)[\s\S]*?cursor = _kagemusha_require_recursive_spend_accumulator_corridor\(/u,
     "SDK accumulator field-length vector negative control must mutate accumulator corridor guard calls across non-C# SDKs",
   );
   assertContainsAll(
@@ -17498,9 +17498,14 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       '(7, bytes(32), r"bundle\\\\.accumulator\\\\.lineage_digest")',
       'Triple(7, ByteArray(32), "bundle.accumulator.lineage_digest")',
       '{7, new byte[32], "bundle.accumulator.lineage_digest"}',
-      "kagemushaRequireRecursiveSpendAccumulatorCorridor(",
+      '[9, Buffer.alloc(32), "bundle.accumulator.nullifier_digest", null]',
+      '(9, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.nullifier_digest"))',
+      '(9, bytes(32), r"bundle\\\\.accumulator\\\\.nullifier_digest")',
+      'Triple(9, ByteArray(32), "bundle.accumulator.nullifier_digest")',
+      '{9, new byte[32], "bundle.accumulator.nullifier_digest"}',
+      "offset = kagemushaRequireRecursiveSpendAccumulatorCorridor(",
       "requireAccumulatorCorridor(decoder, hopCount)",
-      "_kagemusha_require_recursive_spend_accumulator_corridor(",
+      "cursor = _kagemusha_require_recursive_spend_accumulator_corridor(",
       '[2, kagemushaFixedArrayPayload(0x01, 15), "asset", null]',
       '[2, kagemushaCountPrefixedFixedArrayPayload(0x01, 16), "asset", null]',
       '(2, Self.countPrefixedFixedArrayPayload(0x01, count: 16), .invalidArchive(\\"fixedArray\\"))',
@@ -17528,18 +17533,23 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkAccumulatorFieldLengthVectorBranch,
-    /mutated\[target\]\s*=\s*updated[\s\S]*?(?:expected_labels\.append\(label\)|add_expected_label\(label\))[\s\S]*?run_checks\(mutated\)/u,
+    /expected_diagnostics\s*=\s*\[\][\s\S]*?def add_expected_diagnostic\(label: str, marker: str\)[\s\S]*?mutated\[target\]\s*=\s*updated[\s\S]*?add_expected_diagnostic\(label, old\)[\s\S]*?run_checks\(mutated\)/u,
     "SDK accumulator field-length vector negative control must validate the mutated text snapshot",
   );
   assert.match(
     sdkAccumulatorFieldLengthVectorBranch,
-    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK accumulator field-length vector drift was not detected for/u,
-    "SDK accumulator field-length vector negative control must require every SDK drift to be reported",
+    /def reported_guard_marker\(marker: str\)[\s\S]*?for prefix in \("try ", "offset = ", "cursor = "\):[\s\S]*?add_expected_diagnostic\(label, reported_guard_marker\(old\)\)/u,
+    "SDK accumulator field-length vector negative control must normalize reported implementation guard markers",
   );
   assert.match(
     sdkAccumulatorFieldLengthVectorBranch,
-    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
-    "SDK accumulator field-length vector negative control must print diagnostics for every mutated surface",
+    /detected_messages,\s*missing\s*=\s*field_length_diagnostic_lines\([\s\S]*?message,[\s\S]*?expected_diagnostics,[\s\S]*?\)[\s\S]*?SDK accumulator field-length vector drift was not detected for/u,
+    "SDK accumulator field-length vector negative control must require every mutated marker to be reported",
+  );
+  assert.match(
+    sdkAccumulatorFieldLengthVectorBranch,
+    /def field_length_diagnostic_lines\(message: str, diagnostics\)[\s\S]*?if label in line and marker in line[\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
+    "SDK accumulator field-length vector negative control must print diagnostics for every mutated marker",
   );
   assert.match(
     sdkAccumulatorFieldLengthVectorBranch,
@@ -17872,6 +17882,21 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkLineageWitnessTrailingFieldVectorBranch,
     /lineage-witness trailing-field[\s\S]*?recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField/u,
     "SDK lineage-witness trailing-field vector negative control must keep trailing-field labels visible",
+  );
+  assert.match(
+    sdkLineageWitnessTrailingFieldVectorBranch,
+    /javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendLineageWitnessWithPreviousProofField\(1, Buffer\.alloc\(0\)\)[\s\S]*?recursiveSpendLineageWitnessWithPreviousProofBoxBackend\("halo2\/kzg"\)[\s\S]*?recursiveSpendLineageWitnessWithEmptyPreviousProofBytes\(\)/u,
+    "SDK lineage-witness negative control must mutate JavaScript semantic previous-proof vectors",
+  );
+  assert.match(
+    sdkLineageWitnessTrailingFieldVectorBranch,
+    /python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_recursive_spend_lineage_witness_with_previous_proof_field[\s\S]*?_recursive_spend_lineage_witness_with_previous_proof_box_backend[\s\S]*?_recursive_spend_lineage_witness_with_empty_previous_proof_bytes/u,
+    "SDK lineage-witness negative control must mutate Python semantic previous-proof vectors",
+  );
+  assert.match(
+    sdkLineageWitnessTrailingFieldVectorBranch,
+    /javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendLineageWitnessWithPreviousProofField\(1, Buffer\.alloc\(0\)\)[\s\S]*?recursiveSpendLineageWitnessWithPreviousProofBoxBackend\("halo2\/kzg"\)[\s\S]*?recursiveSpendLineageWitnessWithEmptyPreviousProofBytes\(\)/u,
+    "SDK lineage-witness negative control must mutate package-dist semantic previous-proof vectors",
   );
   assert.match(
     sdkLineageWitnessTrailingFieldVectorBranch,

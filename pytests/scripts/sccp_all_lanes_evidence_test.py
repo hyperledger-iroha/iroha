@@ -7379,12 +7379,24 @@ def test_all_lanes_release_checklist_rejects_malformed_lane_containers():
         in items["all_required_lane_records"]["blockers"]
     )
     assert (
+        "domain 2 (bsc): lane record summary is malformed"
+        in items["no_unresolved_blockers"]["blockers"]
+    )
+    assert (
         "domain 2 (bsc): destination binding summary is malformed"
         in items["governed_deployment_evidence"]["blockers"]
     )
     assert (
+        "domain 2 (bsc): destination binding summary is malformed"
+        in items["no_unresolved_blockers"]["blockers"]
+    )
+    assert (
         "domain 2 (bsc): route allowlist summary is malformed"
         in items["route_allowlist_binding"]["blockers"]
+    )
+    assert (
+        "domain 2 (bsc): route allowlist summary is malformed"
+        in items["no_unresolved_blockers"]["blockers"]
     )
     assert (
         "domain 2 (bsc): lane blockers must be a list of "
@@ -7500,10 +7512,17 @@ def test_all_lanes_release_checklist_rejects_malformed_lane_metadata():
 
         assert checklist["ready"] is False, case_id
         assert items["all_required_lane_records"]["ready"] is False, case_id
+        assert items["no_unresolved_blockers"]["ready"] is False, case_id
         assert expected_record_blocker in record_blockers, case_id
+        assert (
+            expected_record_blocker in items["no_unresolved_blockers"]["blockers"]
+        ), case_id
         if expected_canary_blocker is not None:
             assert items["live_route_canary_evidence"]["ready"] is False, case_id
             assert expected_canary_blocker in canary_blockers, case_id
+            assert (
+                expected_canary_blocker in items["no_unresolved_blockers"]["blockers"]
+            ), case_id
         assert "None" not in record_blockers
         assert "Traceback" not in canary_blockers
 
@@ -7748,6 +7767,348 @@ def test_all_lanes_cli_rejects_malformed_allowed_summary_roots_without_leaking(
         ],
     }
     assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_drifted_domain_lists(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    summary["required_domains"] = [1, 1, 3, 4, 5]
+    summary["supported_launch_domains"] = [1, 2, 3, 4, 5, 6]
+    summary["unsupported_launch_domains"] = [1, 6]
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "required_domains" not in payload
+    assert "supported_launch_domains" not in payload
+    assert "unsupported_launch_domains" not in payload
+    assert (
+        "all-lanes summary required_domains must not contain duplicate integers"
+        in blockers
+    )
+    assert (
+        "all-lanes summary required_domains must be the production remote domains"
+        in blockers
+    )
+    assert (
+        "all-lanes summary supported_launch_domains must be the supported launch "
+        "remote domains"
+    ) in blockers
+    assert (
+        "all-lanes summary unsupported_launch_domains must be the diagnostic "
+        "unsupported remote domains"
+    ) in blockers
+    assert (
+        "all-lanes summary supported_launch_domains and "
+        "unsupported_launch_domains must be disjoint"
+    ) in blockers
+    assert (
+        "all-lanes summary supported_launch_domains plus "
+        "unsupported_launch_domains must match required_domains"
+    ) in blockers
+    assert "all-lanes summary required_domains is invalid" in blockers
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_nested_lane_field_drift_without_leaking(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    lane = summary["lanes"][0]
+    lane[7] = "safe lane int-key note"
+    lane["source_record_hashes"]["operator_note"] = "safe source note"
+    lane["source_record_hashes"][7] = "safe source int-key note"
+    lane["source_adapter_gate"]["operator_note"] = "safe gate note"
+    lane["source_adapter_gate"][7] = "safe gate int-key note"
+    lane["source_adapter_gate"]["audit_hashes"]["operator_override"] = hex32(0x73)
+    lane["source_adapter_gate"]["audit_hashes"][7] = hex32(0x74)
+    lane["evm_live_metadata"]["operator_note"] = "safe evm note"
+    lane["evm_live_metadata"][7] = "safe evm int-key note"
+    lane["destination_binding"]["operator_note"] = "safe destination note"
+    lane["destination_binding"][7] = "safe destination int-key note"
+    lane["route_allowlist"]["operator_note"] = "safe route note"
+    lane["route_allowlist"][7] = "safe route int-key note"
+    lane["route_allowlist"]["route_canary"]["operator_note"] = "safe canary note"
+    lane["route_allowlist"]["route_canary"][7] = "safe canary int-key note"
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "all-lanes summary lanes[0] unexpected non-string field name" in blockers
+    assert (
+        "all-lanes summary lanes[0].source_record_hashes unexpected field "
+        "operator_note"
+    ) in blockers
+    assert (
+        "all-lanes summary lanes[0].source_record_hashes unexpected non-string "
+        "field name"
+    ) in blockers
+    assert (
+        "all-lanes summary lanes[0].source_adapter_gate unexpected field "
+        "operator_note"
+    ) in blockers
+    assert (
+        "all-lanes summary lanes[0].source_adapter_gate unexpected non-string "
+        "field name"
+    ) in blockers
+    assert (
+        "all-lanes summary lanes[0].source_adapter_gate.audit_hashes unexpected "
+        "field operator_override"
+    ) in blockers
+    assert (
+        "all-lanes summary lanes[0].source_adapter_gate.audit_hashes unexpected "
+        "non-string field name"
+    ) in blockers
+    assert (
+        "all-lanes summary lanes[0].evm_live_metadata unexpected field operator_note"
+        in blockers
+    )
+    assert (
+        "all-lanes summary lanes[0].evm_live_metadata unexpected non-string field "
+        "name"
+    ) in blockers
+    assert (
+        "all-lanes summary lanes[0].destination_binding unexpected field "
+        "operator_note"
+    ) in blockers
+    assert (
+        "all-lanes summary lanes[0].destination_binding unexpected non-string "
+        "field name"
+    ) in blockers
+    assert (
+        "all-lanes summary lanes[0].route_allowlist unexpected field operator_note"
+        in blockers
+    )
+    assert (
+        "all-lanes summary lanes[0].route_allowlist unexpected non-string field "
+        "name"
+    ) in blockers
+    assert (
+        "all-lanes summary lanes[0].route_allowlist.route_canary unexpected field "
+        "operator_note"
+    ) in blockers
+    assert (
+        "all-lanes summary lanes[0].route_allowlist.route_canary unexpected "
+        "non-string field name"
+    ) in blockers
+    assert "all-lanes summary lanes[0] contains non-string field name" in blockers
+    assert "all-lanes summary lanes are invalid" in blockers
+    assert "safe lane int-key note" not in captured.out
+    assert "safe source note" not in captured.out
+    assert "safe source int-key note" not in captured.out
+    assert "safe gate note" not in captured.out
+    assert "safe gate int-key note" not in captured.out
+    assert "safe evm note" not in captured.out
+    assert "safe evm int-key note" not in captured.out
+    assert "safe destination note" not in captured.out
+    assert "safe destination int-key note" not in captured.out
+    assert "safe route note" not in captured.out
+    assert "safe route int-key note" not in captured.out
+    assert "safe canary note" not in captured.out
+    assert "safe canary int-key note" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_malformed_lanes_without_leaking(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    checklist_items = [
+        {
+            "id": item_id,
+            "title": title,
+            "ready": True,
+            "blockers": [],
+        }
+        for item_id, title in module.RELEASE_CHECKLIST_TITLES.items()
+    ]
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: {
+        "production_ready": True,
+        "blockers": [],
+        "required_domains": [1, 2, 3, 4, 5],
+        "supported_launch_domains": [1, 2, 3, 4, 5],
+        "unsupported_launch_domains": [],
+        "release_checklist": {"ready": True, "items": checklist_items},
+        "lanes": [
+            {
+                "domain": module.SCCP_DOMAIN_ETH,
+                "chain": "bsc",
+                "production_ready": "true",
+                "records": {
+                    "source_verifier_material": True,
+                    "source_adapter_deployment": True,
+                    "destination_rollout": True,
+                    "route_allowlist": True,
+                    "secret-token-record": True,
+                },
+                "source_record_hashes": {
+                    "source_verifier_material_hash": "secret-token-hash",
+                },
+                "source_adapter_gate": {
+                    "required": True,
+                    "ready": True,
+                    "gate_hash": "0x" + "11" * 32,
+                    "audit_hashes": {},
+                    "blockers": [],
+                },
+                "destination_binding": {},
+                "route_allowlist": {},
+                "blockers": ["secret-token-lane-blocker"],
+                "secret-token-lane": "secret-token-value",
+            },
+        ],
+    }
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "all-lanes summary lanes[0] unexpected field with sensitive name" in blockers
+    assert "all-lanes summary lanes[0] chain must match the lane domain" in blockers
+    assert "all-lanes summary lanes[0] production_ready must be a boolean" in blockers
+    assert (
+        "all-lanes summary lanes[0] records unexpected field with sensitive name"
+        in blockers
+    )
+    assert (
+        "all-lanes summary lanes[0] blockers[0] contains sensitive name"
+        in blockers
+    )
+    assert (
+        "all-lanes summary lanes[0].source_record_hashes."
+        "source_verifier_material_hash contains sensitive value"
+    ) in blockers
+    assert "all-lanes summary lanes missing domain 2" in blockers
+    assert "all-lanes summary lanes are invalid" in blockers
+    assert "secret-token" not in captured.out
+    assert "secret-token" not in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_malformed_release_checklist_without_leaking(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    canonical_titles = module.RELEASE_CHECKLIST_TITLES
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: {
+        "production_ready": True,
+        "blockers": [],
+        "required_domains": [1, 2, 3, 4, 5],
+        "supported_launch_domains": [1, 2, 3, 4, 5],
+        "unsupported_launch_domains": [],
+        "lanes": [],
+        "release_checklist": {
+            "ready": "true",
+            "secret-token-checklist": "secret-token-value",
+            7: "safe checklist int-key note",
+            "items": [
+                {
+                    "id": "all_required_lane_records",
+                    "title": "secret-token-title",
+                    "ready": True,
+                    "blockers": [],
+                    7: "safe checklist item int-key note",
+                },
+                {
+                    "id": "all_required_lane_records",
+                    "title": canonical_titles["all_required_lane_records"],
+                    "ready": True,
+                    "blockers": [],
+                },
+                {
+                    "id": "live_route_canary_evidence",
+                    "title": canonical_titles["live_route_canary_evidence"],
+                    "ready": False,
+                    "blockers": ["operator hold"],
+                },
+                "secret-token-item",
+            ],
+        },
+    }
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "release_checklist" not in payload
+    assert "all-lanes summary release_checklist ready must be a boolean" in blockers
+    assert (
+        "all-lanes summary release_checklist unexpected field with sensitive name"
+        in blockers
+    )
+    assert (
+        "all-lanes summary release_checklist unexpected non-string field name"
+        in blockers
+    )
+    assert (
+        "all-lanes summary release_checklist items[0] unexpected non-string "
+        "field name"
+    ) in blockers
+    assert (
+        "all-lanes summary release_checklist items[0] title must match the "
+        "canonical checklist title"
+    ) in blockers
+    assert (
+        "all-lanes summary release_checklist item all_required_lane_records "
+        "is duplicated"
+    ) in blockers
+    assert "all-lanes summary release_checklist items[2] ready must be true" in blockers
+    assert (
+        "all-lanes summary release_checklist items[2] blockers must be empty"
+        in blockers
+    )
+    assert "all-lanes summary release_checklist items[3] must be an object" in blockers
+    assert (
+        "all-lanes summary release_checklist missing item no_unresolved_blockers"
+        in blockers
+    )
+    assert "all-lanes summary release_checklist is invalid" in blockers
+    assert "secret-token" not in captured.out
+    assert "safe checklist int-key note" not in captured.out
+    assert "safe checklist item int-key note" not in captured.out
+    assert "operator hold" not in captured.out
     assert "Traceback" not in captured.err
 
 
@@ -8313,7 +8674,40 @@ def test_all_lanes_release_checklist_rejects_malformed_source_gate_blockers():
 
         assert checklist["ready"] is False, case_id
         assert items["governed_deployment_evidence"]["ready"] is False, case_id
+        assert items["no_unresolved_blockers"]["ready"] is False, case_id
         assert expected in items["governed_deployment_evidence"]["blockers"], case_id
+        assert expected in items["no_unresolved_blockers"]["blockers"], case_id
+
+    ready_cases = (
+        (
+            "source_gate.ready_scalar",
+            "operator hold",
+            "domain 3 (sol): source adapter gate blockers must be a list of "
+            "non-empty canonical strings",
+        ),
+        (
+            "source_gate.ready_valid",
+            ["operator hold"],
+            "domain 3 (sol): operator hold",
+        ),
+    )
+    for case_id, blockers, expected in ready_cases:
+        lane = copy.deepcopy(base_lane)
+        lane["source_adapter_gate"]["ready"] = True
+        lane["source_adapter_gate"]["blockers"] = blockers
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+
+        assert checklist["ready"] is False, case_id
+        assert items["governed_deployment_evidence"]["ready"] is False, case_id
+        assert items["no_unresolved_blockers"]["ready"] is False, case_id
+        assert expected in items["governed_deployment_evidence"]["blockers"], case_id
+        assert expected in items["no_unresolved_blockers"]["blockers"], case_id
+        assert (
+            "domain 3 (sol): source adapter gate is not ready"
+            not in items["governed_deployment_evidence"]["blockers"]
+        ), case_id
 
 
 def test_all_lanes_summary_rejects_malformed_source_gate_blockers():
@@ -8371,6 +8765,26 @@ def test_all_lanes_summary_rejects_malformed_source_gate_blockers():
 
         assert summary["production_ready"] is False, case_id
         assert expected in summary["blockers"], case_id
+
+    def patched_ready_gate_summary(profile, *args):
+        summary = original_gate_summary(profile, *args)
+        if profile.domain == module.SCCP_DOMAIN_SOL:
+            return {
+                **summary,
+                "required": True,
+                "ready": True,
+                "blockers": ["operator hold"],
+            }
+        return summary
+
+    module._source_adapter_gate_summary = patched_ready_gate_summary
+    try:
+        summary = module.validate_evidence_bundle(complete_bundle(module))
+    finally:
+        module._source_adapter_gate_summary = original_gate_summary
+
+    assert summary["production_ready"] is False
+    assert "domain 3 (sol): operator hold" in summary["blockers"]
 
 
 def test_all_lanes_release_checklist_rejects_malformed_route_canary_summary():
@@ -8537,6 +8951,18 @@ def test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars():
         assert checklist["ready"] is False, repr((field, value))
         assert items["live_route_canary_evidence"]["ready"] is False
         assert expected in blockers
+
+
+def test_all_lanes_route_canary_evidence_sources_cover_launch_lanes():
+    module = load_evidence_module()
+
+    assert module.ROUTE_CANARY_EVIDENCE_SOURCE_BY_DOMAIN == {
+        module.SCCP_DOMAIN_ETH: "evm_message_proof_accepted_transaction",
+        module.SCCP_DOMAIN_BSC: "evm_message_proof_accepted_transaction",
+        module.SCCP_DOMAIN_SOL: "solana_live_programdata_snapshot",
+        module.SCCP_DOMAIN_TON: "ton_live_account_snapshot",
+        module.SCCP_DOMAIN_TRON: "tron_message_proof_accepted_transaction",
+    }
 
 
 def test_all_lanes_release_checklist_rejects_malformed_tron_route_canary_boolean_scalars():
