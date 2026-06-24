@@ -732,6 +732,7 @@ function usage() {
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material verify-handoff --handoff <handoff.json> [--trusted-attestation-signer <0x...>]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material sign-attestation --request <attestation-request.json> --role semanticSccpCircuit|circuitSecurity|trustedSetup|reproducibleBuild --private-key-pem <ed25519-private-key.pem> [--out <signed-role-attestation.json>]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-status --request <attestation-request.json> --semantic-attestation <json> --circuit-security-attestation <json> --trusted-setup-attestation <json> --reproducible-build-attestation <json> --trusted-attestation-signer <0x...>
+	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-inventory --request <attestation-request.json> --scan-dir <dir> --trusted-attestation-signer <0x...>
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material finalize-attestations --request <attestation-request.json> --semantic-attestation <json> --circuit-security-attestation <json> --trusted-setup-attestation <json> --reproducible-build-attestation <json> --trusted-attestation-signer <0x...> [--out-dir ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT}/testnet]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs native-prover-bundle --route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT} --artifact-root ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT} --proof-artifact <relative-file> --proving-key <relative-file> --verifier-key <relative-file> --groth16-material-manifest <relative-json> --groth16-proof-self-test <relative-json> --snarkjs-bin <snarkjs> --trusted-attestation-signer <0x...> --cross-sdk-parity <relative-json> --native-prover-self-test <relative-json> --javascript-implementation <relative-file> --swift-implementation <relative-file> --kotlin-implementation <relative-file> --java-android-implementation <relative-file> --dotnet-implementation <relative-file> --audit-circuit-security <hex-or-relative-file> --audit-native-implementation <hex-or-relative-file> --audit-reproducible-build <hex-or-relative-file> --audit-no-wasm-no-remote-scan <hex-or-relative-file> [--audit-cross-sdk-parity <matching-hex-or-relative-file>] [--audit-native-prover-self-test <matching-hex-or-relative-file>] [--out ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--attach-route-manifest-out ${DEFAULT_ROUTE_MANIFEST_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--allow-unready true|false] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}] [--write-offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}]
@@ -807,6 +808,7 @@ marker evidence.`,
   node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material verify-handoff --handoff <handoff.json> [--trusted-attestation-signer <0x...>]
   node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material sign-attestation --request <attestation-request.json> --role semanticSccpCircuit|circuitSecurity|trustedSetup|reproducibleBuild --private-key-pem <ed25519-private-key.pem> [--out <signed-role-attestation.json>]
   node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-status --request <attestation-request.json> --semantic-attestation <json> --circuit-security-attestation <json> --trusted-setup-attestation <json> --reproducible-build-attestation <json> --trusted-attestation-signer <0x...>
+  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-inventory --request <attestation-request.json> --scan-dir <dir> --trusted-attestation-signer <0x...>
   node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material finalize-attestations --request <attestation-request.json> --semantic-attestation <json> --circuit-security-attestation <json> --trusted-setup-attestation <json> --reproducible-build-attestation <json> --trusted-attestation-signer <0x...> [--out-dir ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT}/testnet]
 
 Generates real Circom/SnarkJS Groth16 candidate material or materializes
@@ -1047,6 +1049,11 @@ export function bscProductionRequirements(options = {}) {
         "--circuit-security-attestation <circuit-security-audit.json> " +
         "--trusted-setup-attestation <trusted-setup-ceremony.json> " +
         "--reproducible-build-attestation <reproducible-build-attestation.json> " +
+        "--trusted-attestation-signer <0x...>",
+      groth16AttestationInventory:
+        "node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-inventory " +
+        "--request <attestation-request.json> " +
+        "--scan-dir <native-prover-artifact-root> " +
         "--trusted-attestation-signer <0x...>",
       groth16ProofSelfTest:
         "node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material proof-self-test " +
@@ -2022,11 +2029,12 @@ function bscGroth16SelfTestWord(profile, signalName) {
 }
 
 function bscGroth16PublicSignal(labelHash, valueBytes) {
+  const input = Buffer.concat([
+    Buffer.from(hex32Bytes(labelHash, "BSC Groth16 signal label")),
+    Buffer.from(valueBytes),
+  ]);
   const digest = keccak_256(
-    Buffer.concat([
-      Buffer.from(hex32Bytes(labelHash, "BSC Groth16 signal label")),
-      Buffer.from(valueBytes),
-    ]),
+    new Uint8Array(input.buffer, input.byteOffset, input.byteLength),
   );
   return (bigintFromBytes(digest) % BN254_SCALAR_FIELD_MODULUS).toString(10);
 }
@@ -3489,16 +3497,179 @@ function normalizeBscCompiledContractCodeHashes(input, required = false) {
   );
 }
 
-function compiledContractCodeHashesFromArtifacts(artifacts) {
+function hasImmutableReferences(artifact) {
+  return (
+    isRecord(artifact?.immutableReferences) &&
+    Object.keys(artifact.immutableReferences).length > 0
+  );
+}
+
+function uint256WordHex(value, label) {
+  const bigint = typeof value === "bigint" ? value : BigInt(value);
+  if (bigint < 0n || bigint >= 2n ** 256n) {
+    throw new Error(`${label} must fit into a uint256 word.`);
+  }
+  return `0x${bigint.toString(16).padStart(64, "0")}`;
+}
+
+function sourceBridgeImmutableValues(profile) {
+  return {
+    networkId: profile.networkIdHex,
+    sourceDomain: uint256WordHex(SCCP_DOMAIN_BSC, "sourceBridge.sourceDomain"),
+    targetDomain: uint256WordHex(SCCP_DOMAIN_SORA, "sourceBridge.targetDomain"),
+  };
+}
+
+function deployedBytecodeWithNamedImmutables(artifact, valuesByName, label) {
+  if (!hasImmutableReferences(artifact)) {
+    return artifact.deployedBytecode;
+  }
+  if (!isRecord(artifact.immutableReferenceNames)) {
+    throw new Error(`${label} immutable reference names are missing.`);
+  }
+  const bytes = hexToBytes(artifact.deployedBytecode, `${label} bytecode`, null, {
+    allowZero: false,
+  });
+  for (const [id, locations] of ownRecordEntries(artifact.immutableReferences)) {
+    if (!Array.isArray(locations) || locations.length === 0) {
+      throw new Error(`${label} immutable reference ${id} has no locations.`);
+    }
+    const metadata = ownValue(artifact.immutableReferenceNames, id);
+    const name = isRecord(metadata) ? ownValue(metadata, "name") : undefined;
+    if (typeof name !== "string" || !name) {
+      throw new Error(`${label} immutable reference ${id} has no source name.`);
+    }
+    const value = ownValue(valuesByName, name);
+    if (value === undefined) {
+      throw new Error(`${label} immutable ${name} has no deployment value.`);
+    }
+    for (const location of locations) {
+      if (!isRecord(location)) {
+        throw new Error(`${label} immutable ${name} location is invalid.`);
+      }
+      const start = ownValue(location, "start");
+      const length = ownValue(location, "length");
+      if (
+        !Number.isSafeInteger(start) ||
+        !Number.isSafeInteger(length) ||
+        start < 0 ||
+        length <= 0 ||
+        start + length > bytes.length
+      ) {
+        throw new Error(`${label} immutable ${name} location is out of range.`);
+      }
+      const valueBytes = hexToBytes(value, `${label} immutable ${name}`, length, {
+        allowZero: true,
+      });
+      const existing = bytes.slice(start, start + length);
+      if (!existing.every((byte) => byte === 0)) {
+        throw new Error(
+          `${label} immutable ${name} placeholder is not zero-filled.`,
+        );
+      }
+      bytes.set(valueBytes, start);
+    }
+  }
+  return bytesToHex(bytes);
+}
+
+function deploymentAwareCompiledCodeHash(key, artifact, { profile }) {
+  if (!hasImmutableReferences(artifact)) {
+    return artifact?.deployedBytecodeKeccak256;
+  }
+  if (key !== "sourceBridge") {
+    throw new Error(
+      `BSC ${key} has immutables but no deployment-aware code hash binding.`,
+    );
+  }
+  const patchedBytecode = deployedBytecodeWithNamedImmutables(
+    artifact,
+    sourceBridgeImmutableValues(profile),
+    "BSC sourceBridge",
+  );
+  return bytesToHex(
+    keccak_256(
+      hexToBytes(patchedBytecode, "BSC sourceBridge patched bytecode", null, {
+        allowZero: false,
+      }),
+    ),
+  );
+}
+
+export function compiledContractCodeHashesFromArtifacts(
+  artifacts,
+  { profile } = {},
+) {
+  const normalizedProfile = normalizeBscNetworkProfile(profile?.key ?? profile);
   return normalizeBscCompiledContractCodeHashes(
     Object.fromEntries(
       BSC_CONTRACT_CODE_ROLES.map((key) => [
         key,
-        artifacts?.[key]?.deployedBytecodeKeccak256,
+        deploymentAwareCompiledCodeHash(key, artifacts?.[key], {
+          profile: normalizedProfile,
+        }),
       ]),
     ),
     true,
   );
+}
+
+function collectSolcImmutableDeclarations(node, declarations = {}) {
+  if (!isRecord(node)) {
+    return declarations;
+  }
+  if (
+    ownValue(node, "nodeType") === "VariableDeclaration" &&
+    ownValue(node, "stateVariable") === true &&
+    ownValue(node, "mutability") === "immutable"
+  ) {
+    const id = ownValue(node, "id");
+    const name = ownValue(node, "name");
+    if (Number.isSafeInteger(id) && typeof name === "string" && name) {
+      const typeDescriptions = ownValue(node, "typeDescriptions");
+      declarations[String(id)] = {
+        name,
+        type: isRecord(typeDescriptions)
+          ? ownValue(typeDescriptions, "typeString") ?? null
+          : null,
+      };
+    }
+  }
+  for (const value of Object.values(node)) {
+    if (Array.isArray(value)) {
+      for (const child of value) {
+        collectSolcImmutableDeclarations(child, declarations);
+      }
+    } else if (isRecord(value)) {
+      collectSolcImmutableDeclarations(value, declarations);
+    }
+  }
+  return declarations;
+}
+
+function immutableReferenceNamesForContract(
+  output,
+  definition,
+  immutableReferences,
+) {
+  if (!isRecord(immutableReferences) || Object.keys(immutableReferences).length === 0) {
+    return {};
+  }
+  const declarations = {};
+  for (const source of Object.values(output.sources ?? {})) {
+    collectSolcImmutableDeclarations(ownValue(source, "ast"), declarations);
+  }
+  const result = {};
+  for (const id of Object.keys(immutableReferences)) {
+    const declaration = ownValue(declarations, id);
+    if (!isRecord(declaration)) {
+      throw new Error(
+        `Missing immutable declaration ${id} for ${definition.contract}.`,
+      );
+    }
+    result[id] = declaration;
+  }
+  return result;
 }
 
 function assertBscCompiledCodeHashesMatchReadback({
@@ -9304,7 +9475,13 @@ async function compileBscContracts({ writeOut = null } = {}) {
       optimizer: { enabled: true, runs: 200 },
       outputSelection: {
         "*": {
-          "*": ["abi", "evm.bytecode.object", "evm.deployedBytecode.object"],
+          "": ["ast"],
+          "*": [
+            "abi",
+            "evm.bytecode.object",
+            "evm.deployedBytecode.object",
+            "evm.deployedBytecode.immutableReferences",
+          ],
         },
       },
     },
@@ -9323,12 +9500,22 @@ async function compileBscContracts({ writeOut = null } = {}) {
     if (!contract?.evm?.bytecode?.object) {
       throw new Error(`Missing compiled artifact for ${definition.contract}.`);
     }
+    const immutableReferences =
+      contract.evm.deployedBytecode?.immutableReferences ?? {};
+    const immutableReferenceNames = immutableReferenceNamesForContract(
+      output,
+      definition,
+      immutableReferences,
+    );
     artifacts[definition.key] = {
       file: definition.file,
       contractName: definition.contract,
       abi: contract.abi,
       bytecode: `0x${contract.evm.bytecode.object}`,
       deployedBytecode: `0x${contract.evm.deployedBytecode.object}`,
+      ...(Object.keys(immutableReferences).length
+        ? { immutableReferences, immutableReferenceNames }
+        : {}),
       bytecodeKeccak256: bytesToHex(
         keccak_256(
           hexToBytes(
@@ -12774,6 +12961,7 @@ async function commandDeploy(options) {
     readback,
     compiledContractCodeHashes: compiledContractCodeHashesFromArtifacts(
       artifacts,
+      { profile },
     ),
     bscNetwork: profile.key,
   });
@@ -12841,6 +13029,7 @@ async function commandEvidence(options) {
     readback,
     compiledContractCodeHashes: compiledContractCodeHashesFromArtifacts(
       artifacts,
+      { profile },
     ),
     bscNetwork: profile.key,
   });

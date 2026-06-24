@@ -38,6 +38,7 @@ import {
   generateBscFullMessageCircuitSource,
   generateBscGroth16Material,
   generateBscSignalBindingCircuitSource,
+  inventoryBscGroth16Attestations,
   main,
   materializeBscGroth16Material,
   preflightBscGroth16Material,
@@ -5347,6 +5348,68 @@ test("attestation-status accepts signer-produced role files as ready to finalize
     );
     assert.equal(status.signedRoles.semanticSccpCircuit.signature.verified, true);
     assert.match(status.nextActions.join("\n"), /Run finalize-attestations/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("attestation-inventory selects exact request attestations and flags stale signed candidates", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-inventory-"));
+  try {
+    const { result } = await writeAttestationRequestCandidate(root);
+    const requestPath = join(root, "request.json");
+    await main([
+      "attestation-request",
+      "--manifest",
+      result.manifest,
+      ...result.attestationRequestEvidenceArgs,
+      "--toolchain-sha256",
+      result.reproducibleBuildToolchainSha256,
+      "--out",
+      requestPath,
+    ]);
+    await writeAttestationsFromRequest(join(root, "current"), requestPath);
+    await writeAttestationsFromRequest(join(root, "stale"), requestPath, {
+      semantic: {
+        negativeCaseCoverage: false,
+      },
+    });
+
+    const inventory = await inventoryBscGroth16Attestations({
+      request: requestPath,
+      "scan-dir": root,
+      ...trustedSignerOption(),
+    });
+
+    assert.equal(inventory.candidateSetReady, true);
+    assert.equal(inventory.problemCount, 0);
+    assert.equal(inventory.missingUsableRoles.length, 0);
+    assert.equal(inventory.signerDiversityBlockers.length, 0);
+    assert.ok(inventory.ignoredJsonCount > 0);
+    assert.match(
+      inventory.roleSummary.semanticSccpCircuit.selected.path,
+      /current\/request-attestations\/semantic\.json$/u,
+    );
+    assert.equal(inventory.roleSummary.semanticSccpCircuit.usableCount, 1);
+    assert.equal(
+      inventory.roleSummary.semanticSccpCircuit.classifications[
+        "stale-or-wrong-request"
+      ],
+      1,
+    );
+    const staleSemantic = inventory.candidates.find((candidate) =>
+      candidate.path.endsWith("stale/request-attestations/semantic.json"),
+    );
+    assert.equal(staleSemantic.classification, "stale-or-wrong-request");
+    assert.equal(staleSemantic.usable, false);
+    assert.match(
+      staleSemantic.problems.join("\n"),
+      /signed attestation body does not match this request package/u,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(inventory),
+      /PRIVATE KEY|privateKey|private_key|mnemonic|seed phrase|password/u,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
