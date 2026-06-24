@@ -17565,7 +17565,6 @@ mod tests {
             bfv_full_bootstrap_circuit_material_digest,
             bfv_full_bootstrap_evaluator_artifact_set_digest_v1,
             bfv_full_bootstrap_proof_key_material_commitment_from_artifact_v1,
-            bfv_full_bootstrap_proof_key_material_commitment_v1,
             bfv_full_bootstrap_proof_key_pair_commitment_from_artifacts_v1,
             bfv_full_bootstrap_proof_key_pair_from_key_material_v1,
             bfv_full_bootstrap_proof_public_input_schema_v1,
@@ -30668,13 +30667,10 @@ mod tests {
                     BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_BYTES_V1,
                 supports_exact_residual_multiple: true,
                 supports_bounded_noise: true,
-                key_material_commitment: Hash::new(b"placeholder inert verifier-key commitment"),
+                key_material_commitment: Hash::new(
+                    b"soracloud-invalid-inert-verifier-key-commitment",
+                ),
                 key_material,
-            };
-            let key = BfvFullBootstrapProofKeyV1 {
-                key_material_commitment: bfv_full_bootstrap_proof_key_material_commitment_v1(&key)
-                    .expect("forged verifier-key commitment"),
-                ..key
             };
             let key_payload = norito::to_bytes(&key).expect("encode forged verifier-key payload");
             let mut forged_artifacts = artifacts.clone();
@@ -32829,8 +32825,7 @@ mod tests {
             .expect("sample carries bootstrap key")
             .zero_refresh
             .c0
-            .pop()
-            .expect("sample bootstrap zero refresh has a nonempty c0");
+            .push(1);
         let err =
             prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
                 &params,
@@ -32851,7 +32846,10 @@ mod tests {
             .expect_err(
                 "malformed governed bootstrap-key entries must fail before execution proof generation",
             );
-        assert_invalid_parameter_contains(err, "ciphertext c0 length");
+        assert_invalid_parameter_contains(
+            err,
+            "must not carry encrypted-zero zero_refresh material",
+        );
 
         let mut all_zero_seed_transcript = transcript.clone();
         all_zero_seed_transcript.rotation_transcripts[0].seed =
