@@ -314,6 +314,7 @@ public struct TonSccpProofRequestInput: Equatable {
     public let sourceStateVerifierHash: String
     public let sourceAdapterDeploymentHash: String
     public let sourceAdapterDeploymentReceiptHash: String
+    public let sourceAdapterDeployment: TonSccpSourceAdapterDeploymentInput?
     public let backend: String
     public let sourceDomain: UInt32
 
@@ -326,6 +327,7 @@ public struct TonSccpProofRequestInput: Equatable {
                 sourceStateVerifierHash: String = sccpZeroHashV1,
                 sourceAdapterDeploymentHash: String = sccpZeroHashV1,
                 sourceAdapterDeploymentReceiptHash: String = sccpZeroHashV1,
+                sourceAdapterDeployment: TonSccpSourceAdapterDeploymentInput? = nil,
                 backend: String = sccpTonContractProofBackendV1,
                 sourceDomain: UInt32 = sccpDomainTon) {
         self.publicInputs = publicInputs
@@ -337,6 +339,7 @@ public struct TonSccpProofRequestInput: Equatable {
         self.sourceStateVerifierHash = sourceStateVerifierHash
         self.sourceAdapterDeploymentHash = sourceAdapterDeploymentHash
         self.sourceAdapterDeploymentReceiptHash = sourceAdapterDeploymentReceiptHash
+        self.sourceAdapterDeployment = sourceAdapterDeployment
         self.backend = backend
         self.sourceDomain = sourceDomain
     }
@@ -379,6 +382,7 @@ public struct TonSccpProofRequestInput: Equatable {
             sourceStateVerifierHash: sourceStateVerifierHash,
             sourceAdapterDeploymentHash: deploymentBinding.sourceAdapterDeploymentHash,
             sourceAdapterDeploymentReceiptHash: deploymentBinding.sourceAdapterDeploymentReceiptHash,
+            sourceAdapterDeployment: nil,
             backend: backend,
             sourceDomain: sourceDomain
         )
@@ -394,6 +398,63 @@ public struct TonSccpProofContext: Equatable {
 
 /// Source-adapter deployment binding carried by local TON SCCP proof requests.
 public typealias TonSccpSourceAdapterDeploymentBinding = SolanaSccpSourceAdapterDeploymentBinding
+
+/// Governed TON source-adapter deployment descriptor used to derive request bindings.
+public struct TonSccpSourceAdapterDeploymentInput: Equatable {
+    public let sourceTrustAnchorHash: String
+    public let consensusVerifierHash: String
+    public let messageInclusionVerifierHash: String
+    public let finalityPolicyHash: String
+    public let sourceStateVerifierHash: String
+    public let deploymentReceiptHash: String
+    public let tonMasterchainConfigVerifierHash: String
+    public let tonValidatorSetTransitionVerifierHash: String
+    public let tonShardAccountsDictionaryVerifierHash: String
+    public let sourceDomain: UInt32
+    public let targetDomain: UInt32
+    public let adapterVerifierVkHash: String?
+    public let bridgeAddress: String?
+    public let sourceBridgeEmitterCodeHash: String?
+    public let networkId: String?
+    public let ownerAddress: String?
+    public let configHash: String?
+
+    public init(sourceTrustAnchorHash: String,
+                consensusVerifierHash: String,
+                messageInclusionVerifierHash: String,
+                finalityPolicyHash: String,
+                sourceStateVerifierHash: String,
+                deploymentReceiptHash: String,
+                tonMasterchainConfigVerifierHash: String,
+                tonValidatorSetTransitionVerifierHash: String,
+                tonShardAccountsDictionaryVerifierHash: String,
+                sourceDomain: UInt32 = sccpDomainTon,
+                targetDomain: UInt32 = sccpDomainSora,
+                adapterVerifierVkHash: String? = nil,
+                bridgeAddress: String? = nil,
+                sourceBridgeEmitterCodeHash: String? = nil,
+                networkId: String? = nil,
+                ownerAddress: String? = nil,
+                configHash: String? = nil) {
+        self.sourceTrustAnchorHash = sourceTrustAnchorHash
+        self.consensusVerifierHash = consensusVerifierHash
+        self.messageInclusionVerifierHash = messageInclusionVerifierHash
+        self.finalityPolicyHash = finalityPolicyHash
+        self.sourceStateVerifierHash = sourceStateVerifierHash
+        self.deploymentReceiptHash = deploymentReceiptHash
+        self.tonMasterchainConfigVerifierHash = tonMasterchainConfigVerifierHash
+        self.tonValidatorSetTransitionVerifierHash = tonValidatorSetTransitionVerifierHash
+        self.tonShardAccountsDictionaryVerifierHash = tonShardAccountsDictionaryVerifierHash
+        self.sourceDomain = sourceDomain
+        self.targetDomain = targetDomain
+        self.adapterVerifierVkHash = adapterVerifierVkHash
+        self.bridgeAddress = bridgeAddress
+        self.sourceBridgeEmitterCodeHash = sourceBridgeEmitterCodeHash
+        self.networkId = networkId
+        self.ownerAddress = ownerAddress
+        self.configHash = configHash
+    }
+}
 
 /// Request passed to a linked local TON SCCP prover.
 public struct TonSccpProofRequest: Equatable {
@@ -897,6 +958,7 @@ private func tonSccpWitnessProviderInputSnapshot(_ input: TonSccpProofRequestInp
         sourceStateVerifierHash: input.sourceStateVerifierHash,
         sourceAdapterDeploymentHash: input.sourceAdapterDeploymentHash,
         sourceAdapterDeploymentReceiptHash: input.sourceAdapterDeploymentReceiptHash,
+        sourceAdapterDeployment: input.sourceAdapterDeployment,
         backend: input.backend,
         sourceDomain: input.sourceDomain
     )
@@ -3129,12 +3191,41 @@ public func buildTonSccpProofRequest(_ input: TonSccpProofRequestInput) throws -
     )
     try tonRejectTemplateSourceStateVerifierHash(sourceStateVerifierHashBytes)
     let sourceStateVerifierHash = "0x" + sourceStateVerifierHashBytes.hexEncodedString()
+    let descriptorDerivedDeploymentBinding = try input.sourceAdapterDeployment.map { deployment in
+        guard deployment.sourceDomain == sccpDomainTon else {
+            throw TonSccpProverError.invalidSourceDomain(deployment.sourceDomain)
+        }
+        guard deployment.targetDomain == sccpDomainSora else {
+            throw TonSccpProverError.invalidField("sourceAdapterDeployment.targetDomain")
+        }
+        guard try tonNormalizeNonZeroHex32(
+            deployment.sourceStateVerifierHash,
+            field: "sourceAdapterDeployment.sourceStateVerifierHash"
+        ) == sourceStateVerifierHash else {
+            throw TonSccpProverError.invalidField("sourceAdapterDeployment.sourceStateVerifierHash")
+        }
+        return try sccpTonSourceAdapterDeploymentBindingFromDeployment(deployment)
+    }
+    let sourceAdapterDeploymentHash = try selectTonProofRequestDeploymentHash(
+        supplied: input.sourceAdapterDeploymentHash,
+        derived: descriptorDerivedDeploymentBinding?.sourceAdapterDeploymentHash,
+        field: "sourceAdapterDeploymentHash"
+    )
+    let sourceAdapterDeploymentReceiptHash = try selectTonProofRequestDeploymentHash(
+        supplied: input.sourceAdapterDeploymentReceiptHash,
+        derived: descriptorDerivedDeploymentBinding?.sourceAdapterDeploymentReceiptHash,
+        field: "sourceAdapterDeploymentReceiptHash"
+    )
     let deploymentBinding = try normalizeTonSccpSourceAdapterDeploymentBinding(
         sourceDomain: input.sourceDomain,
         targetDomain: sccpDomainSora,
-        sourceAdapterDeploymentHash: input.sourceAdapterDeploymentHash,
-        sourceAdapterDeploymentReceiptHash: input.sourceAdapterDeploymentReceiptHash
+        sourceAdapterDeploymentHash: sourceAdapterDeploymentHash,
+        sourceAdapterDeploymentReceiptHash: sourceAdapterDeploymentReceiptHash
     )
+    if let descriptorDerivedDeploymentBinding,
+       deploymentBinding != descriptorDerivedDeploymentBinding {
+        throw TonSccpProverError.sourceAdapterDeploymentBindingMismatch
+    }
     guard deploymentBinding.sourceAdapterDeploymentHash != sccpZeroHashV1 else {
         throw TonSccpProverError.sourceAdapterDeploymentBindingMismatch
     }
@@ -3882,6 +3973,53 @@ private func normalizeTonSccpSourceAdapterDeploymentBinding(
             throw error
         }
     }
+}
+
+/// Derive the governed TON source-adapter deployment binding from its descriptor.
+public func sccpTonSourceAdapterDeploymentBindingFromDeployment(
+    _ input: TonSccpSourceAdapterDeploymentInput
+) throws -> TonSccpSourceAdapterDeploymentBinding {
+    guard input.sourceDomain == sccpDomainTon else {
+        throw TonSccpProverError.invalidSourceDomain(input.sourceDomain)
+    }
+    guard input.targetDomain == sccpDomainSora else {
+        throw TonSccpProverError.invalidField("sourceAdapterDeployment.targetDomain")
+    }
+    let sourceAdapterDeploymentHash = try sccpSourceAdapterEngineDeploymentHash(
+        sourceDomain: input.sourceDomain,
+        sourceTrustAnchorHash: input.sourceTrustAnchorHash,
+        consensusVerifierHash: input.consensusVerifierHash,
+        messageInclusionVerifierHash: input.messageInclusionVerifierHash,
+        finalityPolicyHash: input.finalityPolicyHash,
+        deploymentReceiptHash: input.deploymentReceiptHash,
+        targetDomain: input.targetDomain,
+        adapterVerifierVkHash: input.adapterVerifierVkHash,
+        sourceStateVerifierHash: input.sourceStateVerifierHash,
+        bridgeAddress: input.bridgeAddress,
+        sourceBridgeEmitterCodeHash: input.sourceBridgeEmitterCodeHash,
+        networkId: input.networkId,
+        ownerAddress: input.ownerAddress,
+        configHash: input.configHash,
+        tonMasterchainConfigVerifierHash: input.tonMasterchainConfigVerifierHash,
+        tonValidatorSetTransitionVerifierHash: input.tonValidatorSetTransitionVerifierHash,
+        tonShardAccountsDictionaryVerifierHash: input.tonShardAccountsDictionaryVerifierHash
+    )
+    return try normalizeTonSccpSourceAdapterDeploymentBinding(
+        sourceDomain: input.sourceDomain,
+        targetDomain: input.targetDomain,
+        sourceAdapterDeploymentHash: sourceAdapterDeploymentHash,
+        sourceAdapterDeploymentReceiptHash: input.deploymentReceiptHash
+    )
+}
+
+private func selectTonProofRequestDeploymentHash(supplied: String,
+                                                 derived: String?,
+                                                 field: String) throws -> String {
+    let normalized = try tonNormalizeHex32(supplied, field: field)
+    if normalized == sccpZeroHashV1, let derived {
+        return derived
+    }
+    return normalized
 }
 
 public func wrapTonSccpProofResult(proofBytes: Data,

@@ -3253,6 +3253,158 @@ public final class TonSccpProverTests {
                 deploymentBinding));
     assert bindingRequest.requestHash().equals(request.requestHash())
         : "typed deployment binding constructor must match raw-hash constructor";
+    final TonSccpProver.SourceAdapterDeploymentInput auditedTonDeployment =
+        sampleAuditedTonDeployment();
+    final SolanaSccpProver.SourceAdapterDeploymentBinding derivedBinding =
+        TonSccpProver.sourceAdapterDeploymentBindingFromDeployment(auditedTonDeployment);
+    assert derivedBinding.sourceDomain() == TonSccpProver.DOMAIN_TON
+        : "descriptor binding source domain must be TON";
+    assert derivedBinding.targetDomain() == SolanaSccpProver.DOMAIN_SORA
+        : "descriptor binding target domain must be SORA";
+    assert "0x61e5d710ccbc902be00a38a5a80d05c19de97105605a3f93d4f8067862d81f07"
+        .equals(derivedBinding.sourceAdapterDeploymentHash())
+        : "descriptor binding must derive the deployment hash";
+    assert ("0x" + repeat("aa", 32)).equals(derivedBinding.sourceAdapterDeploymentReceiptHash())
+        : "descriptor binding must preserve deployment receipt hash";
+    final TonSccpProver.ProofRequest descriptorRequest =
+        TonSccpProver.buildProofRequest(
+            new TonSccpProver.ProofRequestInput(
+                samplePublicInputs(),
+                sampleTonBundleBytes(),
+                new byte[0],
+                repeat("56", 32),
+                repeat("78", 32),
+                TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,
+                auditedTonDeployment.sourceStateVerifierHash(),
+                SolanaSccpProver.ZERO_HASH_V1,
+                SolanaSccpProver.ZERO_HASH_V1,
+                auditedTonDeployment,
+                TonSccpProver.CONTRACT_PROOF_BACKEND_V1,
+                TonSccpProver.DOMAIN_TON));
+    assert descriptorRequest.sourceAdapterDeploymentBinding().equals(derivedBinding)
+        : "descriptor request must use descriptor-derived deployment binding";
+    assert SolanaSccpProver.sourceAdapterDeploymentBindingHash(derivedBinding)
+        .equals(descriptorRequest.sourceAdapterDeploymentBindingHash())
+        : "descriptor request binding hash must match helper";
+    boolean partialAuditThrew = false;
+    try {
+      TonSccpProver.sourceAdapterDeploymentBindingFromDeployment(
+          new TonSccpProver.SourceAdapterDeploymentInput(
+              auditedTonDeployment.sourceDomain(),
+              auditedTonDeployment.targetDomain(),
+              auditedTonDeployment.sourceTrustAnchorHash(),
+              auditedTonDeployment.consensusVerifierHash(),
+              auditedTonDeployment.messageInclusionVerifierHash(),
+              auditedTonDeployment.finalityPolicyHash(),
+              auditedTonDeployment.sourceStateVerifierHash(),
+              auditedTonDeployment.deploymentReceiptHash(),
+              auditedTonDeployment.adapterVerifierVkHash(),
+              auditedTonDeployment.bridgeAddress(),
+              auditedTonDeployment.sourceBridgeEmitterCodeHash(),
+              auditedTonDeployment.networkId(),
+              auditedTonDeployment.ownerAddress(),
+              auditedTonDeployment.configHash(),
+              SolanaSccpProver.ZERO_HASH_V1,
+              auditedTonDeployment.tonValidatorSetTransitionVerifierHash(),
+              auditedTonDeployment.tonShardAccountsDictionaryVerifierHash()));
+    } catch (final IllegalArgumentException ex) {
+      partialAuditThrew = ex.getMessage().contains("TON audit verifier hashes");
+    }
+    assert partialAuditThrew : "descriptor binding must reject partial TON audit hashes";
+    boolean receiptVkReplayThrew = false;
+    try {
+      TonSccpProver.sourceAdapterDeploymentBindingFromDeployment(
+          new TonSccpProver.SourceAdapterDeploymentInput(
+              auditedTonDeployment.sourceDomain(),
+              auditedTonDeployment.targetDomain(),
+              auditedTonDeployment.sourceTrustAnchorHash(),
+              auditedTonDeployment.consensusVerifierHash(),
+              auditedTonDeployment.messageInclusionVerifierHash(),
+              auditedTonDeployment.finalityPolicyHash(),
+              auditedTonDeployment.sourceStateVerifierHash(),
+              SourceSccpProofs.sourceAdapterVerifierVkHash(SourceSccpProofs.DOMAIN_TON),
+              auditedTonDeployment.adapterVerifierVkHash(),
+              auditedTonDeployment.bridgeAddress(),
+              auditedTonDeployment.sourceBridgeEmitterCodeHash(),
+              auditedTonDeployment.networkId(),
+              auditedTonDeployment.ownerAddress(),
+              auditedTonDeployment.configHash(),
+              auditedTonDeployment.tonMasterchainConfigVerifierHash(),
+              auditedTonDeployment.tonValidatorSetTransitionVerifierHash(),
+              auditedTonDeployment.tonShardAccountsDictionaryVerifierHash()));
+    } catch (final IllegalArgumentException ex) {
+      receiptVkReplayThrew = ex.getMessage().contains("role-separated");
+    }
+    assert receiptVkReplayThrew : "descriptor binding must reject receipt/VK role replay";
+    boolean verifierKeyDriftThrew = false;
+    try {
+      TonSccpProver.sourceAdapterDeploymentBindingFromDeployment(
+          new TonSccpProver.SourceAdapterDeploymentInput(
+              auditedTonDeployment.sourceDomain(),
+              auditedTonDeployment.targetDomain(),
+              auditedTonDeployment.sourceTrustAnchorHash(),
+              auditedTonDeployment.consensusVerifierHash(),
+              auditedTonDeployment.messageInclusionVerifierHash(),
+              auditedTonDeployment.finalityPolicyHash(),
+              auditedTonDeployment.sourceStateVerifierHash(),
+              auditedTonDeployment.deploymentReceiptHash(),
+              "0x" + repeat("99", 32),
+              auditedTonDeployment.bridgeAddress(),
+              auditedTonDeployment.sourceBridgeEmitterCodeHash(),
+              auditedTonDeployment.networkId(),
+              auditedTonDeployment.ownerAddress(),
+              auditedTonDeployment.configHash(),
+              auditedTonDeployment.tonMasterchainConfigVerifierHash(),
+              auditedTonDeployment.tonValidatorSetTransitionVerifierHash(),
+              auditedTonDeployment.tonShardAccountsDictionaryVerifierHash()));
+    } catch (final IllegalArgumentException ex) {
+      verifierKeyDriftThrew =
+          ex.getMessage().contains("canonical source-adapter verifier profile");
+    }
+    assert verifierKeyDriftThrew : "descriptor binding must reject adapter verifier-key drift";
+    boolean sourceStateDescriptorMismatchThrew = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          new TonSccpProver.ProofRequestInput(
+              samplePublicInputs(),
+              sampleTonBundleBytes(),
+              new byte[0],
+              repeat("56", 32),
+              repeat("78", 32),
+              TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,
+              repeat("cc", 32),
+              SolanaSccpProver.ZERO_HASH_V1,
+              SolanaSccpProver.ZERO_HASH_V1,
+              auditedTonDeployment,
+              TonSccpProver.CONTRACT_PROOF_BACKEND_V1,
+              TonSccpProver.DOMAIN_TON));
+    } catch (final IllegalArgumentException ex) {
+      sourceStateDescriptorMismatchThrew =
+          ex.getMessage().contains("sourceStateVerifierHash must match sourceAdapterDeployment");
+    }
+    assert sourceStateDescriptorMismatchThrew
+        : "request source-state hash must match descriptor";
+    boolean rawDescriptorMismatchThrew = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          new TonSccpProver.ProofRequestInput(
+              samplePublicInputs(),
+              sampleTonBundleBytes(),
+              new byte[0],
+              repeat("56", 32),
+              repeat("78", 32),
+              TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,
+              auditedTonDeployment.sourceStateVerifierHash(),
+              repeat("dd", 32),
+              SolanaSccpProver.ZERO_HASH_V1,
+              auditedTonDeployment,
+              TonSccpProver.CONTRACT_PROOF_BACKEND_V1,
+              TonSccpProver.DOMAIN_TON));
+    } catch (final IllegalArgumentException ex) {
+      rawDescriptorMismatchThrew =
+          ex.getMessage().contains("sourceAdapterDeploymentBinding must match sourceAdapterDeployment");
+    }
+    assert rawDescriptorMismatchThrew : "raw deployment hashes must match descriptor";
     boolean wrongBindingTargetThrew = false;
     try {
       new TonSccpProver.ProofRequestInput(
@@ -4136,6 +4288,27 @@ public final class TonSccpProverTests {
         sourceAdapterDeploymentReceiptHash,
         backend,
         sourceDomain);
+  }
+
+  private static TonSccpProver.SourceAdapterDeploymentInput sampleAuditedTonDeployment() {
+    return new TonSccpProver.SourceAdapterDeploymentInput(
+        TonSccpProver.DOMAIN_TON,
+        SolanaSccpProver.DOMAIN_SORA,
+        "0x" + repeat("44", 32),
+        "0x" + repeat("55", 32),
+        "0x" + repeat("66", 32),
+        "0x" + repeat("88", 32),
+        "0x" + repeat("77", 32),
+        "0x" + repeat("aa", 32),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        "0x" + repeat("bb", 32),
+        "0x" + repeat("cc", 32),
+        "0x" + repeat("dd", 32));
   }
 
   private static TonSccpProver.PublicInputsInput samplePublicInputs() {

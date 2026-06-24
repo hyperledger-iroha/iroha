@@ -77,39 +77,59 @@ def test_ton_destination_redacts_verifier_address_parser_failures(monkeypatch):
     module = load_evidence_module()
     args = ton_args(module)
 
-    def fail_address(_value, *, label):
-        raise module.argparse.ArgumentTypeError(
-            f"secret-token {label} parser detail"
-        )
+    failure_cases = (
+        (
+            module.argparse.ArgumentTypeError,
+            "secret-token {label} parser detail",
+            "parser detail",
+        ),
+        (
+            SystemExit,
+            "secret-token {label} helper SystemExit detail",
+            "helper SystemExit detail",
+        ),
+        (
+            RuntimeError,
+            "secret-token {label} helper RuntimeError detail",
+            "helper RuntimeError detail",
+        ),
+        (
+            TypeError,
+            "secret-token {label} helper TypeError detail",
+            "helper TypeError detail",
+        ),
+        (
+            ValueError,
+            "secret-token {label} helper ValueError detail",
+            "helper ValueError detail",
+        ),
+    )
+    for exception_type, secret_template, forbidden_detail in failure_cases:
+        with monkeypatch.context() as patch:
 
-    monkeypatch.setattr(module, "normalize_ton_raw_address", fail_address)
-    try:
-        module._require_destination_evidence(args)
-    except ValueError as exc:
-        rendered = str(exc)
-        assert rendered == "verifier_contract_address metadata is invalid"
-        assert "secret-token" not in rendered
-        assert "parser detail" not in rendered
-        assert exc.__cause__ is None
-        assert exc.__suppress_context__ is True
-    else:
-        raise AssertionError("TON destination leaked verifier parser detail")
+            def fail_address(
+                _value,
+                *,
+                label,
+                exception_type=exception_type,
+                secret_template=secret_template,
+            ):
+                raise exception_type(secret_template.format(label=label))
 
-    def fail_address_typeerror(_value, *, label):
-        raise TypeError(f"secret-token {label} helper TypeError detail")
-
-    monkeypatch.setattr(module, "normalize_ton_raw_address", fail_address_typeerror)
-    try:
-        module._require_destination_evidence(args)
-    except ValueError as exc:
-        rendered = str(exc)
-        assert rendered == "verifier_contract_address metadata is invalid"
-        assert "secret-token" not in rendered
-        assert "helper TypeError detail" not in rendered
-        assert exc.__cause__ is None
-        assert exc.__suppress_context__ is True
-    else:
-        raise AssertionError("TON destination leaked helper TypeError detail")
+            patch.setattr(module, "normalize_ton_raw_address", fail_address)
+            try:
+                module._require_destination_evidence(args)
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == "verifier_contract_address metadata is invalid"
+                assert "secret-token" not in rendered
+                assert forbidden_detail not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    f"TON destination leaked {exception_type.__name__} detail"
+                )
 
 
 def noncanonical_base64_alias(raw: bytes) -> str:
@@ -244,68 +264,86 @@ def test_ton_destination_direct_parsers_redact_parser_causes(tmp_path):
             raise AssertionError("TON destination parser leaked nested details")
 
 
-def test_ton_destination_direct_parsers_redact_typeerror_parser_causes(monkeypatch):
+def test_ton_destination_direct_parsers_redact_helper_exit_parser_causes(monkeypatch):
     module = load_evidence_module()
 
-    class SecretBytes:
-        @staticmethod
-        def fromhex(_text):
-            raise TypeError("secret-token TON destination hex TypeError detail")
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+        detail = (
+            "secret-token TON destination hex TypeError detail"
+            if exception_type is TypeError
+            else f"secret-token TON destination hex {exception_type.__name__} detail"
+        )
 
-    monkeypatch.setattr(module, "bytes", SecretBytes, raising=False)
+        class SecretBytes:
+            @staticmethod
+            def fromhex(_text, detail=detail, exception_type=exception_type):
+                raise exception_type(detail)
 
-    for parser, value, label, kwargs in (
-        (
-            module.parse_hex_bytes,
-            "0x" + "33" * 32,
-            "verifier code hash",
-            {"byte_length": 32},
-        ),
-        (
-            module.parse_code_boc_hex,
-            "0x" + TON_CODE_BOC_HEX,
-            "code BoC",
-            {},
-        ),
-    ):
-        try:
-            parser(value, label=label, **kwargs)
-        except module.argparse.ArgumentTypeError as exc:
-            rendered = str(exc)
-            assert rendered == f"{label} must be hex"
-            assert "secret-token" not in rendered
-            assert "TypeError" not in rendered
-            assert exc.__cause__ is None
-            assert exc.__suppress_context__ is True
-        else:
-            raise AssertionError(f"{label} parser TypeError was accepted")
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "bytes", SecretBytes, raising=False)
+
+            for parser, value, label, kwargs in (
+                (
+                    module.parse_hex_bytes,
+                    "0x" + "33" * 32,
+                    "verifier code hash",
+                    {"byte_length": 32},
+                ),
+                (
+                    module.parse_code_boc_hex,
+                    "0x" + TON_CODE_BOC_HEX,
+                    "code BoC",
+                    {},
+                ),
+            ):
+                try:
+                    parser(value, label=label, **kwargs)
+                except module.argparse.ArgumentTypeError as exc:
+                    rendered = str(exc)
+                    assert rendered == f"{label} must be hex"
+                    assert "secret-token" not in rendered
+                    assert exception_type.__name__ not in rendered
+                    assert exc.__cause__ is None
+                    assert exc.__suppress_context__ is True
+                else:
+                    raise AssertionError(
+                        f"{label} parser {exception_type.__name__} was accepted"
+                    )
 
 
-def test_ton_destination_code_boc_base64_redacts_typeerror_decoder_causes(
+def test_ton_destination_code_boc_base64_redacts_helper_exit_decoder_causes(
     monkeypatch,
 ):
     module = load_evidence_module()
 
-    def fail_decode(*_args, **_kwargs):
-        raise TypeError("secret-token TON code BoC base64 TypeError detail")
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
 
-    monkeypatch.setattr(module.base64, "b64decode", fail_decode)
-    monkeypatch.setattr(module.base64, "urlsafe_b64decode", fail_decode)
+        def fail_decode(*_args, exception_type=exception_type, **_kwargs):
+            raise exception_type(
+                "secret-token TON code BoC base64 TypeError detail"
+            )
 
-    try:
-        module.parse_code_boc_base64(
-            TON_CODE_BOC_BASE64,
-            label="code BoC",
-        )
-    except module.argparse.ArgumentTypeError as exc:
-        rendered = str(exc)
-        assert rendered == "code BoC must be base64 or base64url"
-        assert "secret-token" not in rendered
-        assert "TypeError" not in rendered
-        assert exc.__cause__ is None
-        assert exc.__suppress_context__ is True
-    else:
-        raise AssertionError("TON code BoC base64 decoder TypeError was accepted")
+        with monkeypatch.context() as patch:
+            patch.setattr(module.base64, "b64decode", fail_decode)
+            patch.setattr(module.base64, "urlsafe_b64decode", fail_decode)
+
+            try:
+                module.parse_code_boc_base64(
+                    TON_CODE_BOC_BASE64,
+                    label="code BoC",
+                )
+            except module.argparse.ArgumentTypeError as exc:
+                rendered = str(exc)
+                assert rendered == "code BoC must be base64 or base64url"
+                assert "secret-token" not in rendered
+                assert exception_type.__name__ not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    "TON code BoC base64 decoder "
+                    f"{exception_type.__name__} was accepted"
+                )
 
 
 def test_ton_code_boc_inline_parsers_reject_padded_values(tmp_path):
@@ -497,13 +535,40 @@ def test_ton_destination_account_metadata_redacts_parser_causes(monkeypatch):
     else:
         raise AssertionError("TON destination account status parser detail leaked")
 
-    for exception_type in (TypeError, ValueError):
+    helper_failures = (
+        (
+            SystemExit,
+            "secret-token {label} helper SystemExit detail",
+            "helper SystemExit detail",
+        ),
+        (
+            RuntimeError,
+            "secret-token {label} helper RuntimeError detail",
+            "helper RuntimeError detail",
+        ),
+        (
+            TypeError,
+            "secret-token {label} helper TypeError detail",
+            "helper TypeError detail",
+        ),
+        (
+            ValueError,
+            "secret-token {label} helper ValueError detail",
+            "helper ValueError detail",
+        ),
+    )
+
+    for exception_type, secret_template, forbidden_detail in helper_failures:
         args = ton_args(module)
         with monkeypatch.context() as patch:
-            def reject_account_status(_value, *, label):
-                raise exception_type(
-                    f"secret-token {label} helper TypeError detail"
-                )
+            def reject_account_status(
+                _value,
+                *,
+                label,
+                exception_type=exception_type,
+                secret_template=secret_template,
+            ):
+                raise exception_type(secret_template.format(label=label))
 
             patch.setattr(module, "parse_account_status", reject_account_status)
             try:
@@ -516,7 +581,7 @@ def test_ton_destination_account_metadata_redacts_parser_causes(monkeypatch):
                 rendered = str(exc)
                 assert rendered == "account_status must be active"
                 assert "secret-token" not in rendered
-                assert "helper TypeError detail" not in rendered
+                assert forbidden_detail not in rendered
                 assert exc.__cause__ is None
                 assert exc.__suppress_context__ is True
             else:
@@ -539,13 +604,17 @@ def test_ton_destination_account_metadata_redacts_parser_causes(monkeypatch):
     else:
         raise AssertionError("TON destination last-transaction parser detail leaked")
 
-    for exception_type in (TypeError, ValueError):
+    for exception_type, secret_template, forbidden_detail in helper_failures:
         args = ton_args(module)
         with monkeypatch.context() as patch:
-            def reject_last_transaction_lt(_value, *, label):
-                raise exception_type(
-                    f"secret-token {label} helper TypeError detail"
-                )
+            def reject_last_transaction_lt(
+                _value,
+                *,
+                label,
+                exception_type=exception_type,
+                secret_template=secret_template,
+            ):
+                raise exception_type(secret_template.format(label=label))
 
             patch.setattr(
                 module,
@@ -562,7 +631,7 @@ def test_ton_destination_account_metadata_redacts_parser_causes(monkeypatch):
                 rendered = str(exc)
                 assert rendered == "last_transaction_lt must be a positive decimal"
                 assert "secret-token" not in rendered
-                assert "helper TypeError detail" not in rendered
+                assert forbidden_detail not in rendered
                 assert exc.__cause__ is None
                 assert exc.__suppress_context__ is True
             else:
@@ -581,13 +650,17 @@ def test_ton_destination_account_metadata_redacts_parser_causes(monkeypatch):
     else:
         raise AssertionError("TON destination TOML LT parser detail leaked")
 
-    for exception_type in (TypeError, ValueError):
+    for exception_type, secret_template, forbidden_detail in helper_failures:
         args = ton_args(module)
         with monkeypatch.context() as patch:
-            def reject_toml_last_transaction_lt(_value, *, label):
-                raise exception_type(
-                    f"secret-token {label} helper TypeError detail"
-                )
+            def reject_toml_last_transaction_lt(
+                _value,
+                *,
+                label,
+                exception_type=exception_type,
+                secret_template=secret_template,
+            ):
+                raise exception_type(secret_template.format(label=label))
 
             patch.setattr(
                 module,
@@ -600,7 +673,7 @@ def test_ton_destination_account_metadata_redacts_parser_causes(monkeypatch):
                 rendered = str(exc)
                 assert rendered == "--toml requires --last-transaction-lt"
                 assert "secret-token" not in rendered
-                assert "helper TypeError detail" not in rendered
+                assert forbidden_detail not in rendered
                 assert exc.__cause__ is None
                 assert exc.__suppress_context__ is True
             else:
@@ -841,35 +914,69 @@ def test_ton_toml_code_boc_base64_reparse_redacts_parser_detail():
         raise AssertionError("invalid copied TON code BoC base64 evidence was accepted")
 
 
-def test_ton_toml_code_boc_base64_reparse_redacts_helper_typeerror(
+def test_ton_toml_code_boc_base64_reparse_redacts_helper_failures(
     monkeypatch,
 ):
     module = load_evidence_module()
-    args = SimpleNamespace(
-        verifier_code_hash=bytes.fromhex(TON_CODE_BOC_ROOT_HASH),
-        verifier_code_boc_root_hash=bytes.fromhex(TON_CODE_BOC_ROOT_HASH),
-        verifier_code_boc_hash_matches=True,
-        verifier_code_boc_base64_text=TON_CODE_BOC_BASE64,
+    failure_cases = (
+        (
+            SystemExit,
+            "secret-token {label} copied SystemExit detail",
+            "copied SystemExit detail",
+        ),
+        (
+            RuntimeError,
+            "secret-token {label} copied RuntimeError detail",
+            "copied RuntimeError detail",
+        ),
+        (
+            TypeError,
+            "secret-token {label} copied parser detail",
+            "copied parser detail",
+        ),
+        (
+            ValueError,
+            "secret-token {label} copied ValueError detail",
+            "copied ValueError detail",
+        ),
     )
 
-    def reject_code_boc_base64(_value, *, label):
-        raise TypeError(f"secret-token {label} copied parser detail")
-
-    monkeypatch.setattr(module, "parse_code_boc_base64", reject_code_boc_base64)
-
-    try:
-        module._require_code_boc_root_metadata(args, output="toml")
-    except ValueError as exc:
-        rendered = str(exc)
-        assert rendered == "--toml has invalid verifier code BoC base64 evidence"
-        assert "secret-token" not in rendered
-        assert "copied parser detail" not in rendered
-        assert exc.__cause__ is None
-        assert exc.__suppress_context__ is True
-    else:
-        raise AssertionError(
-            "copied TON code BoC base64 parser TypeError was accepted"
+    for exception_type, secret_template, forbidden_detail in failure_cases:
+        args = SimpleNamespace(
+            verifier_code_hash=bytes.fromhex(TON_CODE_BOC_ROOT_HASH),
+            verifier_code_boc_root_hash=bytes.fromhex(TON_CODE_BOC_ROOT_HASH),
+            verifier_code_boc_hash_matches=True,
+            verifier_code_boc_base64_text=TON_CODE_BOC_BASE64,
         )
+        with monkeypatch.context() as patch:
+
+            def reject_code_boc_base64(
+                _value,
+                *,
+                label,
+                exception_type=exception_type,
+                secret_template=secret_template,
+            ):
+                raise exception_type(secret_template.format(label=label))
+
+            patch.setattr(
+                module,
+                "parse_code_boc_base64",
+                reject_code_boc_base64,
+            )
+            try:
+                module._require_code_boc_root_metadata(args, output="toml")
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == "--toml has invalid verifier code BoC base64 evidence"
+                assert "secret-token" not in rendered
+                assert forbidden_detail not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    f"copied TON code BoC base64 {exception_type.__name__} was accepted"
+                )
 
 
 def test_ton_direct_renderers_derive_verifier_code_hash_from_code_boc():

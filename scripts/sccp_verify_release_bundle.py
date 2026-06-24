@@ -37,30 +37,69 @@ CORRIDOR_PHASES = (
 )
 DOTNET_VERSION_SUCCESS_PREFIX = "SCCP .NET SDK version: 8."
 DOTNET_VERSION_SUCCESS_PATTERN = re.compile(
-    r"^SCCP \.NET SDK version:\s+8\.[0-9]+\.[0-9]+"
-    r"(?:-[A-Za-z0-9][A-Za-z0-9_.-]*)?$",
+    r"^SCCP \.NET SDK version:\s+8\.0\.[1-9][0-9]*$",
 )
 DOTNET_WINDOWS_OS_SUCCESS_LINE = "SCCP .NET SDK OS: Windows"
 DOTNET_RID_SUCCESS_PREFIX = "SCCP .NET SDK RID: win-"
 DOTNET_RID_SUCCESS_PATTERN = re.compile(
     r"^SCCP \.NET SDK RID:\s+win-(?:x64|x86|arm64|arm)$",
 )
+DOTNET_RID_ARCHITECTURES = {
+    "win-x64": "x64",
+    "win-x86": "x86",
+    "win-arm64": "arm64",
+    "win-arm": "arm",
+}
 DOTNET_ARCHITECTURE_SUCCESS_PREFIX = "SCCP .NET SDK Architecture:"
 DOTNET_ARCHITECTURE_SUCCESS_PATTERN = re.compile(
     rf"^{re.escape(DOTNET_ARCHITECTURE_SUCCESS_PREFIX)}\s+(?:x64|x86|arm64|arm)$",
 )
+DOTNET_BRIDGE_PATH_SUCCESS_PREFIX = "connect_norito_bridge native bridge:"
+DOTNET_BRIDGE_PATH_SUCCESS_PATTERN = re.compile(
+    rf"^{re.escape(DOTNET_BRIDGE_PATH_SUCCESS_PREFIX)}\s+(?P<path>.+)$",
+)
+DOTNET_BRIDGE_PATH_COMPONENT_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
+DOTNET_BRIDGE_PATH_DRIVE_PATTERN = re.compile(r"^[A-Za-z]:$")
+DOTNET_BRIDGE_SHA256_SUCCESS_PREFIX = "connect_norito_bridge native bridge sha256:"
+DOTNET_BRIDGE_SHA256_SUCCESS_PATTERN = re.compile(
+    rf"^{re.escape(DOTNET_BRIDGE_SHA256_SUCCESS_PREFIX)}\s+[0-9a-f]{{64}}$",
+)
 DOTNET_TEST_PASSED_SUCCESS_FRAGMENT = "Passed!"
+DOTNET_TEST_ASSEMBLY_SUCCESS_SUFFIX = (
+    "Hyperledger.Iroha.Sdk.Tests.dll (net8.0)"
+)
+DOTNET_TEST_DURATION_SUCCESS_PATTERN = (
+    r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\s*(?:ms|s|m|h)"
+    r"(?:\s+(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\s*(?:ms|s|m|h))*"
+)
 DOTNET_TEST_PASSED_SUCCESS_PATTERN = re.compile(
     r"^\s*Passed!\s+-\s+Failed:\s*0,\s+Passed:\s*(?P<passed>[1-9][0-9]*),"
-    r"\s+Skipped:\s*(?P<skipped>[0-9]+),"
-    r"\s+Total:\s*(?P<total>[1-9][0-9]*),\s+Duration:\s*.+$",
+    r"\s+Skipped:\s*(?P<skipped>0),"
+    rf"\s+Total:\s*(?P<total>[1-9][0-9]*),\s+Duration:\s*"
+    rf"(?P<duration>{DOTNET_TEST_DURATION_SUCCESS_PATTERN})\s+-\s+"
+    rf"{re.escape(DOTNET_TEST_ASSEMBLY_SUCCESS_SUFFIX)}$",
 )
 DOTNET_TRX_SUCCESS_PREFIX = "SCCP .NET SDK TRX:"
 DOTNET_TRX_SUCCESS_PATTERN = re.compile(
     r"^SCCP \.NET SDK TRX:\s+"
     r"csharp/tests/Hyperledger\.Iroha\.Sdk\.Tests/"
-    r"(?:[A-Za-z0-9_.-]+/)*TestResults/(?:[A-Za-z0-9_.-]+/)*"
+    r"(?:[A-Za-z0-9][A-Za-z0-9_.-]*/)*TestResults/"
+    r"(?:[A-Za-z0-9][A-Za-z0-9_.-]*/)*"
     r"sccp-dotnet-sdk\.trx$",
+)
+DOTNET_TRX_BYTES_SUCCESS_PREFIX = "SCCP .NET SDK TRX bytes:"
+DOTNET_TRX_BYTES_SUCCESS_PATTERN = re.compile(
+    r"^SCCP \.NET SDK TRX bytes:\s+[1-9][0-9]*$",
+)
+DOTNET_SUCCESS_OUTSIDE_WINDOW_ERROR_FRAGMENT = (
+    ".NET success marker appears outside its required command window"
+)
+PHASE_SUCCESS_OUTSIDE_WINDOW_ERROR_FRAGMENT = (
+    "success marker appears outside its required command window"
+)
+PHASE_DUPLICATE_COMMAND_ERROR_FRAGMENT = "command appears more than once"
+PHASE_DUPLICATE_SUCCESS_ERROR_FRAGMENT = (
+    "success marker appears more times than required command windows"
 )
 PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
     "rust-sccp": ("cargo test -p iroha_sccp -- --nocapture",),
@@ -107,15 +146,20 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
     ),
     "java-android": (
         "java -version",
-        "ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests",
+        "ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests,"
+        "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests,"
+        "org.hyperledger.iroha.android.sccp.TonSccpProverTests,"
+        "org.hyperledger.iroha.android.sccp.TronSccpProverTests",
         "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests",
         "org.hyperledger.iroha.android.sccp.TonSccpProverTests",
+        "org.hyperledger.iroha.android.sccp.TronSccpProverTests",
         "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests",
         "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests",
     ),
     "dotnet-sdk": (
         "dotnet --version",
         "dotnet --info",
+        "cargo build -p connect_norito_bridge",
         "dotnet restore Hyperledger.Iroha.Sdk.sln",
         "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
         "FullyQualifiedName~Sccp",
@@ -163,8 +207,11 @@ PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS: dict[str, tuple[str, ...]] = {
         DOTNET_WINDOWS_OS_SUCCESS_LINE,
         DOTNET_RID_SUCCESS_PREFIX,
         DOTNET_ARCHITECTURE_SUCCESS_PREFIX,
+        DOTNET_BRIDGE_PATH_SUCCESS_PREFIX,
+        DOTNET_BRIDGE_SHA256_SUCCESS_PREFIX,
         DOTNET_TEST_PASSED_SUCCESS_FRAGMENT,
         DOTNET_TRX_SUCCESS_PREFIX,
+        DOTNET_TRX_BYTES_SUCCESS_PREFIX,
     ),
     "contract-smoke": (
         *CONTRACT_SMOKE_NODE_SUCCESS_FRAGMENTS,
@@ -176,27 +223,112 @@ PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS: dict[str, tuple[re.Pattern[str], ...
     "rust-sccp": (
         re.compile(r"\btest result:\s+FAILED\b", re.IGNORECASE),
         re.compile(r"\b[1-9]\d*\s+failed\b", re.IGNORECASE),
+        re.compile(r"\btest\s+\S+\s+\.\.\.\s+FAILED\b", re.IGNORECASE),
+        re.compile(r"\bfailures:", re.IGNORECASE),
+        re.compile(r"\bthread '[^']+' panicked\b", re.IGNORECASE),
+        re.compile(r"\bpanicked at\b", re.IGNORECASE),
+        re.compile(r"\berror(?:\[[A-Z0-9]+\])?:", re.IGNORECASE),
+        re.compile(r"\bcould not compile\b", re.IGNORECASE),
+        re.compile(r"\baborting due to\b", re.IGNORECASE),
     ),
     "evidence-scripts": (
         re.compile(r"\b[1-9]\d*\s+failed\b", re.IGNORECASE),
         re.compile(r"\b[1-9]\d*\s+errors?\b", re.IGNORECASE),
+        re.compile(r"\bTraceback \(most recent call last\):"),
+        re.compile(r"\bERROR collecting\b", re.IGNORECASE),
+        re.compile(r"\bFAILED\s+\S+"),
+        re.compile(
+            r"\b(?:AssertionError|ImportError|ModuleNotFoundError|RuntimeError|ValueError)\b"
+        ),
+        re.compile(r"\bInterrupted:\s+[1-9]\d*\s+errors?\b", re.IGNORECASE),
+        re.compile(r"\bINTERNALERROR>", re.IGNORECASE),
     ),
-    "js-sdk": (re.compile(r"\bfail\s+[1-9]\d*\b", re.IGNORECASE),),
+    "js-sdk": (
+        re.compile(r"\bfail\s+[1-9]\d*\b", re.IGNORECASE),
+        re.compile(r"\bnot\s+ok\b", re.IGNORECASE),
+        re.compile(r"\bERR_[A-Z0-9_]+\b"),
+        re.compile(
+            r"\b(?:AssertionError|TypeError|ReferenceError|SyntaxError|RangeError)\b"
+        ),
+        re.compile(r"\b(?:uncaughtException|unhandledRejection)\b", re.IGNORECASE),
+        re.compile(r"\b[1-9]\d*\s+errors?\b", re.IGNORECASE),
+    ),
     "python-sdk": (
         re.compile(r"\b[1-9]\d*\s+failed\b", re.IGNORECASE),
         re.compile(r"\b[1-9]\d*\s+errors?\b", re.IGNORECASE),
+        re.compile(r"\bTraceback \(most recent call last\):"),
+        re.compile(r"\bERROR collecting\b", re.IGNORECASE),
+        re.compile(r"\bFAILED\s+\S+"),
+        re.compile(
+            r"\b(?:AssertionError|ImportError|ModuleNotFoundError|RuntimeError|ValueError)\b"
+        ),
+        re.compile(r"\bInterrupted:\s+[1-9]\d*\s+errors?\b", re.IGNORECASE),
     ),
-    "swift-sdk": (re.compile(r"\b[1-9]\d*\s+failures?\b", re.IGNORECASE),),
-    "kotlin-sdk": (re.compile(r"\bBUILD FAILED\b", re.IGNORECASE),),
-    "java-android": (re.compile(r"\bBUILD FAILED\b", re.IGNORECASE),),
+    "swift-sdk": (
+        re.compile(r"\b[1-9]\d*\s+failures?\b", re.IGNORECASE),
+        re.compile(r"\berror:", re.IGNORECASE),
+        re.compile(r"\bTest Case\b.*\bfailed\b", re.IGNORECASE),
+        re.compile(r"\b[1-9]\d*\s+tests?\s+failed\b", re.IGNORECASE),
+        re.compile(r"\bfatal error\b", re.IGNORECASE),
+        re.compile(r"\bfailed\s+to\s+(?:build|compile|emit|run)\b", re.IGNORECASE),
+    ),
+    "kotlin-sdk": (
+        re.compile(r"\bBUILD FAILED\b", re.IGNORECASE),
+        re.compile(r"\bFAILURE:\s+Build failed\b", re.IGNORECASE),
+        re.compile(r"\bExecution failed for task\b", re.IGNORECASE),
+        re.compile(r"\bTask\s+:[^\n]*\s+FAILED\b", re.IGNORECASE),
+        re.compile(r"\bThere were failing tests\b", re.IGNORECASE),
+        re.compile(r"\b[1-9]\d*\s+tests?\s+failed\b", re.IGNORECASE),
+        re.compile(r"\bCompilation failed\b", re.IGNORECASE),
+        re.compile(r"\bCould not (?:compile|resolve|create|determine)\b", re.IGNORECASE),
+    ),
+    "java-android": (
+        re.compile(r"\bBUILD FAILED\b", re.IGNORECASE),
+        re.compile(r"\bFAILURE:\s+Build failed\b", re.IGNORECASE),
+        re.compile(r"\bExecution failed for task\b", re.IGNORECASE),
+        re.compile(r"\bTask\s+:[^\n]*\s+FAILED\b", re.IGNORECASE),
+        re.compile(r"\bThere were failing tests\b", re.IGNORECASE),
+        re.compile(r"\b[1-9]\d*\s+tests?\s+failed\b", re.IGNORECASE),
+        re.compile(r"\bCompilation failed\b", re.IGNORECASE),
+        re.compile(r"\bCould not (?:compile|resolve|create|determine)\b", re.IGNORECASE),
+    ),
     "dotnet-sdk": (
         re.compile(r"\bFailed!\b", re.IGNORECASE),
         re.compile(r"\bFailed:\s*[1-9]\d*\b", re.IGNORECASE),
+        re.compile(
+            r"\berror\s+(?:CS|MSB|NETSDK|NU|CA|IL|BC)\d+\b", re.IGNORECASE
+        ),
+        re.compile(r"\b[1-9]\d*\s+errors?\b", re.IGNORECASE),
+        re.compile(r"\berrors?:\s*[1-9]\d*\b", re.IGNORECASE),
+        re.compile(r"\bfailed\s+to\s+(?:restore|build|load|run)\b", re.IGNORECASE),
+        re.compile(r"\b(?:restore|build)\s+failed\b", re.IGNORECASE),
+        re.compile(r"\bthe\s+build\s+failed\b", re.IGNORECASE),
     ),
-    "contract-smoke": (re.compile(r"\bfail\s+[1-9]\d*\b", re.IGNORECASE),),
+    "contract-smoke": (
+        re.compile(r"\bfail\s+[1-9]\d*\b", re.IGNORECASE),
+        re.compile(r"\bnot\s+ok\b", re.IGNORECASE),
+        re.compile(r"\bERR_[A-Z0-9_]+\b"),
+        re.compile(
+            r"\b(?:AssertionError|TypeError|ReferenceError|SyntaxError|RangeError)\b"
+        ),
+        re.compile(r"\b(?:uncaughtException|unhandledRejection)\b", re.IGNORECASE),
+        re.compile(r"\b[1-9]\d*\s+errors?\b", re.IGNORECASE),
+        re.compile(r"\b(?:ParserError|DeclarationError|CompilerError):"),
+        re.compile(r"\bError:"),
+        re.compile(r"\bnpm ERR!", re.IGNORECASE),
+        re.compile(r"\bcommand not found\b", re.IGNORECASE),
+        re.compile(r"\bNo such file or directory\b", re.IGNORECASE),
+    ),
     "core-admission": (
         re.compile(r"\btest result:\s+FAILED\b", re.IGNORECASE),
         re.compile(r"\b[1-9]\d*\s+failed\b", re.IGNORECASE),
+        re.compile(r"\btest\s+\S+\s+\.\.\.\s+FAILED\b", re.IGNORECASE),
+        re.compile(r"\bfailures:", re.IGNORECASE),
+        re.compile(r"\bthread '[^']+' panicked\b", re.IGNORECASE),
+        re.compile(r"\bpanicked at\b", re.IGNORECASE),
+        re.compile(r"\berror(?:\[[A-Z0-9]+\])?:", re.IGNORECASE),
+        re.compile(r"\bcould not compile\b", re.IGNORECASE),
+        re.compile(r"\baborting due to\b", re.IGNORECASE),
     ),
 }
 PYTEST_OPTIONS_WITH_VALUES = frozenset(
@@ -347,11 +479,15 @@ SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_active_launch_policy_is_ethereum_mainnet",
             "def test_release_bundle_verifier_guards_launch_scope_constant_inventory",
             "def test_release_bundle_verifier_guards_ethereum_launch_policy_documentation",
             "def test_release_bundle_verifier_guards_bsc_groth16_material_documentation",
             "def test_release_bundle_verifier_rejects_missing_launch_scope_inventory_gate",
+            "def test_release_bundle_verifier_rejects_missing_ethereum_launch_policy_documentation_inventory_gate",
+            "def test_release_bundle_verifier_rejects_missing_public_discovery_documentation_inventory_gate",
             "def test_release_bundle_verifier_rejects_missing_bsc_groth16_material_documentation_inventory_gate",
+            "def test_release_bundle_accepts_active_launch_lane_without_future_lanes",
             "def test_release_bundle_verifier_rejects_all_lanes_required_domain_drift",
             "def test_release_bundle_verifier_rejects_launch_scope_domain_drift",
         ),
@@ -497,15 +633,38 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     f"{ACTIVE_LAUNCH_DISPLAY} route-canary transaction metadata",
     ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE,
     "Governed live deployment evidence",
+    "Required source-verifier evidence by lane:",
     "Ethereum recursive source-adapter verifier deployment and remaining beacon light-client update/state branches are not complete for the SCCP inbound path",
     "BSC recursive source-adapter verifier deployment is not complete for the SCCP inbound path",
     "Solana audited Tower replay, full-bank AccountsDB lattice, bank/fork-choice, and source-adapter verifier deployment evidence is not complete for the SCCP inbound path",
     "TON governed full-light-client verifier deployment, canary, and source-adapter deployment evidence are not complete for the SCCP inbound path",
     "TRON transaction-Merkle source-call verifier deployment is not complete for the SCCP inbound path",
-    "Windows `.NET 8` SCCP SDK phase evidence",
+    "Windows `.NET 8.0.x` SCCP SDK phase evidence",
     "FullyQualifiedName~Sccp",
+    "`SCCP .NET SDK version:` marker emitted after `dotnet --version`",
+    "phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order",
+    "no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`",
+    "non-zero `Error(s)` counts",
+    "`Failed to restore`",
+    "dotnet --info",
+    "SCCP .NET SDK OS: Windows",
+    "SCCP .NET SDK RID: win-{x64,x86,arm64,arm}",
+    "SCCP .NET SDK Architecture: {x64,x86,arm64,arm}",
+    "emitted after `dotnet --info`",
+    "connect_norito_bridge native bridge: ...connect_norito_bridge.dll",
+    "connect_norito_bridge native bridge sha256: <64 lowercase hex>",
+    "emitted after `cargo build -p connect_norito_bridge`",
+    "dotnet restore Hyperledger.Iroha.Sdk.sln",
+    "before the strict `dotnet test` command",
+    "VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` emitted after the strict `dotnet test` command",
+    "Hyperledger.Iroha.Sdk.Tests.dll (net8.0)",
     "SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx",
+    "SCCP .NET SDK TRX bytes: <positive integer>",
+    "full-matches the C# test project `TestResults/sccp-dotnet-sdk.trx` path",
     "Failed: 0",
+    "Skipped: 0",
+    "Total == Passed",
+    "numeric unit duration",
     "Public release notes",
     SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE,
     SCCP_NOT_REMAINING_WORK_SCOPE_NOTE,
@@ -3616,6 +3775,10 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "def _reject_source_adapter_audit_template_hashes(",
             "if any(raw == template_hash for template_hash in template_hashes.values()):",
             "def _source_adapter_gate_template_hash_blockers(",
+            "def _public_lane_source_record_template_hash_errors(",
+            "PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS",
+            "f\"{label}.{field} must be deployed evidence, \"",
+            "_public_lane_source_record_template_hash_errors(",
             "source adapter gate hash",
             "source adapter gate audit hashes",
             "not built-in template material",
@@ -3630,6 +3793,9 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "test_all_lanes_evidence_rejects_source_adapter_deployment_template_hashes_for_all_lanes",
             "test_all_lanes_evidence_rejects_source_adapter_audit_hash_template_replays",
             "test_all_lanes_release_checklist_rejects_source_gate_template_replays",
+            "test_all_lanes_cli_rejects_copied_ready_source_record_template_replay",
+            "test_all_lanes_cli_rejects_copied_not_ready_source_record_template_replay",
+            "test_all_lanes_cli_rejects_active_copied_source_record_template_replay_when_lane_not_ready",
             "checklist_source_gate_lane",
             "template_cases = [",
             "eth_module.ETH_TEMPLATE_COMPONENTS.items()",
@@ -3640,6 +3806,7 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "for domain, field, template_hash in template_cases:",
             "for domain, audit_fields, template_hashes in cases:",
             "for template_field, template_hash in template_hashes.items():",
+            "module.PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS",
             "source-adapter evidence, not built-in template material",
             "source adapter gate hash must be deployed evidence",
             "source adapter gate audit hashes",
@@ -3652,13 +3819,27 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "def _source_adapter_gate_template_hashes(",
             "def _source_adapter_gate_template_hash_errors(",
             "def _source_adapter_gate_template_audit_errors(",
-            "all_lanes.SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS",
-            "all_lanes.TON_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS",
+            "_gate_field, audit_fields = all_lanes._source_adapter_gate_requirements(domain)",
             "all_lanes._source_material_template_hashes(profile).values()",
             "for audit_field in audit_fields:",
             "if bytes.fromhex(audit_hash[2:]) in template_hashes:",
+            "def _source_record_template_hash_errors(",
+            "source_verifier_material_hash",
+            "source_adapter_engine_deployment_hash",
+            "f\"{label} {field} must be deployed evidence, \"",
             "must be deployed gate evidence, not built-in template material",
             "not built-in template material",
+        ),
+    ),
+    (
+        "scripts/sccp_verify_release_bundle.py",
+        (
+            "def _source_record_template_hash_errors(",
+            "raw = _canonical_fixed_hex_bytes(source_hash, byte_length=32)",
+            "source_verifier_material_hash",
+            "source_adapter_engine_deployment_hash",
+            "f\"{label} {field} must be deployed evidence, \"",
+            "_source_record_template_hash_errors(",
         ),
     ),
     (
@@ -3666,16 +3847,27 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
         (
             "test_release_bundle_rejects_public_source_adapter_gate_template_audit_replays",
             "test_release_bundle_rejects_public_source_adapter_gate_template_hash_replays",
-            "all_lanes.SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS",
-            "all_lanes.TON_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS",
+            "test_release_bundle_rejects_public_source_record_template_hash_replays",
+            "test_release_bundle_rejects_active_copied_source_record_template_replay_when_lane_not_ready",
+            "all_lanes.SCCP_DOMAIN_ETH,",
+            "all_lanes.SCCP_DOMAIN_BSC,",
+            "all_lanes.SCCP_DOMAIN_SOL,",
+            "all_lanes.SCCP_DOMAIN_TON,",
+            "all_lanes.SCCP_DOMAIN_TRON,",
+            "all_lanes._source_adapter_gate_requirements(domain)",
+            "all_lanes._source_material_template_hashes(profile)",
+            "for source_field in (",
             "for domain, row_chain, audit_fields, template_hashes in cases:",
             "for audit_field in audit_fields:",
             "for template_field, template_hash in template_hashes.items():",
             "bundle._cryptographic_evidence_row_bundle_errors(",
             "bundle._source_adapter_gate_semantic_errors(",
+            "bundle._all_lanes_nested_bundle_errors(",
+            "verifier._all_lanes_lane_schema_errors(",
             "verifier._cryptographic_evidence_source_adapter_gate_schema_errors(",
             "verifier._source_adapter_gate_coherence_errors(",
             "source_adapter_gate_hash must be deployed gate",
+            'f"{builder_label}.source_record_hashes {source_field} must "',
             "not built-in template material",
         ),
     ),
@@ -3820,8 +4012,8 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "TON accountStates account address must be a canonical raw address",
             "TON verifier account code_boc is invalid",
             "TON live code BoC base64 metadata is invalid",
-            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
-            "except (TypeError, binascii.Error, ValueError):",
+            "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, binascii.Error, ValueError):",
             'raise RuntimeError(f"{label} must be 32-byte hex or base64") from None',
             'raise RuntimeError("TON verifier account code_boc is invalid") from None',
             'raise ValueError("TON live code BoC base64 metadata is invalid") from None',
@@ -3831,21 +4023,23 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
         "scripts/sccp_ton_destination_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
-            "except (TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError):",
             'f"{label} must be base64 or base64url"',
-            "except (TypeError, ValueError, binascii.Error):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):",
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             'raise ValueError("account_status must be active") from None',
             'raise ValueError("last_transaction_lt must be a positive decimal") from None',
             'raise ValueError(f"--{output} requires --last-transaction-lt") from None',
             "--{output} has invalid verifier code BoC base64 evidence",
-            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
+            "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
         ),
     ),
     (
         "pytests/scripts/sccp_ton_destination_evidence_test.py",
         (
             "def test_ton_destination_direct_parsers_redact_parser_causes",
+            "def test_ton_destination_direct_parsers_redact_helper_exit_parser_causes",
+            "def test_ton_destination_code_boc_base64_redacts_helper_exit_decoder_causes",
             "def test_ton_destination_account_metadata_redacts_parser_causes",
             "secret-token-ton-destination-fixed-hex",
             "secret-token-ton-destination-code-hex",
@@ -3854,19 +4048,23 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "secret-token-ton-destination-account-status",
             "secret-token-ton-destination-last-lt",
             "secret-token-ton-destination-toml-lt",
-            "for exception_type in (TypeError, ValueError):",
+            "helper_failures = (",
+            "secret-token {label} helper SystemExit detail",
+            "secret-token {label} helper ValueError detail",
             "TON account status helper detail leaked",
             "TON last-transaction helper detail leaked",
             "TON TOML LT helper detail leaked",
             "def test_ton_toml_code_boc_base64_reparse_redacts_parser_detail",
-            "def test_ton_toml_code_boc_base64_reparse_redacts_helper_typeerror",
+            "def test_ton_toml_code_boc_base64_reparse_redacts_helper_failures",
             "secret-token-ton-code-boc",
+            "secret-token {label} copied SystemExit detail",
             "secret-token {label} copied parser detail",
+            "secret-token {label} copied ValueError detail",
             "secret-token {label} helper TypeError detail",
             'assert "secret-token" not in rendered',
-            'assert "copied parser detail" not in rendered',
-            'assert "helper TypeError detail" not in rendered',
+            "assert forbidden_detail not in rendered",
             'assert "must be base64" not in rendered',
+            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
             "assert exc.__suppress_context__ is True",
         ),
     ),
@@ -3878,16 +4076,20 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "def test_live_ton_evidence_redacts_account_address_parser_failures",
             "def test_live_ton_evidence_redacts_code_boc_parser_failures",
             "def test_live_ton_hash_decoder_redacts_base64_parser_causes",
-            "for exception_type in (TypeError, ValueError):",
+            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
             "secret-token-ton-error",
             "secret-token invalid TON accountStates payload",
             "secret-token hash base64",
+            "secret-token {label} SystemExit detail",
+            "secret-token {label} RuntimeError detail",
             "secret-token {label} parser detail",
             "secret-token {label} helper TypeError detail",
+            "secret-token {label} ValueError detail",
+            "normalize_failure_cases = (",
             "duplicate JSON keys",
             "secret-token",
             'assert "secret-token" not in rendered',
-            'assert "helper TypeError detail" not in rendered',
+            "assert forbidden_detail not in rendered",
         ),
     ),
     (
@@ -3905,10 +4107,12 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
         "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
         (
             "def test_tron_source_bridge_direct_parsers_redact_parser_causes",
+            "def test_tron_source_bridge_direct_parsers_redact_helper_exit_parser_causes",
             "secret-token-tron-source-fixed-hex",
             "secret-token-tron-source-runtime",
             "secret-token-tron-source-file",
             "secret-token-tron-source-address",
+            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
             "test_direct_record_hashes_reject_reused_source_role_hashes",
             "test_tron_direct_record_hashes_reject_zero_production_inputs",
             "test_tron_source_deployment_hash_rejects_noncanonical_adapter_vk_hash",
@@ -3941,10 +4145,10 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "raise ValueError(destination_error) from None",
             'f"/wallet/getcontract returned malformed {label} bytecode"',
             'f"/wallet/getcontract returned malformed {label} contract_address"',
-            "except (argparse.ArgumentTypeError, TypeError, RuntimeError, ValueError):",
-            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
+            "except (argparse.ArgumentTypeError, SystemExit, TypeError, RuntimeError, ValueError):",
+            "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             'f"TRON constant call {function_selector} returned non-hex data"',
-            "except (RuntimeError, TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError):",
             "def _unsupported_tron_field_detail(",
             "field with sensitive name",
             "field with malformed name",
@@ -3953,8 +4157,12 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "def _public_summary(",
             "solid block header proof is invalid",
             "witness schedule payload is invalid",
+            "active witness schedule payload is invalid",
+            'f"witness schedule transition {index} parent payload is invalid"',
+            'f"witness schedule transition {index} next payload is invalid"',
             'f"witness schedule transition {index} message is invalid"',
             'f"witness schedule transition {index} seal is invalid"',
+            "witness seal signer bitmap is invalid",
             "witness seal solid-block message is invalid",
             "witness seal proof is invalid",
             "transaction source proof is invalid",
@@ -3973,9 +4181,13 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "def test_live_evidence_redacts_metadata_parser_exception_causes",
             "def test_live_evidence_redacts_solid_block_header_proof_encoder_failures",
             "def test_live_evidence_redacts_witness_schedule_hash_failures",
+            "def test_live_evidence_redacts_witness_schedule_decode_failures",
             "def test_live_evidence_redacts_witness_schedule_transition_encoder_failures",
+            "def test_live_evidence_redacts_witness_schedule_transition_payload_helper_failures",
             "def test_live_evidence_redacts_witness_seal_encoder_failures",
+            "def test_live_evidence_redacts_witness_seal_bitmap_and_hash_shape_failures",
             "def test_live_evidence_redacts_transaction_source_proof_encoder_failures",
+            "def test_live_evidence_redacts_transaction_source_proof_hash_shape_failures",
             "def test_live_evidence_redacts_source_event_topic_parser_failures",
             "def test_live_evidence_redacts_route_canary_topic_parser_failures",
             "def test_live_evidence_redacts_unsupported_transaction_result_fields",
@@ -3986,7 +4198,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             'assert "transaction_info_endpoint" not in payload',
             'assert "transaction_endpoint" not in payload',
             'assert "block_endpoint" not in payload',
-            "for exception_type in (TypeError, ValueError, RuntimeError):",
+            "for exception_type in (SystemExit, TypeError, ValueError, RuntimeError):",
             "secret-token-tron-error",
             "secret-token-result-field",
             "secret-token-detail-field",
@@ -3995,32 +4207,46 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "secret-token-duplicate-transition",
             "0xsecret-token-bytecode",
             "secret-token {label} parser detail",
-            "secret-token {label} helper TypeError detail",
+            "secret-token {label} helper {exception_type.__name__} detail",
             "secret-token constant failure detail",
             "0xsecret-token constant parser detail",
             "secret-token generated full TOML parser detail",
             "secret-token solid block proof parser detail",
             "secret-token witness schedule payload parser detail",
             "secret-token witness schedule hash parser detail",
+            "secret-token witness schedule decoder parser detail",
+            "secret-token transition active schedule parser detail",
+            "secret-token transition parent payload parser detail",
+            "secret-token transition parent schedule parser detail",
+            "secret-token transition next payload parser detail",
+            "secret-token transition next schedule parser detail",
             "secret-token transition message parser detail",
             "secret-token transition seal parser detail",
+            "secret-token witness seal schedule parser detail",
             "secret-token witness seal message parser detail",
+            "secret-token witness seal message hash parser detail",
             "secret-token witness seal proof parser detail",
+            "secret-token witness seal hash parser detail",
+            "0xsecret-token-witness-seal-message-hash",
+            "0xsecret-token-witness-seal-hash",
             "secret-token transaction source proof parser detail",
+            "secret-token transaction source proof hash parser detail",
+            "0xsecret-token-transaction-source-proof-hash",
             "secret-token source-event log topic0 parser detail",
             "secret-token route-canary log topic0 parser detail",
             "solid block header proof is invalid",
             "witness schedule payload is invalid",
             "witness schedule transition 0 message is invalid",
             "witness schedule transition 0 seal is invalid",
+            "witness seal signer bitmap is invalid",
             "witness seal solid-block message is invalid",
             "witness seal proof is invalid",
             "transaction source proof is invalid",
             '"destination_verifier_runtime_bytecode_hex": "0xsecret-token"',
             'assert "secret-token" not in str(exc)',
-            'assert "helper TypeError detail" not in rendered',
+            'assert f"helper {exception_type.__name__} detail" not in rendered',
             'assert "must be hex" not in str(exc)',
-            "TRON full TOML annotation leaked destination parser TypeError",
+            "TRON full TOML annotation leaked destination parser ",
             "secret-token-parent-witness-schedule-payload",
             'assert "duplicate JSON keys:" not in rendered',
             'assert "parent-witness-schedule" not in rendered',
@@ -4046,9 +4272,9 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "raise ValueError(f\"{label}: invalid TOML\") from None",
             "raise ValueError(f\"{label}:{line_number}: invalid string\") from None",
             "raise ValueError(f\"{label}:{line_number}: invalid array\") from None",
-            "except (TypeError, ValueError, binascii.Error):",
-            "except (TypeError, ValueError):",
-            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError):",
+            "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             "def _minimal_toml_duplicate_key_detail(",
             "duplicate key with sensitive name",
             "duplicate key with malformed name",
@@ -4071,7 +4297,6 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "source adapter deployment source_state_verifier_hash must be a non-zero 32-byte hex value",
             "source adapter deployment source_bridge_emitter_address must be a non-zero 20-byte hex value",
             "def test_all_lanes_evidence_redacts_source_gate_recompute_failures",
-            "for exception_type in (TypeError, ValueError, RuntimeError):",
             "for exception_type in (SystemExit, TypeError, ValueError, RuntimeError):",
             "def test_all_lanes_evidence_redacts_source_validator_failures",
             "def test_all_lanes_evidence_redacts_destination_binding_recompute_failures",
@@ -4093,12 +4318,15 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "route|operator-zk-section",
             "secret-token comment",
             "secret-token all-lanes base64",
-            "secret-token all-lanes hex TypeError detail",
-            "def test_all_lanes_solana_base64_callers_redact_typeerror_helper_causes",
-            "secret-token all-lanes {label} TypeError detail",
+            "secret-token all-lanes hex {exception_type.__name__} detail",
+            "def test_all_lanes_solana_base64_callers_redact_helper_exit_causes",
+            "secret-token all-lanes {label} {exception_type.__name__} detail",
             "secret-token destination binding material",
             "secret-token {label} parser detail",
+            "secret-token {label} route canary parser",
             "for exception_type in (TypeError, ValueError):",
+            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
+            "secret-token route canary live program detail",
             "def test_all_lanes_redacts_tron_live_metadata_parser_failures",
             "def test_all_lanes_evidence_redacts_source_record_hash_comment_failures",
             "def test_all_lanes_evidence_redacts_source_record_hash_summary_failures",
@@ -4521,16 +4749,22 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
         (
             'return "finalized" if domain == SCCP_DOMAIN_ETH else "latest"',
             "eth_chainId for {chain} lane must be canonical mainnet chain id",
+            "def _guarded_rpc_fixed_hex_data(",
             "deployment receipt transactionHash must be a non-zero bytes32",
             "deployment transaction receipt status must be 0x1",
             "deployment receipt contractAddress must be a non-zero 20-byte EVM address",
             "deployment receipt contractAddress does not match source bridge",
             "deployment receipt blockHash must be a non-zero bytes32",
+            "deployment transaction hash must be a non-zero bytes32",
             "deployment transaction hash does not match requested deployment transaction",
+            "deployment transaction blockHash must be a non-zero bytes32",
             "deployment transaction to must be null for contract creation",
             "deployment transaction input must not be empty or zero",
+            "deployment receipt block hash must be a non-zero bytes32",
             "deployment receipt blockHash does not match eth_getBlockByNumber",
-            "eth_getBlockByNumber receiptsRoot",
+            "deployment receipt block receiptsRoot must be a non-zero bytes32",
+            "deployment receipt finalized block hash must be a non-zero bytes32",
+            "deployment receipt block hash metadata is invalid",
             "source bridge code hash at deployment receipt block does not",
             "source bridge runtime bytecode at deployment receipt block does",
             "deployment receipt block is newer than the finalized execution block",
@@ -4552,7 +4786,8 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "JSON-RPC {method} returned invalid JSON",
             "JSON-RPC {method} returned error response",
             "EVM source bridge runtime bytecode metadata is invalid",
-            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
+            "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
+            "    except (\n        argparse.ArgumentTypeError,\n        AttributeError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
         ),
     ),
     (
@@ -4560,6 +4795,8 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
         (
             "test_evm_source_live_evidence_rejects_rpc_and_code_hash_drift",
             "test_evm_source_live_redacts_receipt_field_parser_exception_causes",
+            "test_evm_source_live_redacts_receipt_readback_parser_exception_causes",
+            "test_evm_source_live_redacts_receipt_block_hash_metadata_reparse_failures",
             "test_evm_source_live_rejects_deployment_transaction_readback_drift",
             "test_evm_source_live_rejects_missing_or_drifted_receipt_contract_address",
             "test_evm_source_live_rejects_receipt_block_hash_drift",
@@ -4573,6 +4810,8 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             'assert bsc_summary["block_tag"] == "latest"',
             "test_evm_source_live_block_tag_parser_rejects_unstable_or_noncanonical_tags",
             "test_evm_source_live_direct_collector_rejects_unstable_block_tag_before_rpc",
+            "test_evm_source_live_receipt_ready_predicate_redacts_imported_address_parser_failures",
+            "test_evm_source_live_receipt_ready_predicate_uses_guarded_receipt_hash_parse",
             "test_evm_source_live_toml_revalidates_imported_summary_metadata",
             "test_evm_source_live_toml_requires_independent_pins",
             "test_evm_source_live_cli_redacts_top_level_exception_details",
@@ -4583,13 +4822,24 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "test_evm_source_json_rpc_redacts_transport_and_error_response_details",
             "secret-token-evm-source-error",
             "secret-token {target_method} parser detail",
-            "for exception_type in (TypeError, RuntimeError, ValueError):",
+            "secret-token {target_method} readback parser detail",
+            "secret-token deployment receipt block hash metadata parser detail",
+            "for exception_type in (SystemExit, TypeError, RuntimeError, ValueError):",
             "secret-token invalid EVM source JSON-RPC payload",
             "secret-token-source-bridge-runtime",
+            "runtime_failure_cases = (",
+            "secret-token {label} imported argument detail",
+            "secret-token {label} imported SystemExit detail",
+            "secret-token {label} imported RuntimeError detail",
             "secret-token {label} imported parser detail",
+            "secret-token {label} imported ValueError detail",
+            "secret-token source bridge address SystemExit detail",
+            "secret-token source bridge address RuntimeError detail",
+            "secret-token source bridge address TypeError detail",
+            "secret-token source bridge address ValueError detail",
             'assert "secret-token" not in captured.err',
             'assert "secret-token" not in rendered',
-            'assert "imported parser detail" not in rendered',
+            "assert forbidden_detail not in rendered",
             'assert "must be hex" not in rendered',
             "duplicate JSON keys",
         ),
@@ -4691,7 +4941,8 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "JSON-RPC {method} returned error response",
             "EVM bridge runtime bytecode metadata is invalid",
             "EVM verifier runtime bytecode metadata is invalid",
-            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError):",
+            "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
         ),
     ),
     (
@@ -4729,10 +4980,19 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "secret-token invalid EVM JSON-RPC payload",
             "secret-token generated EVM destination TOML parser detail",
             "secret-token-destination-runtime",
+            "runtime_failure_cases = (",
+            "secret-token {label} imported argument detail",
+            "secret-token {label} imported SystemExit detail",
+            "secret-token {label} imported RuntimeError detail",
             "secret-token {label} imported parser detail",
+            "secret-token {label} imported ValueError detail",
+            "secret-token bridge address SystemExit detail",
+            "secret-token bridge address RuntimeError detail",
+            "secret-token bridge address TypeError detail",
+            "secret-token bridge address ValueError detail",
             'assert "secret-token" not in captured.err',
             'assert "secret-token" not in rendered',
-            'assert "imported parser detail" not in rendered',
+            "assert forbidden_detail not in rendered",
             'assert "must be hex" not in rendered',
             "duplicate JSON keys",
         ),
@@ -4741,21 +5001,26 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
         "scripts/sccp_evm_destination_evidence.py",
         (
             "--{output} has invalid {label} evidence",
-            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
+            "                    SystemExit,",
+            "                    RuntimeError,",
         ),
     ),
     (
         "pytests/scripts/sccp_evm_destination_evidence_test.py",
         (
             "def test_evm_toml_runtime_bytecode_reparse_redacts_parser_detail",
-            "def test_evm_toml_runtime_bytecode_reparse_redacts_helper_typeerror",
+            "def test_evm_toml_runtime_bytecode_reparse_redacts_helper_failures",
             "secret-token-bridge-runtime",
             "secret-token-verifier-runtime",
+            "secret-token {label} copied argument detail",
+            "secret-token {label} copied SystemExit detail",
+            "secret-token {label} copied RuntimeError detail",
             "secret-token {label} copied parser detail",
+            "secret-token {label} copied ValueError detail",
             "--toml has invalid bridge runtime bytecode evidence",
             "--toml has invalid verifier runtime bytecode evidence",
             'assert "secret-token" not in rendered',
-            'assert "copied parser detail" not in rendered',
+            "assert forbidden_detail not in rendered",
             'assert "must be hex" not in rendered',
         ),
     ),
@@ -5305,6 +5570,7 @@ SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
         (
             "def test_retired_network_surface_scan_roots_exist_and_are_nonempty",
             "def test_retired_network_patterns_catch_adversarial_examples",
+            "def test_retired_network_patterns_catch_separator_obfuscation_examples",
             "def test_retired_network_surface_scan_covers_expected_files",
             "def test_retired_network_surface_scan_covers_pipeline_translations",
             "def test_generic_no_support_note_stays_in_launch_scope_files",
@@ -5318,10 +5584,13 @@ SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
             "SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE",
             "SCCP_NOT_REMAINING_WORK_NOTE_FILES",
             "SCCP_NOT_REMAINING_WORK_NOTE",
-            '_literal("sub", "strate")',
-            '_literal("pol", "kadot")',
-            '_literal("ku", "sama")',
-            '_literal(_RUNTIME, " ", _SC, _ALE)',
+            "RETIRED_NETWORK_TOKEN_SEPARATOR",
+            "def _retired_word(",
+            '_retired_word("sub", "strate")',
+            '_retired_word("pol", "kadot")',
+            '_retired_word("ku", "sama")',
+            '_retired_word(_RUNTIME, _SC, _ALE)',
+            '_retired_word("x", "cm")',
             'Path("docs/source/engineering_backlog.md")',
             'Path("docs/source/bridge_proofs.ja.md")',
             'Path("docs/source/bridge_proofs.ru.md")',
@@ -5345,6 +5614,11 @@ SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
     (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
+            "def test_release_readiness_verifier_reports_removed_retired_network_pipeline_doc_guard",
+            "def test_release_readiness_verifier_reports_removed_generic_no_support_note_guard",
+            "def test_release_readiness_verifier_reports_removed_specific_no_support_note_guard",
+            "def test_release_readiness_verifier_reports_stale_retired_network_surface_allowlist",
+            "def test_release_readiness_verifier_reports_custom_retired_network_forbidden_marker",
             "def test_release_readiness_report_guards_retired_network_surface_gate_inventory",
             "def test_release_readiness_report_blocks_missing_retired_network_source_gate",
             "retired_network_surface_gate",
@@ -5702,6 +5976,19 @@ ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS = (
         (
             "def test_release_bundle_verifier_rejects_missing_all_lanes_route_canary_scalar_inventory_gate",
             "def test_release_bundle_verifier_guards_all_lanes_route_canary_scalar_inventory",
+            "def test_release_bundle_verifier_rejects_all_lanes_route_canary_evidence_drift",
+            "def test_release_bundle_verifier_rejects_tron_route_canary_zero_addresses",
+            "def test_release_bundle_verifier_rejects_tron_route_canary_zero_binding_hashes",
+            "def test_release_bundle_verifier_rejects_tron_route_canary_zero_transcript_words",
+            "def test_release_bundle_verifier_rejects_evm_route_canary_zero_transcript_words",
+            "def test_release_bundle_verifier_rejects_evm_route_canary_transcript_hash_reuse",
+            "def test_release_bundle_verifier_rejects_evm_route_canary_governed_hash_reuse",
+            "def test_release_bundle_verifier_rejects_solana_route_canary_zero_programdata_address",
+            "def test_release_bundle_verifier_rejects_ton_route_canary_zero_live_hashes",
+            "def test_release_bundle_verifier_rejects_ton_route_canary_hash_role_reuse",
+            "def test_release_bundle_verifier_rejects_tron_route_canary_transcript_hash_reuse",
+            "def test_release_bundle_verifier_rejects_tron_route_canary_governed_hash_reuse",
+            "def test_release_bundle_verifier_rejects_tron_route_canary_recovered_owner_drift",
         ),
     ),
 )
@@ -5782,6 +6069,7 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "contains {field_kind} field name with sensitive name",
             "def _source_adapter_gate_hash_role_fields(",
             "source_adapter_gate.audit_hashes",
+            "source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.message_id",
         ),
     ),
     (
@@ -5813,7 +6101,15 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "def _all_lanes_route_canary_fields(",
             "def _unknown_public_field_error(",
             "contains unknown field name with sensitive name",
+            "def _nonzero_bytes32_field_errors(",
+            "def _nonzero_fixed_hex_field_errors(",
+            "def _destination_binding_recompute_bundle_errors(",
+            "def _route_allowlist_recompute_bundle_errors(",
             "def _all_lanes_nested_bundle_errors(",
+            "records {field} must be true",
+            "destination_network_id is required for EVM-family lanes",
+            "destination_bridge_address is required for EVM-family lanes",
+            "destination_network_id is required for TRON lanes",
             "source_adapter_gate audit_hashes",
             "def _source_adapter_gate_semantic_errors(",
             "required must be false ",
@@ -5828,6 +6124,7 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "when gate is required",
             "def _source_adapter_gate_hash_role_fields(",
             "source_adapter_gate.audit_hashes",
+            "source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.message_id",
             "def _route_canary_common_semantic_errors(",
             "status must be passed",
             "evidence_source must be {expected_source}",
@@ -5893,6 +6190,8 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "def test_release_bundle_verifier_runs_all_lanes_evidence_root_schema_inventory_sweep",
             "def test_release_bundle_verifier_rejects_missing_all_lanes_evidence_root_schema_inventory_gate",
             "def test_release_bundle_rejects_malformed_copied_evidence_before_render",
+            "def test_release_bundle_rejects_empty_copied_evidence_release_checklist_before_render",
+            "def test_release_bundle_rejects_missing_copied_evidence_roots_before_render",
             "def test_release_bundle_rejects_malformed_copied_evidence_nested_maps_before_render",
             '7: "reviewed outside evidence"',
             "records[7] = True",
@@ -5901,16 +6200,49 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "contains malformed audit field name",
             "def test_release_bundle_rejects_copied_evidence_summary_binding_before_render",
             "def test_release_bundle_rejects_copied_evidence_expected_hash_drift_before_render",
+            "def test_release_bundle_rejects_copied_evidence_destination_binding_recompute_drift_before_render",
+            "def test_release_bundle_rejects_copied_evidence_route_allowlist_recompute_drift_before_render",
+            "def test_release_bundle_rejects_active_copied_destination_binding_recompute_drift_when_lane_not_ready",
+            "def test_release_bundle_rejects_active_copied_destination_family_drift_when_lane_not_ready",
+            "def test_release_bundle_rejects_active_copied_destination_binding_missing_fields_when_lane_not_ready",
+            "def test_release_bundle_rejects_active_copied_source_gate_drift_when_lane_not_ready",
+            "def test_release_bundle_rejects_active_copied_source_gate_transcript_replay_when_lane_not_ready",
+            "def test_release_bundle_rejects_active_copied_source_gate_missing_fields_when_lane_not_ready",
+            "def test_release_bundle_rejects_active_copied_route_canary_semantic_drift_when_lane_not_ready",
+            "def test_release_bundle_rejects_active_copied_evm_route_canary_proof_drift_when_lane_not_ready",
+            "def test_release_bundle_rejects_active_copied_evm_route_canary_transcript_drift_when_lane_not_ready",
+            "def test_release_bundle_rejects_active_copied_evm_route_canary_scalar_drift_when_lane_not_ready",
+            "def test_release_bundle_rejects_active_copied_evm_route_canary_missing_fields_when_lane_not_ready",
+            "def test_release_bundle_rejects_active_copied_route_allowlist_recompute_drift_when_lane_not_ready",
+            "def test_release_bundle_rejects_active_copied_route_allowlist_missing_fields_when_lane_not_ready",
+            "def test_release_bundle_rejects_active_copied_record_flags_missing_when_lane_not_ready",
+            "def test_release_bundle_rejects_active_copied_lane_root_missing_fields_when_lane_not_ready",
+            "def test_release_bundle_rejects_active_copied_source_record_template_replay_when_lane_not_ready",
+            "def test_release_bundle_rejects_active_copied_source_record_missing_fields_when_lane_not_ready",
             "def test_release_bundle_rejects_copied_evidence_evm_live_metadata_drift_before_render",
+            "def test_release_bundle_rejects_active_copied_evm_metadata_missing_fields_when_lane_not_ready",
             "def test_release_bundle_rejects_copied_evidence_source_gate_drift_before_render",
             "def test_release_bundle_rejects_copied_evidence_route_canary_drift_before_render",
             "def test_release_bundle_rejects_copied_evidence_route_canary_evidence_hash_replay_before_render",
+            "def test_release_bundle_rejects_active_copied_route_canary_hash_role_reuse_when_lane_not_ready",
             "def test_release_bundle_rejects_copied_route_canary_source_gate_replay_before_render",
             "def test_release_bundle_verifier_rejects_route_canary_source_gate_hash_replay",
+            "def test_release_bundle_rejects_copied_route_canary_transcript_replay_before_render",
             "def test_release_bundle_rejects_copied_evidence_evm_route_canary_transcript_drift_before_render",
             "def test_release_bundle_rejects_copied_evidence_tron_route_canary_transcript_drift_before_render",
             "def test_release_bundle_rejects_copied_evidence_solana_ton_route_canary_drift_before_render",
+            "def test_release_bundle_rejects_claimed_ready_non_active_all_lanes_drift",
             "def test_release_bundle_rejects_summary_drift_before_write",
+            "def test_release_bundle_verifier_rejects_all_lanes_summary_unknown_fields",
+            "def test_release_bundle_verifier_rejects_all_lanes_lane_unknown_fields",
+            "def test_release_bundle_verifier_rejects_all_lanes_malformed_unknown_fields",
+            "def test_release_bundle_verifier_rejects_all_lanes_list_scalar_type_drift",
+            "def test_release_bundle_verifier_rejects_all_lanes_required_domain_drift",
+            "def test_release_bundle_verifier_rejects_all_lanes_unknown_domain_and_chain_drift",
+            "def test_release_bundle_verifier_rejects_all_lanes_nested_crypto_field_drift",
+            "def test_release_bundle_verifier_rejects_cross_lane_route_canary_evidence_replay",
+            "def test_release_bundle_verifier_rejects_cross_lane_route_canary_transcript_replay",
+            "route_canary.message_id from readiness report embedded evidence lane domain 1",
             "supported_launch_domains must not contain duplicate integers",
             "unsupported_launch_domains must not contain duplicate integers",
             "secret_token_source_hash_field",
@@ -6027,8 +6359,15 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "PUBLIC_LANE_SOURCE_ADAPTER_GATE_FIELDS = (",
             "PUBLIC_LANE_EVM_LIVE_METADATA_FIELDS = (",
             "PUBLIC_LANE_DESTINATION_BINDING_FIELDS = (",
+            "PUBLIC_LANE_DESTINATION_BINDING_REQUIRED_FIELDS = (",
             "PUBLIC_LANE_ROUTE_ALLOWLIST_FIELDS = (",
             "PUBLIC_LANE_ROUTE_CANARY_FIELDS = (",
+            "PUBLIC_LANE_ROUTE_CANARY_COMMON_FIELDS = (",
+            "PUBLIC_LANE_EVM_ROUTE_CANARY_FIELDS = ",
+            "PUBLIC_LANE_TRON_ROUTE_CANARY_FIELDS = ",
+            "PUBLIC_LANE_SOLANA_ROUTE_CANARY_FIELDS = ",
+            "PUBLIC_LANE_TON_ROUTE_CANARY_FIELDS = ",
+            "PUBLIC_LANE_ROUTE_CANARY_FIELDS_BY_DOMAIN = {",
             "PUBLIC_DOMAIN_LISTS = {",
             "must be the production remote domains",
             "must be the supported launch remote domains",
@@ -6043,10 +6382,80 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "contains sensitive value",
             "def _public_lane_object_field_errors(",
             "Return bounded public errors for copied lane object field drift.",
+            "def _public_lane_missing_field_errors(",
+            "Return bounded public errors for omitted copied lane object fields.",
+            "def _public_lane_required_bytes32_errors(",
+            "must be a canonical non-zero bytes32",
+            "def _public_lane_optional_bytes32_errors(",
+            "def _public_lane_required_fixed_hex_errors(",
+            "def _public_lane_destination_family_errors(",
+            "destination_network_id is required for EVM-family lanes",
+            "destination_bridge_address is required for EVM-family lanes",
+            "destination_network_id is required for TRON lanes",
+            "destination_bridge_address is only valid for EVM-family lanes",
+            "destination_network_id is only valid for EVM-family or TRON lanes",
+            "def _public_lane_destination_binding_recompute_errors(",
+            "def _public_lane_matching_field_errors(",
+            "def _public_lane_matching_value_errors(",
+            "def _public_lane_route_allowlist_recompute_errors(",
+            "def _public_lane_route_canary_hash_role_errors(",
+            "must match destination_binding_hash",
+            "must match route_allowlist_hash",
+            "destination_binding_hash must recompute from destination_binding_key",
+            "route_allowlist_hash must recompute from source material",
+            "source adapter deployment, and destination binding hashes",
+            "lane route_allowlist_hash",
+            "lane destination_binding_hash",
+            "def _public_lane_optional_bool_errors(",
+            "def _public_lane_optional_canonical_string_errors(",
+            "def _public_lane_optional_positive_int_errors(",
+            "def _public_lane_optional_nonnegative_int_errors(",
+            "def _public_lane_optional_u32_errors(",
+            "def _public_lane_optional_int_errors(",
+            "def _public_lane_optional_positive_decimal_string_errors(",
+            "def _public_lane_optional_tron_address_errors(",
+            "def _public_lane_optional_true_errors(",
+            "def _public_lane_optional_exact_string_errors(",
+            "def _public_lane_optional_lane_domain_errors(",
+            "def _public_lane_optional_int_constant_errors(",
+            "def _public_lane_optional_decimal_constant_errors(",
+            "PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS,",
+            '("gate_hash",),',
+            "f\"{lane_label}.source_adapter_gate.audit_hashes\",",
+            "f\"{lane_label}.evm_live_metadata\",",
+            "f\"{lane_label}.destination_binding\",",
+            "f\"{lane_label}.route_allowlist\",",
+            "f\"{lane_label}.route_allowlist.route_canary\",",
+            "def _public_lane_required_true_errors(",
+            "def _public_lane_required_bool_errors(",
+            "def _public_lane_non_evm_live_metadata_errors(",
+            "def _public_lane_required_exact_string_errors(",
+            "def _public_lane_required_canonical_string_errors(",
+            "def _public_lane_required_positive_int_errors(",
+            "def _public_lane_required_nonnegative_int_errors(",
+            "def _public_lane_required_u32_errors(",
+            "def _public_lane_required_positive_decimal_string_errors(",
+            "def _public_lane_required_lane_domain_errors(",
+            "def _public_lane_required_int_constant_errors(",
+            "def _public_lane_required_tron_address_errors(",
+            "def _public_lane_tron_address_match_errors(",
+            'return [f"{label}.{field} must match lane domain"]',
+            'return [f"{label}.{field} must be {expected_label}"]',
+            '("ton_last_transaction_lt",)',
+            '("solana_programdata_slot",)',
+            'f"{label}.{field} must be a canonical positive decimal string"',
             ".source_adapter_gate.audit_hashes must be an object",
+            ".source_adapter_gate.required must be a boolean",
+            ".source_adapter_gate.ready must be a boolean",
+            ".source_adapter_gate blockers must be empty",
+            "_source_adapter_gate_release_metadata_blockers(",
             ".route_allowlist.route_canary",
             "def _public_lanes_errors(",
             "all-lanes summary lanes must be a list of objects",
+            "lane_require_ready = (",
+            "require_ready or lane_ready is True or domain == SCCP_DOMAIN_ETH",
+            "elif lane_require_ready and records.get(field) is not True:",
+            "if lane_require_ready and gate_blockers:",
             "all-lanes summary lanes missing domain",
             "def _public_domain_list_errors(",
             "must not contain duplicate integers",
@@ -6059,6 +6468,7 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "all-lanes summary lanes are invalid",
             "all-lanes summary release_checklist missing",
             "all-lanes summary release_checklist is invalid",
+            'blockers.append(f"all-lanes summary {field} missing")',
             "field not in public_summary_fields",
             "if field in summary",
             'return 0 if summary.get("production_ready") is True else 1',
@@ -6070,6 +6480,7 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "lane chain must be a non-empty canonical string",
             "live route canary evidence source cannot be validated for malformed lane domain",
             "source_adapter_gate hash role",
+            "source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.message_id",
             'label=f"{lane_label}: source adapter gate hash role"',
             "def _unexpected_audit_hash_field_detail(",
             "source adapter gate hash must match audit_hashes.",
@@ -6126,15 +6537,146 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             'lane["source_record_hashes"][7] = "safe source int-key note"',
             'lane["source_adapter_gate"]["audit_hashes"][7] = hex32(0x74)',
             'lane["route_allowlist"]["route_canary"][7] = "safe canary int-key note"',
+            "def test_all_lanes_cli_rejects_copied_source_adapter_gate_drift_without_leaking",
+            "def test_all_lanes_cli_rejects_copied_not_ready_source_adapter_gate_semantics",
+            "def test_all_lanes_cli_rejects_active_copied_source_gate_missing_fields_when_lane_not_ready",
+            "def test_all_lanes_cli_rejects_copied_not_ready_active_lane_ready_drift",
+            "def test_all_lanes_cli_rejects_active_copied_record_flags_missing_when_lane_not_ready",
+            "def test_all_lanes_cli_rejects_active_copied_lane_root_missing_fields_when_lane_not_ready",
+            'eth_lane["source_adapter_gate"]["required"] = "true"',
+            'bsc_lane["source_adapter_gate"]["gate_hash"] = hex32(0)',
+            "def test_all_lanes_cli_rejects_copied_ready_lane_hash_shape_drift",
+            "def test_all_lanes_cli_rejects_active_copied_source_record_template_replay_when_lane_not_ready",
+            "def test_all_lanes_cli_rejects_active_copied_source_record_missing_fields_when_lane_not_ready",
+            "def test_all_lanes_cli_rejects_copied_not_ready_nested_hash_shape_drift",
+            "def test_all_lanes_cli_rejects_copied_not_ready_nested_scalar_shape_drift",
+            "def test_all_lanes_cli_rejects_copied_not_ready_nested_semantic_drift",
+            "def test_all_lanes_cli_rejects_active_copied_route_canary_semantic_drift_when_lane_not_ready",
+            "def test_all_lanes_cli_rejects_active_copied_evm_route_canary_proof_drift_when_lane_not_ready",
+            "def test_all_lanes_cli_rejects_active_copied_evm_route_canary_transcript_drift_when_lane_not_ready",
+            "def test_all_lanes_cli_rejects_active_copied_evm_route_canary_scalar_drift_when_lane_not_ready",
+            "def test_all_lanes_cli_rejects_active_copied_evm_route_canary_missing_fields_when_lane_not_ready",
+            "def test_all_lanes_cli_rejects_copied_not_ready_claimed_ready_lane_drift",
+            "def test_all_lanes_cli_rejects_copied_not_ready_claimed_ready_destination_family_drift",
+            "def test_all_lanes_cli_rejects_active_copied_destination_family_drift_when_lane_not_ready",
+            "def test_all_lanes_cli_rejects_copied_not_ready_claimed_ready_hash_binding_drift",
+            "def test_all_lanes_cli_rejects_copied_not_ready_hash_binding_drift",
+            "def test_all_lanes_cli_rejects_copied_not_ready_route_allowlist_recompute_drift",
+            "def test_all_lanes_cli_rejects_copied_not_ready_destination_binding_recompute_drift",
+            "def test_all_lanes_cli_rejects_active_copied_route_allowlist_recompute_drift_when_lane_not_ready",
+            "def test_all_lanes_cli_rejects_active_copied_route_allowlist_missing_fields_when_lane_not_ready",
+            "def test_all_lanes_cli_rejects_active_copied_destination_binding_recompute_drift_when_lane_not_ready",
+            "def test_all_lanes_cli_rejects_active_copied_destination_binding_missing_fields_when_lane_not_ready",
+            "def test_all_lanes_cli_rejects_copied_not_ready_route_canary_hash_role_reuse",
+            "def test_all_lanes_cli_rejects_active_copied_route_canary_hash_role_reuse_when_lane_not_ready",
+            "def test_all_lanes_cli_rejects_copied_not_ready_claimed_ready_evm_metadata_drift",
+            "def test_all_lanes_cli_rejects_active_copied_evm_metadata_drift_when_lane_not_ready",
+            "def test_all_lanes_cli_rejects_active_copied_evm_metadata_missing_fields_when_lane_not_ready",
+            "def test_all_lanes_cli_rejects_copied_not_ready_non_evm_metadata_drift",
+            "def test_all_lanes_cli_rejects_copied_not_ready_route_canary_domain_field_drift",
+            "def test_all_lanes_cli_rejects_copied_not_ready_route_canary_missing_fields",
+            "def test_all_lanes_cli_rejects_copied_not_ready_nested_missing_fields",
+            "def test_all_lanes_cli_rejects_copied_not_ready_required_hash_empties",
+            "def test_all_lanes_cli_rejects_copied_not_ready_evm_required_field_drift",
+            "not-a-source-hash",
+            "not-a-gate-hash",
+            "not-an-audit-hash",
+            "not-a-destination-hash",
+            "not-a-route-hash",
+            "not-a-canary-hash",
+            "yes-recomputed",
+            "yes-route",
+            "bad-owner-address",
+            "evm_live_metadata.source_rpc_chain_id must be a canonical ",
+            "evm_live_metadata.destination_rpc_chain_id must be a canonical ",
+            "route_allowlist.route_canary.signature_recovered_address must be ",
+            "safe-block-tag",
+            "wrong_source",
+            "evm_live_metadata.source_rpc_chain_id must be 1",
+            "evm_live_metadata.destination_rpc_chain_id must be 1",
+            "evm_live_metadata.ready must be a boolean",
+            "evm_live_metadata.destination_block_tag must be finalized",
+            "evm_live_metadata.destination_block_tag must be a non-empty canonical string",
+            "destination_binding.destination_binding_key must be a non-empty canonical string",
+            "evm_live_metadata.required must be false for non-EVM lanes",
+            "evm_live_metadata.ready must be true for non-EVM lanes",
+            "evm_live_metadata.source_rpc_chain_id must be empty for non-EVM lanes",
+            "evm_live_metadata.destination_rpc_chain_id must be empty for non-EVM lanes",
+            "safe-solana-block-tag",
+            "safe-tron-block-tag",
+            "route_allowlist.route_canary unexpected field solana_programdata_slot",
+            "route_allowlist.route_canary unexpected field transaction_hash",
+            "route_allowlist.route_canary unexpected field transaction_id",
+            "route_allowlist.route_canary unexpected field ton_last_transaction_lt",
+            "route_allowlist.route_canary missing field transaction_hash",
+            "route_allowlist.route_canary missing field solana_programdata_address",
+            "route_allowlist.route_canary missing field ton_last_transaction_hash",
+            "route_allowlist.route_canary missing field signature_sha256",
+            "source_record_hashes missing field source_verifier_material_hash",
+            "source_adapter_gate missing field gate_hash",
+            "source_adapter_gate.audit_hashes missing field",
+            "evm_live_metadata missing field source_block_tag",
+            "destination_binding missing field expected_destination_binding_hash",
+            "route_allowlist missing field route_canary",
+            "destination_binding.expected_destination_binding_hash must be a canonical non-zero bytes32",
+            "route_allowlist.route_allowlist_hash must be a canonical non-zero bytes32",
+            "route_allowlist.route_canary.destination_binding_hash must be a canonical non-zero bytes32",
+            "source adapter gate required flag must match lane policy",
+            "source adapter gate hash must be empty when not required",
+            "source adapter gate audit hashes must be empty when not required",
+            "source adapter gate ready must be true when not required",
+            "source adapter gate blockers must be empty when not required",
+            "source adapter gate ready must be true when required",
+            "source adapter gate blockers must be empty when required",
+            "source adapter gate hash must match audit_hashes.evm_source_gate_hash",
+            "records.source_verifier_material must be true",
+            "records.route_allowlist must be true",
+            "operator pending active lane certification",
+            "route_allowlist.route_canary.proof_source_domain must be ",
+            "claimed-ready lane blocker",
+            "source_record_hashes.source_verifier_material_hash must be a ",
+            "operator pending diagnostic BSC lane certification",
+            "operator pending route recompute certification",
+            "operator pending route-canary role audit",
+            "route_allowlist.route_canary hash role evidence_hash must not",
+            "reuse route_allowlist_hash",
+            "route_allowlist.route_canary hash role message_id must not reuse",
+            "source_verifier_material_hash",
+            "reuse source_adapter_gate_hash",
+            "route_allowlist.route_canary hash role ton_account_state_hash must",
+            "not reuse destination_binding_hash",
+            "route_allowlist.route_canary.message_id must be a canonical non-zero bytes32",
+            "def test_all_lanes_cli_rejects_copied_ready_route_canary_scalar_drift",
+            "forged-status",
+            "forged-source",
+            "route_allowlist.route_canary.status must be passed",
+            "route_allowlist.route_canary.evidence_bound must be true",
+            "route_allowlist.route_canary.receipt_block_number must be a positive integer",
+            "route_allowlist.route_canary.log_index must be a u32 integer",
+            "route_allowlist.route_canary.target_domain must match lane domain",
+            "route_allowlist.route_canary.proof_version must be 1",
+            "route_allowlist.route_canary.proof_source_domain must be SORA domain",
+            "route_allowlist.route_canary.message_proof_used must be a boolean",
+            "route_allowlist.route_canary.receipt_block_finalized must be true",
+            "route_allowlist.route_canary.block_number must be a positive integer",
+            "route_allowlist.route_canary.block_timestamp must be a non-negative integer",
+            "route_allowlist.route_canary.raw_data_owner_matches_transaction must be a boolean",
+            "route_allowlist.route_canary.signature_recovers_to_owner must be true",
+            "route_allowlist.route_canary.signature_recovered_address must match ",
+            "route_allowlist.route_canary.solana_programdata_slot must be a",
+            "route_allowlist.route_canary.ton_last_transaction_lt must be a",
             "all-lanes summary lanes[0].source_record_hashes unexpected field ",
             "all-lanes summary lanes[0].source_adapter_gate.audit_hashes unexpected ",
             "field operator_override",
+            "source adapter gate hash must be a canonical non-zero bytes32",
             "all-lanes summary lanes[0].route_allowlist.route_canary unexpected field ",
             "unexpected non-string ",
             "contains non-string field name",
             "safe source note",
             "safe source int-key note",
             "def test_all_lanes_cli_rejects_malformed_lanes_without_leaking",
+            "def test_all_lanes_cli_rejects_empty_copied_release_checklist_without_leaking",
+            "def test_all_lanes_cli_rejects_missing_copied_summary_roots_without_leaking",
             "def test_all_lanes_cli_rejects_malformed_release_checklist_without_leaking",
             "all-lanes summary lanes must be a list of objects",
             "all-lanes summary lanes[0] chain must match the lane domain",
@@ -6158,7 +6700,11 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "def test_all_lanes_evidence_rejects_cross_lane_route_canary_replay",
             "def test_all_lanes_evidence_rejects_cross_lane_route_canary_source_hash_replay",
             "def test_all_lanes_evidence_rejects_cross_lane_route_canary_governed_hash_replay",
+            "def test_all_lanes_evidence_rejects_cross_lane_route_canary_source_gate_replay",
+            "def test_all_lanes_evidence_rejects_cross_lane_route_canary_transcript_replay",
             "route canary evidence hash for domain 2 must be distinct from domain 1",
+            "route_canary.message_id for domain 1",
+            "source_adapter_gate.audit_hashes.solana_tower_replay_verifier_hash",
             "def test_all_lanes_release_checklist_requires_source_gate_hash_and_audits",
             "def test_all_lanes_release_checklist_rejects_source_gate_template_replays",
             "checklist_source_gate_lane",
@@ -6467,6 +7013,23 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "def test_release_bundle_verifier_guards_all_lanes_release_checklist_exact_boolean_inventory",
             "def test_release_bundle_verifier_guards_all_lanes_route_canary_sdk_role_inventory",
             "def test_release_bundle_verifier_rejects_missing_all_lanes_release_checklist_exact_boolean_inventory_gate",
+            "def test_release_bundle_verifier_rejects_malformed_active_route_canary_source",
+            "def test_release_bundle_verifier_rejects_all_lanes_lane_not_ready",
+            "def test_release_bundle_verifier_rejects_all_lanes_missing_record_flags",
+            "def test_release_bundle_verifier_rejects_all_lanes_zero_governed_hashes",
+            "def test_release_bundle_verifier_rejects_all_lanes_zero_source_gate_hashes",
+            "def test_release_bundle_verifier_rejects_source_gate_hash_named_role_drift",
+            "def test_release_bundle_verifier_rejects_source_gate_domain_policy_drift",
+            "def test_release_bundle_verifier_rejects_source_gate_audit_hash_role_reuse",
+            "def test_release_bundle_verifier_recomputes_all_lanes_route_allowlist_hash",
+            "def test_release_bundle_verifier_rejects_required_source_gate_ready_without_audits",
+            "def test_release_bundle_verifier_rejects_required_source_gate_not_ready",
+            "def test_release_bundle_verifier_rejects_required_source_gate_unbacked_hash",
+            "def test_release_bundle_verifier_rejects_required_source_gate_audit_key_drift",
+            "def test_release_bundle_verifier_rejects_all_lanes_route_canary_hash_drift",
+            "def test_release_bundle_verifier_rejects_route_canary_evidence_hash_role_reuse",
+            "def test_release_bundle_verifier_rejects_route_canary_source_gate_hash_replay",
+            "def test_release_bundle_verifier_rejects_all_lanes_expected_hash_drift",
         ),
     ),
 )
@@ -6807,18 +7370,25 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "domain.string",
             "chain.padded",
             "production_ready.string",
+            "def test_release_bundle_verifier_recomputes_active_checklist_with_exact_metadata",
+            "def test_release_bundle_verifier_rejects_release_checklist_drift",
+            "def test_release_bundle_verifier_rejects_release_checklist_unknown_fields",
+            "def test_release_bundle_verifier_rejects_release_checklist_duplicate_item_ids",
             "def test_release_bundle_verifier_active_launch_blockers_reject_malformed_containers",
             "top_level.numeric",
             "def test_release_bundle_verifier_classifies_malformed_active_required_record_fields",
             "def test_release_bundle_verifier_classifies_malformed_active_lane_blockers",
             "def test_release_bundle_verifier_rejects_release_checklist_field_type_drift",
             "def test_release_bundle_verifier_rejects_release_checklist_malformed_unknown_fields",
+            "def test_release_bundle_verifier_rejects_release_checklist_malformed_item_ids",
+            "def test_release_bundle_verifier_rejects_release_checklist_blocked_items",
             "def test_release_bundle_rejects_unknown_copied_checklist_fields_before_render",
             "operator|secret-token",
             'checklist[7] = "safe checklist int-key note"',
             'item[7] = "safe checklist item int-key note"',
             "contains malformed unknown field name",
             "def test_release_bundle_rejects_malformed_copied_checklist_before_render",
+            "def test_release_bundle_rejects_empty_copied_checklist_before_render",
             "secret_token_checklist_item",
             'assert "secret_token_checklist_item" not in captured.err',
             "def test_release_bundle_rejects_copied_checklist_binding_before_render",
@@ -7205,6 +7775,9 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "source-adapter deployment binding hashes must reject unsupported source domains",
             "source-adapter deployment binding bytes must reject local SORA source domains",
             "source-adapter deployment binding hashes must reject non-SORA targets",
+            "source-adapter deployment bindings must not be minted from partial TON audit descriptors",
+            "source-adapter deployment bindings must not be minted from receipt/VK role replay",
+            "source-adapter deployment bindings must not be minted from verifier-key drift",
             "SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1",
         ),
     ),
@@ -7227,6 +7800,9 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sourceStateProof must be a TON source-state stark-fri-v1 proof",
             "sourceAdapterDeploymentBinding.sourceDomain must be a launch-scope remote domain",
             "sourceAdapterDeploymentBinding.targetDomain must be SORA",
+            "export function sccpSourceAdapterDeploymentBindingFromDeployment",
+            "sourceStateVerifierHash must match sourceAdapterDeployment",
+            "sourceAdapterDeploymentBinding must match sourceAdapterDeployment",
             "export function wrapTonSccpSourceStateVerificationProof(proofBytes, request) {\n"
             "  const proofRequest = normalizeTonSourceStateProofRequestForWrapping(request);\n"
             "  const proof = copyBytes(toBytes(proofBytes, \"proofBytes\"));\n"
@@ -7252,6 +7828,9 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sourceStateProof must be a TON source-state stark-fri-v1 proof",
             "sourceAdapterDeploymentBinding.sourceDomain must be a launch-scope remote domain",
             "sourceAdapterDeploymentBinding.targetDomain must be SORA",
+            "export function sccpSourceAdapterDeploymentBindingFromDeployment",
+            "sourceStateVerifierHash must match sourceAdapterDeployment",
+            "sourceAdapterDeploymentBinding must match sourceAdapterDeployment",
             "export function wrapTonSccpSourceStateVerificationProof(proofBytes, request) {\n"
             "  const proofRequest = normalizeTonSourceStateProofRequestForWrapping(request);\n"
             "  const proof = copyBytes(toBytes(proofBytes, \"proofBytes\"));\n"
@@ -7286,6 +7865,10 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sourceAdapterDeploymentReceiptHash: HEX32_B",
             "/must both be zero or both be non-zero/",
             "/must differ from sourceAdapterDeploymentReceiptHash/",
+            "sccpSourceAdapterDeploymentBindingFromDeployment(",
+            "sourceAdapterDeployment: auditedTonDeployment",
+            "/sourceStateVerifierHash must match sourceAdapterDeployment/",
+            "/sourceAdapterDeploymentBinding must match sourceAdapterDeployment/",
         ),
     ),
     (
@@ -7300,6 +7883,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "TON source-state stark-fri-v1 proof",
             "oversizedTonDistSourceStateProofBytes",
             "oversizedTonDistCallbackProver",
+            "sourceAdapterDeployment\\?: SccpSourceAdapterEngineDeploymentInput",
+            "sccpSourceAdapterDeploymentBindingFromDeployment(",
         ),
     ),
     (
@@ -7354,6 +7939,9 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sourceStateProof must be a TON source-state stark-fri-v1 proof",
             "sourceAdapterDeploymentBinding.sourceDomain must be a launch-scope remote domain",
             "sourceAdapterDeploymentBinding.targetDomain must be SORA",
+            "def sccp_source_adapter_deployment_binding_from_deployment",
+            "sourceStateVerifierHash must match sourceAdapterDeployment",
+            "sourceAdapterDeploymentBinding must match sourceAdapterDeployment",
         ),
     ),
     (
@@ -7392,6 +7980,10 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             '"source_adapter_deployment_receipt_hash": HEX32_B',
             'match="must both be zero or both be non-zero"',
             'match="must differ from sourceAdapterDeploymentReceiptHash"',
+            "sccp_source_adapter_deployment_binding_from_deployment(",
+            "source_adapter_deployment=audited_ton_deployment",
+            'match="sourceStateVerifierHash must match sourceAdapterDeployment"',
+            'match="sourceAdapterDeploymentBinding must match sourceAdapterDeployment"',
             "def sample_token_add_bundle_fixture",
             "lowercase_required_eip55_recipient",
             "lowercase_required_eip55_sender",
@@ -7440,6 +8032,10 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "proof.proofFamily == STARK_FRI_PROOF_FAMILY_V1",
             "proof.proofBytes.size <= SOURCE_STATE_MAX_PROOF_BYTES",
             "proofBytes.size <= SOURCE_STATE_MAX_PROOF_BYTES",
+            "fun sourceAdapterDeploymentBindingFromDeployment(",
+            "sourceStateVerifierHash must match sourceAdapterDeployment",
+            "sourceAdapterDeploymentBinding must match sourceAdapterDeployment",
+            "data class TonSccpSourceAdapterDeploymentInput(",
         ),
     ),
     (
@@ -7457,6 +8053,10 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "oversizedCallbackProver",
             'proofFamily = "debug-proof-family"',
             "proofBytes must be at most",
+            "sampleAuditedTonDeployment()",
+            "sourceAdapterDeployment = auditedTonDeployment",
+            "sourceStateVerifierHash must match sourceAdapterDeployment",
+            "sourceAdapterDeploymentBinding must match sourceAdapterDeployment",
         ),
     ),
     (
@@ -7495,6 +8095,10 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "!STARK_FRI_PROOF_FAMILY_V1.equals(proof.proofFamily())",
             "proof.proofBytes().length > SOURCE_STATE_MAX_PROOF_BYTES",
             "normalizedProofBytes.length > SOURCE_STATE_MAX_PROOF_BYTES",
+            "sourceAdapterDeploymentBindingFromDeployment(final SourceAdapterDeploymentInput input)",
+            "sourceStateVerifierHash must match sourceAdapterDeployment",
+            "sourceAdapterDeploymentBinding must match sourceAdapterDeployment",
+            "public record SourceAdapterDeploymentInput(",
         ),
     ),
     (
@@ -7513,6 +8117,10 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "oversizedCallbackProver",
             '"debug-proof-family"',
             "TON source-state verification proof family must be stark-fri-v1",
+            "sampleAuditedTonDeployment()",
+            "auditedTonDeployment",
+            "sourceStateVerifierHash must match sourceAdapterDeployment",
+            "sourceAdapterDeploymentBinding must match sourceAdapterDeployment",
         ),
     ),
     (
@@ -7573,6 +8181,10 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "proof.proofBytes.count <= sccpSourceStateMaxProofBytes",
             "proofBytes.count <= sccpSourceStateMaxProofBytes",
             "proof.proofFamily == tonStarkFriProofFamilyV1",
+            "public struct TonSccpSourceAdapterDeploymentInput",
+            "sourceAdapterDeployment: TonSccpSourceAdapterDeploymentInput?",
+            "public func sccpTonSourceAdapterDeploymentBindingFromDeployment(",
+            "sourceAdapterDeployment.sourceStateVerifierHash",
         ),
     ),
     (
@@ -7609,6 +8221,10 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "Receipt-only deployment bindings must fail, not only deployment-only bindings.",
             "sourceAdapterDeploymentHash: sccpZeroHashV1",
             "sourceAdapterDeploymentReceiptHash: String(repeating: \"cd\", count: 32)",
+            "sampleAuditedTonDeployment()",
+            "sourceAdapterDeployment: auditedTonDeployment",
+            "sccpTonSourceAdapterDeploymentBindingFromDeployment",
+            "sourceAdapterDeployment.sourceStateVerifierHash",
         ),
     ),
     (
@@ -8186,6 +8802,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_readiness_all_public_sccp_sdk_sources_are_native_local_prover_only",
             "def test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned",
             "def test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned",
+            "def test_release_readiness_report_blocks_without_native_evm_prover_bundle",
             "def test_release_readiness_report_blocks_duplicate_native_evm_prover_json_keys",
             "def test_release_readiness_report_blocks_duplicate_native_evm_prover_nested_json_keys",
             "def test_release_readiness_report_blocks_duplicate_native_evm_prover_sdk_artifact_keys",
@@ -8372,6 +8989,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
         (
             "def test_release_bundle_verifier_guards_native_evm_canonical_sdk_inventory",
             "def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory",
+            "def test_release_bundle_requires_native_evm_prover_bundle",
             "def test_release_bundle_rejects_empty_native_evm_prover_payload",
             "def test_release_bundle_rejects_tiny_native_evm_prover_payload",
             "def test_release_bundle_rejects_native_evm_prover_forbidden_payload_marker",
@@ -8508,6 +9126,7 @@ SCCP_PHASE_EVIDENCE_SOURCE_MARKERS = (
             "test_release_readiness_report_rejects_padded_phase_result_status",
             "test_release_readiness_report_rejects_malformed_phase_result_status_values",
             "test_release_readiness_report_suppresses_unknown_phase_result_status",
+            "test_release_readiness_report_strict_phase_evidence_blocks_missing_artifacts",
             "test_release_readiness_report_rejects_padded_phase_evidence_name",
             "test_release_readiness_report_suppresses_phase_evidence_syntax_input",
             "test_release_readiness_report_rejects_empty_phase_evidence_path",
@@ -8558,6 +9177,7 @@ SCCP_PHASE_EVIDENCE_SOURCE_MARKERS = (
             "test_release_bundle_rejects_padded_phase_result_status_before_render",
             "test_release_bundle_rejects_malformed_phase_result_status_values_before_render",
             "test_release_bundle_suppresses_unknown_phase_result_status_before_render",
+            "test_release_bundle_requires_hashed_phase_evidence",
             "test_release_bundle_rejects_padded_phase_evidence_name_before_copy",
             "test_release_bundle_suppresses_phase_evidence_syntax_input_before_copy",
             "test_release_bundle_rejects_empty_phase_evidence_path_before_copy",
@@ -8620,6 +9240,12 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "if fragment in CONTRACT_SMOKE_NODE_SUCCESS_FRAGMENTS:",
             "def _phase_success_command_windows(",
             "def _phase_success_fragment_has_position_after_required_command(",
+            "def _phase_success_fragment_positions_are_only_in_required_command_windows(",
+            ".NET success marker appears outside its required command window",
+            "PHASE_SUCCESS_OUTSIDE_WINDOW_ERROR_FRAGMENT",
+            "success marker appears outside its required command window",
+            "PHASE_DUPLICATE_SUCCESS_ERROR_FRAGMENT",
+            "success marker appears more times than required command windows",
             "required_success_command_positions = _phase_block_command_fragment_line_indices(",
             "phase_required_fragments = PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase, ())",
             "later_command_positions: list[int] = []",
@@ -8629,19 +9255,32 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "SCCP .NET SDK Architecture:",
             "DOTNET_VERSION_SUCCESS_PREFIX",
             "DOTNET_VERSION_SUCCESS_PATTERN",
+            r"^SCCP \.NET SDK version:\s+8\.0\.[1-9][0-9]*$",
             "DOTNET_WINDOWS_OS_SUCCESS_LINE",
             "DOTNET_RID_SUCCESS_PREFIX",
             "DOTNET_RID_SUCCESS_PATTERN",
+            "DOTNET_RID_ARCHITECTURES",
             "DOTNET_ARCHITECTURE_SUCCESS_PREFIX",
             "DOTNET_ARCHITECTURE_SUCCESS_PATTERN",
             "DOTNET_TEST_PASSED_SUCCESS_FRAGMENT",
+            "DOTNET_TEST_ASSEMBLY_SUCCESS_SUFFIX",
+            "Hyperledger.Iroha.Sdk.Tests.dll (net8.0)",
+            "DOTNET_TEST_DURATION_SUCCESS_PATTERN",
+            "(?P<duration>",
+            "(?:ms|s|m|h)",
             "DOTNET_TEST_PASSED_SUCCESS_PATTERN",
+            r"Skipped:\s*(?P<skipped>0)",
             "def _dotnet_test_passed_success_line_matches(",
             "total == passed + skipped",
+            "skipped == 0",
+            "def _dotnet_phase_block_rid_architecture_markers_match(",
+            "rid_architectures[0] == architectures[0]",
             "DOTNET_TRX_SUCCESS_PREFIX",
             "DOTNET_TRX_SUCCESS_PATTERN",
+            r"(?:[A-Za-z0-9][A-Za-z0-9_.-]*/)*TestResults/",
             "line == CORRIDOR_COMPLETION_SENTINEL",
             "def _phase_command_lines(",
+            'normalized_line.lstrip().startswith("+ ")',
             "def _phase_effective_command_tokens(",
             "PYTEST_OPTIONS_WITH_VALUES",
             "NODE_TEST_OPTIONS_WITH_VALUES",
@@ -8655,18 +9294,79 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "def _node_test_command_files(",
             "def _node_check_command_matches(",
             "def _dotnet_sdk_command_matches(",
+            "def _dotnet_setup_command_matches(",
+            "def _dotnet_phase_block_forbidden_test_command(",
+            ".NET phase ran a non-canonical dotnet test command",
+            "def _dotnet_phase_block_forbidden_setup_command(",
+            ".NET phase ran a non-canonical dotnet setup command",
+            "def _dotnet_bridge_build_target_dir(",
+            'name == "CARGO_TARGET_DIR"',
+            "def _dotnet_bridge_build_has_noncanonical_env_prefix(",
+            "def _dotnet_phase_block_has_noncanonical_bridge_build_env_prefix(",
+            "def _dotnet_bridge_build_command_matches(",
+            "def _dotnet_normalized_path_text(",
+            "def _dotnet_phase_block_bridge_path_matches_target_dir(",
+            'bridge_path == f"{target_dir}/debug/connect_norito_bridge.dll"',
+            "evidence artifact .NET native bridge path does not match",
+            "evidence artifact .NET RID and architecture markers disagree",
+            "CARGO_TARGET_DIR/debug handoff",
             "def _phase_prefix_env_assignments(",
             "def _android_harness_mains_classes(",
+            "DOTNET_PHASE_ALLOWED_ENV_ASSIGNMENTS",
+            "DOTNET_PHASE_REQUIRED_ENV_ASSIGNMENTS",
+            "DOTNET_PHASE_FIXED_ENV_VALUES",
+            "def _dotnet_phase_command_dir(",
+            "def _dotnet_phase_command_uses_bridge_path(",
+            "def _dotnet_phase_path_value_matches_bridge_dir(",
+            "def _dotnet_phase_command_has_noncanonical_env_prefix(",
+            "def _dotnet_phase_block_has_noncanonical_env_prefix(",
+            "def _dotnet_phase_bridge_library_dir(",
+            "non-canonical environment prefix",
             "def _gradle_test_selector_matches(",
             "def _gradle_test_command_selectors(",
+            "def _gradle_test_selectors_match_expected(",
+            "def _kotlin_sdk_expected_test_selectors(",
+            "def _java_android_expected_harness_classes(",
+            "def _java_android_harness_command_matches(",
             "actual_harness_classes = _android_harness_mains_classes(command)",
+            "== _java_android_expected_harness_classes()",
+            "exact Kotlin Gradle selector list",
+            "exact Java Android harness class list including TRON",
             "tuple(tokens) == tuple(shlex.split(fragment))",
             "_command_token_basename(tokens[0]) == fragment_tokens[0]",
             "shlex.split(command, comments=True)",
+            "wrapped_command = _phase_command_has_runner_cd_wrapper(raw_tokens)",
+            "def _phase_command_has_runner_cd_wrapper(",
+            'raw_tokens[0] == "(cd"',
+            "def _phase_command_runner_cd_dir(",
+            "def _phase_command_expected_wrapper_basenames(",
+            'phase == EVM_NATIVE_DOTNET_PHASE and command_name == "dotnet"',
+            "def _phase_block_has_unexpected_runner_cd_wrapper(",
+            "unexpected runner cd wrapper directory",
+            "def _phase_command_has_unsupported_parenthesized_group(",
+            "def _phase_block_has_unsupported_parenthesized_group(",
+            "unsupported parenthesized traced command",
+            "normalized = normalized[1:]",
+            "def _phase_command_is_parseable(",
+            "def _phase_block_has_unparseable_command(",
+            "contains unparseable traced command",
             'tokens.index("&&") == 2',
             "def _effective_command_equals(",
             "def _phase_command_matches_required_fragment(",
             "def _phase_block_command_fragment_line_indices(",
+            "def _phase_block_has_ordered_command_fragments(",
+            "def _phase_block_duplicate_command_fragment(",
+            ".NET commands are not in required version-info-bridge-restore-test order",
+            ".NET command appears more than once:",
+            "PHASE_DUPLICATE_COMMAND_ERROR_FRAGMENT",
+            "command appears more than once:",
+            "def _phase_block_has_ordered_output_fragments(",
+            "def _phase_block_output_fragments_are_strictly_ordered(",
+            "min(positions) <= previous_max_position",
+            "def _phase_block_duplicate_output_fragment(",
+            ".NET native bridge markers are not in required path-sha256 order",
+            ".NET success markers are not in required passed-trx-bytes order",
+            ".NET evidence marker appears more than once:",
             "def _phase_block_output_fragment_line_indices(",
             "SUCCESS_OUTPUT_NEGATION_PATTERN",
             "SUCCESS_OUTPUT_DIAGNOSTIC_PREFIX_PATTERN",
@@ -8684,6 +9384,10 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "_dotnet_test_passed_success_line_matches(scan_line)",
             "fragment == DOTNET_TRX_SUCCESS_PREFIX",
             "DOTNET_TRX_SUCCESS_PATTERN.fullmatch(scan_line)",
+            "DOTNET_TRX_BYTES_SUCCESS_PREFIX",
+            "DOTNET_TRX_BYTES_SUCCESS_PATTERN",
+            "fragment == DOTNET_TRX_BYTES_SUCCESS_PREFIX",
+            "DOTNET_TRX_BYTES_SUCCESS_PATTERN.fullmatch(scan_line)",
             "def _line_is_shell_xtrace_command(",
             "SHELL_XTRACE_COMMAND_PATTERN.match(normalized_line)",
             "def _phase_block_has_exact_output_line(",
@@ -8696,6 +9400,37 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "def _phase_block_has_nonempty_line_after_completion(",
             "def _transcript_has_nonempty_line_after_completion(",
             "PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS",
+            r"\btest\s+\S+\s+\.\.\.\s+FAILED\b",
+            r"\bfailures:",
+            r"\bthread '[^']+' panicked\b",
+            r"\berror(?:\[[A-Z0-9]+\])?:",
+            r"\bcould not compile\b",
+            r"\bnot\s+ok\b",
+            r"\bERR_[A-Z0-9_]+\b",
+            "AssertionError|TypeError|ReferenceError|SyntaxError|RangeError",
+            "uncaughtException|unhandledRejection",
+            r"Traceback \(most recent call last\):",
+            r"\bERROR collecting\b",
+            r"\bFAILED\s+\S+",
+            "AssertionError|ImportError|ModuleNotFoundError|RuntimeError|ValueError",
+            r"\bINTERNALERROR>",
+            r"\berror:",
+            r"\bTest Case\b.*\bfailed\b",
+            r"\bfatal error\b",
+            r"failed\s+to\s+(?:build|compile|emit|run)",
+            r"\bFAILURE:\s+Build failed\b",
+            r"\bExecution failed for task\b",
+            r"\bTask\s+:[^\n]*\s+FAILED\b",
+            "There were failing tests",
+            r"Could not (?:compile|resolve|create|determine)",
+            r"error\s+(?:CS|MSB|NETSDK|NU|CA|IL|BC)\d+",
+            r"[1-9]\d*\s+errors?",
+            r"failed\s+to\s+(?:restore|build|load|run)",
+            r"\b(?:ParserError|DeclarationError|CompilerError):",
+            r"\bError:",
+            r"\bnpm ERR!",
+            r"\bcommand not found\b",
+            r"\bNo such file or directory\b",
             "import unicodedata",
             "ANSI_ESCAPE_PATTERN",
             "ASCII_CONTROL_CHARACTER_PATTERN",
@@ -8748,6 +9483,12 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "if fragment in CONTRACT_SMOKE_NODE_SUCCESS_FRAGMENTS:",
             "def _phase_success_command_windows(",
             "def _phase_success_fragment_has_position_after_required_command(",
+            "def _phase_success_fragment_positions_are_only_in_required_command_windows(",
+            ".NET success marker appears outside its required command window",
+            "PHASE_SUCCESS_OUTSIDE_WINDOW_ERROR_FRAGMENT",
+            "success marker appears outside its required command window",
+            "PHASE_DUPLICATE_SUCCESS_ERROR_FRAGMENT",
+            "success marker appears more times than required command windows",
             "required_success_command_positions = _phase_block_command_fragment_line_indices(",
             "phase_required_fragments = PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase, ())",
             "later_command_positions: list[int] = []",
@@ -8757,17 +9498,29 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "SCCP .NET SDK Architecture:",
             "DOTNET_VERSION_SUCCESS_PREFIX",
             "DOTNET_VERSION_SUCCESS_PATTERN",
+            r"^SCCP \.NET SDK version:\s+8\.0\.[1-9][0-9]*$",
             "DOTNET_WINDOWS_OS_SUCCESS_LINE",
             "DOTNET_RID_SUCCESS_PREFIX",
             "DOTNET_RID_SUCCESS_PATTERN",
+            "DOTNET_RID_ARCHITECTURES",
             "DOTNET_ARCHITECTURE_SUCCESS_PREFIX",
             "DOTNET_ARCHITECTURE_SUCCESS_PATTERN",
             "DOTNET_TEST_PASSED_SUCCESS_FRAGMENT",
+            "DOTNET_TEST_ASSEMBLY_SUCCESS_SUFFIX",
+            "Hyperledger.Iroha.Sdk.Tests.dll (net8.0)",
+            "DOTNET_TEST_DURATION_SUCCESS_PATTERN",
+            "(?P<duration>",
+            "(?:ms|s|m|h)",
             "DOTNET_TEST_PASSED_SUCCESS_PATTERN",
+            r"Skipped:\s*(?P<skipped>0)",
             "def _dotnet_test_passed_success_line_matches(",
             "total == passed + skipped",
+            "skipped == 0",
+            "def _dotnet_phase_block_rid_architecture_markers_match(",
+            "rid_architectures[0] == architectures[0]",
             "DOTNET_TRX_SUCCESS_PREFIX",
             "DOTNET_TRX_SUCCESS_PATTERN",
+            r"(?:[A-Za-z0-9][A-Za-z0-9_.-]*/)*TestResults/",
             "line == CORRIDOR_COMPLETION_SENTINEL",
             "not line.lstrip().startswith(\"+ \")",
             "def _phase_effective_command_tokens(",
@@ -8783,18 +9536,79 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "def _node_test_command_files(",
             "def _node_check_command_matches(",
             "def _dotnet_sdk_command_matches(",
+            "def _dotnet_setup_command_matches(",
+            "def _dotnet_phase_block_forbidden_test_command(",
+            ".NET phase ran a non-canonical dotnet test command",
+            "def _dotnet_phase_block_forbidden_setup_command(",
+            ".NET phase ran a non-canonical dotnet setup command",
+            "def _dotnet_bridge_build_target_dir(",
+            'name == "CARGO_TARGET_DIR"',
+            "def _dotnet_bridge_build_has_noncanonical_env_prefix(",
+            "def _dotnet_phase_block_has_noncanonical_bridge_build_env_prefix(",
+            "def _dotnet_bridge_build_command_matches(",
+            "def _dotnet_normalized_path_text(",
+            "def _dotnet_phase_block_bridge_path_matches_target_dir(",
+            'bridge_path == f"{target_dir}/debug/connect_norito_bridge.dll"',
+            "evidence artifact .NET native bridge path does not match",
+            "evidence artifact .NET RID and architecture markers disagree",
+            "CARGO_TARGET_DIR/debug handoff",
             "def _phase_prefix_env_assignments(",
             "def _android_harness_mains_classes(",
+            "DOTNET_PHASE_ALLOWED_ENV_ASSIGNMENTS",
+            "DOTNET_PHASE_REQUIRED_ENV_ASSIGNMENTS",
+            "DOTNET_PHASE_FIXED_ENV_VALUES",
+            "def _dotnet_phase_command_dir(",
+            "def _dotnet_phase_command_uses_bridge_path(",
+            "def _dotnet_phase_path_value_matches_bridge_dir(",
+            "def _dotnet_phase_command_has_noncanonical_env_prefix(",
+            "def _dotnet_phase_block_has_noncanonical_env_prefix(",
+            "def _dotnet_phase_bridge_library_dir(",
+            "non-canonical environment prefix",
             "def _gradle_test_selector_matches(",
             "def _gradle_test_command_selectors(",
+            "def _gradle_test_selectors_match_expected(",
+            "def _kotlin_sdk_expected_test_selectors(",
+            "def _java_android_expected_harness_classes(",
+            "def _java_android_harness_command_matches(",
             "actual_harness_classes = _android_harness_mains_classes(command)",
+            "== _java_android_expected_harness_classes()",
+            "exact Kotlin Gradle selector list",
+            "exact Java Android harness class list including TRON",
             "tuple(tokens) == tuple(shlex.split(fragment))",
             "_command_token_basename(tokens[0]) == fragment_tokens[0]",
             "shlex.split(command, comments=True)",
+            "wrapped_command = _phase_command_has_runner_cd_wrapper(raw_tokens)",
+            "def _phase_command_has_runner_cd_wrapper(",
+            'raw_tokens[0] == "(cd"',
+            "def _phase_command_runner_cd_dir(",
+            "def _phase_command_expected_wrapper_basenames(",
+            'phase == EVM_NATIVE_DOTNET_PHASE and command_name == "dotnet"',
+            "def _phase_block_has_unexpected_runner_cd_wrapper(",
+            "unexpected runner cd wrapper directory",
+            "def _phase_command_has_unsupported_parenthesized_group(",
+            "def _phase_block_has_unsupported_parenthesized_group(",
+            "unsupported parenthesized traced command",
+            "normalized = normalized[1:]",
+            "def _phase_command_is_parseable(",
+            "def _phase_block_has_unparseable_command(",
+            "contains unparseable traced command",
             'tokens.index("&&") == 2',
             "def _effective_command_equals(",
             "def _phase_command_matches_required_fragment(",
             "def _phase_block_command_fragment_line_indices(",
+            "def _phase_block_has_ordered_command_fragments(",
+            "def _phase_block_duplicate_command_fragment(",
+            ".NET commands are not in required version-info-bridge-restore-test order",
+            ".NET command appears more than once:",
+            "PHASE_DUPLICATE_COMMAND_ERROR_FRAGMENT",
+            "command appears more than once:",
+            "def _phase_block_has_ordered_output_fragments(",
+            "def _phase_block_output_fragments_are_strictly_ordered(",
+            "min(positions) <= previous_max_position",
+            "def _phase_block_duplicate_output_fragment(",
+            ".NET native bridge markers are not in required path-sha256 order",
+            ".NET success markers are not in required passed-trx-bytes order",
+            ".NET evidence marker appears more than once:",
             "def _phase_block_output_fragment_line_indices(",
             "SUCCESS_OUTPUT_NEGATION_PATTERN",
             "SUCCESS_OUTPUT_DIAGNOSTIC_PREFIX_PATTERN",
@@ -8812,6 +9626,10 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "_dotnet_test_passed_success_line_matches(scan_line)",
             "fragment == DOTNET_TRX_SUCCESS_PREFIX",
             "DOTNET_TRX_SUCCESS_PATTERN.fullmatch(scan_line)",
+            "DOTNET_TRX_BYTES_SUCCESS_PREFIX",
+            "DOTNET_TRX_BYTES_SUCCESS_PATTERN",
+            "fragment == DOTNET_TRX_BYTES_SUCCESS_PREFIX",
+            "DOTNET_TRX_BYTES_SUCCESS_PATTERN.fullmatch(scan_line)",
             "def _line_is_shell_xtrace_command(",
             "SHELL_XTRACE_COMMAND_PATTERN.match(normalized_line)",
             "def _phase_block_has_exact_output_line(",
@@ -8824,6 +9642,31 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "def _phase_block_has_nonempty_line_after_completion(",
             "def _transcript_has_nonempty_line_after_completion(",
             "PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS",
+            r"\btest\s+\S+\s+\.\.\.\s+FAILED\b",
+            r"\bfailures:",
+            r"\bthread '[^']+' panicked\b",
+            r"\berror(?:\[[A-Z0-9]+\])?:",
+            r"\bcould not compile\b",
+            r"\bnot\s+ok\b",
+            r"\bERR_[A-Z0-9_]+\b",
+            "AssertionError|TypeError|ReferenceError|SyntaxError|RangeError",
+            "uncaughtException|unhandledRejection",
+            r"Traceback \(most recent call last\):",
+            r"\bERROR collecting\b",
+            r"\bFAILED\s+\S+",
+            "AssertionError|ImportError|ModuleNotFoundError|RuntimeError|ValueError",
+            r"\berror:",
+            r"\bTest Case\b.*\bfailed\b",
+            r"\bfatal error\b",
+            r"failed\s+to\s+(?:build|compile|emit|run)",
+            r"\bFAILURE:\s+Build failed\b",
+            r"\bExecution failed for task\b",
+            r"\bTask\s+:[^\n]*\s+FAILED\b",
+            "There were failing tests",
+            r"Could not (?:compile|resolve|create|determine)",
+            r"error\s+(?:CS|MSB|NETSDK|NU|CA|IL|BC)\d+",
+            r"[1-9]\d*\s+errors?",
+            r"failed\s+to\s+(?:restore|build|load|run)",
             "import unicodedata",
             "ANSI_ESCAPE_PATTERN",
             "ASCII_CONTROL_CHARACTER_PATTERN",
@@ -8873,10 +9716,12 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "test_sccp_production_corridor_gradle_opts_override_is_preserved",
             "test_sccp_production_corridor_rejects_empty_log_dir",
             "test_sccp_production_corridor_dry_run_skips_mobile_toolchain_resolution",
+            "test_sccp_production_corridor_dotnet_phase_rejects_rid_architecture_mismatch",
             "GRADLE_OPTS=-Dorg.gradle.jvmargs=-Xmx6g",
             "-Dkotlin.daemon.jvmargs=-Xmx6g",
             "-Dkotlin.daemon.jvm.options=-Xmx6g",
             "--log-dir requires a directory.",
+            "requires the Windows RID architecture to match",
             "assert completed.returncode == 2",
         ),
     ),
@@ -8890,9 +9735,18 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "test_release_readiness_report_rejects_output_before_phase_marker",
             "test_release_readiness_report_rejects_prefix_alias_phase_marker",
             "test_release_readiness_report_rejects_duplicate_phase_marker",
+            "test_release_readiness_report_rejects_prefix_marker_hidden_failure",
+            "test_release_readiness_report_rejects_partial_multi_phase_hidden_failure",
+            "test_release_readiness_report_rejects_out_of_order_full_corridor_log",
             "test_release_readiness_report_rejects_phase_log_without_expected_command",
+            "test_release_readiness_report_rejects_phase_command_outside_claimed_block",
+            "test_release_readiness_report_rejects_phase_log_without_success_marker",
             "test_release_readiness_report_rejects_phase_log_without_phase_completion",
+            "test_release_readiness_report_rejects_completion_before_phase_evidence",
+            "test_release_readiness_report_rejects_command_after_completion",
+            "test_release_readiness_report_rejects_output_after_completion",
             "test_release_readiness_report_rejects_command_line_only_completion_marker",
+            "test_release_readiness_report_rejects_command_line_only_full_completion_marker",
             "test_release_readiness_report_rejects_nonexact_completion_marker",
             "test_release_readiness_report_rejects_success_marker_before_phase_command",
             "test_release_readiness_report_rejects_command_line_only_success_marker",
@@ -8903,11 +9757,68 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "test_release_readiness_report_rejects_phase_failure_output_marker",
             "test_release_readiness_report_rejects_ansi_obfuscated_failure_output",
             "test_release_readiness_report_rejects_unicode_format_obfuscated_failure_output",
+            "test_release_readiness_report_rejects_cargo_diagnostic_output_transcript",
+            "test_release_readiness_report_rejects_js_node_diagnostic_output_transcript",
+            "test_release_readiness_report_rejects_python_diagnostic_output_transcript",
+            "test_release_readiness_report_rejects_swift_diagnostic_output_transcript",
+            "test_release_readiness_report_rejects_gradle_diagnostic_output_transcript",
+            "test_release_readiness_report_rejects_evidence_script_diagnostic_output_transcript",
+            "test_release_readiness_report_rejects_contract_smoke_diagnostic_output_transcript",
+            "test_release_readiness_evidence_phase_requires_evm_script_suites",
+            "test_release_readiness_evidence_phase_requires_retired_network_surface_scan",
+            "test_release_readiness_report_requires_evm_evidence_script_transcript",
+            "test_release_readiness_report_requires_release_verifier_tests_in_evidence_phase",
+            "test_release_readiness_report_requires_retired_network_scan_evidence",
+            "test_release_readiness_report_requires_js_package_dist_transcript",
+            "test_release_readiness_report_requires_js_package_export_transcript",
+            "test_release_readiness_report_requires_js_mainnet_facade_transcripts",
+            "test_release_readiness_report_requires_bsc_browser_no_wasm_marker",
+            "test_release_readiness_report_requires_ethereum_browser_no_wasm_marker",
+            "test_release_readiness_report_requires_bsc_parlia_declaration_marker",
+            "test_release_readiness_report_requires_ethereum_facade_declaration_marker",
+            "test_release_readiness_report_requires_mobile_jdk21_transcripts",
+            "test_release_readiness_report_requires_contract_smoke_node_success_evidence",
+            "test_release_readiness_report_rejects_dotnet_error_output_transcript",
+            "test_release_readiness_report_rejects_dotnet_bare_passed_transcript",
+            "test_release_readiness_report_rejects_dotnet_failed_summary_transcript",
+            "test_release_readiness_report_rejects_dotnet_zero_passed_summary_transcript",
+            "test_release_readiness_report_rejects_dotnet_inconsistent_total_transcript",
+            "test_release_readiness_report_rejects_dotnet_prerelease_version_transcript",
+            "test_release_readiness_report_rejects_dotnet_zero_padded_version_transcript",
+            "test_release_readiness_report_rejects_dotnet_non_8_0_version_transcript",
+            "test_release_readiness_report_rejects_dotnet_malformed_version_transcript",
+            "test_release_readiness_report_rejects_dotnet_non_windows_transcript",
+            "test_release_readiness_report_rejects_dotnet_malformed_os_transcript",
+            "test_release_readiness_report_rejects_dotnet_malformed_rid_transcript",
+            "test_release_readiness_report_rejects_dotnet_malformed_architecture_transcript",
+            "test_release_readiness_report_rejects_dotnet_missing_architecture_transcript",
+            "test_release_readiness_report_rejects_dotnet_rid_architecture_mismatch",
+            "test_release_readiness_report_rejects_dotnet_skipped_summary_transcript",
+            "test_release_readiness_report_rejects_dotnet_noncanonical_zero_skipped_summary",
+            "test_release_readiness_report_rejects_dotnet_malformed_duration_summary",
+            "test_release_readiness_report_rejects_dotnet_wrong_assembly_summary_transcript",
             "test_release_readiness_report_rejects_marker_only_full_corridor_completion",
             "test_release_readiness_report_rejects_full_corridor_success_before_command",
+            "test_release_readiness_report_rejects_extra_rust_success_before_command",
+            "test_release_readiness_report_rejects_duplicate_rust_command",
+            "test_release_readiness_report_rejects_duplicate_rust_success_after_command",
             "test_release_readiness_report_rejects_full_corridor_final_command_only_success",
             "test_release_readiness_report_rejects_success_before_required_late_command",
             "test_release_readiness_report_rejects_success_only_after_final_required_command",
+            "test_release_readiness_report_rejects_dotnet_success_before_test_command",
+            "test_release_readiness_report_rejects_extra_dotnet_success_before_test_command",
+            "test_release_readiness_report_rejects_dotnet_version_before_version_command",
+            "test_release_readiness_report_rejects_dotnet_info_before_version_command",
+            "test_release_readiness_report_rejects_extra_dotnet_setup_markers_before_commands",
+            "test_release_readiness_report_rejects_dotnet_host_markers_before_info_command",
+            "test_release_readiness_report_rejects_dotnet_bridge_markers_before_build_command",
+            "test_release_readiness_report_rejects_dotnet_bridge_sha_before_path",
+            "test_release_readiness_report_rejects_extra_dotnet_bridge_sha_before_path",
+            "test_release_readiness_report_rejects_extra_dotnet_bridge_path_after_sha",
+            "test_release_readiness_report_rejects_duplicate_dotnet_bridge_sha_after_sha",
+            "test_release_readiness_report_rejects_dotnet_malformed_bridge_transcript",
+            "test_release_readiness_report_rejects_dotnet_bridge_target_dir_drift",
+            "test_release_readiness_report_rejects_dotnet_bridge_build_extra_env",
             "test_release_readiness_report_rejects_output_only_phase_command_fragment",
             "test_release_readiness_phase_command_matchers_reject_bare_fragments",
             "test_release_readiness_phase_command_matchers_reject_comment_fragments",
@@ -8919,11 +9830,41 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "test_release_readiness_report_rejects_comment_only_phase_command_fragment",
             "test_release_readiness_report_rejects_inert_option_phase_command_fragment",
             "test_release_readiness_report_rejects_narrow_kotlin_phase_command_fragment",
+            "test_release_readiness_report_rejects_nonexact_android_harness_phase_command_fragment",
+            "test_release_readiness_report_rejects_nonexact_kotlin_selector_phase_command_fragment",
             "test_release_readiness_report_rejects_gradle_dry_run_phase_command_fragment",
+            "test_release_readiness_java_android_phase_requires_source_proof_harness",
+            "test_release_readiness_kotlin_phase_requires_ton_prover_test",
+            "test_release_readiness_rejects_java_android_log_without_source_harness",
+            "test_release_readiness_rejects_java_android_log_without_ton_harness",
+            "test_release_readiness_rejects_kotlin_log_without_ton_prover_test",
             "test_release_readiness_report_rejects_pytest_suffix_phase_command_fragment",
             "test_release_readiness_report_rejects_pytest_extra_positional_phase_command_fragment",
             "test_release_readiness_report_rejects_node_extra_positional_phase_command_fragment",
             "test_release_readiness_report_rejects_dotnet_suffix_phase_command_fragment",
+            "test_release_readiness_report_rejects_dotnet_test_before_restore_command",
+            "test_release_readiness_report_rejects_duplicate_dotnet_restore_command",
+            "test_release_readiness_report_rejects_dotnet_missing_trx_transcript",
+            "test_release_readiness_report_rejects_dotnet_malformed_trx_bytes_transcript",
+            "test_release_readiness_report_rejects_dotnet_trx_bytes_before_trx_path",
+            "test_release_readiness_report_rejects_dotnet_trx_path_before_passed_summary",
+            "test_release_readiness_report_rejects_extra_dotnet_trx_path_before_passed_summary",
+            "test_release_readiness_report_rejects_extra_dotnet_passed_summary_after_trx_path",
+            "test_release_readiness_report_rejects_extra_dotnet_trx_bytes_before_trx_path",
+            "test_release_readiness_report_rejects_extra_dotnet_trx_path_after_trx_bytes",
+            "test_release_readiness_report_rejects_duplicate_dotnet_trx_bytes_after_trx_bytes",
+            "test_release_readiness_report_rejects_dotnet_malformed_trx_transcript",
+            "test_release_readiness_report_rejects_dotnet_trx_traversal_component",
+            "test_release_readiness_report_rejects_extra_narrow_dotnet_test_command",
+            "test_release_readiness_report_rejects_unparseable_dotnet_command",
+            "test_release_readiness_report_rejects_obfuscated_dotnet_command_trace",
+            "test_release_readiness_report_rejects_parenthesized_dotnet_logger_argument",
+            "test_release_readiness_report_rejects_parenthesized_dotnet_command_group",
+            "test_release_readiness_report_rejects_wrong_dotnet_runner_cd_wrapper",
+            "test_release_readiness_report_rejects_extra_dotnet_env_assignment",
+            "test_release_readiness_report_rejects_mismatched_dotnet_root_binary",
+            "test_release_readiness_report_rejects_env_prefixed_bare_dotnet_binary",
+            "test_release_readiness_report_rejects_mismatched_dotnet_path_prefix",
             "test_release_readiness_report_rejects_prefix_android_harness_phase_command_fragment",
             "test_release_readiness_report_rejects_inert_swift_phase_command_fragment",
             "test_release_readiness_report_rejects_suffix_argument_phase_command_fragment",
@@ -8936,32 +9877,102 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
         (
             "test_release_bundle_verifier_guards_release_corridor_phase_transcript_inventory",
             "test_release_bundle_verifier_rejects_missing_release_corridor_phase_transcript_inventory_gate",
+            "test_release_bundle_evidence_phase_inventory_matches_corridor_runner",
+            "test_release_bundle_verifier_corridor_phase_inventory_matches_runner",
+            "test_release_bundle_verifier_corridor_phase_inventory_is_independent",
+            "test_release_bundle_verifier_recomputes_required_corridor_phases",
+            "test_release_bundle_verifier_rejects_noncanonical_phase_log_path",
             "test_release_bundle_rejects_copied_phase_transcript_before_render",
             "test_release_bundle_verifier_rejects_missing_copied_phase_log",
             "test_release_bundle_verifier_rejects_forged_phase_log",
             "test_release_bundle_verifier_rejects_output_before_phase_marker",
             "test_release_bundle_verifier_rejects_prefix_alias_phase_marker",
             "test_release_bundle_verifier_rejects_duplicate_phase_marker",
+            "test_release_bundle_verifier_rejects_prefix_marker_hidden_failure",
+            "test_release_bundle_verifier_rejects_partial_multi_phase_hidden_failure",
+            "test_release_bundle_verifier_rejects_out_of_order_full_corridor_log",
             "test_release_bundle_verifier_rejects_phase_log_without_expected_command",
             "test_release_bundle_verifier_rejects_phase_command_outside_claimed_block",
             "test_release_bundle_verifier_rejects_phase_log_without_success_marker",
             "test_release_bundle_verifier_rejects_completion_outside_claimed_phase_block",
+            "test_release_bundle_verifier_rejects_completion_before_phase_evidence",
+            "test_release_bundle_verifier_rejects_command_after_completion",
+            "test_release_bundle_verifier_rejects_output_after_completion",
             "test_release_bundle_verifier_rejects_success_marker_before_phase_command",
             "test_release_bundle_verifier_rejects_command_line_only_success_marker",
             "test_release_bundle_verifier_rejects_xtrace_success_marker",
             "test_release_bundle_verifier_rejects_obfuscated_xtrace_success_marker",
             "test_release_bundle_verifier_rejects_command_line_only_completion_marker",
+            "test_release_bundle_verifier_rejects_command_line_only_full_completion_marker",
             "test_release_bundle_verifier_rejects_nonexact_completion_marker",
             "test_release_bundle_verifier_rejects_negated_success_marker",
             "test_release_bundle_verifier_rejects_diagnostic_success_marker",
             "test_release_bundle_verifier_rejects_phase_failure_output_marker",
             "test_release_bundle_verifier_rejects_ansi_obfuscated_failure_output",
             "test_release_bundle_verifier_rejects_unicode_format_obfuscated_failure_output",
+            "test_release_bundle_verifier_rejects_cargo_diagnostic_output_transcript",
+            "test_release_bundle_verifier_rejects_js_node_diagnostic_output_transcript",
+            "test_release_bundle_verifier_rejects_python_diagnostic_output_transcript",
+            "test_release_bundle_verifier_rejects_swift_diagnostic_output_transcript",
+            "test_release_bundle_verifier_rejects_gradle_diagnostic_output_transcript",
+            "test_release_bundle_verifier_rejects_evidence_script_diagnostic_output_transcript",
+            "test_release_bundle_verifier_rejects_contract_smoke_diagnostic_output_transcript",
+            "test_release_bundle_evidence_phase_requires_evm_script_suites",
+            "test_release_bundle_evidence_phase_requires_retired_network_surface_scan",
+            "test_release_bundle_evidence_phase_accepts_pytest_runner_command_shape",
+            "test_release_bundle_verifier_requires_evm_evidence_script_transcript",
+            "test_release_bundle_verifier_requires_release_verifier_tests_in_evidence_phase",
+            "test_release_bundle_verifier_requires_retired_network_scan_evidence",
+            "test_release_bundle_verifier_requires_js_package_export_transcript",
+            "test_release_bundle_verifier_requires_js_mainnet_facade_transcripts",
+            "test_release_bundle_verifier_requires_bsc_browser_no_wasm_marker",
+            "test_release_bundle_verifier_requires_ethereum_browser_no_wasm_marker",
+            "test_release_bundle_verifier_requires_bsc_parlia_declaration_marker",
+            "test_release_bundle_verifier_requires_ethereum_facade_declaration_marker",
+            "test_release_bundle_verifier_requires_mobile_jdk21_transcripts",
+            "test_release_bundle_verifier_rejects_contract_smoke_log_without_node_success",
+            "test_release_bundle_verifier_rejects_dotnet_error_output_transcript",
+            "test_release_bundle_verifier_rejects_dotnet_bare_passed_transcript",
+            "test_release_bundle_verifier_rejects_dotnet_failed_summary_transcript",
+            "test_release_bundle_verifier_rejects_dotnet_zero_passed_summary_transcript",
+            "test_release_bundle_verifier_rejects_dotnet_inconsistent_total_transcript",
+            "test_release_bundle_verifier_rejects_dotnet_prerelease_version_transcript",
+            "test_release_bundle_verifier_rejects_dotnet_zero_padded_version_transcript",
+            "test_release_bundle_verifier_rejects_dotnet_non_8_0_version_transcript",
+            "test_release_bundle_verifier_rejects_dotnet_malformed_version_transcript",
+            "test_release_bundle_verifier_rejects_dotnet_non_windows_transcript",
+            "test_release_bundle_verifier_rejects_dotnet_malformed_os_transcript",
+            "test_release_bundle_verifier_rejects_dotnet_malformed_rid_transcript",
+            "test_release_bundle_verifier_rejects_dotnet_malformed_architecture_transcript",
+            "test_release_bundle_verifier_rejects_dotnet_missing_architecture_transcript",
+            "test_release_bundle_verifier_rejects_dotnet_rid_architecture_mismatch",
+            "test_release_bundle_verifier_rejects_dotnet_skipped_summary_transcript",
+            "test_release_bundle_verifier_rejects_dotnet_noncanonical_zero_skipped_summary",
+            "test_release_bundle_verifier_rejects_dotnet_malformed_duration_summary",
+            "test_release_bundle_verifier_rejects_dotnet_wrong_assembly_summary_transcript",
             "test_release_bundle_verifier_rejects_marker_only_full_corridor_completion",
             "test_release_bundle_verifier_rejects_full_corridor_success_before_command",
+            "test_release_bundle_verifier_rejects_extra_rust_success_before_command",
+            "test_release_bundle_verifier_rejects_duplicate_rust_command",
+            "test_release_bundle_verifier_rejects_duplicate_rust_success_after_command",
             "test_release_bundle_verifier_rejects_full_corridor_final_command_only_success",
             "test_release_bundle_verifier_rejects_success_before_required_late_command",
             "test_release_bundle_verifier_rejects_success_only_after_final_required_command",
+            "test_release_bundle_verifier_rejects_dotnet_success_before_test_command",
+            "test_release_bundle_verifier_rejects_extra_dotnet_success_before_test_command",
+            "test_release_bundle_verifier_rejects_dotnet_version_before_version_command",
+            "test_release_bundle_verifier_rejects_dotnet_info_before_version_command",
+            "test_release_bundle_verifier_rejects_extra_dotnet_setup_markers_before_commands",
+            "test_release_bundle_verifier_rejects_dotnet_host_markers_before_info_command",
+            "test_release_bundle_verifier_rejects_dotnet_bridge_markers_before_build_command",
+            "test_release_bundle_verifier_rejects_dotnet_bridge_sha_before_path",
+            "test_release_bundle_verifier_rejects_extra_dotnet_bridge_sha_before_path",
+            "test_release_bundle_verifier_rejects_extra_dotnet_bridge_path_after_sha",
+            "test_release_bundle_verifier_rejects_duplicate_dotnet_bridge_sha_after_sha",
+            "test_release_bundle_verifier_rejects_dotnet_malformed_bridge_transcript",
+            "test_release_bundle_verifier_rejects_dotnet_bridge_target_dir_drift",
+            "test_release_bundle_verifier_rejects_dotnet_bridge_build_extra_env",
+            "test_release_bundle_verifier_phase_transcript_inventory_matches_report",
             "test_release_bundle_verifier_phase_transcript_inventory_is_independent",
             "test_release_bundle_verifier_phase_transcript_rejects_malformed_artifact_rows",
             "test_release_bundle_verifier_redacts_phase_transcript_checker_errors",
@@ -8969,26 +9980,62 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "readiness report phase transcript cannot be checked",
             "bundled report.corridor phase transcript cannot be checked",
             "secret-token phase transcript detail",
+            "test_release_bundle_phase_command_matchers_accept_corridor_dry_run",
+            "test_release_bundle_phase_command_matchers_reject_echoed_fragments",
             "test_release_bundle_phase_command_matchers_reject_bare_fragments",
             "test_release_bundle_phase_command_matchers_reject_comment_fragments",
             "test_release_bundle_phase_command_matchers_reject_inert_option_values",
             "test_release_bundle_phase_command_matchers_reject_narrow_kotlin_selector",
             "test_release_bundle_phase_command_matchers_reject_extra_suffix_arguments",
+            "test_release_bundle_phase_command_matchers_reject_short_circuited_fragments",
+            "test_release_bundle_verifier_rejects_output_only_phase_command_fragment",
             "test_release_bundle_verifier_rejects_bare_phase_command_fragment",
             "test_release_bundle_verifier_rejects_short_circuited_phase_command_fragment",
             "test_release_bundle_verifier_rejects_comment_only_phase_command_fragment",
             "test_release_bundle_verifier_rejects_inert_option_phase_command_fragment",
             "test_release_bundle_verifier_rejects_narrow_kotlin_phase_command_fragment",
+            "test_release_bundle_verifier_rejects_nonexact_android_harness_phase_command_fragment",
+            "test_release_bundle_verifier_rejects_nonexact_kotlin_selector_phase_command_fragment",
             "test_release_bundle_verifier_rejects_gradle_dry_run_phase_command_fragment",
+            "test_release_bundle_java_android_phase_requires_source_proof_harness",
+            "test_release_bundle_kotlin_phase_requires_ton_prover_test",
+            "test_release_bundle_verifier_rejects_java_android_log_without_source_harness",
+            "test_release_bundle_verifier_rejects_java_android_log_without_ton_harness",
+            "test_release_bundle_verifier_rejects_kotlin_log_without_ton_prover_test",
             "test_release_bundle_verifier_rejects_pytest_suffix_phase_command_fragment",
             "test_release_bundle_verifier_rejects_pytest_extra_positional_phase_command_fragment",
             "test_release_bundle_verifier_rejects_node_extra_positional_phase_command_fragment",
             "test_release_bundle_verifier_rejects_dotnet_suffix_phase_command_fragment",
+            "test_release_bundle_verifier_rejects_dotnet_test_before_restore_command",
+            "test_release_bundle_verifier_rejects_duplicate_dotnet_restore_command",
+            "test_release_bundle_verifier_rejects_dotnet_missing_trx_transcript",
+            "test_release_bundle_verifier_rejects_dotnet_malformed_trx_bytes_transcript",
+            "test_release_bundle_verifier_rejects_dotnet_trx_bytes_before_trx_path",
+            "test_release_bundle_verifier_rejects_dotnet_trx_path_before_passed_summary",
+            "test_release_bundle_verifier_rejects_extra_dotnet_trx_path_before_passed_summary",
+            "test_release_bundle_verifier_rejects_extra_dotnet_passed_summary_after_trx_path",
+            "test_release_bundle_verifier_rejects_extra_dotnet_trx_bytes_before_trx_path",
+            "test_release_bundle_verifier_rejects_extra_dotnet_trx_path_after_trx_bytes",
+            "test_release_bundle_verifier_rejects_duplicate_dotnet_trx_bytes_after_trx_bytes",
+            "test_release_bundle_verifier_rejects_dotnet_malformed_trx_transcript",
+            "test_release_bundle_verifier_rejects_dotnet_trx_traversal_component",
+            "test_release_bundle_verifier_rejects_narrow_dotnet_sccp_filter",
+            "test_release_bundle_verifier_rejects_extra_narrow_dotnet_test_command",
+            "test_release_bundle_verifier_rejects_unparseable_dotnet_command",
+            "test_release_bundle_verifier_rejects_obfuscated_dotnet_command_trace",
+            "test_release_bundle_verifier_rejects_parenthesized_dotnet_logger_argument",
+            "test_release_bundle_verifier_rejects_parenthesized_dotnet_command_group",
+            "test_release_bundle_verifier_rejects_wrong_dotnet_runner_cd_wrapper",
+            "test_release_bundle_verifier_rejects_extra_dotnet_env_assignment",
+            "test_release_bundle_verifier_rejects_mismatched_dotnet_root_binary",
+            "test_release_bundle_verifier_rejects_env_prefixed_bare_dotnet_binary",
+            "test_release_bundle_verifier_rejects_mismatched_dotnet_path_prefix",
             "test_release_bundle_verifier_rejects_prefix_android_harness_phase_command_fragment",
             "test_release_bundle_verifier_rejects_inert_swift_phase_command_fragment",
             "test_release_bundle_verifier_rejects_suffix_argument_phase_command_fragment",
             "test_release_bundle_verifier_rejects_inert_dotnet_project_phase_command_fragment",
             "test_release_bundle_verifier_rejects_inert_contract_smoke_test_fragment",
+            "test_release_bundle_verifier_rejects_echoed_contract_smoke_command",
         ),
     ),
 )
@@ -9067,6 +10114,8 @@ SCCP_RELEASE_BUNDLE_SOURCE_COPY_MARKERS = (
             "release bundle source path contains control character",
             "release bundle source path must not be a symlink",
             "release bundle source path ancestor must not be a symlink",
+            "test_release_bundle_verifier_recomputes_summary_from_copied_evidence",
+            "test_release_bundle_verifier_copied_evidence_recompute_is_independent",
         ),
     ),
     (
@@ -9192,6 +10241,9 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
         (
             "test_release_bundle_verifier_guards_release_native_prover_bundle_schema_inventory",
             "test_release_bundle_verifier_rejects_missing_release_native_prover_bundle_schema_inventory_gate",
+            "test_release_bundle_verifier_rejects_tampered_native_evm_prover_bundle",
+            "test_release_bundle_verifier_rejects_tampered_native_evm_prover_payload",
+            "test_release_bundle_verifier_rejects_unlabeled_native_evm_prover_audits",
             "test_release_bundle_native_evm_prover_bundle_rejects_boolean_type_drift",
             "native_bundle_boolean_exactness_cases = (",
             "test_release_bundle_rejects_malformed_copied_native_evm_summary_before_render",
@@ -9387,6 +10439,7 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "def _path_percent_encoded_traversal(",
             "manifest artifact path contains Markdown-unsafe character",
             "manifest artifact path contains percent-encoded traversal segment",
+            "manifest artifact path escapes bundle",
             "readiness report inputs path contains Markdown-unsafe character",
             "readiness report inputs path contains percent-encoded traversal segment",
             "readiness report inputs path must not contain surrounding whitespace",
@@ -9394,6 +10447,7 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "artifact path contains Markdown-unsafe character",
             "artifact path contains percent-encoded traversal segment",
             "artifact path must not contain surrounding whitespace",
+            "bundle contains entry path with control character ",
             "bundle contains entry path with Markdown-unsafe character",
         ),
     ),
@@ -9414,15 +10468,19 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "test_release_bundle_rejects_encoded_traversal_native_evm_manifest_filename_before_copy",
             "test_release_bundle_rejects_padded_native_evm_payload_filename_before_copy",
             "test_release_bundle_rejects_encoded_traversal_native_evm_payload_filename_before_copy",
+            "test_release_bundle_rejects_control_character_artifact_paths",
             "test_release_bundle_rejects_markdown_unsafe_artifact_paths",
             "test_release_bundle_rejects_padded_artifact_paths",
             "test_release_bundle_rejects_symlinked_artifact_path_without_path_leak",
             "test_release_bundle_rejects_percent_encoded_artifact_traversal_paths",
             "secret-token-complete",
             'assert "secret-token" not in message',
+            "test_release_bundle_verifier_rejects_manifest_path_escape",
+            "test_release_bundle_verifier_rejects_control_character_manifest_paths",
             "test_release_bundle_verifier_rejects_markdown_unsafe_manifest_paths",
             "test_release_bundle_verifier_rejects_padded_manifest_paths",
             "test_release_bundle_verifier_rejects_percent_encoded_manifest_path_escape",
+            "test_release_bundle_verifier_rejects_control_character_report_paths",
             "test_release_bundle_verifier_rejects_markdown_unsafe_report_paths",
             "test_release_bundle_verifier_rejects_padded_report_paths",
             "test_release_bundle_verifier_rejects_percent_encoded_report_paths",
@@ -9430,6 +10488,7 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "test_release_bundle_verifier_rejects_markdown_unsafe_native_evm_prover_payload_paths",
             "test_release_bundle_verifier_rejects_padded_native_evm_prover_payload_paths",
             "test_release_bundle_verifier_rejects_native_evm_prover_percent_encoded_path",
+            "test_release_bundle_verifier_rejects_control_character_filesystem_entries",
             "test_release_bundle_verifier_rejects_markdown_unsafe_filesystem_entries",
         ),
     ),
@@ -9476,6 +10535,12 @@ SCCP_RELEASE_INPUT_PROVENANCE_SCHEMA_MARKERS = (
             "def _sccp_release_input_provenance_schema_gate_inventory_errors(",
             '"release_input_provenance_schema_gate"',
             "SCCP release input-provenance schema source inventory",
+            "readiness report inputs must be a non-empty list of canonical strings",
+            "readiness report input_artifacts must be a non-empty list of objects",
+            "readiness report inputs contains duplicate path",
+            "readiness report input_artifacts contains duplicate path",
+            "readiness report inputs do not match copied input_artifacts",
+            "readiness report input_artifacts do not match inputs",
         ),
     ),
     (
@@ -9526,6 +10591,12 @@ SCCP_RELEASE_INPUT_PROVENANCE_SCHEMA_MARKERS = (
         (
             "test_release_readiness_report_guards_release_input_provenance_schema_gate_inventory",
             "test_release_readiness_report_blocks_missing_release_input_provenance_schema_gate",
+            "def test_release_readiness_report_cli_rejects_empty_input_provenance_without_leaking",
+            "readiness report inputs must be a non-empty list of canonical strings",
+            "def test_release_readiness_report_cli_rejects_duplicate_input_provenance_without_leaking",
+            "def test_release_readiness_report_cli_rejects_input_provenance_drift_without_leaking",
+            "readiness report input_artifacts contains duplicate path",
+            "readiness report inputs do not match copied input_artifacts",
         ),
     ),
 )
@@ -9580,9 +10651,24 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "INPUT_ARTIFACT_PUBLIC_FIELDS = frozenset",
             "def _readiness_report_unknown_field_blocker(",
             "def _public_input_artifact_errors(",
+            "CORRIDOR_PUBLIC_FIELDS = frozenset",
+            "CORRIDOR_PUBLIC_PHASE_STATUSES = frozenset",
+            "def _public_corridor_errors(",
+            "readiness report corridor missing field",
+            "readiness report corridor phase",
+            "NATIVE_EVM_PROVER_BUNDLE_PUBLIC_FIELDS = frozenset",
+            "NATIVE_EVM_PROVER_SDK_ARTIFACT_SUMMARY_PUBLIC_FIELDS = frozenset",
+            "def _public_native_evm_prover_bundle_errors(",
+            "readiness report native_evm_prover_bundle missing field",
+            "readiness report native_evm_prover_bundle is invalid",
+            "def _public_embedded_evidence_errors(",
+            "readiness report evidence must be a canonical public all-lanes summary",
             "SOURCE_INVENTORY_PUBLIC_FIELDS = frozenset",
             "def _public_source_inventory_gate_error(",
+            "def _source_inventory_required_public_gates(",
             "def _public_source_inventory_errors(",
+            "readiness report source_inventory contains unknown gate",
+            "readiness report source_inventory missing required gate",
             "USER_PROVER_SUBMISSION_SURFACE_PUBLIC_FIELDS = frozenset",
             "def _public_user_prover_submission_surface_errors(",
             "CRYPTOGRAPHIC_EVIDENCE_PUBLIC_FIELDS = frozenset",
@@ -9592,13 +10678,20 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "root_errors",
             "readiness report evidence must be an object",
             "readiness report inputs must be a list of canonical strings",
+            "readiness report inputs must be a non-empty list of canonical strings",
+            "readiness report input_artifacts must be a non-empty list of objects",
             "readiness report input_artifacts is invalid",
             "readiness report source_inventory is invalid",
             "readiness report user_prover_submission_surfaces is invalid",
             "readiness report cryptographic_evidence is invalid",
             "contains malformed audit field name",
             "sdk_helper_symbols_by_sdk[{sdk}]",
+            "ready must be true when release_checklist ready is true",
+            "blockers must be empty when ready is true",
             "validation_blockers must be empty when",
+            "validation_status is passed",
+            "validation_blockers must be non-empty ",
+            "when validation_status is blocked",
             "validation_status must be passed or blocked",
             "path must be a canonical public path",
             "sha256 must be a canonical SHA-256 hex string",
@@ -9615,6 +10708,8 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
         (
             "READINESS_REPORT_ROOT_FIELDS",
             "SOURCE_INVENTORY_FIELDS",
+            "def _release_report_preflight_errors(",
+            "production_ready must be true or false",
             "def _unknown_public_field_errors(",
             "def _source_inventory_gate_key_error(",
             "contains malformed unknown gate name",
@@ -9654,9 +10749,15 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
         (
             "test_release_bundle_verifier_guards_release_public_json_root_schema_inventory",
             "test_release_bundle_verifier_rejects_missing_release_public_json_root_schema_inventory_gate",
+            "test_release_bundle_preflight_rejects_truthy_production_ready",
+            "test_release_bundle_preflight_rejects_malformed_blocker_containers",
+            "test_release_bundle_preflight_rejects_malformed_ready_report",
+            "test_release_bundle_rejects_malformed_copied_report_before_render",
             "test_release_bundle_rejects_unknown_copied_report_root_before_render",
             "operator|secret-token",
             "test_release_bundle_rejects_malformed_copied_source_inventory_before_render",
+            "test_release_bundle_rejects_empty_copied_source_inventory_before_render",
+            "bundled report.source_inventory missing required gate",
             "contains malformed unknown gate name",
             "contains unknown gate name with surrounding whitespace",
             "contains unknown gate name with control character",
@@ -9672,7 +10773,18 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "test_release_bundle_verifier_rejects_duplicate_json_keys",
             "test_release_bundle_verifier_rejects_report_summary_duplicate_json_keys",
             "test_release_bundle_verifier_rejects_malformed_public_json_duplicate_keys",
+            "test_release_bundle_verifier_requires_non_empty_report_and_summary_json",
+            "test_release_bundle_verifier_rejects_summary_report_mismatch",
+            "test_release_bundle_verifier_rejects_unknown_root_json_fields",
             "test_release_bundle_verifier_rejects_malformed_root_json_fields",
+            "test_release_bundle_verifier_rejects_missing_report_root_json_fields",
+            "test_release_bundle_verifier_rejects_malformed_report_sections",
+            "test_release_bundle_verifier_rejects_unknown_source_inventory_gate",
+            "test_release_bundle_verifier_rejects_malformed_source_inventory_gate_names",
+            "test_release_bundle_verifier_rejects_missing_source_inventory_gate",
+            "test_release_bundle_verifier_rejects_malformed_source_inventory_gate",
+            "test_release_bundle_verifier_rejects_blocked_source_inventory_gate",
+            "test_release_bundle_verifier_rejects_source_inventory_gate_malformed_unknown_fields",
             "test_generated_bundle_self_verifier_rejects_malformed_summaries",
             "test_release_bundle_verifier_cli_suppresses_malformed_summary_roots",
             "test_release_bundle_verifier_cli_exit_compares_verified_exactly",
@@ -9699,15 +10811,34 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "def test_release_readiness_report_cli_rejects_malformed_allowed_report_roots_without_leaking",
             "readiness report inputs must be a list of canonical strings",
             "readiness report native_evm_prover_bundle must be an object",
+            "def test_release_readiness_report_cli_rejects_empty_native_bundle_without_leaking",
+            "def test_release_readiness_report_cli_rejects_malformed_native_bundle_without_leaking",
+            "readiness report native_evm_prover_bundle validation_blockers[0] contains sensitive name",
+            "def test_release_readiness_report_cli_rejects_empty_corridor_without_leaking",
+            "def test_release_readiness_report_cli_rejects_malformed_corridor_without_leaking",
+            "readiness report corridor blockers must be empty when production_ready is true",
+            "def test_release_readiness_report_cli_rejects_ready_release_checklist_blockers_without_leaking",
+            "readiness report release_checklist items[0] blockers must be empty",
+            "readiness report release_checklist items[1] ready must be true when",
+            "def test_release_readiness_report_cli_rejects_empty_embedded_evidence_without_leaking",
+            "readiness report evidence must be a canonical public all-lanes summary",
+            "def test_release_readiness_report_cli_rejects_empty_input_provenance_without_leaking",
+            "readiness report input_artifacts must be a non-empty list of objects",
             "def test_release_readiness_report_cli_rejects_malformed_input_artifacts_without_leaking",
             '"safe artifact int-key note"',
             "readiness report input_artifacts[0] contains malformed unknown field name",
             "readiness report input_artifacts[0] path must be a canonical public path",
             "readiness report input_artifacts is invalid",
+            "def test_release_readiness_report_cli_rejects_empty_source_inventory_without_leaking",
+            "readiness report source_inventory missing required gate: ",
             "def test_release_readiness_report_cli_rejects_malformed_source_inventory_without_leaking",
             '"safe source inventory int-key note"',
             "readiness report source_inventory contains gate name with",
+            "readiness report source_inventory contains unknown gate: zz_extra_gate",
             "readiness report source_inventory[2] validation_status must be passed",
+            "def test_release_readiness_report_cli_rejects_source_inventory_status_blocker_drift_without_leaking",
+            "readiness report source_inventory[{passed_index}] validation_blockers",
+            "readiness report source_inventory[{blocked_index}] validation_blockers",
             "readiness report source_inventory is invalid",
             "def test_release_readiness_report_cli_rejects_malformed_user_prover_surfaces_without_leaking",
             '"safe user prover int-key note"',
@@ -9814,6 +10945,9 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "source_adapter_gate_required must be a boolean",
             "source_adapter_gate_audit_hashes must be an object",
             "source_adapter_gate hash role",
+            "public source_adapter_gate audit hashes must not reuse route_canary_message_id",
+            "def _cryptographic_evidence_route_canary_hash_role_errors(",
+            "route_canary hash role",
             "def _cryptographic_evidence_lane_binding_errors(",
             "readiness report cryptographic_evidence does not cover every lane",
             "_expected_cryptographic_evidence(report_evidence)",
@@ -9846,9 +10980,26 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
     (
         "scripts/sccp_release_readiness_report.py",
         (
+            "ALL_LANES_REQUIRED_DOMAINS = tuple(",
+            "ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN = {",
+            "ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN = {",
             "def _sccp_release_public_crypto_evidence_binding_gate_inventory_errors(",
             '"release_public_crypto_evidence_binding_gate"',
             "SCCP release public cryptographic-evidence binding source inventory",
+            "readiness report cryptographic_evidence contains duplicate domain",
+            "readiness report cryptographic_evidence contains unknown domain",
+            "readiness report cryptographic_evidence missing required domain",
+            "source_adapter_gate_required must be boolean",
+            "source_adapter_gate_required must be true for this domain",
+            "source_adapter_gate_hash must be empty when ",
+            "source_adapter_gate_audit_hashes must be empty ",
+            "when gate is not required",
+            "source_adapter_gate_hash must match one ",
+            "def _public_cryptographic_source_adapter_gate_hash_role_errors(",
+            "source_adapter_gate hash role",
+            "public source_adapter_gate audit hashes must not reuse route_canary_message_id",
+            "def _public_cryptographic_route_canary_hash_role_errors(",
+            "route_canary hash role",
         ),
     ),
     (
@@ -9874,6 +11025,9 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "def _cryptographic_evidence_source_adapter_gate_bundle_errors(",
             "def _cryptographic_evidence_source_adapter_gate_hash_role_errors(",
             "source_adapter_gate hash role",
+            "public source_adapter_gate audit hashes must not reuse route_canary_message_id",
+            "def _cryptographic_evidence_route_canary_hash_role_errors(",
+            "route_canary hash role",
             "source_adapter_gate_required must be false for this domain",
             "source_adapter_gate_required must be true for this domain",
             "source_adapter_gate_hash must be empty when gate is not required",
@@ -9912,6 +11066,7 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "test_release_bundle_verifier_rejects_crypto_evidence_inventory_drift",
             "test_release_bundle_verifier_rejects_crypto_evidence_domain_policy_drift",
             "test_release_bundle_verifier_rejects_crypto_source_gate_hash_role_replay",
+            "test_release_bundle_bsc_source_gate_policy_matches_verifier_before_render",
             "test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift",
             "test_release_bundle_verifier_rejects_crypto_evidence_malformed_source_adapter_gate_audit_keys",
             "test_release_bundle_verifier_suppresses_crypto_evidence_malformed_markdown_leaks",
@@ -9927,6 +11082,7 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "test_release_bundle_verifier_redacts_sensitive_source_adapter_gate_audit_fields",
             "secret-token-audit-field",
             "audit_hashes contains unexpected field with sensitive name",
+            "test_release_bundle_verifier_rejects_crypto_evidence_unknown_fields",
             "test_release_bundle_verifier_rejects_crypto_evidence_malformed_unknown_fields",
             "source_adapter_gate_audit_hashes must be an object",
             "route_canary_receipt_block_finalized must be a boolean or null",
@@ -9943,6 +11099,9 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "test_release_readiness_report_guards_release_public_crypto_evidence_binding_gate_inventory",
             "test_release_readiness_report_blocks_missing_release_public_crypto_evidence_binding_gate",
             "test_release_readiness_report_preserves_malformed_crypto_evidence_values",
+            "test_release_readiness_report_cli_rejects_empty_cryptographic_evidence_without_leaking",
+            "test_release_readiness_report_cli_rejects_crypto_source_adapter_gate_drift_without_leaking",
+            "readiness report cryptographic_evidence missing required domain: ",
             'assert active_row["source_adapter_gate_audit_hashes"] == ["not", "an", "object"]',
         ),
     ),
@@ -10122,10 +11281,12 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "test_release_bundle_rejects_blocked_copied_submission_surface_before_render",
             "test_release_bundle_rejects_copied_submission_surface_binding_before_render",
             "test_release_bundle_rejects_copied_submission_surface_extra_helpers_before_render",
+            "test_release_bundle_verifier_submission_helper_lanes_match_supported_scope",
             "test_release_bundle_verifier_required_helper_inventory_matches_report",
             "test_release_bundle_verifier_expected_submission_surfaces_are_independent",
             "test_release_bundle_verifier_helper_inventory_is_independent",
             "test_release_bundle_verifier_rejects_submission_surface_drift",
+            "test_release_bundle_verifier_rejects_submission_surface_unknown_fields",
             "test_release_bundle_verifier_rejects_submission_surface_duplicate_lanes",
             "test_release_bundle_verifier_rejects_submission_surface_unknown_lanes",
             "test_release_bundle_verifier_rejects_submission_surface_malformed_lanes",
@@ -10143,18 +11304,27 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "test_release_bundle_verifier_rejects_submission_surface_malformed_sdk_helpers_text",
             "secret-token-helpers",
             "sdk_helpers contains sensitive name",
+            "test_release_bundle_verifier_rejects_submission_surface_helper_symbol_drift",
+            "test_release_bundle_verifier_rejects_per_sdk_helper_symbol_drift",
             "secret-token-user-surface-blocker",
             "validation_blockers contains blocker with sensitive name",
             "test_release_bundle_verifier_rejects_submission_surface_backend_mismatch",
             "test_release_bundle_verifier_rejects_missing_required_submission_surface_helper",
             "test_release_bundle_verifier_rejects_submission_surface_extra_helpers",
+            "test_release_bundle_verifier_rejects_duplicate_submission_surface_helpers",
             "test_release_bundle_verifier_rejects_submission_surface_malformed_sdk_helper_map_keys",
             "secret-token-sdk",
             "sdk_helper_symbols_by_sdk contains SDK key with sensitive name",
             "test_release_bundle_verifier_rejects_submission_surface_malformed_required_phases",
+            "test_release_bundle_verifier_requires_submission_surface_sdk_core_phases",
+            "test_release_bundle_verifier_requires_contract_smoke_for_contract_backends",
             "secret-token-phase",
             "required_phases contains phase with sensitive name",
             "test_release_bundle_verifier_rejects_submission_surface_exact_phase_drift",
+            "test_release_bundle_verifier_sdk_phase_inventory_matches_report",
+            "test_release_bundle_verifier_sdk_phase_inventory_is_independent",
+            "test_release_bundle_verifier_requires_submission_surface_ui_hooks",
+            "test_release_bundle_verifier_rejects_blocked_submission_surface",
             "test_release_bundle_verifier_rejects_submission_surface_malformed_unknown_fields",
             "test_release_bundle_verifier_redacts_public_renderer_errors",
             "test_release_bundle_redacts_builder_recompute_and_renderer_errors",
@@ -10451,7 +11621,10 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "bundle root is a symlink",
             "bundle root is not a directory",
             "missing manifest",
+            "manifest is a symlink: manifest.json",
             "cannot enumerate bundle files",
+            "bundle artifact path uses symlink",
+            "bundle contains symlink",
             "bundle contains unsupported filesystem entry",
             "bundle contains unmanifested artifact",
             "bundle contains unmanifested directory",
@@ -10486,6 +11659,10 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
         (
             "def test_release_bundle_verifier_guards_release_manifest_artifact_set_order_inventory",
             "def test_release_bundle_verifier_rejects_missing_release_manifest_artifact_set_order_inventory_gate",
+            "def test_release_bundle_writes_hash_bound_public_artifacts",
+            "def test_release_bundle_accepts_hash_bound_full_corridor_log",
+            "def test_release_bundle_verifier_rejects_tampered_artifact",
+            "def test_release_bundle_verifier_rejects_symlinked_manifest",
             "def test_release_bundle_verifier_rejects_manifest_root_self_listing",
             "def test_release_bundle_verifier_rejects_symlinked_bundle_root",
             "def test_release_bundle_verifier_rejects_non_directory_bundle_root",
@@ -10511,6 +11688,7 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "operator_attestation",
             "readiness report input artifact bytes must be a positive integer",
             "readiness report input artifact sha256 must be a canonical SHA-256 hex string",
+            "def test_release_bundle_verifier_rejects_symlinked_artifact",
             "def test_release_bundle_rejects_malformed_copied_artifacts_before_render",
             "secret-token-duplicate-artifact",
             "secret-token-operator-side-note",
@@ -10562,13 +11740,41 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
         "scripts/sccp_release_readiness_report.py",
         (
             "def _public_blocker_text_issue(",
+            "def _public_blocker_list_duplicate_error(",
+            "must not contain duplicate strings",
             "def _canonical_public_report_blockers(",
+            "def _public_corridor_errors(",
+            "readiness report corridor blockers must be a list of non-empty",
+            "canonical strings",
+            "readiness report corridor blockers must be empty when",
+            "production_ready is true",
+            "def _public_native_evm_prover_bundle_errors(",
+            "readiness report native_evm_prover_bundle validation_blockers",
+            "validation_blockers must be empty when",
+            "validation_status is passed",
+            "blockers must be empty when ready is true",
+            "validation_blockers must be non-empty ",
+            "when validation_status is blocked",
             "def _public_report_payload(",
             "readiness report must be an object",
             "readiness report production_ready must be boolean",
             "def _sccp_release_public_blocker_list_schema_gate_inventory_errors(",
             '"release_public_blocker_list_schema_gate"',
             "SCCP release public blocker-list schema source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_cli_rejects_malformed_corridor_without_leaking",
+            "readiness report corridor blockers[0] contains sensitive name",
+            "readiness report corridor blockers must be empty when production_ready is true",
+            "def test_release_readiness_report_cli_rejects_malformed_native_bundle_without_leaking",
+            "readiness report native_evm_prover_bundle validation_blockers[0] contains sensitive name",
+            "def test_release_readiness_report_cli_rejects_ready_release_checklist_blockers_without_leaking",
+            "safe copied ready checklist blocker",
+            "def test_release_readiness_report_cli_rejects_source_inventory_status_blocker_drift_without_leaking",
+            "safe copied passed source blocker",
         ),
     ),
     (
@@ -10602,14 +11808,28 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "root.empty",
             "root.numeric",
             "root.null",
+            "root.mnemonic",
+            "root.seed-phrase",
+            "root.credential",
+            "root.auth-header",
+            "root.signing-key",
+            "operator mnemonic recovery blocker",
+            "operator seed phrase recovery blocker",
+            "operator credential recovery blocker",
+            "operator auth header recovery blocker",
+            "operator signing key recovery blocker",
             "def test_release_bundle_rejects_malformed_copied_corridor_before_render",
+            "def test_release_bundle_rejects_empty_copied_corridor_before_render",
             "operator|secret-token",
             "def test_release_bundle_rejects_copied_corridor_not_ready_before_render",
+            "def test_release_bundle_verifier_rejects_corridor_unknown_fields",
+            "def test_release_bundle_verifier_rejects_corridor_blockers",
             "def test_release_bundle_verifier_rejects_all_lanes_list_scalar_type_drift",
             "def test_release_bundle_verifier_rejects_padded_public_blocker_strings",
             "def test_release_bundle_verifier_rejects_duplicate_public_blocker_strings",
             "def test_release_bundle_verifier_rejects_hostile_public_blocker_strings",
-            "secret-token-public-blocker",
+            "operator mnemonic recovery public-blocker",
+            "mnemonic recovery public-blocker",
             "operator|public-blocker",
             "operator public blоcker",
             "def test_release_bundle_verifier_active_launch_blockers_reject_malformed_containers",
@@ -10626,11 +11846,17 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "def test_release_readiness_report_blocks_missing_release_public_blocker_list_schema_gate",
             "def test_release_readiness_report_markdown_marks_malformed_blocker_containers",
             "def test_release_readiness_report_markdown_marks_hostile_public_blocker_strings",
+            "def test_release_readiness_report_markdown_marks_duplicate_public_blocker_strings",
+            "operator mnemonic recovery public-blocker",
+            "mnemonic recovery public-blocker",
             "def test_release_readiness_report_classifies_malformed_active_lane_blockers",
             "def test_release_readiness_report_blocks_malformed_native_prover_blockers",
             "def test_release_readiness_report_cli_suppresses_malformed_report_roots",
             "def test_release_readiness_report_cli_exit_compares_production_ready_exactly",
             "def test_release_readiness_report_cli_suppresses_malformed_report_blockers",
+            "def test_release_readiness_report_cli_rejects_duplicate_public_blocker_lists_without_leaking",
+            "safe duplicated root blocker",
+            "safe duplicated user-prover blocker",
         ),
     ),
 )
@@ -10666,7 +11892,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             '"readiness report corridor phases"',
             '"readiness report corridor evidence_artifacts"',
             "def _is_nonzero_hex32(value: Any) -> bool:",
-            "except (TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError):",
             "def _solana_pubkey_field_errors(",
         ),
     ),
@@ -10676,7 +11902,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "destination binding cannot be recomputed",
             "verifier_identity is not canonical for",
             "except (argparse.ArgumentTypeError, SystemExit, TypeError, ValueError, RuntimeError):",
-            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
+            "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             'errors.append(f"{label} is invalid")',
             "def decode_comment_base64(field: str, label: str) -> bytes | None:",
             "Solana ProgramData account is not canonical",
@@ -10684,7 +11910,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "Solana ProgramData metadata base64 metadata",
             "Solana ProgramData executable base64 metadata is invalid",
             'raise ValueError(f"{label} must be base64") from None',
-            "except (TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError):",
             "def decode_base64(field: str, label: str) -> bytes | None:",
             "Solana route canary Program account data",
             "Solana route canary ProgramData metadata",
@@ -10710,8 +11936,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "JSON-RPC {method} returned error response",
             'raise RuntimeError(f"{label} account data is invalid base64") from None',
             'raise ValueError(f"{label} must be base64") from None',
-            "except (TypeError, ValueError, binascii.Error):",
-            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):",
+            "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             "Solana live verifier program id metadata is invalid",
             "Solana live ProgramData address metadata is invalid",
             "Solana live verifier code hash metadata is invalid",
@@ -10734,8 +11960,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "TON live last_transaction_lt metadata is invalid",
             'raise ValueError("--api-key-file cannot be read") from None',
             "TON accountStates account address must be a canonical raw address",
-            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
-            "except (TypeError, binascii.Error, ValueError):",
+            "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, binascii.Error, ValueError):",
             'raise RuntimeError(f"{label} must be 32-byte hex or base64") from None',
             'raise RuntimeError("TON verifier account code_boc is invalid") from None',
             'raise ValueError("TON live code BoC base64 metadata is invalid") from None',
@@ -10766,10 +11992,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "sccp_client.canonical_tron_solid_block_header_proof_bytes",
             '"solid_block_header_proof_blocker": "solid block header proof is invalid"',
             "TRON destination verifier runtime bytecode metadata is invalid",
-            "except (argparse.ArgumentTypeError, TypeError, RuntimeError, ValueError):",
-            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
+            "except (argparse.ArgumentTypeError, SystemExit, TypeError, RuntimeError, ValueError):",
+            "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             'f"TRON constant call {function_selector} returned non-hex data"',
-            "except (RuntimeError, TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError):",
             "def _unsupported_tron_field_detail(",
             "field with sensitive name",
             "field with malformed name",
@@ -10794,7 +12020,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_eth_source_bridge_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
-            "except (TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError):",
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             "def _cli_error_detail(",
             "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
@@ -10805,7 +12031,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_bsc_source_bridge_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
-            "except (TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError):",
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             "BSC network must be mainnet or testnet",
             "def _cli_error_detail(",
@@ -10817,7 +12043,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_evm_destination_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
-            "except (TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError):",
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             'raise argparse.ArgumentTypeError("domain must be eth or bsc") from None',
             "BSC network must be mainnet or testnet",
@@ -10833,7 +12059,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_evm_receipt_proof_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
-            "except (TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError):",
+            "returned non-canonical lowercase 0x hex data",
             "except (OSError, RuntimeError, TypeError, ValueError, argparse.ArgumentTypeError) as exc:",
             "JSON-RPC {method} returned duplicate JSON keys",
             "JSON-RPC {method} failed with HTTP {exc.code}",
@@ -10848,11 +12075,19 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_evm_source_live_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
-            "except (TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError):",
             'raise ValueError(f"{label} metadata is invalid") from None',
             "deployment receipt transactionHash must be a non-zero bytes32",
             "deployment receipt contractAddress must be a non-zero 20-byte EVM address",
             "deployment receipt blockHash must be a non-zero bytes32",
+            "deployment transaction hash must be a non-zero bytes32",
+            "deployment transaction blockHash must be a non-zero bytes32",
+            "deployment receipt block hash must be a non-zero bytes32",
+            "deployment receipt block receiptsRoot must be a non-zero bytes32",
+            "deployment receipt finalized block hash must be a non-zero bytes32",
+            "deployment receipt block hash metadata is invalid",
+            "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
+            "    except (\n        argparse.ArgumentTypeError,\n        AttributeError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
             "JSON-RPC {method} returned duplicate JSON keys",
             "JSON-RPC {method} returned invalid JSON",
             "def _cli_error_detail(",
@@ -10865,9 +12100,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         (
             "domain must have a canonical RPC chain id",
             "domain must have a canonical EVM mainnet network id",
-            "except (KeyError, TypeError, ValueError, argparse.ArgumentTypeError):",
-            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
-            "except (TypeError, ValueError):",
+            "except (KeyError, SystemExit, RuntimeError, TypeError, ValueError, argparse.ArgumentTypeError):",
+            "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError):",
             'raise ValueError(f"{label} metadata is invalid") from None',
             "generated EVM destination TOML arguments are invalid",
             "JSON-RPC {method} returned duplicate JSON keys",
@@ -10881,11 +12116,11 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_solana_destination_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
-            "except (TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError):",
             'raise argparse.ArgumentTypeError(f"{label} must be base64") from None',
-            "except (TypeError, ValueError, binascii.Error):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):",
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
-            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
+            "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             'raise ValueError(f"{label} metadata is invalid") from None',
             "def _cli_error_detail(",
             "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
@@ -10896,7 +12131,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_solana_source_state_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
-            "except (TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError):",
             "def _cli_error_detail(",
             "except (OSError, SystemExit, RuntimeError, TypeError, ValueError) as exc:",
             "SCCP Solana source-state evidence rendering failed",
@@ -10906,14 +12141,14 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_ton_destination_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
-            "except (TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError):",
             'f"{label} must be base64 or base64url"',
-            "except (TypeError, ValueError, binascii.Error):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):",
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             'raise ValueError("account_status must be active") from None',
             'raise ValueError("last_transaction_lt must be a positive decimal") from None',
             'raise ValueError(f"--{output} requires --last-transaction-lt") from None',
-            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
+            "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             'raise ValueError(f"{label} metadata is invalid") from None',
             "def _cli_error_detail(",
             "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
@@ -10924,7 +12159,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_ton_source_state_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
-            "except (TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError):",
             "def _cli_error_detail(",
             "except (OSError, SystemExit, RuntimeError, TypeError, ValueError) as exc:",
             "SCCP TON source-state evidence rendering failed",
@@ -10934,7 +12169,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_tron_source_bridge_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
-            "except (TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError):",
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             "def _cli_error_detail(",
             "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
@@ -10953,7 +12188,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _submission_surface_row_bundle_errors(",
             "def _submission_surface_sdk_key_error(",
             "def _is_canonical_solana_pubkey_text(value: Any) -> bool:",
-            "except (TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError):",
             "def _corridor_phase_names(",
             "def _corridor_phase_key_error(",
             "phase status must be passed or blocked",
@@ -10975,7 +12210,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "    except (\n        OSError,\n        RuntimeError,\n        TypeError,\n        ValueError,\n        argparse.ArgumentTypeError,\n    ) as exc:",
             "SCCP release readiness report generation failed",
             "def _is_nonzero_hex32(value: Any) -> bool:",
-            "except (TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError):",
         ),
     ),
     (
@@ -11008,10 +12243,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_release_bundle_rejects_malformed_copied_submission_surface_before_render",
             "def test_release_bundle_native_evm_duplicate_json_redacts_sensitive_key_causes",
             "secret-token-native-duplicate",
-            "def test_release_bundle_hex_predicates_redact_typeerror_parser_causes",
-            "secret-token bundle hex TypeError detail",
-            "def test_release_bundle_solana_pubkey_redacts_typeerror_parser_causes",
-            "secret-token bundle Solana pubkey TypeError detail",
+            "def test_release_bundle_hex_predicates_redact_parser_exit_causes",
+            "secret-token bundle hex {exception_type.__name__} detail",
+            "def test_release_bundle_solana_pubkey_redacts_parser_exit_causes",
+            "secret-token bundle Solana pubkey ",
             "assert exc.__suppress_context__ is True",
         ),
     ),
@@ -11023,17 +12258,17 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_all_lanes_redacts_ton_live_account_parser_failures",
             "def test_all_lanes_redacts_solana_live_base64_comment_failures",
             "def test_all_lanes_base64_helper_redacts_parser_causes",
-            "def test_all_lanes_hex_helpers_redact_typeerror_parser_causes",
+            "def test_all_lanes_hex_helpers_redact_parser_exit_causes",
             "def test_all_lanes_redacts_solana_route_canary_base64_comment_failures",
-            "def test_all_lanes_solana_base64_callers_redact_typeerror_helper_causes",
+            "def test_all_lanes_solana_base64_callers_redact_helper_exit_causes",
             "def test_all_lanes_redacts_tron_route_canary_address_parser_failures",
             "def test_all_lanes_redacts_solana_programdata_parser_failures",
             "Solana Program account data base64 metadata is invalid",
             "Solana route canary ProgramData metadata is invalid",
             "secret-token-metadata!",
             "secret-token all-lanes base64",
-            "secret-token all-lanes hex TypeError detail",
-            "secret-token all-lanes {label} TypeError detail",
+            "secret-token all-lanes hex {exception_type.__name__} detail",
+            "secret-token all-lanes {label} {exception_type.__name__} detail",
             "secret-token-route-metadata!",
             "secret-token {label} program bytes",
             "metadata is invalid:",
@@ -11062,6 +12297,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             '"secret-token-summary": "secret-token-value"',
             """parser_exception_types = (
         module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
         TypeError,
         ValueError,
     )""",
@@ -11069,7 +12306,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token invalid Solana JSON-RPC payload",
             "secret-token verifier_code_hash parser detail",
             "secret-token live account base64",
-            "account_exception_types = (TypeError, ValueError)",
+            "account_exception_types = (SystemExit, RuntimeError, TypeError, ValueError)",
             "secret-token account-data decoder detail",
             "secret-token live metadata base64",
             "secret-token {label} decode detail",
@@ -11100,12 +12337,16 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token invalid TON accountStates payload",
             "secret-token hash base64",
             "secret-token-ton-api-key-file",
-            "secret-token account address parser detail",
+            "secret-token {label} argument detail",
+            "secret-token {label} SystemExit detail",
+            "secret-token {label} RuntimeError detail",
             "secret-token {label} parser detail",
             "secret-token {label} helper TypeError detail",
+            "secret-token {label} ValueError detail",
+            "normalize_failure_cases = (",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
-            'assert "helper TypeError detail" not in rendered',
+            "assert forbidden_detail not in rendered",
         ),
     ),
     (
@@ -11117,7 +12358,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_tron_api_http_error_detail_is_bounded",
             "def test_tron_api_rejects_duplicate_json_keys",
             "def test_tron_api_redacts_transport_and_error_response_details",
-            "for exception_type in (TypeError, ValueError, RuntimeError):",
+            "for exception_type in (SystemExit, TypeError, ValueError, RuntimeError):",
             "for exception_type in (OSError, RuntimeError, TypeError, ValueError):",
             "def test_tron_live_cli_redacts_top_level_exception_details",
             "SCCP TRON live evidence collection failed",
@@ -11132,6 +12373,11 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_live_evidence_redacts_generated_full_toml_parser_exception_cause",
             "def test_live_evidence_redacts_metadata_parser_exception_causes",
             "def test_live_evidence_redacts_solid_block_header_proof_encoder_failures",
+            "def test_live_evidence_redacts_witness_schedule_decode_failures",
+            "def test_live_evidence_redacts_witness_schedule_transition_payload_helper_failures",
+            "def test_live_evidence_redacts_witness_seal_bitmap_and_hash_shape_failures",
+            "def test_live_evidence_redacts_transaction_source_proof_encoder_failures",
+            "def test_live_evidence_redacts_transaction_source_proof_hash_shape_failures",
             "def test_live_evidence_redacts_source_event_topic_parser_failures",
             "def test_live_evidence_redacts_route_canary_topic_parser_failures",
             "def test_live_evidence_redacts_unsupported_transaction_result_fields",
@@ -11146,33 +12392,48 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token-duplicate-transition",
             "0xsecret-token-bytecode",
             "secret-token {label} parser detail",
-            "secret-token {label} helper TypeError detail",
+            "secret-token {label} helper {exception_type.__name__} detail",
             "secret-token constant failure detail",
             "0xsecret-token constant parser detail",
             "secret-token generated full TOML parser detail",
             "secret-token solid block proof parser detail",
             "secret-token witness schedule payload parser detail",
             "secret-token witness schedule hash parser detail",
+            "secret-token witness schedule decoder parser detail",
+            "secret-token transition active schedule parser detail",
+            "secret-token transition parent payload parser detail",
+            "secret-token transition parent schedule parser detail",
+            "secret-token transition next payload parser detail",
+            "secret-token transition next schedule parser detail",
             "secret-token transition message parser detail",
             "secret-token transition seal parser detail",
+            "secret-token witness seal schedule parser detail",
             "secret-token witness seal message parser detail",
+            "secret-token witness seal message hash parser detail",
             "secret-token witness seal proof parser detail",
+            "secret-token witness seal hash parser detail",
+            "0xsecret-token-witness-seal-message-hash",
+            "0xsecret-token-witness-seal-hash",
             "secret-token transaction source proof parser detail",
+            "secret-token transaction source proof hash parser detail",
+            "0xsecret-token-transaction-source-proof-hash",
             "secret-token source-event log topic0 parser detail",
             "secret-token route-canary log topic0 parser detail",
             "solid block header proof is invalid",
             'assert "secret-token" not in captured.err',
-            'assert "helper TypeError detail" not in rendered',
-            "TRON full TOML annotation leaked destination parser TypeError",
+            'assert f"helper {exception_type.__name__} detail" not in rendered',
+            "TRON full TOML annotation leaked destination parser ",
         ),
     ),
     (
         "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
         (
             "def test_eth_source_bridge_direct_parsers_redact_parser_causes",
+            "def test_eth_source_bridge_direct_parsers_redact_helper_exit_parser_causes",
             "secret-token-eth-source-hex",
             "secret-token-eth-source-runtime0",
             "secret-token ETH source hex TypeError detail",
+            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
             "secret-token-eth-source-file-path.hex",
             "def test_eth_cli_redacts_top_level_exception_details",
             "SCCP Ethereum source bridge evidence rendering failed",
@@ -11185,9 +12446,11 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
         (
             "def test_bsc_source_bridge_direct_parsers_redact_parser_causes",
+            "def test_bsc_source_bridge_direct_parsers_redact_helper_exit_parser_causes",
             "secret-token-bsc-source-hex",
             "secret-token-bsc-source-runtime0",
             "secret-token BSC source hex TypeError detail",
+            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
             "secret-token-bsc-source-file-path.hex",
             "secret-token-bsc-source-network",
             "def test_bsc_cli_redacts_top_level_exception_details",
@@ -11204,9 +12467,11 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token-evm-destination-domain",
             "secret-token-evm-destination-bsc-network",
             "def test_evm_destination_direct_parsers_redact_parser_causes",
+            "def test_evm_destination_direct_parsers_redact_helper_exit_parser_causes",
             "secret-token-evm-destination-hex",
             "secret-token-evm-destination-runtime",
             "secret-token EVM destination hex TypeError detail",
+            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
             "secret-token-evm-destination-file-path.hex",
             "def test_evm_destination_domain_wrappers_redact_nested_causes",
             "def test_evm_destination_cli_redacts_top_level_exception_details",
@@ -11220,8 +12485,12 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
         (
             "def test_receipt_hex_parser_redacts_parser_causes",
+            "def test_receipt_hex_parser_redacts_helper_exit_parser_causes",
+            "def test_receipt_rpc_hex_data_redacts_helper_exit_parser_causes",
             "secret-token-evm-receipt-hex",
             "secret-token EVM receipt hex TypeError detail",
+            "secret-token EVM receipt RPC hex ",
+            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
             "def test_receipt_cli_redacts_top_level_exception_details",
             "for exception_type in (OSError, RuntimeError, TypeError, ValueError):",
             "SCCP EVM receipt proof evidence collection failed",
@@ -11244,15 +12513,29 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "bridge address metadata is invalid",
             "test_evm_source_json_rpc_redacts_invalid_json_parser_details",
             "test_evm_source_live_redacts_receipt_field_parser_exception_causes",
-            "def test_evm_source_live_hex_parsers_redact_typeerror_parser_causes",
+            "test_evm_source_live_redacts_receipt_readback_parser_exception_causes",
+            "test_evm_source_live_redacts_receipt_block_hash_metadata_reparse_failures",
+            "def test_evm_source_live_hex_parsers_redact_helper_exit_parser_causes",
             "secret-token-evm-source-error",
             "secret-token invalid EVM source JSON-RPC payload",
             "secret-token-evm-source-live-hex",
             "secret-token EVM source live hex TypeError detail",
+            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
             "0xsecret-token-source-bridge-runtime",
             "secret-token source bridge address parser detail",
+            "secret-token {target_method} readback parser detail",
+            "secret-token deployment receipt block hash metadata parser detail",
+            "secret-token source bridge address SystemExit detail",
+            "secret-token source bridge address RuntimeError detail",
+            "secret-token source bridge address TypeError detail",
+            "secret-token source bridge address ValueError detail",
             "secret-token {target_method} parser detail",
-            "for exception_type in (TypeError, RuntimeError, ValueError):",
+            "runtime_failure_cases = (",
+            "secret-token {label} imported SystemExit detail",
+            "secret-token {label} imported RuntimeError detail",
+            "secret-token {label} imported ValueError detail",
+            "for exception_type in (SystemExit, TypeError, RuntimeError, ValueError):",
+            "assert forbidden_detail not in rendered",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
         ),
@@ -11269,11 +12552,14 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_evm_live_hex_parsers_redact_typeerror_parser_causes",
             "secret-token-evm-error",
             "secret-token invalid EVM JSON-RPC payload",
-            "secret-token EVM live hex TypeError detail",
+            "secret-token EVM live hex {exception_type.__name__} detail",
+            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
             "def test_live_evm_default_domain_lookups_redact_lookup_causes",
             "secret-token-evm-live-chain-id",
             "secret-token-evm-live-network-id",
             "SecretArgparseChainIds",
+            "SecretSystemExitChainIds",
+            "SecretRuntimeChainIds",
             "for exception_type in (",
             "argparse detail",
             "helper detail",
@@ -11288,19 +12574,24 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "pytests/scripts/sccp_solana_destination_evidence_test.py",
         (
             "def test_solana_destination_hex_parsers_redact_parser_causes",
+            "def test_solana_destination_hex_parsers_redact_helper_exit_parser_causes",
             "secret-token-solana-fixed-hex",
             "secret-token-solana-program-hex",
             "secret-token Solana destination hex TypeError detail",
             "def test_solana_destination_base64_parser_redacts_parser_causes",
             "secret-token-solana-destination-base64",
             "secret-token Solana destination base64 decoder detail",
+            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
             "def test_solana_destination_file_parser_redacts_file_read_causes",
             "secret-token-private-verifier.so",
             "def test_solana_destination_redacts_verifier_program_parser_failures",
             "verifier_program_id metadata is invalid",
             "secret-token {label} parser detail",
+            "secret-token {label} helper SystemExit detail",
+            "secret-token {label} helper RuntimeError detail",
             "secret-token {label} helper TypeError detail",
-            'assert "helper TypeError detail" not in rendered',
+            "secret-token {label} helper ValueError detail",
+            "assert forbidden_detail not in rendered",
             "parser detail",
             "def test_solana_destination_cli_redacts_top_level_exception_details",
             "SCCP Solana destination evidence rendering failed",
@@ -11313,8 +12604,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "pytests/scripts/sccp_solana_source_state_evidence_test.py",
         (
             "def test_solana_source_hex_parser_redacts_parser_causes",
+            "def test_solana_source_hex_parser_redacts_helper_exit_parser_causes",
             "secret-token-solana-source-hex",
             "secret-token Solana source hex TypeError detail",
+            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
             "def test_solana_source_cli_redacts_top_level_exception_details",
             "SCCP Solana source-state evidence rendering failed",
             "for exception_type in (SystemExit, OSError, RuntimeError, TypeError, ValueError):",
@@ -11326,27 +12619,36 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "pytests/scripts/sccp_ton_destination_evidence_test.py",
         (
             "def test_ton_destination_direct_parsers_redact_parser_causes",
+            "def test_ton_destination_direct_parsers_redact_helper_exit_parser_causes",
+            "def test_ton_destination_code_boc_base64_redacts_helper_exit_decoder_causes",
             "def test_ton_destination_account_metadata_redacts_parser_causes",
             "secret-token-ton-destination-fixed-hex",
             "secret-token-ton-destination-code-hex",
             "secret-token-ton-destination-code-boc",
             "secret-token TON destination hex TypeError detail",
             "secret-token TON code BoC base64 TypeError detail",
-            "def test_ton_toml_code_boc_base64_reparse_redacts_helper_typeerror",
+            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
+            "def test_ton_toml_code_boc_base64_reparse_redacts_helper_failures",
+            "secret-token {label} copied SystemExit detail",
+            "secret-token {label} copied RuntimeError detail",
             "secret-token {label} copied parser detail",
+            "secret-token {label} copied ValueError detail",
             "secret-token-ton-destination-file-path",
             "secret-token-ton-destination-account-status",
             "secret-token-ton-destination-last-lt",
             "secret-token-ton-destination-toml-lt",
-            "for exception_type in (TypeError, ValueError):",
+            "helper_failures = (",
             "TON account status helper detail leaked",
             "TON last-transaction helper detail leaked",
             "TON TOML LT helper detail leaked",
             "def test_ton_destination_redacts_verifier_address_parser_failures",
             "verifier_contract_address metadata is invalid",
             "secret-token {label} parser detail",
+            "secret-token {label} helper SystemExit detail",
+            "secret-token {label} helper RuntimeError detail",
             "secret-token {label} helper TypeError detail",
-            'assert "helper TypeError detail" not in rendered',
+            "secret-token {label} helper ValueError detail",
+            "assert forbidden_detail not in rendered",
             "parser detail",
             "copied parser detail",
             "def test_ton_destination_cli_redacts_top_level_exception_details",
@@ -11360,8 +12662,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "pytests/scripts/sccp_ton_source_state_evidence_test.py",
         (
             "def test_ton_source_hex_parser_redacts_parser_causes",
+            "def test_ton_source_hex_parser_redacts_helper_exit_parser_causes",
             "secret-token-ton-source-hex",
             "secret-token TON source hex TypeError detail",
+            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
             "def test_ton_source_cli_redacts_top_level_exception_details",
             "SCCP TON source-state evidence rendering failed",
             "for exception_type in (SystemExit, OSError, RuntimeError, TypeError, ValueError):",
@@ -11373,11 +12677,13 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
         (
             "def test_tron_source_bridge_direct_parsers_redact_parser_causes",
+            "def test_tron_source_bridge_direct_parsers_redact_helper_exit_parser_causes",
             "secret-token-tron-source-fixed-hex",
             "secret-token-tron-source-runtime",
             "secret-token-tron-source-file",
             "secret-token-tron-source-address",
             "secret-token TRON source hex TypeError detail",
+            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
             "assert exc.__suppress_context__ is True",
             "def test_tron_source_cli_redacts_top_level_exception_details",
             "SCCP TRON source bridge evidence rendering failed",
@@ -11392,8 +12698,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_release_readiness_report_blocks_missing_release_public_scalar_text_schema_gate",
             "def test_release_readiness_report_cli_redacts_top_level_exception_details",
             "for exception_type in (OSError, RuntimeError, TypeError, ValueError):",
-            "def test_release_readiness_hex_predicates_redact_typeerror_parser_causes",
-            "secret-token readiness hex TypeError detail",
+            "def test_release_readiness_hex_predicates_redact_parser_exit_causes",
+            "secret-token readiness hex {exception_type.__name__} detail",
         ),
     ),
 )
@@ -11435,7 +12741,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_LANE_COVERAGE_MARKERS = {
         ),
         (
             "pytests/scripts/sccp_ton_live_evidence_test.py",
-            "secret-token account address parser detail",
+            "secret-token {label} parser detail",
         ),
     ),
     "tron": (
@@ -11445,7 +12751,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_LANE_COVERAGE_MARKERS = {
         ),
         (
             "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "TRON full TOML annotation leaked destination parser TypeError",
+            "TRON full TOML annotation leaked destination parser ",
         ),
     ),
 }
@@ -11614,9 +12920,29 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "Solana audited Tower replay, full-bank AccountsDB lattice, bank/fork-choice, and source-adapter verifier deployment evidence is not complete for the SCCP inbound path",
             "TON governed full-light-client verifier deployment, canary, and source-adapter deployment evidence are not complete for the SCCP inbound path",
             "TRON transaction-Merkle source-call verifier deployment is not complete for the SCCP inbound path",
-            "Windows `.NET 8` SCCP SDK phase evidence",
+            "Windows `.NET 8.0.x` SCCP SDK phase evidence",
             "FullyQualifiedName~Sccp",
+            "`SCCP .NET SDK version:` marker emitted after `dotnet --version`",
+            "phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order",
+            "no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`",
+            "non-zero `Error(s)` counts",
+            "`Failed to restore`",
+            "dotnet --info",
+            "SCCP .NET SDK OS: Windows",
+            "SCCP .NET SDK RID: win-{x64,x86,arm64,arm}",
+            "SCCP .NET SDK Architecture: {x64,x86,arm64,arm}",
+            "emitted after `dotnet --info`",
+            "connect_norito_bridge native bridge: ...connect_norito_bridge.dll",
+            "connect_norito_bridge native bridge sha256: <64 lowercase hex>",
+            "emitted after `cargo build -p connect_norito_bridge`",
+            "dotnet restore Hyperledger.Iroha.Sdk.sln",
+            "before the strict `dotnet test` command",
+            "VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` emitted after the strict `dotnet test` command",
+            "numeric unit duration",
+            "Total == Passed",
             "SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx",
+            "SCCP .NET SDK TRX bytes: <positive integer>",
+            "full-matches the C# test project `TestResults/sccp-dotnet-sdk.trx` path",
             "SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE",
             "SCCP_NOT_REMAINING_WORK_SCOPE_NOTE",
             "def _sccp_readiness_markdown_invariants_gate_inventory_errors(",
@@ -11699,9 +13025,29 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "Solana audited Tower replay, full-bank AccountsDB lattice, bank/fork-choice, and source-adapter verifier deployment evidence is not complete for the SCCP inbound path",
             "TON governed full-light-client verifier deployment, canary, and source-adapter deployment evidence are not complete for the SCCP inbound path",
             "TRON transaction-Merkle source-call verifier deployment is not complete for the SCCP inbound path",
-            "Windows `.NET 8` SCCP SDK phase evidence",
+            "Windows `.NET 8.0.x` SCCP SDK phase evidence",
             "FullyQualifiedName~Sccp",
+            "`SCCP .NET SDK version:` marker emitted after `dotnet --version`",
+            "phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order",
+            "no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`",
+            "non-zero `Error(s)` counts",
+            "`Failed to restore`",
+            "dotnet --info",
+            "SCCP .NET SDK OS: Windows",
+            "SCCP .NET SDK RID: win-{x64,x86,arm64,arm}",
+            "SCCP .NET SDK Architecture: {x64,x86,arm64,arm}",
+            "emitted after `dotnet --info`",
+            "connect_norito_bridge native bridge: ...connect_norito_bridge.dll",
+            "connect_norito_bridge native bridge sha256: <64 lowercase hex>",
+            "emitted after `cargo build -p connect_norito_bridge`",
+            "dotnet restore Hyperledger.Iroha.Sdk.sln",
+            "before the strict `dotnet test` command",
+            "VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` emitted after the strict `dotnet test` command",
+            "numeric unit duration",
+            "Total == Passed",
             "SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx",
+            "SCCP .NET SDK TRX bytes: <positive integer>",
+            "full-matches the C# test project `TestResults/sccp-dotnet-sdk.trx` path",
             "SCCP readiness Markdown invariants source inventory",
         ),
     ),
@@ -11721,8 +13067,12 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "def test_release_bundle_verifier_rejects_markdown_report_drift",
             "def test_release_bundle_verifier_readiness_markdown_renderer_matches_report",
             "def test_release_bundle_verifier_readiness_markdown_renderer_is_independent",
+            "def test_release_bundle_verifier_readiness_markdown_compares_rows_exactly",
+            "def test_release_bundle_verifier_readiness_markdown_marks_bad_blocker_containers",
             "def test_release_bundle_rejects_markdown_drift_before_write",
             "def test_release_bundle_verifier_markdown_invariants_require_public_sections",
+            "def test_release_bundle_required_evidence_source_rows_have_strict_markers",
+            "def test_release_bundle_required_evidence_markers_are_unique_and_generated",
             "def test_release_bundle_verifier_markdown_invariants_require_evidence_input_row",
             "def test_release_bundle_verifier_markdown_invariants_require_corridor_phase_status",
             "def test_release_bundle_verifier_markdown_invariants_require_corridor_artifact_row",
@@ -11734,6 +13084,7 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "def test_release_bundle_verifier_markdown_invariants_require_crypto_live_evm_row",
             "def test_release_bundle_verifier_markdown_invariants_require_crypto_core_hash_row",
             "def test_release_bundle_verifier_markdown_invariants_require_crypto_route_canary_row",
+            "def test_release_bundle_verifier_rejects_markdown_crypto_evidence_omission",
             "def test_release_bundle_verifier_readiness_markdown_rejects_malformed_crypto_rows",
             "def test_release_bundle_verifier_markdown_invariants_require_lane_status",
             "def test_release_bundle_verifier_readiness_markdown_rejects_malformed_lane_rows",
@@ -11756,6 +13107,7 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "def test_release_bundle_verifier_suppresses_malformed_source_inventory_gate_markdown_leaks",
             "def test_release_bundle_verifier_suppresses_malformed_report_artifact_path_markdown_leaks",
             "def test_release_bundle_verifier_suppresses_crypto_evidence_malformed_markdown_leaks",
+            "def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence",
             "def test_release_bundle_verifier_guards_readiness_markdown_invariants_inventory",
             "def test_release_bundle_verifier_rejects_missing_readiness_markdown_invariants_inventory_gate",
         ),
@@ -12695,7 +14047,7 @@ def _source_adapter_gate_hash_key_for_domain_chain(
 
 
 def _source_adapter_gate_template_hashes(domain: Any) -> tuple[bytes, ...]:
-    if type(domain) is not int or domain not in (SCCP_DOMAIN_SOL, SCCP_DOMAIN_TON):
+    if type(domain) is not int:
         return ()
     all_lanes = _all_lanes_module()
     profile = all_lanes.LANE_PROFILES.get(domain)
@@ -12715,6 +14067,55 @@ def _source_adapter_gate_template_hash_errors(
     return [
         f"{label} must be deployed gate evidence, not built-in template material"
     ]
+
+
+def _source_adapter_gate_template_audit_errors(
+    label: str,
+    domain: Any,
+    audit_hashes: Any,
+) -> list[str]:
+    if type(domain) is not int or not isinstance(audit_hashes, dict):
+        return []
+    all_lanes = _all_lanes_module()
+    _gate_field, audit_fields = all_lanes._source_adapter_gate_requirements(domain)
+    if not audit_fields:
+        return []
+    template_hashes = _source_adapter_gate_template_hashes(domain)
+    errors: list[str] = []
+    for audit_field in audit_fields:
+        audit_hash = audit_hashes.get(audit_field)
+        raw = _canonical_fixed_hex_bytes(audit_hash, byte_length=32)
+        if raw is not None and raw in template_hashes:
+            errors.append(
+                f"{label} {audit_field} must be deployed audit evidence, "
+                "not built-in template material"
+            )
+    return errors
+
+
+def _source_record_template_hash_errors(
+    label: str,
+    domain: Any,
+    source_hashes: Any,
+) -> list[str]:
+    """Return errors for copied source-record hashes that replay templates."""
+
+    if type(domain) is not int or not isinstance(source_hashes, dict):
+        return []
+    template_hashes = _source_adapter_gate_template_hashes(domain)
+    errors: list[str] = []
+    for field in (
+        "source_verifier_material_hash",
+        "source_adapter_engine_deployment_hash",
+    ):
+        source_hash = source_hashes.get(field)
+        raw = _canonical_fixed_hex_bytes(source_hash, byte_length=32)
+        if raw is not None and raw in template_hashes:
+            errors.append(
+                f"{label} {field} must be deployed evidence, "
+                "not built-in template material"
+            )
+    return errors
 
 
 ALL_LANES_DESTINATION_BINDING_REQUIRED_KEYS = {
@@ -13364,6 +14765,162 @@ def _phase_transcript_errors(
             f"{phase} evidence artifact contains non-empty output after "
             "completion sentinel"
         )
+    if phase_block is not None and _phase_block_has_unparseable_command(phase_block):
+        errors.append(
+            "readiness report phase "
+            f"{phase} evidence artifact contains unparseable traced command"
+        )
+    if (
+        phase_block is not None
+        and _phase_block_has_unsupported_parenthesized_group(phase_block)
+    ):
+        errors.append(
+            "readiness report phase "
+            f"{phase} evidence artifact contains unsupported parenthesized traced command"
+        )
+    if (
+        phase_block is not None
+        and _phase_block_has_unexpected_runner_cd_wrapper(phase, phase_block)
+    ):
+        errors.append(
+            "readiness report phase "
+            f"{phase} evidence artifact contains unexpected runner cd wrapper directory"
+        )
+    if (
+        phase == "dotnet-sdk"
+        and phase_block is not None
+        and _dotnet_phase_block_has_noncanonical_env_prefix(phase_block)
+    ):
+        errors.append(
+            "readiness report phase "
+            f"{phase} evidence artifact .NET phase used a non-canonical environment prefix"
+        )
+    if (
+        phase == "dotnet-sdk"
+        and phase_block is not None
+        and _dotnet_phase_block_has_noncanonical_bridge_build_env_prefix(phase_block)
+    ):
+        errors.append(
+            "readiness report phase "
+            f"{phase} evidence artifact .NET native bridge build used a non-canonical environment prefix"
+        )
+    if (
+        phase == "dotnet-sdk"
+        and phase_block is not None
+        and not _phase_block_has_ordered_command_fragments(
+            phase,
+            phase_block,
+            (
+                "dotnet --version",
+                "dotnet --info",
+                "cargo build -p connect_norito_bridge",
+                "dotnet restore Hyperledger.Iroha.Sdk.sln",
+                "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
+            ),
+        )
+    ):
+        errors.append(
+            "readiness report phase "
+            f"{phase} evidence artifact .NET commands are not in required "
+            "version-info-bridge-restore-test order"
+        )
+    if phase_block is not None:
+        duplicate_phase_command = _phase_block_duplicate_command_fragment(
+            phase,
+            phase_block,
+            PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase, ()),
+        )
+        if duplicate_phase_command is not None:
+            duplicate_command_error = (
+                ".NET command appears more than once:"
+                if phase == "dotnet-sdk"
+                else f"{PHASE_DUPLICATE_COMMAND_ERROR_FRAGMENT}:"
+            )
+            errors.append(
+                "readiness report phase "
+                f"{phase} evidence artifact {duplicate_command_error} "
+                f"{_phase_diagnostic_fragment(duplicate_phase_command)}"
+            )
+    if (
+        phase == "dotnet-sdk"
+        and phase_block is not None
+        and not _dotnet_phase_block_bridge_path_matches_target_dir(phase_block)
+    ):
+        errors.append(
+            "readiness report phase "
+            f"{phase} evidence artifact .NET native bridge path does not match "
+            "CARGO_TARGET_DIR/debug handoff"
+        )
+    if (
+        phase == "dotnet-sdk"
+        and phase_block is not None
+        and _dotnet_phase_block_forbidden_test_command(phase_block)
+    ):
+        errors.append(
+            "readiness report phase "
+            f"{phase} evidence artifact .NET phase ran a non-canonical dotnet test command"
+        )
+    if (
+        phase == "dotnet-sdk"
+        and phase_block is not None
+        and _dotnet_phase_block_forbidden_setup_command(phase_block)
+    ):
+        errors.append(
+            "readiness report phase "
+            f"{phase} evidence artifact .NET phase ran a non-canonical dotnet setup command"
+        )
+    if (
+        phase == "dotnet-sdk"
+        and phase_block is not None
+        and not _dotnet_phase_block_rid_architecture_markers_match(phase_block)
+    ):
+        errors.append(
+            "readiness report phase "
+            f"{phase} evidence artifact .NET RID and architecture markers disagree"
+        )
+    if (
+        phase == "dotnet-sdk"
+        and phase_block is not None
+        and not _phase_block_output_fragments_are_strictly_ordered(
+            phase_block,
+            (
+                DOTNET_BRIDGE_PATH_SUCCESS_PREFIX,
+                DOTNET_BRIDGE_SHA256_SUCCESS_PREFIX,
+            ),
+        )
+    ):
+        errors.append(
+            f"readiness report phase {phase} evidence artifact .NET native bridge markers are not in required path-sha256 order"
+        )
+    if (
+        phase == "dotnet-sdk"
+        and phase_block is not None
+        and not _phase_block_output_fragments_are_strictly_ordered(
+            phase_block,
+            (
+                DOTNET_TEST_PASSED_SUCCESS_FRAGMENT,
+                DOTNET_TRX_SUCCESS_PREFIX,
+                DOTNET_TRX_BYTES_SUCCESS_PREFIX,
+            ),
+        )
+    ):
+        errors.append(
+            "readiness report phase "
+            f"{phase} evidence artifact .NET success markers are not in "
+            "required passed-trx-bytes order"
+        )
+    if phase == "dotnet-sdk" and phase_block is not None:
+        duplicate_dotnet_marker = _phase_block_duplicate_output_fragment(
+            phase_block,
+            PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS.get(phase, ()),
+        )
+        if duplicate_dotnet_marker is not None:
+            errors.append(
+                "readiness report phase "
+                f"{phase} evidence artifact .NET evidence marker appears more "
+                "than once: "
+                f"{_phase_diagnostic_fragment(duplicate_dotnet_marker)}"
+            )
     if (
         phase_block is not None
         and _transcript_has_multiple_known_phase_markers(transcript)
@@ -13395,6 +14952,18 @@ def _phase_transcript_errors(
             f"{phase} evidence artifact has no expected success fragment configured"
         )
     elif phase_block is not None:
+        phase_command_positions = [
+            position
+            for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase, ())
+            for position in _phase_block_command_fragment_line_indices(
+                phase,
+                phase_block,
+                fragment,
+            )
+        ]
+        first_phase_command_position = (
+            min(phase_command_positions) if phase_command_positions else -1
+        )
         for fragment in success_fragments:
             if not _phase_block_has_output_fragment(phase, phase_block, fragment):
                 errors.append(
@@ -13403,6 +14972,42 @@ def _phase_transcript_errors(
                     "phase-block success marker: "
                     f"{_phase_diagnostic_fragment(fragment)}"
                 )
+            elif (
+                not _phase_success_fragment_positions_are_only_in_required_command_windows(
+                    phase,
+                    phase_block,
+                    fragment,
+                    _phase_block_output_fragment_line_indices(phase_block, fragment),
+                    first_phase_command_position,
+                )
+            ):
+                outside_window_error = (
+                    DOTNET_SUCCESS_OUTSIDE_WINDOW_ERROR_FRAGMENT
+                    if phase == "dotnet-sdk"
+                    else PHASE_SUCCESS_OUTSIDE_WINDOW_ERROR_FRAGMENT
+                )
+                errors.append(
+                    "readiness report phase "
+                    f"{phase} evidence artifact {outside_window_error}: "
+                    f"{_phase_diagnostic_fragment(fragment)}"
+                )
+            elif phase != "dotnet-sdk":
+                success_positions = _phase_block_output_fragment_line_indices(
+                    phase_block,
+                    fragment,
+                )
+                expected_windows = _phase_success_command_windows(
+                    phase,
+                    phase_block,
+                    fragment,
+                    first_phase_command_position,
+                )
+                if len(success_positions) > len(expected_windows):
+                    errors.append(
+                        "readiness report phase "
+                        f"{phase} evidence artifact {PHASE_DUPLICATE_SUCCESS_ERROR_FRAGMENT}: "
+                        f"{_phase_diagnostic_fragment(fragment)}"
+                    )
     if phase_block is not None:
         forbidden_marker = _phase_block_forbidden_output_marker(phase, phase_block)
         if forbidden_marker is not None:
@@ -14889,11 +16494,18 @@ def _transcript_has_full_corridor_completion(transcript: str) -> bool:
 
 
 def _phase_command_lines(phase_block: str) -> list[str]:
-    return [
-        line.strip()
-        for line in phase_block.splitlines()
-        if line.lstrip().startswith("+ ")
-    ]
+    command_lines: list[str] = []
+    for line in phase_block.splitlines():
+        if line.lstrip().startswith("+ "):
+            command_lines.append(line.strip())
+            continue
+        normalized_line = _phase_output_failure_scan_line(line)
+        if (
+            normalized_line != line
+            and normalized_line.lstrip().startswith("+ ")
+        ):
+            command_lines.append(normalized_line.strip())
+    return command_lines
 
 
 def _line_is_shell_xtrace_command(line: str) -> bool:
@@ -14911,13 +16523,129 @@ def _phase_command_tokens(command: str) -> list[str]:
     if command.startswith("+ "):
         command = command[2:]
     try:
-        return [
-            normalized
-            for token in shlex.split(command, comments=True)
-            if (normalized := token.strip("()"))
-        ]
+        raw_tokens = shlex.split(command, comments=True)
     except ValueError:
         return []
+    wrapped_command = _phase_command_has_runner_cd_wrapper(raw_tokens)
+    tokens: list[str] = []
+    for index, token in enumerate(raw_tokens):
+        normalized = token
+        if wrapped_command and index == 0 and normalized.startswith("("):
+            normalized = normalized[1:]
+        if wrapped_command and index == len(raw_tokens) - 1 and normalized.endswith(")"):
+            normalized = normalized[:-1]
+        if normalized:
+            tokens.append(normalized)
+    return tokens
+
+
+def _phase_command_has_runner_cd_wrapper(raw_tokens: list[str]) -> bool:
+    return (
+        len(raw_tokens) >= 4
+        and raw_tokens[0] == "(cd"
+        and bool(raw_tokens[1])
+        and raw_tokens[2] == "&&"
+        and raw_tokens[-1].endswith(")")
+    )
+
+
+def _phase_command_runner_cd_dir(command: str) -> str | None:
+    command = command.strip()
+    if command.startswith("+ "):
+        command = command[2:]
+    try:
+        raw_tokens = shlex.split(command, comments=True)
+    except ValueError:
+        return None
+    if not _phase_command_has_runner_cd_wrapper(raw_tokens):
+        return None
+    return raw_tokens[1]
+
+
+def _path_basename_text(path: str) -> str:
+    return PurePosixPath(path.replace("\\", "/").rstrip("/")).name
+
+
+def _phase_command_expected_wrapper_basenames(
+    phase: str,
+    command: str,
+) -> tuple[str, ...]:
+    tokens = _phase_effective_command_tokens(command)
+    if not tokens:
+        return ()
+    command_name = _command_token_basename(tokens[0])
+    if phase == "swift-sdk" and command_name == "swift":
+        return ("IrohaSwift",)
+    if phase == "kotlin-sdk" and command_name == "gradlew":
+        return ("kotlin",)
+    if phase == "java-android" and command_name == "gradlew":
+        return ("iroha_android",)
+    if phase == "dotnet-sdk" and command_name == "dotnet":
+        return ("csharp",)
+    return ()
+
+
+def _phase_command_has_unexpected_runner_cd_wrapper(
+    phase: str,
+    command: str,
+) -> bool:
+    cd_dir = _phase_command_runner_cd_dir(command)
+    if cd_dir is None:
+        return False
+    expected_basenames = _phase_command_expected_wrapper_basenames(phase, command)
+    if not expected_basenames:
+        return False
+    return _path_basename_text(cd_dir) not in expected_basenames
+
+
+def _phase_block_has_unexpected_runner_cd_wrapper(
+    phase: str,
+    phase_block: str,
+) -> bool:
+    return any(
+        _phase_command_has_unexpected_runner_cd_wrapper(phase, command)
+        for command in _phase_command_lines(phase_block)
+    )
+
+
+def _phase_command_has_unsupported_parenthesized_group(command: str) -> bool:
+    command = command.strip()
+    if command.startswith("+ "):
+        command = command[2:]
+    try:
+        raw_tokens = shlex.split(command, comments=True)
+    except ValueError:
+        return False
+    return bool(
+        raw_tokens
+        and raw_tokens[0].startswith("(")
+        and not _phase_command_has_runner_cd_wrapper(raw_tokens)
+    )
+
+
+def _phase_block_has_unsupported_parenthesized_group(phase_block: str) -> bool:
+    return any(
+        _phase_command_has_unsupported_parenthesized_group(command)
+        for command in _phase_command_lines(phase_block)
+    )
+
+
+def _phase_command_is_parseable(command: str) -> bool:
+    command = command.strip()
+    if command.startswith("+ "):
+        command = command[2:]
+    try:
+        shlex.split(command, comments=True)
+    except ValueError:
+        return False
+    return True
+
+
+def _phase_block_has_unparseable_command(phase_block: str) -> bool:
+    return any(
+        not _phase_command_is_parseable(command)
+        for command in _phase_command_lines(phase_block)
+    )
 
 
 def _command_token_basename(token: str) -> str:
@@ -15005,6 +16733,112 @@ def _android_harness_mains_classes(command: str) -> list[str]:
     if harness_value is None:
         return []
     return [item for item in harness_value.split(",") if item]
+
+
+DOTNET_PHASE_ALLOWED_ENV_ASSIGNMENTS = frozenset(
+    (
+        "DOTNET_ROOT",
+        "DOTNET_CLI_TELEMETRY_OPTOUT",
+        "DOTNET_CLI_UI_LANGUAGE",
+        "PATH",
+    )
+)
+DOTNET_PHASE_REQUIRED_ENV_ASSIGNMENTS = frozenset(
+    (
+        "DOTNET_ROOT",
+        "DOTNET_CLI_TELEMETRY_OPTOUT",
+        "DOTNET_CLI_UI_LANGUAGE",
+    )
+)
+DOTNET_PHASE_FIXED_ENV_VALUES = {
+    "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+    "DOTNET_CLI_UI_LANGUAGE": "en",
+}
+
+
+def _dotnet_phase_command_dir(command_token: str) -> str | None:
+    command_path = _dotnet_normalized_path_text(command_token)
+    parent, separator, leaf = command_path.rpartition("/")
+    if not separator or not leaf:
+        return None
+    return parent or "/"
+
+
+def _dotnet_phase_command_uses_bridge_path(tokens: list[str]) -> bool:
+    return (
+        len(tokens) >= 2
+        and _command_token_basename(tokens[0]) == "dotnet"
+        and tokens[1] in ("restore", "test")
+    )
+
+
+def _dotnet_phase_path_value_matches_bridge_dir(
+    value: str,
+    bridge_library_dir: str | None,
+) -> bool:
+    if bridge_library_dir is None:
+        return False
+    expected = _dotnet_normalized_path_text(bridge_library_dir)
+    actual = _dotnet_normalized_path_text(value)
+    return bool(
+        expected
+        and (
+            actual == expected
+            or actual.startswith(f"{expected}:")
+            or actual.startswith(f"{expected};")
+        )
+    )
+
+
+def _dotnet_phase_command_has_noncanonical_env_prefix(
+    command: str,
+    bridge_library_dir: str | None = None,
+) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if not tokens or _command_token_basename(tokens[0]) != "dotnet":
+        return False
+    assignments = _phase_prefix_env_assignments(command)
+    if not assignments:
+        return False
+    seen: dict[str, str] = {}
+    for assignment in assignments:
+        name, separator, value = assignment.partition("=")
+        if (
+            not separator
+            or name not in DOTNET_PHASE_ALLOWED_ENV_ASSIGNMENTS
+            or name in seen
+            or not value
+        ):
+            return True
+        expected_value = DOTNET_PHASE_FIXED_ENV_VALUES.get(name)
+        if expected_value is not None and value != expected_value:
+            return True
+        seen[name] = value
+    if not DOTNET_PHASE_REQUIRED_ENV_ASSIGNMENTS <= set(seen):
+        return True
+    command_dir = _dotnet_phase_command_dir(tokens[0])
+    if command_dir is None:
+        return True
+    return (
+        _dotnet_normalized_path_text(seen["DOTNET_ROOT"]) != command_dir
+    ) or (
+        "PATH" in seen
+        and (
+            not _dotnet_phase_command_uses_bridge_path(tokens)
+            or not _dotnet_phase_path_value_matches_bridge_dir(
+                seen["PATH"],
+                bridge_library_dir,
+            )
+        )
+    )
+
+
+def _dotnet_phase_block_has_noncanonical_env_prefix(phase_block: str) -> bool:
+    bridge_library_dir = _dotnet_phase_bridge_library_dir(phase_block)
+    return any(
+        _dotnet_phase_command_has_noncanonical_env_prefix(command, bridge_library_dir)
+        for command in _phase_command_lines(phase_block)
+    )
 
 
 def _phase_effective_command_tokens(command: str) -> list[str]:
@@ -15142,6 +16976,136 @@ def _dotnet_sdk_command_matches(tokens: list[str]) -> bool:
     )
 
 
+def _dotnet_setup_command_matches(tokens: list[str]) -> bool:
+    if not tokens or _command_token_basename(tokens[0]) != "dotnet":
+        return False
+    return (
+        (len(tokens) == 2 and tokens[1] in ("--version", "--info"))
+        or (
+            len(tokens) == 3
+            and tokens[1] == "restore"
+            and tokens[2] == "Hyperledger.Iroha.Sdk.sln"
+        )
+    )
+
+
+def _dotnet_phase_block_forbidden_test_command(phase_block: str) -> bool:
+    """Return whether the .NET phase ran a non-canonical test command."""
+
+    for command in _phase_command_lines(phase_block):
+        tokens = _phase_effective_command_tokens(command)
+        if (
+            len(tokens) >= 2
+            and _command_token_basename(tokens[0]) == "dotnet"
+            and tokens[1] == "test"
+            and not _dotnet_sdk_command_matches(tokens)
+        ):
+            return True
+    return False
+
+
+def _dotnet_phase_block_forbidden_setup_command(phase_block: str) -> bool:
+    """Return whether the .NET phase ran a non-canonical setup command."""
+
+    for command in _phase_command_lines(phase_block):
+        tokens = _phase_effective_command_tokens(command)
+        if not tokens or _command_token_basename(tokens[0]) != "dotnet":
+            continue
+        if len(tokens) >= 2 and tokens[1] == "test":
+            continue
+        if not _dotnet_setup_command_matches(tokens):
+            return True
+    return False
+
+
+def _dotnet_bridge_build_target_dir(command: str) -> str | None:
+    tokens = _phase_effective_command_tokens(command)
+    if not (
+        len(tokens) == 4
+        and _command_token_basename(tokens[0]) == "cargo"
+        and tokens[1] == "build"
+        and tokens[2] == "-p"
+        and tokens[3] == "connect_norito_bridge"
+    ):
+        return None
+    target_dirs = [
+        value
+        for assignment in _phase_prefix_env_assignments(command)
+        for name, separator, value in (assignment.partition("="),)
+        if separator and name == "CARGO_TARGET_DIR" and value
+    ]
+    if len(target_dirs) != 1:
+        return None
+    return target_dirs[0]
+
+
+def _dotnet_bridge_build_has_noncanonical_env_prefix(command: str) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if not (
+        len(tokens) == 4
+        and _command_token_basename(tokens[0]) == "cargo"
+        and tokens[1:] == ["build", "-p", "connect_norito_bridge"]
+    ):
+        return False
+    assignments = _phase_prefix_env_assignments(command)
+    if not assignments:
+        return False
+    return len(assignments) != 1 or not assignments[0].startswith("CARGO_TARGET_DIR=")
+
+
+def _dotnet_phase_block_has_noncanonical_bridge_build_env_prefix(
+    phase_block: str,
+) -> bool:
+    return any(
+        _dotnet_bridge_build_has_noncanonical_env_prefix(command)
+        for command in _phase_command_lines(phase_block)
+    )
+
+
+def _dotnet_bridge_build_command_matches(command: str) -> bool:
+    return _dotnet_bridge_build_target_dir(command) is not None
+
+
+def _dotnet_normalized_path_text(path: str) -> str:
+    return path.replace("\\", "/").rstrip("/")
+
+
+def _dotnet_phase_bridge_library_dir(phase_block: str) -> str | None:
+    bridge_dirs = []
+    for line in phase_block.splitlines():
+        match = DOTNET_BRIDGE_PATH_SUCCESS_PATTERN.fullmatch(line)
+        if match is None or not _dotnet_bridge_path_success_line_matches(line):
+            continue
+        bridge_path = _dotnet_normalized_path_text(match.group("path"))
+        suffix = "/connect_norito_bridge.dll"
+        if bridge_path.endswith(suffix):
+            bridge_dirs.append(bridge_path[: -len(suffix)])
+    if len(bridge_dirs) != 1 or not bridge_dirs[0]:
+        return None
+    return bridge_dirs[0]
+
+
+def _dotnet_phase_block_bridge_path_matches_target_dir(phase_block: str) -> bool:
+    target_dirs = [
+        target_dir
+        for command in _phase_command_lines(phase_block)
+        if (target_dir := _dotnet_bridge_build_target_dir(command)) is not None
+    ]
+    bridge_paths = [
+        match.group("path")
+        for line in phase_block.splitlines()
+        if (match := DOTNET_BRIDGE_PATH_SUCCESS_PATTERN.fullmatch(line)) is not None
+        and _dotnet_bridge_path_success_line_matches(line)
+    ]
+    if len(target_dirs) != 1 or len(bridge_paths) != 1:
+        return False
+    target_dir = _dotnet_normalized_path_text(target_dirs[0])
+    bridge_path = _dotnet_normalized_path_text(bridge_paths[0])
+    if not target_dir:
+        return False
+    return bridge_path == f"{target_dir}/debug/connect_norito_bridge.dll"
+
+
 def _gradle_test_selector_matches(expected: str, actual: str) -> bool:
     if expected.endswith("."):
         return actual in (expected, f"{expected}*")
@@ -15165,6 +17129,49 @@ def _gradle_test_command_selectors(tokens: list[str], task: str) -> list[str]:
         selectors.append(tokens[index + 1])
         index += 2
     return selectors
+
+
+def _gradle_test_selectors_match_expected(
+    expected_selectors: tuple[str, ...],
+    actual_selectors: list[str],
+) -> bool:
+    return len(actual_selectors) == len(expected_selectors) and all(
+        _gradle_test_selector_matches(expected, actual)
+        for expected, actual in zip(expected_selectors, actual_selectors)
+    )
+
+
+def _kotlin_sdk_expected_test_selectors() -> tuple[str, ...]:
+    selectors: list[str] = []
+    for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["kotlin-sdk"]:
+        if fragment.startswith("./gradlew "):
+            selectors.extend(_command_option_values(shlex.split(fragment), "--tests"))
+        elif fragment.startswith("org.hyperledger.iroha.sdk.sccp."):
+            selectors.append(fragment)
+    return tuple(selectors)
+
+
+def _java_android_expected_harness_classes() -> tuple[str, ...]:
+    assignment = next(
+        (
+            fragment
+            for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["java-android"]
+            if fragment.startswith("ANDROID_HARNESS_MAINS=")
+        ),
+        "",
+    )
+    return tuple(item for item in assignment.partition("=")[2].split(",") if item)
+
+
+def _java_android_harness_command_matches(
+    command: str,
+    test_selectors: list[str],
+) -> bool:
+    return (
+        tuple(_android_harness_mains_classes(command))
+        == _java_android_expected_harness_classes()
+        and tuple(test_selectors) == ("org.hyperledger.iroha.android.GradleHarnessTests",)
+    )
 
 
 def _evidence_pytest_command_has_fragment(
@@ -15236,6 +17243,11 @@ def _kotlin_sdk_command_has_fragment(command: str, fragment: str) -> bool:
     test_selectors = _gradle_test_command_selectors(tokens, ":core-jvm:test")
     if not test_selectors:
         return False
+    if not _gradle_test_selectors_match_expected(
+        _kotlin_sdk_expected_test_selectors(),
+        test_selectors,
+    ):
+        return False
     if fragment.startswith("./gradlew "):
         fragment_tokens = shlex.split(fragment)
         expected_tests = _command_option_values(fragment_tokens, "--tests")
@@ -15263,29 +17275,24 @@ def _java_android_command_has_fragment(command: str, fragment: str) -> bool:
         return False
     actual_harness_classes = _android_harness_mains_classes(command)
     if fragment.startswith("ANDROID_HARNESS_MAINS="):
-        expected_harness_classes = [
-            item for item in fragment.partition("=")[2].split(",") if item
-        ]
-        return bool(expected_harness_classes) and all(
-            item in actual_harness_classes for item in expected_harness_classes
-        ) and "org.hyperledger.iroha.android.GradleHarnessTests" in test_selectors
+        return _java_android_harness_command_matches(command, test_selectors)
     if (
         fragment.startswith("org.hyperledger.iroha.android.sccp.")
         and fragment.endswith("Tests")
     ):
         return (
-            fragment in actual_harness_classes
-            and "org.hyperledger.iroha.android.GradleHarnessTests" in test_selectors
+            fragment in _java_android_expected_harness_classes()
+            and _java_android_harness_command_matches(command, test_selectors)
         )
     fragment_tokens = shlex.split(fragment)
     expected_tests = _command_option_values(fragment_tokens, "--tests")
     if expected_tests:
+        if expected_tests == ["org.hyperledger.iroha.android.GradleHarnessTests"]:
+            return _java_android_harness_command_matches(command, test_selectors)
         return (
             all(part in tokens for part in fragment_tokens if part not in expected_tests)
-            and all(
-                expected in test_selectors
-                for expected in expected_tests
-            )
+            and tuple(test_selectors) == tuple(expected_tests)
+            and not actual_harness_classes
         )
     return all(part in tokens for part in shlex.split(fragment))
 
@@ -15363,7 +17370,9 @@ def _phase_command_matches_required_fragment(
     command: str,
     fragment: str,
 ) -> bool:
-    if fragment not in command:
+    if fragment not in command and not (
+        phase == "java-android" and fragment.startswith("ANDROID_HARNESS_MAINS=")
+    ):
         return False
     if phase == "evidence-scripts":
         return _evidence_pytest_command_has_fragment(phase, command, fragment)
@@ -15380,6 +17389,8 @@ def _phase_command_matches_required_fragment(
     if phase == "java-android":
         return _java_android_command_has_fragment(command, fragment)
     if phase == "dotnet-sdk":
+        if fragment == "cargo build -p connect_norito_bridge":
+            return _dotnet_bridge_build_command_matches(command)
         return _dotnet_sdk_command_has_fragment(command, fragment)
     if phase == "contract-smoke":
         return _contract_smoke_command_has_fragment(command, fragment)
@@ -15394,6 +17405,87 @@ def _phase_block_has_command_fragment(
     fragment: str,
 ) -> bool:
     return bool(_phase_block_command_fragment_line_indices(phase, phase_block, fragment))
+
+
+def _phase_block_has_ordered_command_fragments(
+    phase: str,
+    phase_block: str,
+    fragments: tuple[str, ...],
+) -> bool:
+    previous_position = -1
+    for fragment in fragments:
+        later_positions = [
+            position
+            for position in _phase_block_command_fragment_line_indices(
+                phase,
+                phase_block,
+                fragment,
+            )
+            if position > previous_position
+        ]
+        if not later_positions:
+            return False
+        previous_position = min(later_positions)
+    return True
+
+
+def _phase_block_duplicate_command_fragment(
+    phase: str,
+    phase_block: str,
+    fragments: tuple[str, ...],
+) -> str | None:
+    for fragment in fragments:
+        positions = _phase_block_command_fragment_line_indices(
+            phase,
+            phase_block,
+            fragment,
+        )
+        if len(positions) > 1:
+            return fragment
+    return None
+
+
+def _phase_block_has_ordered_output_fragments(
+    phase_block: str,
+    fragments: tuple[str, ...],
+) -> bool:
+    previous_position = -1
+    for fragment in fragments:
+        later_positions = [
+            position
+            for position in _phase_block_output_fragment_line_indices(
+                phase_block,
+                fragment,
+            )
+            if position > previous_position
+        ]
+        if not later_positions:
+            return False
+        previous_position = min(later_positions)
+    return True
+
+
+def _phase_block_output_fragments_are_strictly_ordered(
+    phase_block: str,
+    fragments: tuple[str, ...],
+) -> bool:
+    previous_max_position = -1
+    for fragment in fragments:
+        positions = _phase_block_output_fragment_line_indices(phase_block, fragment)
+        if not positions or min(positions) <= previous_max_position:
+            return False
+        previous_max_position = max(positions)
+    return True
+
+
+def _phase_block_duplicate_output_fragment(
+    phase_block: str,
+    fragments: tuple[str, ...],
+) -> str | None:
+    for fragment in fragments:
+        if len(_phase_block_output_fragment_line_indices(phase_block, fragment)) > 1:
+            return fragment
+    return None
 
 
 def _phase_success_fragment_required_command_fragment(
@@ -15442,7 +17534,16 @@ def _phase_success_fragment_required_command_fragments(
             DOTNET_ARCHITECTURE_SUCCESS_PREFIX,
         ):
             return ("dotnet --info",)
-        if fragment in (DOTNET_TEST_PASSED_SUCCESS_FRAGMENT, DOTNET_TRX_SUCCESS_PREFIX):
+        if fragment in (
+            DOTNET_BRIDGE_PATH_SUCCESS_PREFIX,
+            DOTNET_BRIDGE_SHA256_SUCCESS_PREFIX,
+        ):
+            return ("cargo build -p connect_norito_bridge",)
+        if fragment in (
+            DOTNET_TEST_PASSED_SUCCESS_FRAGMENT,
+            DOTNET_TRX_SUCCESS_PREFIX,
+            DOTNET_TRX_BYTES_SUCCESS_PREFIX,
+        ):
             return (
                 "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
             )
@@ -15532,6 +17633,31 @@ def _phase_success_fragment_has_position_after_required_command(
             for position in success_positions
         )
         for anchor_position, window_ceiling in windows
+    )
+
+
+def _phase_success_fragment_positions_are_only_in_required_command_windows(
+    phase: str,
+    phase_block: str,
+    fragment: str,
+    success_positions: list[int],
+    fallback_position: int,
+) -> bool:
+    windows = _phase_success_command_windows(
+        phase,
+        phase_block,
+        fragment,
+        fallback_position,
+    )
+    if not windows:
+        return False
+    return all(
+        any(
+            position > anchor_position
+            and (window_ceiling is None or position < window_ceiling)
+            for anchor_position, window_ceiling in windows
+        )
+        for position in success_positions
     )
 
 
@@ -15625,6 +17751,16 @@ def _phase_output_line_has_success_fragment(line: str, fragment: str) -> bool:
             DOTNET_ARCHITECTURE_SUCCESS_PATTERN.fullmatch(scan_line)
             for scan_line in scan_lines
         )
+    if fragment == DOTNET_BRIDGE_PATH_SUCCESS_PREFIX:
+        return any(
+            _dotnet_bridge_path_success_line_matches(scan_line)
+            for scan_line in scan_lines
+        )
+    if fragment == DOTNET_BRIDGE_SHA256_SUCCESS_PREFIX:
+        return any(
+            DOTNET_BRIDGE_SHA256_SUCCESS_PATTERN.fullmatch(scan_line)
+            for scan_line in scan_lines
+        )
     if fragment == DOTNET_TEST_PASSED_SUCCESS_FRAGMENT:
         return any(
             _dotnet_test_passed_success_line_matches(scan_line)
@@ -15633,6 +17769,11 @@ def _phase_output_line_has_success_fragment(line: str, fragment: str) -> bool:
     if fragment == DOTNET_TRX_SUCCESS_PREFIX:
         return any(
             DOTNET_TRX_SUCCESS_PATTERN.fullmatch(scan_line)
+            for scan_line in scan_lines
+        )
+    if fragment == DOTNET_TRX_BYTES_SUCCESS_PREFIX:
+        return any(
+            DOTNET_TRX_BYTES_SUCCESS_PATTERN.fullmatch(scan_line)
             for scan_line in scan_lines
         )
     for scan_line in scan_lines:
@@ -15655,7 +17796,56 @@ def _dotnet_test_passed_success_line_matches(line: str) -> bool:
     passed = int(match.group("passed"))
     skipped = int(match.group("skipped"))
     total = int(match.group("total"))
-    return total == passed + skipped
+    return total == passed + skipped and skipped == 0
+
+
+def _dotnet_phase_block_rid_architecture_markers_match(phase_block: str) -> bool:
+    rid_architectures: list[str] = []
+    architectures: list[str] = []
+    for line in phase_block.splitlines():
+        if _line_is_shell_xtrace_command(line):
+            continue
+        normalized_line = _phase_output_failure_scan_line(line)
+        scan_lines = (line,) if normalized_line == line else (line, normalized_line)
+        for scan_line in scan_lines:
+            if DOTNET_RID_SUCCESS_PATTERN.fullmatch(scan_line):
+                rid = scan_line.split(":", 1)[1].strip()
+                rid_architectures.append(DOTNET_RID_ARCHITECTURES[rid])
+                break
+            if DOTNET_ARCHITECTURE_SUCCESS_PATTERN.fullmatch(scan_line):
+                architecture = scan_line.split(":", 1)[1].strip()
+                architectures.append(architecture)
+                break
+    if len(rid_architectures) != 1 or len(architectures) != 1:
+        return True
+    return rid_architectures[0] == architectures[0]
+
+
+def _dotnet_bridge_path_success_line_matches(line: str) -> bool:
+    match = DOTNET_BRIDGE_PATH_SUCCESS_PATTERN.fullmatch(line)
+    if match is None:
+        return False
+    path = match.group("path")
+    raw_parts = re.split(r"[\\/]", path)
+    if raw_parts and raw_parts[0] == "":
+        raw_parts = raw_parts[1:]
+    if any(part in {"", ".", ".."} for part in raw_parts):
+        return False
+    if any(
+        any(char.isspace() or ord(char) < 0x20 for char in part)
+        for part in raw_parts
+    ):
+        return False
+    for index, part in enumerate(raw_parts):
+        if index == 0 and DOTNET_BRIDGE_PATH_DRIVE_PATTERN.fullmatch(part):
+            continue
+        if DOTNET_BRIDGE_PATH_COMPONENT_PATTERN.fullmatch(part) is None:
+            return False
+    return (
+        len(raw_parts) >= 3
+        and raw_parts[-2] == "debug"
+        and raw_parts[-1] == "connect_norito_bridge.dll"
+    )
 
 
 def _phase_block_has_exact_output_line(phase_block: str, expected: str) -> bool:
@@ -16622,7 +18812,7 @@ def _is_nonzero_hex32(value: Any) -> bool:
         return False
     try:
         raw = bytes.fromhex(value[2:])
-    except (TypeError, ValueError):
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         return False
     return len(raw) == 32 and any(raw) and value == f"0x{raw.hex()}"
 
@@ -16632,7 +18822,7 @@ def _is_hex32(value: Any) -> bool:
         return False
     try:
         raw = bytes.fromhex(value[2:])
-    except (TypeError, ValueError):
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         return False
     return len(raw) == 32 and value == f"0x{raw.hex()}"
 
@@ -16975,15 +19165,36 @@ def _native_evm_prover_field_name_blocker(
 
 SENSITIVE_PUBLIC_FIELD_NAME_MARKERS = (
     "secret-token",
+    "secret key",
+    "secret-key",
+    "secret_key",
+    "private key",
     "private-key",
     "private_key",
     "password",
     "bearer",
     "authorization",
+    "access key",
+    "access-key",
+    "access_key",
+    "api key",
     "api-key",
     "api_key",
+    "client secret",
     "client-secret",
     "client_secret",
+    "credential",
+    "credentials",
+    "auth header",
+    "auth-header",
+    "auth_header",
+    "mnemonic",
+    "seed phrase",
+    "seed-phrase",
+    "seed_phrase",
+    "signing key",
+    "signing-key",
+    "signing_key",
     "token",
 )
 
@@ -19660,7 +21871,7 @@ def _render_readiness_markdown(
             f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report {ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE} and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
             f"- {ACTIVE_LAUNCH_DISPLAY} route-canary transaction metadata must include a canonical non-zero transaction hash, finalized receipt block number/hash, receipts root, message id, and `{ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE}` evidence source before launch readiness can pass.",
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked. Required source-verifier evidence by lane: Ethereum recursive source-adapter verifier deployment and remaining beacon light-client update/state branches are not complete for the SCCP inbound path; BSC recursive source-adapter verifier deployment is not complete for the SCCP inbound path; Solana audited Tower replay, full-bank AccountsDB lattice, bank/fork-choice, and source-adapter verifier deployment evidence is not complete for the SCCP inbound path; TON governed full-light-client verifier deployment, canary, and source-adapter deployment evidence are not complete for the SCCP inbound path; TRON transaction-Merkle source-call verifier deployment is not complete for the SCCP inbound path.",
-            "- Windows `.NET 8` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, canonical Windows OS/RID/architecture markers, a non-zero passed VSTest summary with `Failed: 0`, and the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker before release readiness can pass.",
+            "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, the `SCCP .NET SDK version:` marker emitted after `dotnet --version`, phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order, no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, or restore/build failed markers, exact host markers `SCCP .NET SDK OS: Windows`, `SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and `SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` emitted after `dotnet --info`, exact native bridge markers `connect_norito_bridge native bridge: ...connect_norito_bridge.dll` and `connect_norito_bridge native bridge sha256: <64 lowercase hex>` emitted after `cargo build -p connect_norito_bridge`, `dotnet restore Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, a non-zero passed VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` emitted after the strict `dotnet test` command, with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a numeric unit duration, and with a positive TRX byte count plus a TRX marker that full-matches the C# test project `TestResults/sccp-dotnet-sdk.trx` path before release readiness can pass.",
             "- An audited `--native-evm-prover-bundle` manifest with `schema = sccp-native-evm-groth16-prover-bundle-v1`, `no_wasm = true`, `remote_prover_required = false`, and matching Ethereum destination binding/proving-key hashes.",
             f"- {SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE}",
             f"- {SCCP_NOT_REMAINING_WORK_SCOPE_NOTE}",
@@ -19724,7 +21935,7 @@ def _render_readiness_markdown(
             "- SCCP release native-prover bundle schema source inventory must pin native EVM Groth16 manifest schema, readiness summary schema, artifact hash/path binding, copied-summary scalar exactness, and bundled-manifest drift rejection before published bundle readiness can pass.",
             "- SCCP proof-request bundle/source-proof source inventory must pin canonical bundle-byte, SORA-empty source-proof, and decoded non-SORA source-proof binding gates across Rust, JavaScript, Python, Swift, Kotlin/JVM, Java Android, and C#/.NET.",
             "- SCCP phase-evidence source inventory must pin duplicate assignment and directory override rejection across readiness-report and release-bundle CLIs before corridor phase evidence can satisfy production readiness.",
-            "- SCCP release corridor phase-transcript source inventory must pin exact phase markers, phase-local ordered non-negated/non-diagnostic shell-xtrace-free completion/success output after required commands in per-phase and full-corridor logs, phase-specific traced command shapes with exact pytest positional inputs, option-bound selectors, exact Gradle test command parsing, broad Kotlin package-suite selectors, exact Swift filter commands, exact Android harness class membership, exact Node test/check command files, exact .NET project/filter/nologo commands, exact no-suffix cargo/bash/java commands, and without bare-fragment shortcuts or shell-comment-hidden fragments, restricted cd wrappers, dry-run rejection, failure-marker scans, and forged-block rejection before corridor logs can satisfy public bundle readiness.",
+            "- SCCP release corridor phase-transcript source inventory must pin exact phase markers, phase-local ordered non-negated/non-diagnostic shell-xtrace-free completion/success output after required commands in per-phase and full-corridor logs, phase-specific traced command shapes with exact pytest positional inputs, option-bound selectors, exact Gradle test command parsing, exact Kotlin Gradle selector list, exact Swift filter commands, exact Java Android harness class list including TRON, exact Node test/check command files, exact .NET project/filter/nologo commands, exact no-suffix cargo/bash/java commands, and without bare-fragment shortcuts or shell-comment-hidden fragments, restricted cd wrappers, dry-run rejection, failure-marker scans, and forged-block rejection before corridor logs can satisfy public bundle readiness.",
             "- SCCP release bundle source-copy source inventory must pin symlink and control-character rejection for evidence inputs, phase evidence, native EVM prover manifests, and native prover payload sources before bundle copy can run.",
             "- SCCP release bundle output-path source inventory must pin symlink and control-character rejection for output directories before bundle generation can create or overwrite release artifacts.",
             "- SCCP release artifact path text source inventory must pin Markdown-unsafe character rejection for manifest artifact paths, readiness inputs, native prover manifest/payload paths, copied bundle filenames, and bundle filesystem entries before release notes can render artifact tables.",
@@ -20753,6 +22964,11 @@ def _readiness_markdown_invariant_errors(
                 )
             helper_sets = surface.get("sdk_helper_symbols_by_sdk")
             if isinstance(helper_sets, dict):
+                expected_helpers_by_sdk = (
+                    USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK.get(lanes, {})
+                    if isinstance(lanes, str)
+                    else {}
+                )
                 for sdk, helpers in helper_sets.items():
                     if _submission_surface_sdk_key_blocker(sdk) is not None:
                         continue
@@ -20766,6 +22982,9 @@ def _readiness_markdown_invariant_errors(
                     )
                     if not isinstance(helpers, list):
                         continue
+                    expected_helpers = expected_helpers_by_sdk.get(sdk)
+                    if expected_helpers is None:
+                        continue
                     for helper in helpers:
                         if (
                             _submission_surface_helper_symbol_blocker(
@@ -20774,6 +22993,11 @@ def _readiness_markdown_invariant_errors(
                                 f"sdk_helper_symbols_by_sdk[{sdk}]",
                             )
                             is not None
+                        ):
+                            continue
+                        if (
+                            expected_helpers is not None
+                            and helper not in expected_helpers
                         ):
                             continue
                         errors.extend(
@@ -21586,6 +23810,14 @@ def _cryptographic_evidence_source_adapter_gate_schema_errors(
                 gate_hash,
             )
         )
+        errors.extend(
+            _source_adapter_gate_template_audit_errors(
+                "readiness report cryptographic evidence row "
+                "source_adapter_gate_audit_hashes",
+                row.get("domain"),
+                semantic_audit_hashes,
+            )
+        )
         if not semantic_audit_hashes:
             errors.append(
                 "readiness report cryptographic evidence row "
@@ -21653,6 +23885,17 @@ def _cryptographic_evidence_source_adapter_gate_schema_errors(
         ("destination_binding_hash", row.get("destination_binding_hash")),
         ("route_allowlist_hash", row.get("route_allowlist_hash")),
         ("route_canary_evidence_hash", row.get("route_canary_evidence_hash")),
+        # Source-inventory marker: public source_adapter_gate audit hashes must not reuse route_canary_message_id
+        ("route_canary_transaction_hash", row.get("route_canary_transaction_hash")),
+        (
+            "route_canary_receipt_block_hash",
+            row.get("route_canary_receipt_block_hash"),
+        ),
+        (
+            "route_canary_block_receipts_root",
+            row.get("route_canary_block_receipts_root"),
+        ),
+        ("route_canary_message_id", row.get("route_canary_message_id")),
     ]
     role_fields.extend(
         (f"source_adapter_gate_audit_hashes.{field}", value)
@@ -21667,6 +23910,33 @@ def _cryptographic_evidence_source_adapter_gate_schema_errors(
         )
     )
     return errors
+
+
+def _cryptographic_evidence_route_canary_hash_role_errors(
+    row: dict[str, Any],
+) -> list[str]:
+    """Return public crypto-row blockers for route-canary transcript replay."""
+
+    return _distinct_nonzero_hex_field_errors(
+        "readiness report cryptographic evidence row route_canary hash role",
+        (
+            (
+                "route_canary_transaction_hash",
+                row.get("route_canary_transaction_hash"),
+            ),
+            (
+                "route_canary_receipt_block_hash",
+                row.get("route_canary_receipt_block_hash"),
+            ),
+            (
+                "route_canary_block_receipts_root",
+                row.get("route_canary_block_receipts_root"),
+            ),
+            ("route_canary_message_id", row.get("route_canary_message_id")),
+            ("route_canary_evidence_hash", row.get("route_canary_evidence_hash")),
+        ),
+        byte_length=32,
+    )
 
 
 def _cryptographic_evidence_row_schema_errors(
@@ -21878,6 +24148,7 @@ def _cryptographic_evidence_row_schema_errors(
     errors.extend(
         _cryptographic_evidence_source_adapter_gate_schema_errors(row, audit_hashes)
     )
+    errors.extend(_cryptographic_evidence_route_canary_hash_role_errors(row))
     if row.get("domain") != ACTIVE_LAUNCH_DOMAIN:
         if row.get("domain") == SCCP_DOMAIN_TRON:
             has_tron_route_canary_metadata = (
@@ -22321,6 +24592,43 @@ def _public_blocker_list_field_errors(
         if blocker_error is not None and blocker_error not in errors:
             errors.append(blocker_error)
     return errors
+
+
+PUBLIC_VERIFIER_ERROR_MARKDOWN_UNSAFE_CHARACTER_PATTERN = re.compile(
+    r"Markdown-unsafe character '(?:\||`|<|>)'"
+)
+
+
+def _public_verifier_error_text_blocker(
+    blocker: Any,
+    label: str,
+    field: str,
+) -> str | None:
+    if not isinstance(blocker, str) or not blocker:
+        return (
+            f"{label} {field} must be a list of non-empty strings "
+            "with no surrounding whitespace"
+        )
+    if _path_control_character(blocker) is not None:
+        return f"{label} {field} contains blocker with control character"
+    if not blocker.isascii():
+        return f"{label} {field} contains blocker with non-ASCII character"
+    if blocker.strip() != blocker:
+        return (
+            f"{label} {field} must be a list of non-empty strings "
+            "with no surrounding whitespace"
+        )
+    markdown_scan_text = (
+        PUBLIC_VERIFIER_ERROR_MARKDOWN_UNSAFE_CHARACTER_PATTERN.sub(
+            "Markdown-unsafe character",
+            blocker,
+        )
+    )
+    if _path_markdown_unsafe_character(markdown_scan_text) is not None:
+        return f"{label} {field} contains blocker with Markdown-unsafe character"
+    if any(marker in blocker.lower() for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS):
+        return f"{label} {field} contains blocker with sensitive name"
+    return None
 
 
 def _integer_list_field_errors(
@@ -22911,6 +25219,13 @@ def _source_adapter_gate_coherence_errors(
             errors.append(
                 f"{label} gate_hash must match audit_hashes.{expected_gate_key}"
             )
+        errors.extend(
+            _source_adapter_gate_template_audit_errors(
+                f"{label} audit_hashes",
+                domain,
+                semantic_audit_hashes,
+            )
+        )
         role_fields: list[tuple[str, Any]] = []
         source_hashes = lane.get("source_record_hashes")
         if isinstance(source_hashes, dict):
@@ -22944,6 +25259,22 @@ def _source_adapter_gate_coherence_errors(
                         route_canary.get("evidence_hash"),
                     )
                 )
+                # Source-inventory marker: source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.message_id
+                for field in sorted(
+                    ALL_LANES_ROUTE_CANARY_KEYS_BY_DOMAIN.get(
+                        domain,
+                        ALL_LANES_ROUTE_CANARY_COMMON_KEYS,
+                    )
+                ):
+                    if field in {
+                        "destination_binding_hash",
+                        "evidence_hash",
+                        "route_allowlist_hash",
+                    }:
+                        continue
+                    role_fields.append(
+                        (f"route_canary.{field}", route_canary.get(field))
+                    )
         role_fields.extend(
             (f"audit_hashes.{field}", value)
             for field, value in sorted(semantic_audit_hashes.items())
@@ -23033,7 +25364,7 @@ def _solana_pubkey_field_errors(
         return [f"{label} {field} must be a non-zero canonical base58 Solana address"]
     try:
         raw = _decode_solana_base58(value)
-    except (TypeError, ValueError):
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         return [f"{label} {field} must be a non-zero canonical base58 Solana address"]
     if len(raw) != 32 or not any(raw):
         return [f"{label} {field} must be a non-zero canonical base58 Solana address"]
@@ -23239,6 +25570,52 @@ def _route_allowlist_recompute_errors(
     return errors
 
 
+def _destination_binding_recompute_errors(
+    label: str,
+    lane: dict[str, Any],
+    destination_binding: dict[str, Any],
+) -> list[str]:
+    """Return bounded errors for copied destination binding hash drift."""
+
+    try:
+        all_lanes = _all_lanes_module()
+        helper = getattr(all_lanes, "_public_lane_destination_binding_recompute_errors")
+    except (
+        argparse.ArgumentTypeError,
+        AttributeError,
+        ImportError,
+        OSError,
+        RuntimeError,
+        SystemExit,
+        TypeError,
+        ValueError,
+    ):
+        return [
+            f"{label} destination_binding_hash must recompute from "
+            "destination_binding_key"
+        ]
+    try:
+        helper_errors = helper(lane, label, destination_binding)
+    except (
+        argparse.ArgumentTypeError,
+        AttributeError,
+        ImportError,
+        OSError,
+        RuntimeError,
+        SystemExit,
+        TypeError,
+        ValueError,
+    ):
+        return [
+            f"{label} destination_binding_hash must recompute from "
+            "destination_binding_key"
+        ]
+    return [
+        error.replace(f"{label}.", f"{label} ", 1)
+        for error in helper_errors
+    ]
+
+
 def _all_lanes_lane_label(label: str, index: int, lane: dict[str, Any]) -> str:
     domain = lane.get("domain")
     if type(domain) is int:
@@ -23292,6 +25669,24 @@ def _all_lanes_route_canary_cross_lane_errors(
             )
             if value is not None:
                 governed_hashes.setdefault(value, (lane_label, "route_allowlist_hash"))
+            route_canary = route_allowlist.get("route_canary")
+            if isinstance(route_canary, dict):
+                canary_fields = ALL_LANES_ROUTE_CANARY_KEYS_BY_DOMAIN.get(
+                    lane.get("domain"),
+                    ALL_LANES_ROUTE_CANARY_COMMON_KEYS,
+                )
+                for field in sorted(canary_fields):
+                    if field == "evidence_hash":
+                        continue
+                    canary_value = _canonical_nonzero_fixed_hex_value(
+                        route_canary.get(field),
+                        byte_length=32,
+                    )
+                    if canary_value is not None:
+                        governed_hashes.setdefault(
+                            canary_value,
+                            (lane_label, f"route_canary.{field}"),
+                        )
         for field, value in _source_adapter_gate_hash_role_fields(lane_label, lane):
             governed_hash = _canonical_nonzero_fixed_hex_value(
                 value,
@@ -23846,6 +26241,13 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                         type_label="bytes32",
                     )
                 )
+            errors.extend(
+                _source_record_template_hash_errors(
+                    source_hashes_label,
+                    domain,
+                    source_hashes,
+                )
+            )
         source_gate = lane.get("source_adapter_gate")
         if isinstance(source_gate, dict):
             source_gate_label = f"{lane_label} source_adapter_gate"
@@ -24122,6 +26524,13 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                     destination_label,
                     destination_binding,
                     "recomputed",
+                )
+            )
+            errors.extend(
+                _destination_binding_recompute_errors(
+                    destination_label,
+                    lane,
+                    destination_binding,
                 )
             )
         route_allowlist = lane.get("route_allowlist")
@@ -25374,7 +27783,7 @@ def _public_verifier_summary_errors(value: Any) -> tuple[list[str], list[str]]:
     seen_public_errors: set[str] = set()
     seen_validation_errors: set[str] = set()
     for blocker in value:
-        blocker_error = _public_blocker_text_blocker(blocker, label, field)
+        blocker_error = _public_verifier_error_text_blocker(blocker, label, field)
         if blocker_error is not None:
             if blocker_error not in seen_validation_errors:
                 validation_errors.append(blocker_error)

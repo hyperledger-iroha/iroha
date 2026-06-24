@@ -13,29 +13,31 @@ _ALE = "ale"
 _RUNTIME = "runtime"
 
 
-def _literal(*parts: str) -> re.Pattern[str]:
-    return re.compile(re.escape("".join(parts)), re.IGNORECASE)
+RETIRED_NETWORK_TOKEN_SEPARATOR = r"[\s._-]*"
 
 
-def _word(*parts: str) -> re.Pattern[str]:
-    return re.compile(r"\b" + re.escape("".join(parts)) + r"\b", re.IGNORECASE)
+def _retired_word(*parts: str) -> re.Pattern[str]:
+    return re.compile(
+        r"\b"
+        + RETIRED_NETWORK_TOKEN_SEPARATOR.join(re.escape(part) for part in parts)
+        + r"\b",
+        re.IGNORECASE,
+    )
 
 
 BANNED_PATTERNS: tuple[re.Pattern[str], ...] = (
-    _literal("sub", "strate"),
-    _literal("sub", "strat"),
-    _literal("pol", "kadot"),
-    _literal("ku", "sama"),
-    _literal(_RUNTIME, " ", _SC, _ALE),
-    _literal(_RUNTIME, "-", _SC, _ALE),
-    _literal(_RUNTIME, "_", _SC, _ALE),
-    _word("pa", "llet"),
-    _word("para", "chain"),
-    _word("x", "cm"),
-    _word("sr", "25519"),
-    _word("sp", "_", _RUNTIME),
-    _word("frame", "_", "system"),
-    _word("frame", "_", "support"),
+    _retired_word("sub", "strate"),
+    _retired_word("sub", "strat"),
+    _retired_word("pol", "kadot"),
+    _retired_word("ku", "sama"),
+    _retired_word(_RUNTIME, _SC, _ALE),
+    _retired_word("pa", "llet"),
+    _retired_word("para", "chain"),
+    _retired_word("x", "cm"),
+    _retired_word("sr", "25519"),
+    _retired_word("sp", _RUNTIME),
+    _retired_word("frame", "system"),
+    _retired_word("frame", "support"),
     re.compile(chr(0x57FA) + chr(0x677F), re.IGNORECASE),
     re.compile("".join(chr(code) for code in (0x0627, 0x0644, 0x0631, 0x0643, 0x064A, 0x0632, 0x0629))),
 )
@@ -208,22 +210,39 @@ def test_retired_network_patterns_catch_adversarial_examples() -> None:
         ("sub", "strat"),
         ("pol", "kadot"),
         ("ku", "sama"),
-        (_RUNTIME, " ", _SC, _ALE),
-        (_RUNTIME, "-", _SC, _ALE),
-        (_RUNTIME, "_", _SC, _ALE),
+        (_RUNTIME, _SC, _ALE),
         ("pa", "llet"),
         ("para", "chain"),
         ("x", "cm"),
         ("sr", "25519"),
-        ("sp", "_", _RUNTIME),
-        ("frame", "_", "system"),
-        ("frame", "_", "support"),
+        ("sp", _RUNTIME),
+        ("frame", "system"),
+        ("frame", "support"),
         (chr(0x57FA), chr(0x677F)),
         tuple(chr(code) for code in (0x0627, 0x0644, 0x0631, 0x0643, 0x064A, 0x0632, 0x0629)),
     ]
 
     assert len(BANNED_PATTERNS) == len(examples)
     for pattern, example in zip(BANNED_PATTERNS, examples):
+        assert pattern.search("".join(example))
+
+
+def test_retired_network_patterns_catch_separator_obfuscation_examples() -> None:
+    cases = (
+        (BANNED_PATTERNS[0], ("sub", "-", "strate")),
+        (BANNED_PATTERNS[0], ("sub", "_", "strate")),
+        (BANNED_PATTERNS[0], ("sub", ".", "strate")),
+        (BANNED_PATTERNS[0], ("sub", " ", "strate")),
+        (BANNED_PATTERNS[2], ("pol", "-", "kadot")),
+        (BANNED_PATTERNS[2], ("pol", "_", "kadot")),
+        (BANNED_PATTERNS[4], (_RUNTIME, ".", _SC, ".", _ALE)),
+        (BANNED_PATTERNS[7], ("x", "-", "cm")),
+        (BANNED_PATTERNS[9], ("sp", "_", _RUNTIME)),
+        (BANNED_PATTERNS[10], ("frame", "-", "system")),
+        (BANNED_PATTERNS[11], ("frame", ".", "support")),
+    )
+
+    for pattern, example in cases:
         assert pattern.search("".join(example))
 
 

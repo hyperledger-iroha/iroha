@@ -145,7 +145,7 @@ public final class OfflineNoteV2 {
     return InstructionBox.fromWirePayload(
         ISSUE_INSTRUCTION_SCHEMA,
         encodeInstructionWrapper(
-            ISSUE_INSTRUCTION_SCHEMA, value, ISSUE_ADAPTER, encodeIssue(value)));
+            ISSUE_INSTRUCTION_SCHEMA, encodeIssue(value)));
   }
 
   public static InstructionBox redeemInstruction(final RedeemV2 value) {
@@ -153,7 +153,7 @@ public final class OfflineNoteV2 {
     return InstructionBox.fromWirePayload(
         REDEEM_INSTRUCTION_SCHEMA,
         encodeInstructionWrapper(
-            REDEEM_INSTRUCTION_SCHEMA, value, REDEEM_ADAPTER, encodeRedeem(value)));
+            REDEEM_INSTRUCTION_SCHEMA, encodeRedeem(value)));
   }
 
   public static InstructionBox auditInstruction(final AuditBundleV2 value) {
@@ -161,7 +161,7 @@ public final class OfflineNoteV2 {
     return InstructionBox.fromWirePayload(
         AUDIT_INSTRUCTION_SCHEMA,
         encodeInstructionWrapper(
-            AUDIT_INSTRUCTION_SCHEMA, value, AUDIT_ADAPTER, encodeAudit(value)));
+            AUDIT_INSTRUCTION_SCHEMA, encodeAudit(value)));
   }
 
   public static InstructionBox registerDeviceAttestationInstruction(
@@ -170,8 +170,6 @@ public final class OfflineNoteV2 {
         REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
         encodeInstructionWrapper(
             REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
-            value,
-            DEVICE_ATTESTATION_REGISTRATION_ADAPTER,
             encodeDeviceAttestationRegistration(value)));
   }
 
@@ -270,26 +268,17 @@ public final class OfflineNoteV2 {
     return NoritoCodec.decode(bytes, adapter, schema);
   }
 
-  private static <T> byte[] encodeInstructionWrapper(
-      final String schema,
-      final T value,
-      final TypeAdapter<T> adapter,
-      final byte[] framedModelPayload) {
+  private static byte[] encodeInstructionWrapper(
+      final String schema, final byte[] framedModelPayload) {
     if (!isNoritoFrame(framedModelPayload)) {
       throw new IllegalArgumentException("Offline Note V2 framed model payload is invalid");
     }
-    return encodeInstructionWrapper(schema, value, adapter);
-  }
-
-  private static <T> byte[] encodeInstructionWrapper(
-      final String schema, final T value, final TypeAdapter<T> adapter) {
-    final NoritoCodec.AdaptiveEncoding modelPayload =
-        NoritoCodec.encodeAdaptive(value, adapter, NoritoHeader.COMPACT_LEN);
+    final NoritoCodec.ArchiveView modelPayload = NoritoCodec.fromBytesView(framedModelPayload, null);
     return NoritoCodec.encode(
-        new InstructionModelPayload(modelPayload.payload(), modelPayload.flags()),
+        new InstructionModelPayload(modelPayload.asBytes(), modelPayload.flags()),
         schema,
         INSTRUCTION_WRAPPER_ADAPTER,
-        modelPayload.flags());
+        0);
   }
 
   private static <T> T decodeInstructionModel(

@@ -587,10 +587,10 @@ final class OfflineNoteV2Tests: XCTestCase {
         }
 
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, publicKey: Data(repeating: 0x01, count: 31))) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .invalidPublicKeyLength(expected: 32, actual: 31))
+            XCTAssertEqual(error as? OfflineNoteV2Error, .invalidNotePublicKeyLength(expected: 32, actual: 31))
         }
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, recentBlockHash: Data(repeating: 0x01, count: 31))) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .invalidHash(field: "recent_block_hash"))
+            XCTAssertEqual(error as? OfflineNoteV2Error, .invalidHashLength(field: "recent_block_hash", expected: 32, actual: 31))
         }
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, oneUse: false)) { error in
             XCTAssertEqual(error as? OfflineNoteV2Error, .certificateMustBeOneUse)

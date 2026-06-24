@@ -12930,6 +12930,7 @@ fn sccp_source_bridge_config_hash_fields_are_consistent(
                 return false;
             };
             address20_is_nonzero(&source_bridge_owner_address)
+                && source_bridge_owner_address != source_bridge_address
                 && h256_is_nonzero(&source_bridge_network_id)
                 && h256_is_nonzero(&source_bridge_config_hash)
                 && sccp_tron_source_bridge_config_hash_v1(
@@ -16448,7 +16449,7 @@ pub fn sccp_source_adapter_deployment_binding_hash(
 pub fn sccp_source_adapter_deployment_binding_from_deployment_v1(
     deployment: &SccpSourceAdapterEngineDeploymentV1,
 ) -> Option<SccpSourceAdapterDeploymentBindingV1> {
-    if deployment.version != 1 || !h256_is_nonzero(&deployment.deployment_receipt_hash) {
+    if !source_adapter_deployment_has_standalone_valid_shape(deployment) {
         return None;
     }
     let binding = SccpSourceAdapterDeploymentBindingV1 {
@@ -58549,6 +58550,42 @@ mod tests {
             sccp_source_adapter_deployment_binding_hash(&non_sora_target).is_none(),
             "source-adapter deployment binding hashes must reject non-SORA targets"
         );
+
+        let material = sample_production_source_verifier_material(SCCP_DOMAIN_TON);
+        let deployment = sample_production_source_adapter_deployment(&material);
+        let derived = sccp_source_adapter_deployment_binding_from_deployment_v1(&deployment)
+            .expect("standalone-valid TON deployment binding");
+        assert_eq!(derived.source_domain, SCCP_DOMAIN_TON);
+        assert_eq!(derived.target_domain, SCCP_DOMAIN_SORA);
+        assert_eq!(
+            derived.source_adapter_deployment_hash,
+            sccp_source_adapter_engine_deployment_hash(&deployment)
+        );
+        assert_eq!(
+            derived.source_adapter_deployment_receipt_hash,
+            deployment.deployment_receipt_hash
+        );
+
+        let mut partial_ton_audit = deployment.clone();
+        partial_ton_audit.ton_masterchain_config_verifier_hash = [0u8; 32];
+        assert!(
+            sccp_source_adapter_deployment_binding_from_deployment_v1(&partial_ton_audit).is_none(),
+            "source-adapter deployment bindings must not be minted from partial TON audit descriptors"
+        );
+
+        let mut replayed_receipt = deployment.clone();
+        replayed_receipt.deployment_receipt_hash = deployment.adapter_verifier_vk_hash;
+        assert!(
+            sccp_source_adapter_deployment_binding_from_deployment_v1(&replayed_receipt).is_none(),
+            "source-adapter deployment bindings must not be minted from receipt/VK role replay"
+        );
+
+        let mut drifted_vk = deployment;
+        drifted_vk.adapter_verifier_vk_hash[0] ^= 0x01;
+        assert!(
+            sccp_source_adapter_deployment_binding_from_deployment_v1(&drifted_vk).is_none(),
+            "source-adapter deployment bindings must not be minted from verifier-key drift"
+        );
     }
 
     #[test]
@@ -68891,6 +68928,14 @@ mod tests {
         assert!(!material.placeholder_material);
         assert!(!sccp_source_verifier_material_uses_builtin_placeholder_components(&material));
         assert!(sccp_source_verifier_material_is_production_ready(&material));
+        let mut reused_owner_material = material.clone();
+        reused_owner_material.source_bridge_owner_address =
+            sample_tron_message_emitter_address().to_vec();
+        reused_owner_material.source_bridge_config_hash = reused_owner_config_hash;
+        assert!(
+            !sccp_source_verifier_material_is_production_ready(&reused_owner_material),
+            "TRON production readiness must reject owner/emitter address reuse"
+        );
         let retired_suffix = ["receipt-root", "branch-mainnet:v1"].join("-");
         let mut retired_receipt_root_profile = material.clone();
         retired_receipt_root_profile.message_inclusion_verifier_id =

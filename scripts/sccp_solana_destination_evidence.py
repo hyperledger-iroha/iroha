@@ -63,7 +63,7 @@ def parse_hex_bytes(
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except (TypeError, ValueError):
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
@@ -83,7 +83,7 @@ def parse_program_bytes_hex(value: str, *, label: str) -> bytes:
         raise argparse.ArgumentTypeError(f"{label} must have an even hex length")
     try:
         raw = bytes.fromhex(text)
-    except (TypeError, ValueError):
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be all zero")
@@ -102,7 +102,7 @@ def parse_program_bytes_base64(value: str, *, label: str) -> bytes:
         raise argparse.ArgumentTypeError(f"{label} must not be empty")
     try:
         raw = base64.b64decode(text, validate=True)
-    except (TypeError, ValueError, binascii.Error):
+    except (SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):
         raise argparse.ArgumentTypeError(f"{label} must be base64") from None
     if base64.b64encode(raw).decode("ascii") != text:
         raise argparse.ArgumentTypeError(f"{label} must be canonical base64")
@@ -238,7 +238,7 @@ def _require_distinct_hash_roles(
 def _require_solana_program_id(value: str, *, label: str) -> str:
     try:
         return normalize_solana_program_id(value, label=label)
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError(f"{label} metadata is invalid") from None
 
 

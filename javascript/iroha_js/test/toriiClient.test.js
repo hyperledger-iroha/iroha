@@ -217,6 +217,9 @@ function assertMultisigProposeInstructionWireId(body, expectedWireId, label) {
     "signature_b64",
     "creation_time_ms",
     "fee_sponsor",
+    "memo",
+    "validation_fee_policy_version",
+    "validation_fee_policy_hash",
   ]) {
     offset = readNoritoFieldPayload(
       payload,

@@ -11663,6 +11663,21 @@ CommitVoteCountersOnlyChangeByVoteOrTimeout ==
 PhaseOnlyChangesByProtocol ==
   [] [PhaseOnlyChangesByProtocolStep]_vars
 
+TimeoutRecoveryAlwaysMatchesViewChangeEnvelope ==
+  /\ TimeoutTickGateNeverBypassesStalledProgress
+  /\ TimeoutTickStepAlwaysStartsFreshNewView
+  /\ TimeoutTickStepNeverPreemptsProgress
+  /\ TimeoutTickStepAlwaysClearsCommitVoteGates
+  /\ TimeoutTickStepAlwaysStartsNewViewVoteHandoff
+  /\ TimeoutTickStepAlwaysPreservesRbcEvidence
+  /\ ViewAdvanceOnlyComesFromTimeout
+  /\ LiveProgressResetOnlyByTimeout
+  /\ ViewEvidenceOnlyChangesByQuorumOrTimeout
+  /\ NewViewVotesOnlyChangeByVoteOrReset
+  /\ PrepareVotesOnlyChangeByVoteOrTimeout
+  /\ CommitVoteCountersOnlyChangeByVoteOrTimeout
+  /\ PhaseOnlyChangesByProtocol
+
 PreparePhaseEntryOnlyByProposal ==
   [] [PreparePhaseEntryOnlyByProposalStep]_vars
 
@@ -11863,6 +11878,36 @@ PrepareVotePendingStepNeverMutatesCommitArtifacts ==
 PrepareVotePendingStepAlwaysKeepsPrepareVoteHandoff ==
   [] [PrepareVotePendingStepKeepsPrepareVoteHandoff]_vars
 
+PreCommitHandoffAlwaysMatchesProposalPrepareEnvelope ==
+  /\ PreparePhaseEntryOnlyByProposal
+  /\ CommitVotePhaseEntryOnlyByPrepareQuorum
+  /\ ProposePhaseEntryOnlyByNewViewQuorum
+  /\ NewViewPhaseEntryOnlyByTimeout
+  /\ ViewQuorumEvidenceNeverDiverges
+  /\ ViewEvidenceWitnessNeverTargetsZeroOrNewView
+  /\ NewViewQuorumHandoffNeverStalls
+  /\ LiveNewViewVotesNeverLeakPastHandoff
+  /\ HonestProposeGateNeverBypassesHandoffEvidence
+  /\ HonestProposeStepAlwaysStartsPrepareAndRbc
+  /\ HonestProposeStepAlwaysStartsPrepareVoteHandoff
+  /\ NewViewVoteGateNeverBypassesFreshViewEvidence
+  /\ NewViewVoteQuorumGateNeverBypassesNextEvidence
+  /\ NewViewVoteQuorumStepAlwaysInstallsViewEvidence
+  /\ NewViewVoteQuorumStepAlwaysStartsProposalHandoff
+  /\ NewViewVotePendingGateNeverBypassesMissingNextEvidence
+  /\ NewViewVotePendingStepNeverInstallsViewEvidence
+  /\ ViewEvidenceNeverPartial
+  /\ PreCommitVotesNeverCarryAcrossViews
+  /\ PrePrepareVotesNeverCarryAcrossViews
+  /\ LivePrepareVotesNeverBypassPrepareHandoff
+  /\ PrepareVoteGateNeverBypassesProposalEvidence
+  /\ PrepareVoteQuorumGateNeverBypassesNextEvidence
+  /\ PrepareVoteQuorumStepAlwaysEntersCommitVote
+  /\ PrepareVoteQuorumStepAlwaysStartsCommitVoteHandoff
+  /\ PrepareVotePendingGateNeverBypassesMissingNextEvidence
+  /\ PrepareVotePendingStepNeverMutatesCommitArtifacts
+  /\ PrepareVotePendingStepAlwaysKeepsPrepareVoteHandoff
+
 CommitEvidenceNeverPartial ==
   [] CommitEvidenceIsCompleteOrEmpty
 
@@ -11919,6 +11964,27 @@ LiveCommitVotesNeverBypassCommitHandoff ==
 
 PreFinalityCommitArtifactsNeverAppear ==
   [] (NoCommitEvidenceBeforeCommit /\ NoCommitViewBeforeCommit)
+
+CommitVoteHandoffAlwaysMatchesFinalityEnvelope ==
+  /\ CommitEvidenceNeverPartial
+  /\ CommitPhasesNeverBypassPrepareQuorum
+  /\ LiveCommitVotesNeverBypassPrepareQuorum
+  /\ CommitVoteGateNeverBypassesPrepareEvidence
+  /\ ByzantineCommitVoteGateNeverBypassesPrepareEvidence
+  /\ HonestCommitVoteFinalityGateNeverBypassesNextEvidence
+  /\ HonestCommitVoteFinalityStepAlwaysInstallsCommitArtifacts
+  /\ HonestCommitVoteFinalityStepAlwaysCompletesCommittedDelivery
+  /\ HonestCommitVotePendingGateNeverBypassesMissingNextEvidence
+  /\ HonestCommitVotePendingStepNeverMutatesCommitArtifacts
+  /\ HonestCommitVotePendingStepAlwaysKeepsCommitVoteHandoff
+  /\ ByzantineCommitVoteFinalityGateNeverBypassesNextEvidence
+  /\ ByzantineCommitVoteFinalityStepAlwaysInstallsCommitArtifacts
+  /\ ByzantineCommitVoteFinalityStepAlwaysCompletesCommittedDelivery
+  /\ ByzantineCommitVotePendingGateNeverBypassesMissingNextEvidence
+  /\ ByzantineCommitVotePendingStepNeverMutatesCommitArtifacts
+  /\ ByzantineCommitVotePendingStepAlwaysKeepsCommitVoteHandoff
+  /\ LiveCommitVotesNeverBypassCommitHandoff
+  /\ PreFinalityCommitArtifactsNeverAppear
 
 FinalityCertificateStackNeverIncomplete ==
   [] FinalityCertificateStackComplete
@@ -11977,6 +12043,24 @@ CommitEvidenceNeverLost ==
   [] (committed =>
         [] (/\ commitEvidenceVotes >= CommitQuorum
             /\ commitEvidenceStake >= StakeQuorum))
+
+FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope ==
+  /\ FinalityCertificateStackNeverIncomplete
+  /\ FinalityCertificateStackAlwaysMatchesFinality
+  /\ FinalityNeverRetainsNewViewHandoff
+  /\ CommitViewQuorumEvidenceNeverLost
+  /\ PrepareQuorumNeverLostAfterCommit
+  /\ LiveCommitQuorumNeverLost
+  /\ CommitHonestSupportNeverLost
+  /\ CommitRbcEvidenceNeverLost
+  /\ CommitProgressActionsNeverReenabled
+  /\ [] CommitDisablesByzantineCommitVote
+  /\ CommitEvidenceNeverDivergesFromVoteCounters
+  /\ StakeAccountingNeverDiverges
+  /\ LiveStakeNeverExceedsRosterBudget
+  /\ CommitEvidenceNeverExceedsRosterBudget
+  /\ VoteCountersNeverExceedRosterBudgets
+  /\ CommitEvidenceNeverLost
 
 RbcDeliveryNeverLost ==
   [] (rbcState = "Delivered" => [] (rbcState = "Delivered"))
@@ -12831,5 +12915,15 @@ RbcLifecycleAlwaysMatchesEndToEndEnvelope ==
   /\ RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope
   /\ RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope
   /\ RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope
+
+SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope ==
+  /\ CommittedStateAlwaysMatchesTerminalEnvelope
+  /\ PostFinalityStateAlwaysMatchesStabilityEnvelope
+  /\ TimeoutRecoveryAlwaysMatchesViewChangeEnvelope
+  /\ FinalityInstallationAlwaysMatchesCertifiedCommitEnvelope
+  /\ PreCommitHandoffAlwaysMatchesProposalPrepareEnvelope
+  /\ CommitVoteHandoffAlwaysMatchesFinalityEnvelope
+  /\ FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope
+  /\ RbcLifecycleAlwaysMatchesEndToEndEnvelope
 
 ====

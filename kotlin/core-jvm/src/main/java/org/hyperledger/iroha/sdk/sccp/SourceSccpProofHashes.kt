@@ -3680,6 +3680,14 @@ object SccpSourceProofs {
         }
         if (
             normalizedSourceDomain == DOMAIN_TRON &&
+            normalizedSourceBridgeOwnerAddress.contentEquals(normalizedSourceBridgeEmitterAddress)
+        ) {
+            throw IllegalArgumentException(
+                "sourceBridgeOwnerAddress must not match sourceBridgeEmitterAddress",
+            )
+        }
+        if (
+            normalizedSourceDomain == DOMAIN_TRON &&
             !normalizedSourceBridgeConfigHash.contentEquals(
                 tronSourceBridgeConfigHash(
                     normalizedSourceDomain,

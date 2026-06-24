@@ -137,8 +137,6 @@ object OfflineNoteV2 {
             ISSUE_INSTRUCTION_SCHEMA,
             encodeInstructionWrapper(
                 ISSUE_INSTRUCTION_SCHEMA,
-                value,
-                IssueAdapter,
                 encodeIssue(value),
             ),
         )
@@ -150,8 +148,6 @@ object OfflineNoteV2 {
             REDEEM_INSTRUCTION_SCHEMA,
             encodeInstructionWrapper(
                 REDEEM_INSTRUCTION_SCHEMA,
-                value,
-                RedeemAdapter,
                 encodeRedeem(value),
             ),
         )
@@ -164,8 +160,6 @@ object OfflineNoteV2 {
             AUDIT_INSTRUCTION_SCHEMA,
             encodeInstructionWrapper(
                 AUDIT_INSTRUCTION_SCHEMA,
-                value,
-                AuditAdapter,
                 encodeAudit(value),
             ),
         )
@@ -177,8 +171,6 @@ object OfflineNoteV2 {
             REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
             encodeInstructionWrapper(
                 REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
-                value,
-                DeviceAttestationRegistrationAdapter,
                 encodeDeviceAttestationRegistration(value),
             ),
         )
@@ -291,29 +283,19 @@ object OfflineNoteV2 {
     private fun <T> decodeWithHeader(bytes: ByteArray, schema: String, adapter: TypeAdapter<T>): T =
         NoritoCodec.decode(bytes, adapter, schema)
 
-    private fun <T> encodeInstructionWrapper(
+    private fun encodeInstructionWrapper(
         schema: String,
-        value: T,
-        adapter: TypeAdapter<T>,
         framedModelPayload: ByteArray,
     ): ByteArray {
         require(isNoritoFrame(framedModelPayload)) {
             "Offline Note V2 framed model payload is invalid"
         }
-        return encodeInstructionWrapper(schema, value, adapter)
-    }
-
-    private fun <T> encodeInstructionWrapper(
-        schema: String,
-        value: T,
-        adapter: TypeAdapter<T>,
-    ): ByteArray {
-        val modelPayload = NoritoCodec.encodeAdaptive(value, adapter, NoritoHeader.COMPACT_LEN)
+        val modelPayload = NoritoCodec.fromBytesView(framedModelPayload, null)
         return NoritoCodec.encode(
-            InstructionModelPayload(modelPayload.payload(), modelPayload.flags),
+            InstructionModelPayload(modelPayload.asBytes(), modelPayload.flags),
             schema,
             InstructionWrapperAdapter,
-            modelPayload.flags,
+            0,
         )
     }
 

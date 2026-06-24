@@ -457,41 +457,51 @@ def test_evm_destination_direct_parsers_redact_parser_causes(tmp_path):
         raise AssertionError("missing secret EVM destination runtime file was accepted")
 
 
-def test_evm_destination_direct_parsers_redact_typeerror_parser_causes(monkeypatch):
+def test_evm_destination_direct_parsers_redact_helper_exit_parser_causes(monkeypatch):
     module = load_evidence_module()
 
-    class SecretBytes:
-        @staticmethod
-        def fromhex(_text):
-            raise TypeError("secret-token EVM destination hex TypeError detail")
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+        detail = (
+            "secret-token EVM destination hex TypeError detail"
+            if exception_type is TypeError
+            else f"secret-token EVM destination hex {exception_type.__name__} detail"
+        )
 
-    monkeypatch.setattr(module, "bytes", SecretBytes, raising=False)
+        class SecretBytes:
+            @staticmethod
+            def fromhex(_text, detail=detail, exception_type=exception_type):
+                raise exception_type(detail)
 
-    for parser, value, label, kwargs in (
-        (
-            module.parse_hex_bytes,
-            "0x" + "11" * 32,
-            "network id",
-            {"byte_length": 32},
-        ),
-        (
-            module.parse_runtime_bytecode_hex,
-            "0x6001600055",
-            "bridge runtime bytecode",
-            {},
-        ),
-    ):
-        try:
-            parser(value, label=label, **kwargs)
-        except module.argparse.ArgumentTypeError as exc:
-            rendered = str(exc)
-            assert rendered == f"{label} must be hex"
-            assert "secret-token" not in rendered
-            assert "TypeError" not in rendered
-            assert exc.__cause__ is None
-            assert exc.__suppress_context__ is True
-        else:
-            raise AssertionError(f"{label} parser TypeError was accepted")
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "bytes", SecretBytes, raising=False)
+
+            for parser, value, label, kwargs in (
+                (
+                    module.parse_hex_bytes,
+                    "0x" + "11" * 32,
+                    "network id",
+                    {"byte_length": 32},
+                ),
+                (
+                    module.parse_runtime_bytecode_hex,
+                    "0x6001600055",
+                    "bridge runtime bytecode",
+                    {},
+                ),
+            ):
+                try:
+                    parser(value, label=label, **kwargs)
+                except module.argparse.ArgumentTypeError as exc:
+                    rendered = str(exc)
+                    assert rendered == f"{label} must be hex"
+                    assert "secret-token" not in rendered
+                    assert exception_type.__name__ not in rendered
+                    assert exc.__cause__ is None
+                    assert exc.__suppress_context__ is True
+                else:
+                    raise AssertionError(
+                        f"{label} parser {exception_type.__name__} was accepted"
+                    )
 
 
 def test_evm_destination_binding_hash_matches_vectors_and_domain_separates():
@@ -1862,20 +1872,37 @@ def test_evm_toml_runtime_bytecode_reparse_redacts_parser_detail():
             )
 
 
-def test_evm_toml_runtime_bytecode_reparse_redacts_helper_typeerror(
+def test_evm_toml_runtime_bytecode_reparse_redacts_helper_failures(
     monkeypatch,
 ):
     module = load_evidence_module()
     parser_calls: list[str] = []
-
-    def reject_runtime_bytecode(_text, *, label):
-        parser_calls.append(label)
-        raise TypeError(f"secret-token {label} copied parser detail")
-
-    monkeypatch.setattr(
-        module,
-        "parse_runtime_bytecode_hex",
-        reject_runtime_bytecode,
+    failure_cases = (
+        (
+            module.argparse.ArgumentTypeError,
+            "secret-token {label} copied argument detail",
+            "copied argument detail",
+        ),
+        (
+            SystemExit,
+            "secret-token {label} copied SystemExit detail",
+            "copied SystemExit detail",
+        ),
+        (
+            RuntimeError,
+            "secret-token {label} copied RuntimeError detail",
+            "copied RuntimeError detail",
+        ),
+        (
+            TypeError,
+            "secret-token {label} copied parser detail",
+            "copied parser detail",
+        ),
+        (
+            ValueError,
+            "secret-token {label} copied ValueError detail",
+            "copied ValueError detail",
+        ),
     )
 
     cases = (
@@ -1901,20 +1928,44 @@ def test_evm_toml_runtime_bytecode_reparse_redacts_helper_typeerror(
         ),
     )
 
-    for args, label, expected_message in cases:
-        try:
-            module._require_runtime_bytecode_evidence(args, output="toml")
-        except ValueError as exc:
-            rendered = str(exc)
-            assert rendered == expected_message
-            assert "secret-token" not in rendered
-            assert "copied parser detail" not in rendered
-            assert exc.__cause__ is None
-            assert exc.__suppress_context__ is True
-        else:
-            raise AssertionError(f"{label} helper TypeError was accepted")
+    for exception_type, secret_template, forbidden_detail in failure_cases:
+        with monkeypatch.context() as patch:
 
-    assert parser_calls == ["bridge runtime bytecode", "verifier runtime bytecode"]
+            def reject_runtime_bytecode(
+                _text,
+                *,
+                label,
+                exception_type=exception_type,
+                secret_template=secret_template,
+            ):
+                parser_calls.append(label)
+                raise exception_type(secret_template.format(label=label))
+
+            patch.setattr(
+                module,
+                "parse_runtime_bytecode_hex",
+                reject_runtime_bytecode,
+            )
+            for args, label, expected_message in cases:
+                try:
+                    module._require_runtime_bytecode_evidence(args, output="toml")
+                except ValueError as exc:
+                    rendered = str(exc)
+                    assert rendered == expected_message
+                    assert "secret-token" not in rendered
+                    assert forbidden_detail not in rendered
+                    assert exc.__cause__ is None
+                    assert exc.__suppress_context__ is True
+                else:
+                    raise AssertionError(
+                        f"{label} helper {exception_type.__name__} was accepted"
+                    )
+
+    assert parser_calls == [
+        label
+        for _exception_type, _secret_template, _forbidden_detail in failure_cases
+        for _args, label, _expected_message in cases
+    ]
 
 
 def test_evm_cli_derives_bridge_code_hash_from_runtime_bytecode(capsys):

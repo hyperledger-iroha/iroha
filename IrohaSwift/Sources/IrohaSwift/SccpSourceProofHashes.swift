@@ -4709,6 +4709,10 @@ private func normalizeSccpSourceMaterial(
         bridgeOwnerAddress = try sourceProofNonZeroBytesFromHex20(ownerAddress, field: "ownerAddress")
         bridgeConfigHash = try sourceProofNonZeroBytesFromHex32(configHash, field: "configHash")
         if sourceDomain == sccpDomainTron,
+           bridgeOwnerAddress == bridgeEmitterAddress {
+            throw SccpSourceProofHashError.invalidSourceMaterial("sourceBridgeOwnerAddress")
+        }
+        if sourceDomain == sccpDomainTron,
            bridgeConfigHash != tronSourceBridgeConfigHash(
                sourceDomain: sourceDomain,
                bridgeAddress: bridgeEmitterAddress,

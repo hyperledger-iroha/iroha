@@ -2142,12 +2142,44 @@ object SccpTon {
             "sourceStateVerifierHash must not be the TON template verifier hash"
         }
         val sourceStateVerifierHash = "0x" + hexLower(sourceStateVerifierHashBytes)
+        val descriptorDerivedDeploymentBinding = input.sourceAdapterDeployment?.let { deployment ->
+            require(deployment.sourceDomain == DOMAIN_TON) {
+                "sourceAdapterDeployment.sourceDomain must be TON"
+            }
+            require(deployment.targetDomain == SccpSolana.DOMAIN_SORA) {
+                "sourceAdapterDeployment.targetDomain must be SORA"
+            }
+            require(
+                normalizeNonZeroHex32(
+                    deployment.sourceStateVerifierHash,
+                    "sourceAdapterDeployment.sourceStateVerifierHash",
+                ) == sourceStateVerifierHash,
+            ) {
+                "sourceStateVerifierHash must match sourceAdapterDeployment"
+            }
+            sourceAdapterDeploymentBindingFromDeployment(deployment)
+        }
+        val sourceAdapterDeploymentHash =
+            selectTonProofRequestDeploymentHash(
+                supplied = input.sourceAdapterDeploymentHash,
+                derived = descriptorDerivedDeploymentBinding?.sourceAdapterDeploymentHash,
+                field = "sourceAdapterDeploymentHash",
+            )
+        val sourceAdapterDeploymentReceiptHash =
+            selectTonProofRequestDeploymentHash(
+                supplied = input.sourceAdapterDeploymentReceiptHash,
+                derived = descriptorDerivedDeploymentBinding?.sourceAdapterDeploymentReceiptHash,
+                field = "sourceAdapterDeploymentReceiptHash",
+            )
         val deploymentBinding = SccpSolana.normalizeSourceAdapterDeploymentBinding(
             sourceDomain = input.sourceDomain,
             targetDomain = SccpSolana.DOMAIN_SORA,
-            sourceAdapterDeploymentHash = input.sourceAdapterDeploymentHash,
-            sourceAdapterDeploymentReceiptHash = input.sourceAdapterDeploymentReceiptHash,
+            sourceAdapterDeploymentHash = sourceAdapterDeploymentHash,
+            sourceAdapterDeploymentReceiptHash = sourceAdapterDeploymentReceiptHash,
         )
+        require(descriptorDerivedDeploymentBinding == null || deploymentBinding == descriptorDerivedDeploymentBinding) {
+            "sourceAdapterDeploymentBinding must match sourceAdapterDeployment"
+        }
         require(deploymentBinding.sourceAdapterDeploymentHash != SccpSolana.ZERO_HASH_V1) {
             "TON SCCP proof request requires non-zero source adapter deployment binding"
         }
@@ -2180,6 +2212,43 @@ object SccpTon {
             sourceAdapterDeploymentBindingHash = deploymentBindingHash,
             sourceAdapterDeploymentBinding = deploymentBinding,
             requestHash = hashHex("sccp:ton:proof-request:v1", preimage.toByteArray()),
+        )
+    }
+
+    @JvmStatic
+    fun sourceAdapterDeploymentBindingFromDeployment(
+        input: TonSccpSourceAdapterDeploymentInput,
+    ): TonSccpSourceAdapterDeploymentBinding {
+        require(input.sourceDomain == DOMAIN_TON) {
+            "sourceAdapterDeployment.sourceDomain must be TON"
+        }
+        require(input.targetDomain == SccpSolana.DOMAIN_SORA) {
+            "sourceAdapterDeployment.targetDomain must be SORA"
+        }
+        val sourceAdapterDeploymentHash = SccpSourceProofs.sourceAdapterEngineDeploymentHash(
+            sourceDomain = input.sourceDomain,
+            sourceTrustAnchorHash = input.sourceTrustAnchorHash,
+            consensusVerifierHash = input.consensusVerifierHash,
+            messageInclusionVerifierHash = input.messageInclusionVerifierHash,
+            finalityPolicyHash = input.finalityPolicyHash,
+            deploymentReceiptHash = input.deploymentReceiptHash,
+            targetDomain = input.targetDomain,
+            adapterVerifierVkHash = input.adapterVerifierVkHash,
+            sourceStateVerifierHash = input.sourceStateVerifierHash,
+            bridgeAddress = input.bridgeAddress,
+            sourceBridgeEmitterCodeHash = input.sourceBridgeEmitterCodeHash,
+            networkId = input.networkId,
+            ownerAddress = input.ownerAddress,
+            configHash = input.configHash,
+            tonMasterchainConfigVerifierHash = input.tonMasterchainConfigVerifierHash,
+            tonValidatorSetTransitionVerifierHash = input.tonValidatorSetTransitionVerifierHash,
+            tonShardAccountsDictionaryVerifierHash = input.tonShardAccountsDictionaryVerifierHash,
+        )
+        return SccpSolana.normalizeSourceAdapterDeploymentBinding(
+            sourceDomain = input.sourceDomain,
+            targetDomain = input.targetDomain,
+            sourceAdapterDeploymentHash = sourceAdapterDeploymentHash,
+            sourceAdapterDeploymentReceiptHash = input.deploymentReceiptHash,
         )
     }
 
@@ -5806,6 +5875,7 @@ data class TonSccpProofRequestInput(
     val sourceStateVerifierHash: String = SccpSolana.ZERO_HASH_V1,
     val sourceAdapterDeploymentHash: String = SccpSolana.ZERO_HASH_V1,
     val sourceAdapterDeploymentReceiptHash: String = SccpSolana.ZERO_HASH_V1,
+    val sourceAdapterDeployment: TonSccpSourceAdapterDeploymentInput? = null,
     val backend: String = SccpTon.CONTRACT_PROOF_BACKEND_V1,
     val sourceDomain: Int = SccpTon.DOMAIN_TON,
 ) {
@@ -5838,9 +5908,36 @@ data class TonSccpProofRequestInput(
                 sourceAdapterDeploymentBinding,
                 sourceDomain,
             ).sourceAdapterDeploymentReceiptHash,
+        sourceAdapterDeployment = null,
         backend = backend,
         sourceDomain = sourceDomain,
     )
+}
+
+private fun selectTonProofRequestDeploymentHash(
+    supplied: String,
+    derived: String?,
+    field: String,
+): String {
+    val normalizedSupplied = normalizeTonProofRequestHex32(supplied, field)
+    return if (derived != null && normalizedSupplied == SccpSolana.ZERO_HASH_V1) {
+        derived
+    } else {
+        normalizedSupplied
+    }
+}
+
+private fun normalizeTonProofRequestHex32(value: String, field: String): String {
+    require(value.trim() == value) { "$field must be canonical hex" }
+    val body = if (value.startsWith("0x", ignoreCase = true)) value.substring(2) else value
+    require(body.none { it.isWhitespace() }) { "$field must be canonical hex" }
+    require(body.length == 64) { "$field must be 32 bytes" }
+    val out = ByteArray(32)
+    for (index in out.indices) {
+        out[index] = body.substring(index * 2, index * 2 + 2).toIntOrNull(16)?.toByte()
+            ?: throw IllegalArgumentException("$field must be canonical hex")
+    }
+    return "0x" + out.joinToString("") { "%02x".format(it.toInt() and 0xff) }
 }
 
 private fun checkedTonProofRequestDeploymentBinding(
@@ -5878,6 +5975,27 @@ data class TonSccpProofContext(
 
 /** Source-adapter deployment binding carried by local TON SCCP proof requests. */
 typealias TonSccpSourceAdapterDeploymentBinding = SolanaSccpSourceAdapterDeploymentBinding
+
+/** Governed TON source-adapter deployment descriptor used to derive request bindings. */
+data class TonSccpSourceAdapterDeploymentInput(
+    val sourceTrustAnchorHash: String,
+    val consensusVerifierHash: String,
+    val messageInclusionVerifierHash: String,
+    val finalityPolicyHash: String,
+    val sourceStateVerifierHash: String,
+    val deploymentReceiptHash: String,
+    val tonMasterchainConfigVerifierHash: String,
+    val tonValidatorSetTransitionVerifierHash: String,
+    val tonShardAccountsDictionaryVerifierHash: String,
+    val sourceDomain: Int = SccpTon.DOMAIN_TON,
+    val targetDomain: Int = SccpSolana.DOMAIN_SORA,
+    val adapterVerifierVkHash: String? = null,
+    val bridgeAddress: String? = null,
+    val sourceBridgeEmitterCodeHash: String? = null,
+    val networkId: String? = null,
+    val ownerAddress: String? = null,
+    val configHash: String? = null,
+)
 
 /** Request passed to a linked local TON SCCP prover. */
 class TonSccpProofRequest(

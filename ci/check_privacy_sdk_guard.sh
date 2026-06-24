@@ -6399,8 +6399,11 @@ def check_csharp_sdk_script_prints_dotnet_version(errors):
         errors,
     )
     require(
-        "8.0.*) ;;" in script,
-        "Privacy C# SDK script must reject non-.NET-8 SDK versions",
+        '[[ ! "${DOTNET_VERSION}" =~ ^8\\.0\\.[1-9][0-9]*$ ]]' in script
+        and "stable canonical .NET SDK 8.0.x" in script
+        and "non-zero patch" in script
+        and "8.0.*) ;;" not in script,
+        "Privacy C# SDK script must reject prerelease and noncanonical .NET 8 SDK versions",
         errors,
     )
 
@@ -10361,7 +10364,7 @@ if mode == "--negative-control-csharp-sdk-dotnet-override-script":
 
 if mode == "--negative-control-csharp-sdk-dotnet-major-script":
     original = read(csharp_sdk_command)
-    mutated = original.replace("8.0.*) ;;", "7.0.*) ;;", 1)
+    mutated = original.replace("^8\\.0\\.[1-9][0-9]*$", "^7\\.0\\.[1-9][0-9]*$", 1)
     if mutated == original:
         raise SystemExit("negative control failed: unable to mutate C# SDK dotnet major matcher")
     text_overrides[csharp_sdk_command] = mutated

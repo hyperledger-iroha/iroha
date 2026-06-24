@@ -1492,6 +1492,20 @@ def _reject_mismatched_tron_source_bridge_config_hash(
         "sourceBridgeConfigHash",
         32,
     )
+    emitter_address = _hex_to_bytes(
+        material["source_bridge_emitter_address"],
+        "sourceBridgeEmitterAddress",
+        20,
+    )
+    owner_address = _hex_to_bytes(
+        material["source_bridge_owner_address"],
+        "sourceBridgeOwnerAddress",
+        20,
+    )
+    if owner_address == emitter_address:
+        raise TypeError(
+            "sourceBridgeOwnerAddress must not match sourceBridgeEmitterAddress"
+        )
     if supplied != _tron_source_bridge_config_hash(material):
         raise TypeError(
             "sourceBridgeConfigHash must match TRON source bridge config fields"
@@ -16531,6 +16545,24 @@ def sccp_source_adapter_deployment_binding_hash(input_value: Any) -> str:
     )
 
 
+def sccp_source_adapter_deployment_binding_from_deployment(input_value: Any) -> Dict[str, Any]:
+    """Derive source-adapter deployment binding material from a deployment descriptor."""
+
+    deployment = normalize_sccp_source_adapter_engine_deployment(input_value)
+    return normalize_sccp_source_adapter_deployment_binding(
+        {
+            "source_domain": deployment["source_domain"],
+            "target_domain": deployment["target_domain"],
+            "source_adapter_deployment_hash": sccp_source_adapter_engine_deployment_hash(
+                deployment
+            ),
+            "source_adapter_deployment_receipt_hash": deployment[
+                "deployment_receipt_hash"
+            ],
+        }
+    )
+
+
 def _sccp_source_adapter_verifier_profile(source_domain: int) -> tuple[bytes, int, int]:
     if source_domain == SCCP_DOMAIN_ETH:
         return (b"eth", 1, 1)
@@ -21269,16 +21301,23 @@ def build_ton_sccp_message_body_boc(input_value: Any) -> bytes:
             raise TypeError(
                 "proofResult.sourceStateVerifierHash must not be the TON template verifier hash"
             )
-        deployment_binding = normalize_sccp_source_adapter_deployment_binding(
-            _require_mapping(
-                result_field(
-                    "proofResult.sourceAdapterDeploymentBinding",
-                    "sourceAdapterDeploymentBinding",
-                    "source_adapter_deployment_binding",
-                ),
+        deployment_binding_input = _require_mapping(
+            result_field(
                 "proofResult.sourceAdapterDeploymentBinding",
-            )
+                "sourceAdapterDeploymentBinding",
+                "source_adapter_deployment_binding",
+            ),
+            "proofResult.sourceAdapterDeploymentBinding",
         )
+        try:
+            deployment_binding = normalize_sccp_source_adapter_deployment_binding(
+                deployment_binding_input
+            )
+        except TypeError as exc:
+            message = str(exc)
+            if message.startswith("sourceAdapterDeploymentBinding."):
+                raise TypeError(f"proofResult.{message}") from exc
+            raise
         proof_result_deployment_binding = deployment_binding
         if deployment_binding["source_domain"] != SCCP_DOMAIN_TON:
             raise TypeError(
@@ -22368,6 +22407,31 @@ def build_ton_sccp_proof_request(input_value: Any) -> Mapping[str, Any]:
     proof_context = normalize_ton_sccp_proof_context(
         value if proof_context_input is _MISSING else proof_context_input
     )
+    deployment_descriptor_input = request_optional_value(
+        "sourceAdapterDeployment",
+        "sourceAdapterDeployment",
+        "source_adapter_deployment",
+    )
+    descriptor_binding = None
+    descriptor_deployment = None
+    if deployment_descriptor_input is not _MISSING and deployment_descriptor_input is not None:
+        descriptor_deployment = normalize_sccp_source_adapter_engine_deployment(
+            deployment_descriptor_input
+        )
+        descriptor_binding = sccp_source_adapter_deployment_binding_from_deployment(
+            descriptor_deployment
+        )
+        if (
+            descriptor_binding["source_domain"] != SCCP_DOMAIN_TON
+            or descriptor_binding["target_domain"] != SCCP_DOMAIN_SORA
+        ):
+            raise TypeError(
+                "TON SCCP proof request sourceAdapterDeployment must describe TON -> SORA"
+            )
+        if descriptor_deployment["source_state_verifier_hash"] != source_state_verifier_hash:
+            raise TypeError(
+                "sourceStateVerifierHash must match sourceAdapterDeployment"
+            )
     deployment_input = request_optional_value(
         "sourceAdapterDeploymentBinding",
         "sourceAdapterDeploymentBinding",
@@ -22406,7 +22470,11 @@ def build_ton_sccp_proof_request(input_value: Any) -> Mapping[str, Any]:
             "TON SCCP proof request source adapter deployment binding targetDomain must be SORA"
         )
 
-    def select_deployment_hash(label: str, snake_label: str) -> str:
+    def select_deployment_hash(
+        label: str,
+        snake_label: str,
+        descriptor_value: Optional[str],
+    ) -> str:
         top_level_value = request_optional_value(label, label, snake_label)
         nested_value = _mapping_optional_value_without_aliases(
             deployment_input,
@@ -22436,15 +22504,23 @@ def build_ton_sccp_proof_request(input_value: Any) -> Mapping[str, Any]:
             return normalized_top_level_value
         if normalized_nested_value is not None:
             return normalized_nested_value
+        if descriptor_value is not None:
+            return descriptor_value
         return SCCP_ZERO_HASH_V1
 
     deployment_hash_input = select_deployment_hash(
         "sourceAdapterDeploymentHash",
         "source_adapter_deployment_hash",
+        None
+        if descriptor_binding is None
+        else descriptor_binding["source_adapter_deployment_hash"],
     )
     deployment_receipt_hash_input = select_deployment_hash(
         "sourceAdapterDeploymentReceiptHash",
         "source_adapter_deployment_receipt_hash",
+        None
+        if descriptor_binding is None
+        else descriptor_binding["source_adapter_deployment_receipt_hash"],
     )
     deployment_binding = normalize_sccp_source_adapter_deployment_binding(
         {
@@ -22457,6 +22533,10 @@ def build_ton_sccp_proof_request(input_value: Any) -> Mapping[str, Any]:
     if deployment_binding["source_adapter_deployment_hash"] == SCCP_ZERO_HASH_V1:
         raise TypeError(
             "TON SCCP proof request requires non-zero source adapter deployment binding"
+        )
+    if descriptor_binding is not None and deployment_binding != descriptor_binding:
+        raise TypeError(
+            "sourceAdapterDeploymentBinding must match sourceAdapterDeployment"
         )
     deployment_binding_hash = sccp_source_adapter_deployment_binding_hash(deployment_binding)
     request_hash = _bytes_to_hex(

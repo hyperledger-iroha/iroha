@@ -124,6 +124,13 @@ PUBLIC_LANE_DESTINATION_BINDING_FIELDS = (
     "destination_bridge_address",
     "recomputed",
 )
+PUBLIC_LANE_DESTINATION_BINDING_REQUIRED_FIELDS = (
+    "destination_binding_hash",
+    "expected_destination_binding_hash",
+    "expected_destination_binding_hash_matches",
+    "destination_binding_key",
+    "recomputed",
+)
 PUBLIC_LANE_ROUTE_ALLOWLIST_FIELDS = (
     "route_allowlist_hash",
     "expected_route_allowlist_hash",
@@ -168,6 +175,71 @@ PUBLIC_LANE_ROUTE_CANARY_FIELDS = (
     "solana_programdata_address",
     "solana_programdata_slot",
 )
+PUBLIC_LANE_ROUTE_CANARY_COMMON_FIELDS = (
+    "status",
+    "evidence_hash",
+    "route_allowlist_hash",
+    "destination_binding_hash",
+    "evidence_source",
+    "evidence_bound",
+)
+PUBLIC_LANE_EVM_ROUTE_CANARY_FIELDS = PUBLIC_LANE_ROUTE_CANARY_COMMON_FIELDS + (
+    "transaction_hash",
+    "receipt_block_number",
+    "receipt_block_hash",
+    "block_receipts_root",
+    "call_data_sha256",
+    "log_index",
+    "message_id",
+    "payload_hash",
+    "target_domain",
+    "statement_hash",
+    "commitment_root",
+    "finality_height",
+    "finality_block_hash",
+    "proof_version",
+    "proof_source_domain",
+    "message_proof_used",
+    "receipt_block_finalized",
+)
+PUBLIC_LANE_TRON_ROUTE_CANARY_FIELDS = PUBLIC_LANE_ROUTE_CANARY_COMMON_FIELDS + (
+    "transaction_id",
+    "transaction_owner_address",
+    "block_number",
+    "block_timestamp",
+    "log_index",
+    "message_id",
+    "call_data_sha256",
+    "payload_hash",
+    "target_domain",
+    "statement_hash",
+    "commitment_root",
+    "finality_height",
+    "finality_block_hash",
+    "proof_version",
+    "proof_source_domain",
+    "message_proof_used",
+    "raw_data_owner_matches_transaction",
+    "signature_sha256",
+    "signature_recovered_address",
+    "signature_recovers_to_owner",
+)
+PUBLIC_LANE_SOLANA_ROUTE_CANARY_FIELDS = PUBLIC_LANE_ROUTE_CANARY_COMMON_FIELDS + (
+    "solana_programdata_address",
+    "solana_programdata_slot",
+)
+PUBLIC_LANE_TON_ROUTE_CANARY_FIELDS = PUBLIC_LANE_ROUTE_CANARY_COMMON_FIELDS + (
+    "ton_account_state_hash",
+    "ton_last_transaction_lt",
+    "ton_last_transaction_hash",
+)
+PUBLIC_LANE_ROUTE_CANARY_FIELDS_BY_DOMAIN = {
+    SCCP_DOMAIN_ETH: PUBLIC_LANE_EVM_ROUTE_CANARY_FIELDS,
+    SCCP_DOMAIN_BSC: PUBLIC_LANE_EVM_ROUTE_CANARY_FIELDS,
+    SCCP_DOMAIN_SOL: PUBLIC_LANE_SOLANA_ROUTE_CANARY_FIELDS,
+    SCCP_DOMAIN_TON: PUBLIC_LANE_TON_ROUTE_CANARY_FIELDS,
+    SCCP_DOMAIN_TRON: PUBLIC_LANE_TRON_ROUTE_CANARY_FIELDS,
+}
 PUBLIC_DOMAIN_LISTS = {
     "required_domains": (
         SCCP_CORE_REMOTE_DOMAINS,
@@ -1049,7 +1121,7 @@ def _hex_bytes(value: Any, *, byte_length: int) -> bytes | None:
         return None
     try:
         return bytes.fromhex(text)
-    except (TypeError, ValueError):
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         return None
 
 
@@ -1072,7 +1144,7 @@ def _exact_hex_bytes(value: Any, *, byte_length: int) -> bytes | None:
         return None
     try:
         return bytes.fromhex(text)
-    except (TypeError, ValueError):
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         return None
 
 
@@ -1129,7 +1201,7 @@ def _is_nonempty_string(value: Any) -> bool:
 def _decode_canonical_base64(value: str, *, label: str) -> bytes:
     try:
         raw = base64.b64decode(value, validate=True)
-    except (TypeError, ValueError, binascii.Error):
+    except (SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):
         raise ValueError(f"{label} must be base64") from None
     if base64.b64encode(raw).decode("ascii") != value:
         raise ValueError(f"{label} must be canonical base64")
@@ -1988,7 +2060,7 @@ def _check_tron_live_source_bridge_evidence(record: dict[str, Any]) -> list[str]
             if _is_nonempty_string(address)
             else None
         )
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         errors.append("TRON source bridge address metadata is invalid")
         observed_address = None
     if observed_address is None or not any(observed_address):
@@ -2033,7 +2105,7 @@ def _check_tron_live_source_bridge_evidence(record: dict[str, Any]) -> list[str]
                 label="TRON source bridge runtime bytecode metadata",
             )
             derived_hash = module.runtime_bytecode_hash(runtime)
-        except (argparse.ArgumentTypeError, TypeError, ValueError):
+        except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
             errors.append("TRON source bridge runtime bytecode metadata is invalid")
         else:
             if bridge_code_hash is not None and derived_hash != bridge_code_hash:
@@ -2145,7 +2217,7 @@ def _check_evm_live_source_bridge_evidence(
                 label="EVM source bridge runtime bytecode metadata",
             )
             derived_bridge_code_hash = module.runtime_bytecode_hash(bridge_runtime)
-        except (argparse.ArgumentTypeError, TypeError, ValueError):
+        except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
             errors.append("EVM source bridge runtime bytecode metadata is invalid")
         else:
             if (
@@ -3030,6 +3102,45 @@ def _source_adapter_gate_summary(
             ),
         ),
     ]
+    route_canary_summary = route_allowlist_summary.get("route_canary")
+    if isinstance(route_canary_summary, dict) or route_record is not None:
+        route_canary_summary_map = (
+            route_canary_summary if isinstance(route_canary_summary, dict) else {}
+        )
+        # Source-inventory marker: source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.message_id
+        for field in sorted(
+            PUBLIC_LANE_ROUTE_CANARY_FIELDS_BY_DOMAIN.get(
+                profile.domain,
+                PUBLIC_LANE_ROUTE_CANARY_COMMON_FIELDS,
+            )
+        ):
+            if field in {
+                "destination_binding_hash",
+                "evidence_hash",
+                "route_allowlist_hash",
+            }:
+                continue
+            route_canary_value = route_canary_summary_map.get(field)
+            if route_canary_value is None and route_record is not None:
+                comment_fields = [
+                    f"_comment_route_canary_{field}",
+                    f"_comment_evm_route_canary_{field}",
+                    f"_comment_tron_route_canary_{field}",
+                ]
+                if field.startswith("ton_"):
+                    comment_fields.append(
+                        f"_comment_ton_route_canary_{field.removeprefix('ton_')}"
+                    )
+                for comment_field in comment_fields:
+                    if comment_field in route_record:
+                        route_canary_value = route_record.get(comment_field)
+                        break
+            role_fields.append(
+                (
+                    f"route_canary.{field}",
+                    _hex_bytes(route_canary_value, byte_length=32),
+                )
+            )
     role_fields.extend(
         (f"audit_hashes.{field}", _hex_bytes(value, byte_length=32))
         for field, value in sorted(audit_hashes.items())
@@ -3570,7 +3681,7 @@ def _check_tron_live_destination_verifier_evidence(
             record.get("verifier_identity"),
             label="verifier_identity",
         )
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         errors.append("TRON destination verifier address metadata is invalid")
         observed_address = None
         expected_address = None
@@ -3617,7 +3728,7 @@ def _check_tron_live_destination_verifier_evidence(
                 label="TRON destination verifier runtime bytecode metadata",
             )
             derived_hash = module.runtime_bytecode_hash(runtime)
-        except (argparse.ArgumentTypeError, TypeError, ValueError):
+        except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
             errors.append(
                 "TRON destination verifier runtime bytecode metadata is invalid"
             )
@@ -3744,7 +3855,7 @@ def _check_evm_live_bridge_evidence(
                 label="EVM bridge runtime bytecode metadata",
             )
             derived_bridge_code_hash = module.runtime_bytecode_hash(bridge_runtime)
-        except (argparse.ArgumentTypeError, TypeError, ValueError):
+        except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
             errors.append("EVM bridge runtime bytecode metadata is invalid")
         else:
             if (
@@ -3783,7 +3894,7 @@ def _check_evm_live_bridge_evidence(
                 label="EVM verifier runtime bytecode metadata",
             )
             derived_verifier_code_hash = module.runtime_bytecode_hash(verifier_runtime)
-        except (argparse.ArgumentTypeError, TypeError, ValueError):
+        except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
             errors.append("EVM verifier runtime bytecode metadata is invalid")
         else:
             if (
@@ -3866,7 +3977,7 @@ def _check_solana_live_programdata_evidence(record: dict[str, Any]) -> list[str]
             return None
         try:
             return _decode_canonical_base64(value, label=label)
-        except (TypeError, ValueError):
+        except (SystemExit, RuntimeError, TypeError, ValueError):
             errors.append(f"{label} is invalid")
             return None
 
@@ -3991,7 +4102,7 @@ def _check_solana_live_programdata_evidence(record: dict[str, Any]) -> list[str]
                 errors.append(
                     "Solana ProgramData account metadata must differ from verifier_identity"
                 )
-        except (argparse.ArgumentTypeError, TypeError, ValueError):
+        except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
             errors.append("Solana ProgramData account is not canonical")
 
     program_account_data = decode_comment_base64(
@@ -4137,7 +4248,7 @@ def _check_solana_live_programdata_evidence(record: dict[str, Any]) -> list[str]
             derived_programdata_hash = module.solana_verifier_program_code_hash(
                 programdata_executable
             )
-        except (argparse.ArgumentTypeError, TypeError, ValueError):
+        except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
             errors.append(
                 "Solana ProgramData executable base64 metadata is invalid"
             )
@@ -4270,7 +4381,7 @@ def _check_ton_live_account_evidence(record: dict[str, Any]) -> list[str]:
             derived_code_boc_root_hash = ton_module.ton_boc_single_root_hash(
                 code_boc_bytes
             )
-        except (argparse.ArgumentTypeError, TypeError, ValueError):
+        except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
             errors.append("TON verifier code BoC metadata is invalid")
         else:
             if (
@@ -4291,7 +4402,7 @@ def _check_ton_live_account_evidence(record: dict[str, Any]) -> list[str]:
                         label="TON code BoC base64 metadata",
                     )
                     comment_root = ton_module.ton_boc_single_root_hash(comment_code_boc)
-                except (argparse.ArgumentTypeError, TypeError, ValueError):
+                except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
                     errors.append("TON code BoC base64 metadata is invalid")
                 else:
                     if comment_code_boc != code_boc_bytes:
@@ -5558,7 +5669,7 @@ def _check_tron_route_canary_transaction_evidence(
             ),
             label="TRON destination verifier address",
         )
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         errors.append("TRON route canary verifier address metadata is invalid")
         verifier_address = None
     network_id = _exact_hex_bytes(
@@ -5816,7 +5927,7 @@ def _check_ton_route_canary_live_account_evidence(
             str(destination_record.get("verifier_identity")),
             label="TON route canary verifier identity",
         )
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         errors.append("TON route canary verifier identity is invalid")
         verifier_identity = None
     verifier_code_hash = _exact_hex_bytes(
@@ -5962,7 +6073,7 @@ def _check_solana_route_canary_live_program_evidence(
             return None
         try:
             return _decode_canonical_base64(value, label=label)
-        except (TypeError, ValueError):
+        except (SystemExit, RuntimeError, TypeError, ValueError):
             errors.append(f"{label} is invalid")
             return None
 
@@ -6003,7 +6114,7 @@ def _check_solana_route_canary_live_program_evidence(
                 programdata_executable_base64,
                 label="Solana route canary ProgramData executable",
             )
-        except (argparse.ArgumentTypeError, TypeError, ValueError):
+        except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
             errors.append("Solana route canary ProgramData executable is invalid")
 
     _expect_distinct_byte_values(
@@ -6062,7 +6173,7 @@ def _check_solana_route_canary_live_program_evidence(
             programdata_metadata=programdata_metadata,
             programdata_executable=programdata_executable,
         )
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         errors.append("Solana route canary live program metadata is invalid")
         return errors
     if evidence_hash != expected_hash:
@@ -6423,6 +6534,55 @@ def _check_route_canary_evidence_hashes_do_not_reuse_governed_hashes(
                 raw_route,
                 (domain, "route_allowlist_hash"),
             )
+        route_canary = (
+            route_allowlist.get("route_canary")
+            if isinstance(route_allowlist, dict)
+            else None
+        )
+        if isinstance(route_canary, dict):
+            for field in sorted(
+                PUBLIC_LANE_ROUTE_CANARY_FIELDS_BY_DOMAIN.get(
+                    domain,
+                    PUBLIC_LANE_ROUTE_CANARY_COMMON_FIELDS,
+                )
+            ):
+                if field in {
+                    "destination_binding_hash",
+                    "evidence_hash",
+                    "route_allowlist_hash",
+                }:
+                    continue
+                raw_canary = _hex_bytes(route_canary.get(field), byte_length=32)
+                if raw_canary is not None and any(raw_canary):
+                    governed_hashes.setdefault(
+                        raw_canary,
+                        (domain, f"route_canary.{field}"),
+                    )
+        source_adapter_gate = lane.get("source_adapter_gate", {})
+        raw_gate = _hex_bytes(
+            source_adapter_gate.get("gate_hash")
+            if isinstance(source_adapter_gate, dict)
+            else None,
+            byte_length=32,
+        )
+        if raw_gate is not None and any(raw_gate):
+            governed_hashes.setdefault(
+                raw_gate,
+                (domain, "source_adapter_gate_hash"),
+            )
+        audit_hashes = (
+            source_adapter_gate.get("audit_hashes")
+            if isinstance(source_adapter_gate, dict)
+            else None
+        )
+        if isinstance(audit_hashes, dict):
+            for field, value in sorted(audit_hashes.items()):
+                raw_audit = _hex_bytes(value, byte_length=32)
+                if raw_audit is not None and any(raw_audit):
+                    governed_hashes.setdefault(
+                        raw_audit,
+                        (domain, f"source_adapter_gate.audit_hashes.{field}"),
+                    )
 
     for lane in lanes:
         domain = lane["domain"]
@@ -6542,6 +6702,8 @@ def _source_adapter_gate_release_metadata_blockers(
 
     gate_hash = source_adapter_gate.get("gate_hash", "")
     audit_hashes = source_adapter_gate.get("audit_hashes", {})
+    gate_ready = source_adapter_gate.get("ready")
+    gate_blockers = source_adapter_gate.get("blockers", [])
     if gate_required is not True:
         if gate_hash not in ("", None):
             blockers.append(
@@ -6555,7 +6717,24 @@ def _source_adapter_gate_release_metadata_blockers(
             blockers.append(
                 f"{lane_label}: source adapter gate audit hashes must be empty when not required"
             )
+        if gate_ready is not True:
+            blockers.append(
+                f"{lane_label}: source adapter gate ready must be true when not required"
+            )
+        if isinstance(gate_blockers, list) and gate_blockers:
+            blockers.append(
+                f"{lane_label}: source adapter gate blockers must be empty when not required"
+            )
         return blockers
+
+    if gate_ready is not True:
+        blockers.append(
+            f"{lane_label}: source adapter gate ready must be true when required"
+        )
+    if isinstance(gate_blockers, list) and gate_blockers:
+        blockers.append(
+            f"{lane_label}: source adapter gate blockers must be empty when required"
+        )
 
     parsed_gate_hash = _hex_bytes(gate_hash, byte_length=32)
     if parsed_gate_hash is None or not any(parsed_gate_hash):
@@ -7310,7 +7489,11 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     return text
 
 
-def _public_release_checklist_errors(value: Any) -> list[str]:
+def _public_release_checklist_errors(
+    value: Any,
+    *,
+    require_ready: bool,
+) -> list[str]:
     """Return bounded public errors for a copied all-lanes release checklist."""
 
     if not isinstance(value, dict):
@@ -7329,8 +7512,9 @@ def _public_release_checklist_errors(value: Any) -> list[str]:
     ready = value.get("ready")
     if type(ready) is not bool:
         errors.append("all-lanes summary release_checklist ready must be a boolean")
-    elif ready is not True:
+    elif require_ready and ready is not True:
         errors.append("all-lanes summary release_checklist ready must be true")
+    require_item_ready = require_ready or ready is True
 
     items = value.get("items")
     if not isinstance(items, list):
@@ -7376,7 +7560,7 @@ def _public_release_checklist_errors(value: Any) -> list[str]:
         item_ready = item.get("ready")
         if type(item_ready) is not bool:
             errors.append(f"{item_label} ready must be a boolean")
-        elif item_ready is not True:
+        elif require_item_ready and item_ready is not True:
             errors.append(f"{item_label} ready must be true")
 
         blockers = item.get("blockers")
@@ -7385,7 +7569,7 @@ def _public_release_checklist_errors(value: Any) -> list[str]:
             item_label,
         )
         errors.extend(blocker_errors)
-        if canonical_blockers:
+        if require_item_ready and canonical_blockers:
             errors.append(f"{item_label} blockers must be empty")
 
     for item_id in RELEASE_CHECKLIST_ITEM_IDS:
@@ -7446,6 +7630,1106 @@ def _public_lane_object_field_errors(
     ]
 
 
+def _public_lane_missing_field_errors(
+    value: Any,
+    label: str,
+    required_fields: tuple[str, ...],
+) -> list[str]:
+    """Return bounded public errors for omitted copied lane object fields."""
+
+    if not isinstance(value, dict):
+        return []
+    return [
+        f"{label} missing field {field}"
+        for field in required_fields
+        if field not in value
+    ]
+
+
+def _public_lane_required_bytes32_errors(
+    value: Any,
+    label: str,
+    fields: tuple[str, ...],
+) -> list[str]:
+    """Return errors for required copied ready-lane hash values."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field in fields:
+        raw = _hex_bytes(value.get(field), byte_length=32)
+        if raw is None or not any(raw):
+            errors.append(f"{label}.{field} must be a canonical non-zero bytes32")
+    return errors
+
+
+def _public_lane_source_record_template_hash_errors(
+    value: Any,
+    label: str,
+    domain: Any,
+) -> list[str]:
+    """Return errors for copied source-record hashes replaying templates."""
+
+    if not isinstance(value, dict) or not isinstance(domain, int):
+        return []
+    profile = LANE_PROFILES.get(domain)
+    if profile is None:
+        return []
+    template_hashes = tuple(_source_material_template_hashes(profile).values())
+    errors: list[str] = []
+    for field in PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS:
+        raw = _hex_bytes(value.get(field), byte_length=32)
+        if raw is not None and raw in template_hashes:
+            errors.append(
+                f"{label}.{field} must be deployed evidence, "
+                "not built-in template material"
+            )
+    return errors
+
+
+def _public_lane_optional_bytes32_errors(
+    value: Any,
+    label: str,
+    fields: tuple[str, ...],
+) -> list[str]:
+    """Return errors for copied optional ready-lane hashes when present."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field in fields:
+        if field not in value or value.get(field) in (None, ""):
+            continue
+        raw = _hex_bytes(value.get(field), byte_length=32)
+        if raw is None or not any(raw):
+            errors.append(f"{label}.{field} must be a canonical non-zero bytes32")
+    return errors
+
+
+def _public_lane_required_fixed_hex_errors(
+    value: Any,
+    label: str,
+    fields: tuple[tuple[str, int, str], ...],
+) -> list[str]:
+    """Return errors for required copied ready-lane fixed-width hex values."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field, byte_length, type_label in fields:
+        raw = _hex_bytes(value.get(field), byte_length=byte_length)
+        if raw is None or not any(raw):
+            errors.append(
+                f"{label}.{field} must be a canonical non-zero {type_label}"
+            )
+    return errors
+
+
+def _public_lane_destination_family_errors(
+    value: Any,
+    label: str,
+    domain: Any,
+) -> list[str]:
+    """Return errors for copied ready-lane destination-family field drift."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    if domain in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC):
+        if "destination_network_id" not in value:
+            errors.append(
+                f"{label}.destination_network_id is required for EVM-family lanes"
+            )
+        if "destination_bridge_address" not in value:
+            errors.append(
+                f"{label}.destination_bridge_address is required for EVM-family lanes"
+            )
+        errors.extend(
+            _public_lane_required_fixed_hex_errors(
+                value,
+                label,
+                (
+                    ("destination_network_id", 32, "bytes32"),
+                    ("destination_bridge_address", 20, "20-byte hex value"),
+                ),
+            )
+        )
+    elif domain == SCCP_DOMAIN_TRON:
+        if "destination_network_id" not in value:
+            errors.append(f"{label}.destination_network_id is required for TRON lanes")
+        errors.extend(
+            _public_lane_required_fixed_hex_errors(
+                value,
+                label,
+                (("destination_network_id", 32, "bytes32"),),
+            )
+        )
+        if "destination_bridge_address" in value:
+            errors.append(
+                f"{label}.destination_bridge_address is only valid for EVM-family lanes"
+            )
+    elif domain in (SCCP_DOMAIN_SOL, SCCP_DOMAIN_TON):
+        if "destination_network_id" in value:
+            errors.append(
+                f"{label}.destination_network_id is only valid for EVM-family or TRON lanes"
+            )
+        if "destination_bridge_address" in value:
+            errors.append(
+                f"{label}.destination_bridge_address is only valid for EVM-family lanes"
+            )
+    return errors
+
+
+def _parse_public_destination_binding_key_u32(value: str, *, label: str) -> int:
+    if not _is_canonical_decimal_text(value, positive=False):
+        raise ValueError(f"{label} must be a canonical u32")
+    parsed = int(value, 10)
+    if parsed < 0 or parsed > 0xFFFF_FFFF:
+        raise ValueError(f"{label} must be a canonical u32")
+    return parsed
+
+
+def _parse_public_destination_binding_key_hex(
+    value: str,
+    *,
+    byte_length: int,
+    prefixed: bool,
+    label: str,
+) -> bytes:
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be canonical hex")
+    parsed = _hex_bytes(
+        value if prefixed else f"0x{value}",
+        byte_length=byte_length,
+    )
+    if parsed is None or not any(parsed):
+        raise ValueError(f"{label} must be canonical non-zero hex")
+    if prefixed and value != _hex(parsed):
+        raise ValueError(f"{label} must be canonical hex")
+    if not prefixed and value != parsed.hex():
+        raise ValueError(f"{label} must be canonical hex")
+    return parsed
+
+
+def _public_destination_binding_from_key(
+    profile: LaneProfile,
+    key: str,
+) -> dict[str, Any]:
+    if profile.chain in ("eth", "bsc"):
+        module = _load_sibling_module("sccp_evm_destination_evidence.py")
+        parts = key.split(":")
+        if len(parts) != 8 or parts[0] != "evm":
+            raise ValueError("destination_binding_key must be an EVM key")
+        source_domain = _parse_public_destination_binding_key_u32(
+            parts[1],
+            label="destination binding source domain",
+        )
+        target_domain = _parse_public_destination_binding_key_u32(
+            parts[2],
+            label="destination binding target domain",
+        )
+        network_id = _parse_public_destination_binding_key_hex(
+            parts[3],
+            byte_length=32,
+            prefixed=False,
+            label="destination binding network id",
+        )
+        verifier_address = module.parse_evm_address(
+            parts[4],
+            label="destination binding verifier address",
+        )
+        bridge_address = module.parse_evm_address(
+            parts[5],
+            label="destination binding bridge address",
+        )
+        verifier_code_hash = _parse_public_destination_binding_key_hex(
+            parts[6],
+            byte_length=32,
+            prefixed=True,
+            label="destination binding verifier code hash",
+        )
+        verifier_key_hash = _parse_public_destination_binding_key_hex(
+            parts[7],
+            byte_length=32,
+            prefixed=True,
+            label="destination binding verifier key hash",
+        )
+        binding_hash = module.evm_destination_binding_hash(
+            network_id=network_id,
+            source_domain=source_domain,
+            target_domain=target_domain,
+            verifier_address=verifier_address,
+            bridge_address=bridge_address,
+            verifier_code_hash=verifier_code_hash,
+            verifier_key_hash=verifier_key_hash,
+        )
+        canonical_key = module.evm_destination_binding_key(
+            network_id=network_id,
+            source_domain=source_domain,
+            target_domain=target_domain,
+            verifier_address=verifier_address,
+            bridge_address=bridge_address,
+            verifier_code_hash=verifier_code_hash,
+            verifier_key_hash=verifier_key_hash,
+        )
+        if canonical_key != key:
+            raise ValueError("destination_binding_key must be canonical")
+        return {
+            "destination_binding_hash": binding_hash,
+            "destination_binding_key": canonical_key,
+            "destination_network_id": network_id,
+            "destination_bridge_address": bridge_address,
+        }
+    if profile.chain == "sol":
+        module = _load_sibling_module("sccp_solana_destination_evidence.py")
+        canonical_key = module.solana_destination_binding_key()
+        if key != canonical_key:
+            raise ValueError("destination_binding_key must be canonical")
+        return {
+            "destination_binding_hash": module.solana_destination_binding_hash(),
+            "destination_binding_key": canonical_key,
+        }
+    if profile.chain == "ton":
+        module = _load_sibling_module("sccp_ton_destination_evidence.py")
+        canonical_key = module.ton_destination_binding_key()
+        if key != canonical_key:
+            raise ValueError("destination_binding_key must be canonical")
+        return {
+            "destination_binding_hash": module.ton_destination_binding_hash(),
+            "destination_binding_key": canonical_key,
+        }
+    if profile.chain == "tron":
+        module = _load_sibling_module("sccp_tron_source_bridge_evidence.py")
+        parts = key.split(":")
+        if len(parts) != 7 or parts[0] != "tron":
+            raise ValueError("destination_binding_key must be a TRON key")
+        source_domain = _parse_public_destination_binding_key_u32(
+            parts[1],
+            label="destination binding source domain",
+        )
+        target_domain = _parse_public_destination_binding_key_u32(
+            parts[2],
+            label="destination binding target domain",
+        )
+        network_id = _parse_public_destination_binding_key_hex(
+            parts[3],
+            byte_length=32,
+            prefixed=False,
+            label="destination binding network id",
+        )
+        verifier_code_hash = _parse_public_destination_binding_key_hex(
+            parts[5],
+            byte_length=32,
+            prefixed=True,
+            label="destination binding verifier code hash",
+        )
+        verifier_key_hash = _parse_public_destination_binding_key_hex(
+            parts[6],
+            byte_length=32,
+            prefixed=True,
+            label="destination binding verifier key hash",
+        )
+        binding_hash = module.tron_destination_binding_hash(
+            network_id=network_id,
+            source_domain=source_domain,
+            target_domain=target_domain,
+            verifier_address=parts[4],
+            verifier_code_hash=verifier_code_hash,
+            verifier_key_hash=verifier_key_hash,
+        )
+        canonical_key = module.tron_destination_binding_key(
+            network_id=network_id,
+            source_domain=source_domain,
+            target_domain=target_domain,
+            verifier_address=parts[4],
+            verifier_code_hash=verifier_code_hash,
+            verifier_key_hash=verifier_key_hash,
+        )
+        if canonical_key != key:
+            raise ValueError("destination_binding_key must be canonical")
+        return {
+            "destination_binding_hash": binding_hash,
+            "destination_binding_key": canonical_key,
+            "destination_network_id": network_id,
+        }
+    raise ValueError(f"unsupported destination chain {profile.chain!r}")
+
+
+def _public_lane_destination_binding_recompute_errors(
+    lane: dict[str, Any],
+    label: str,
+    destination_binding: Any,
+) -> list[str]:
+    """Return errors when copied destination hashes drift from their key."""
+
+    # Source-inventory marker: destination_binding_hash must recompute from destination_binding_key
+    if not isinstance(destination_binding, dict):
+        return []
+    profile = LANE_PROFILES.get(lane.get("domain"))
+    key = destination_binding.get("destination_binding_key")
+    if profile is None or not _is_nonempty_string(key):
+        return []
+    supplied_hash = _hex_bytes(
+        destination_binding.get("destination_binding_hash"),
+        byte_length=32,
+    )
+    expected_hash = _hex_bytes(
+        destination_binding.get("expected_destination_binding_hash"),
+        byte_length=32,
+    )
+    if supplied_hash is None or not any(supplied_hash):
+        return []
+    try:
+        expected = _public_destination_binding_from_key(profile, key)
+    except (
+        argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
+        return [
+            f"{label}.destination_binding_key must be a canonical "
+            f"SORA -> {profile.chain} destination binding key"
+        ]
+
+    errors: list[str] = []
+    recomputed_hash = expected["destination_binding_hash"]
+    if supplied_hash != recomputed_hash:
+        errors.append(
+            f"{label}.destination_binding_hash must recompute from "
+            "destination_binding_key"
+        )
+    if (
+        expected_hash is not None
+        and any(expected_hash)
+        and expected_hash != recomputed_hash
+    ):
+        errors.append(
+            f"{label}.expected_destination_binding_hash must recompute from "
+            "destination_binding_key"
+        )
+    expected_network_id = expected.get("destination_network_id")
+    if expected_network_id is not None:
+        supplied_network_id = _hex_bytes(
+            destination_binding.get("destination_network_id"),
+            byte_length=32,
+        )
+        if (
+            supplied_network_id is not None
+            and any(supplied_network_id)
+            and supplied_network_id != expected_network_id
+        ):
+            errors.append(
+                f"{label}.destination_network_id must match destination_binding_key"
+            )
+    expected_bridge_address = expected.get("destination_bridge_address")
+    if expected_bridge_address is not None:
+        supplied_bridge_address = _hex_bytes(
+            destination_binding.get("destination_bridge_address"),
+            byte_length=20,
+        )
+        if (
+            supplied_bridge_address is not None
+            and any(supplied_bridge_address)
+            and supplied_bridge_address != expected_bridge_address
+        ):
+            errors.append(
+                f"{label}.destination_bridge_address must match "
+                "destination_binding_key"
+            )
+    return errors
+
+
+def _public_lane_matching_field_errors(
+    value: Any,
+    label: str,
+    field: str,
+    expected_field: str,
+) -> list[str]:
+    """Return errors when two copied fields in the same object drift."""
+
+    if not isinstance(value, dict):
+        return []
+    actual = value.get(field)
+    expected = value.get(expected_field)
+    if isinstance(actual, str) and isinstance(expected, str) and actual != expected:
+        return [f"{label}.{field} must match {expected_field}"]
+    return []
+
+
+def _public_lane_matching_value_errors(
+    value: Any,
+    label: str,
+    field: str,
+    expected_value: Any,
+    expected_label: str,
+) -> list[str]:
+    """Return errors when a copied field drifts from sibling lane evidence."""
+
+    if not isinstance(value, dict):
+        return []
+    actual = value.get(field)
+    if (
+        isinstance(actual, str)
+        and isinstance(expected_value, str)
+        and actual != expected_value
+    ):
+        return [f"{label}.{field} must match {expected_label}"]
+    return []
+
+
+def _public_lane_route_canary_hash_role_errors(
+    lane: dict[str, Any],
+    label: str,
+    route_allowlist: dict[str, Any],
+    route_canary: dict[str, Any],
+) -> list[str]:
+    """Return errors for copied route-canary hash role reuse."""
+
+    if not isinstance(route_allowlist, dict) or not isinstance(route_canary, dict):
+        return []
+
+    fields: list[tuple[str, bytes | None]] = []
+    source_hashes = lane.get("source_record_hashes")
+    if isinstance(source_hashes, dict):
+        fields.extend(
+            (
+                (field, _hex_bytes(source_hashes.get(field), byte_length=32))
+                for field in PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS
+            )
+        )
+
+    source_adapter_gate = lane.get("source_adapter_gate")
+    if isinstance(source_adapter_gate, dict):
+        source_gate_hash_values: set[bytes] = set()
+        gate_hash = _hex_bytes(source_adapter_gate.get("gate_hash"), byte_length=32)
+        fields.append(
+            (
+                "source_adapter_gate_hash",
+                gate_hash,
+            )
+        )
+        if gate_hash is not None and any(gate_hash):
+            source_gate_hash_values.add(gate_hash)
+        audit_hashes = source_adapter_gate.get("audit_hashes")
+        domain = lane.get("domain")
+        if isinstance(audit_hashes, dict) and domain in LANE_PROFILES:
+            _gate_field, audit_fields = _source_adapter_gate_requirements(domain)
+            for field in audit_fields:
+                audit_hash = _hex_bytes(audit_hashes.get(field), byte_length=32)
+                if (
+                    audit_hash is not None
+                    and any(audit_hash)
+                    and audit_hash in source_gate_hash_values
+                ):
+                    continue
+                fields.append(
+                    (
+                        f"source_adapter_gate.audit_hashes.{field}",
+                        audit_hash,
+                    )
+                )
+                if audit_hash is not None and any(audit_hash):
+                    source_gate_hash_values.add(audit_hash)
+
+    fields.append(
+        (
+            "route_allowlist_hash",
+            _hex_bytes(route_allowlist.get("route_allowlist_hash"), byte_length=32),
+        )
+    )
+    destination_binding = lane.get("destination_binding")
+    if isinstance(destination_binding, dict):
+        fields.append(
+            (
+                "destination_binding_hash",
+                _hex_bytes(
+                    destination_binding.get("destination_binding_hash"),
+                    byte_length=32,
+                ),
+            )
+        )
+
+    domain = lane.get("domain")
+    route_canary_fields: tuple[str, ...] = ("evidence_hash",)
+    if domain in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC):
+        route_canary_fields = route_canary_fields + (
+            "transaction_hash",
+            "receipt_block_hash",
+            "block_receipts_root",
+            "call_data_sha256",
+            "message_id",
+            "payload_hash",
+            "statement_hash",
+            "commitment_root",
+            "finality_height",
+            "finality_block_hash",
+        )
+    elif domain == SCCP_DOMAIN_TRON:
+        route_canary_fields = route_canary_fields + (
+            "transaction_id",
+            "message_id",
+            "call_data_sha256",
+            "payload_hash",
+            "statement_hash",
+            "commitment_root",
+            "finality_height",
+            "finality_block_hash",
+            "signature_sha256",
+        )
+    elif domain == SCCP_DOMAIN_TON:
+        route_canary_fields = route_canary_fields + (
+            "ton_account_state_hash",
+            "ton_last_transaction_hash",
+        )
+
+    fields.extend(
+        (
+            (field, _hex_bytes(route_canary.get(field), byte_length=32))
+            for field in route_canary_fields
+        )
+    )
+
+    errors: list[str] = []
+    _expect_distinct_byte_values(
+        errors,
+        tuple(fields),
+        label=f"{label} hash role",
+    )
+    return errors
+
+
+def _public_lane_route_allowlist_recompute_errors(
+    lane: dict[str, Any],
+    label: str,
+    route_allowlist: Any,
+) -> list[str]:
+    """Return errors when copied route hashes drift from copied lane hashes."""
+
+    # Source-inventory marker: route_allowlist_hash must recompute from source material, source adapter deployment, and destination binding hashes
+    if not isinstance(route_allowlist, dict):
+        return []
+    domain = lane.get("domain")
+    profile = LANE_PROFILES.get(domain)
+    source_hashes = lane.get("source_record_hashes")
+    destination_binding = lane.get("destination_binding")
+    if (
+        profile is None
+        or not isinstance(source_hashes, dict)
+        or not isinstance(destination_binding, dict)
+    ):
+        return []
+    supplied_hash = _hex_bytes(route_allowlist.get("route_allowlist_hash"), byte_length=32)
+    if supplied_hash is None or not any(supplied_hash):
+        return []
+    try:
+        expected_hash = _expected_route_allowlist_hash(
+            profile,
+            source_hashes,
+            destination_binding,
+        )
+    except (SystemExit, RuntimeError, TypeError, ValueError):
+        return [
+            f"{label}.route_allowlist_hash must recompute from source material, "
+            "source adapter deployment, and destination binding hashes"
+        ]
+    if supplied_hash != expected_hash:
+        return [
+            f"{label}.route_allowlist_hash must recompute from source material, "
+            "source adapter deployment, and destination binding hashes"
+        ]
+    return []
+
+
+def _public_lane_optional_bool_errors(
+    value: Any,
+    label: str,
+    fields: tuple[str, ...],
+) -> list[str]:
+    """Return errors for copied optional booleans when present."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field in fields:
+        if field not in value or value.get(field) is None:
+            continue
+        if type(value.get(field)) is not bool:
+            errors.append(f"{label}.{field} must be a boolean")
+    return errors
+
+
+def _public_lane_optional_canonical_string_errors(
+    value: Any,
+    label: str,
+    fields: tuple[str, ...],
+    *,
+    allow_empty: bool = False,
+) -> list[str]:
+    """Return errors for copied optional canonical strings when present."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field in fields:
+        if field not in value or value.get(field) is None:
+            continue
+        raw = value.get(field)
+        if allow_empty and raw == "":
+            continue
+        if not isinstance(raw, str) or not raw or raw.strip() != raw:
+            errors.append(f"{label}.{field} must be a non-empty canonical string")
+    return errors
+
+
+def _public_lane_optional_positive_int_errors(
+    value: Any,
+    label: str,
+    fields: tuple[str, ...],
+) -> list[str]:
+    """Return errors for copied optional positive integers when present."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field in fields:
+        if field not in value or value.get(field) is None:
+            continue
+        raw = value.get(field)
+        if type(raw) is not int or raw <= 0:
+            errors.append(f"{label}.{field} must be a positive integer")
+    return errors
+
+
+def _public_lane_optional_nonnegative_int_errors(
+    value: Any,
+    label: str,
+    fields: tuple[str, ...],
+) -> list[str]:
+    """Return errors for copied optional non-negative integers when present."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field in fields:
+        if field not in value or value.get(field) is None:
+            continue
+        raw = value.get(field)
+        if type(raw) is not int or raw < 0:
+            errors.append(f"{label}.{field} must be a non-negative integer")
+    return errors
+
+
+def _public_lane_optional_u32_errors(
+    value: Any,
+    label: str,
+    fields: tuple[str, ...],
+) -> list[str]:
+    """Return errors for copied optional u32 integers when present."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field in fields:
+        if field not in value or value.get(field) is None:
+            continue
+        raw = value.get(field)
+        if type(raw) is not int or raw < 0 or raw > 0xFFFF_FFFF:
+            errors.append(f"{label}.{field} must be a u32 integer")
+    return errors
+
+
+def _public_lane_optional_int_errors(
+    value: Any,
+    label: str,
+    fields: tuple[str, ...],
+) -> list[str]:
+    """Return errors for copied optional integers when present."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field in fields:
+        if field not in value or value.get(field) is None:
+            continue
+        if type(value.get(field)) is not int:
+            errors.append(f"{label}.{field} must be an integer")
+    return errors
+
+
+def _public_lane_optional_positive_decimal_string_errors(
+    value: Any,
+    label: str,
+    fields: tuple[str, ...],
+) -> list[str]:
+    """Return errors for copied optional positive decimal strings when present."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field in fields:
+        if field not in value or value.get(field) in (None, ""):
+            continue
+        if not _is_canonical_decimal_text(value.get(field), positive=True):
+            errors.append(
+                f"{label}.{field} must be a canonical positive decimal string"
+            )
+    return errors
+
+
+def _public_lane_optional_tron_address_errors(
+    value: Any,
+    label: str,
+    fields: tuple[str, ...],
+) -> list[str]:
+    """Return errors for copied optional TRON addresses when present."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field in fields:
+        if field not in value or value.get(field) in (None, ""):
+            continue
+        raw = _hex_bytes(value.get(field), byte_length=21)
+        if raw is None or raw[0] != 0x41 or not any(raw[1:]):
+            errors.append(f"{label}.{field} must be a non-zero TRON address")
+    return errors
+
+
+def _public_lane_optional_true_errors(
+    value: Any,
+    label: str,
+    fields: tuple[str, ...],
+) -> list[str]:
+    """Return errors for copied optional booleans that must be true when present."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field in fields:
+        raw = value.get(field)
+        if field not in value or raw is None:
+            continue
+        if type(raw) is bool and raw is not True:
+            errors.append(f"{label}.{field} must be true")
+    return errors
+
+
+def _public_lane_optional_exact_string_errors(
+    value: Any,
+    label: str,
+    expected_values: dict[str, str],
+) -> list[str]:
+    """Return errors for copied optional strings with exact public values."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field, expected in expected_values.items():
+        raw = value.get(field)
+        if field not in value or raw in (None, ""):
+            continue
+        if isinstance(raw, str) and raw.strip() == raw and raw != expected:
+            errors.append(f"{label}.{field} must be {expected}")
+    return errors
+
+
+def _public_lane_optional_lane_domain_errors(
+    value: Any,
+    label: str,
+    field: str,
+    expected_domain: int,
+) -> list[str]:
+    """Return errors when an optional copied domain field drifts."""
+
+    if not isinstance(value, dict):
+        return []
+    raw = value.get(field)
+    if field not in value or raw is None:
+        return []
+    if type(raw) is int and raw != expected_domain:
+        return [f"{label}.{field} must match lane domain"]
+    return []
+
+
+def _public_lane_optional_int_constant_errors(
+    value: Any,
+    label: str,
+    field: str,
+    expected: int,
+    expected_label: str,
+) -> list[str]:
+    """Return errors when an optional copied integer constant drifts."""
+
+    if not isinstance(value, dict):
+        return []
+    raw = value.get(field)
+    if field not in value or raw is None:
+        return []
+    if type(raw) is int and raw != expected:
+        return [f"{label}.{field} must be {expected_label}"]
+    return []
+
+
+def _public_lane_optional_decimal_constant_errors(
+    value: Any,
+    label: str,
+    field: str,
+    expected: int,
+) -> list[str]:
+    """Return errors when an optional copied decimal string drifts."""
+
+    if not isinstance(value, dict):
+        return []
+    raw = value.get(field)
+    if field not in value or raw in (None, ""):
+        return []
+    if _is_canonical_decimal_text(raw, positive=True) and int(raw, 10) != expected:
+        return [f"{label}.{field} must be {expected}"]
+    return []
+
+
+def _public_lane_required_true_errors(
+    value: Any,
+    label: str,
+    fields: tuple[str, ...],
+) -> list[str]:
+    """Return errors for required copied ready-lane boolean flags."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field in fields:
+        flag = value.get(field)
+        if type(flag) is not bool:
+            errors.append(f"{label}.{field} must be a boolean")
+        elif flag is not True:
+            errors.append(f"{label}.{field} must be true")
+    return errors
+
+
+def _public_lane_required_bool_errors(
+    value: Any,
+    label: str,
+    fields: tuple[str, ...],
+) -> list[str]:
+    """Return errors for required copied ready-lane booleans."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field in fields:
+        if type(value.get(field)) is not bool:
+            errors.append(f"{label}.{field} must be a boolean")
+    return errors
+
+
+def _public_lane_non_evm_live_metadata_errors(value: Any, label: str) -> list[str]:
+    """Return errors when copied non-EVM lanes carry EVM live metadata."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    if value.get("required") is not False:
+        errors.append(f"{label}.required must be false for non-EVM lanes")
+    if value.get("ready") is not True:
+        errors.append(f"{label}.ready must be true for non-EVM lanes")
+    for field in (
+        "source_rpc_chain_id",
+        "source_block_tag",
+        "destination_rpc_chain_id",
+        "destination_block_tag",
+    ):
+        if value.get(field) not in ("", None):
+            errors.append(f"{label}.{field} must be empty for non-EVM lanes")
+    return errors
+
+
+def _public_lane_required_exact_string_errors(
+    value: Any,
+    label: str,
+    expected_values: dict[str, str],
+) -> list[str]:
+    """Return errors for required copied ready-lane string constants."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field, expected in expected_values.items():
+        raw = value.get(field)
+        if not isinstance(raw, str) or not raw or raw.strip() != raw:
+            errors.append(f"{label}.{field} must be a non-empty canonical string")
+        elif raw != expected:
+            errors.append(f"{label}.{field} must be {expected}")
+    return errors
+
+
+def _public_lane_required_canonical_string_errors(
+    value: Any,
+    label: str,
+    fields: tuple[str, ...],
+) -> list[str]:
+    """Return errors for required copied ready-lane canonical strings."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field in fields:
+        raw = value.get(field)
+        if not isinstance(raw, str) or not raw or raw.strip() != raw:
+            errors.append(f"{label}.{field} must be a non-empty canonical string")
+    return errors
+
+
+def _public_lane_required_positive_int_errors(
+    value: Any,
+    label: str,
+    fields: tuple[str, ...],
+) -> list[str]:
+    """Return errors for required copied ready-lane positive integer scalars."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field in fields:
+        raw = value.get(field)
+        if type(raw) is not int or raw <= 0:
+            errors.append(f"{label}.{field} must be a positive integer")
+    return errors
+
+
+def _public_lane_required_nonnegative_int_errors(
+    value: Any,
+    label: str,
+    fields: tuple[str, ...],
+) -> list[str]:
+    """Return errors for required copied ready-lane non-negative integers."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field in fields:
+        raw = value.get(field)
+        if type(raw) is not int or raw < 0:
+            errors.append(f"{label}.{field} must be a non-negative integer")
+    return errors
+
+
+def _public_lane_required_u32_errors(
+    value: Any,
+    label: str,
+    fields: tuple[str, ...],
+) -> list[str]:
+    """Return errors for required copied ready-lane u32 scalars."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field in fields:
+        raw = value.get(field)
+        if type(raw) is not int or raw < 0 or raw > 0xFFFF_FFFF:
+            errors.append(f"{label}.{field} must be a u32 integer")
+    return errors
+
+
+def _public_lane_required_positive_decimal_string_errors(
+    value: Any,
+    label: str,
+    fields: tuple[str, ...],
+) -> list[str]:
+    """Return errors for required copied ready-lane decimal string scalars."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field in fields:
+        if not _is_canonical_decimal_text(value.get(field), positive=True):
+            errors.append(
+                f"{label}.{field} must be a canonical positive decimal string"
+            )
+    return errors
+
+
+def _public_lane_required_lane_domain_errors(
+    value: Any,
+    label: str,
+    field: str,
+    expected_domain: int,
+) -> list[str]:
+    """Return errors when copied route canary target domain drifts."""
+
+    if not isinstance(value, dict):
+        return []
+    raw = value.get(field)
+    if type(raw) is not int:
+        return [f"{label}.{field} must be an integer"]
+    if raw != expected_domain:
+        return [f"{label}.{field} must match lane domain"]
+    return []
+
+
+def _public_lane_required_int_constant_errors(
+    value: Any,
+    label: str,
+    field: str,
+    expected: int,
+    expected_label: str,
+) -> list[str]:
+    """Return errors when copied ready-lane integer constants drift."""
+
+    if not isinstance(value, dict):
+        return []
+    raw = value.get(field)
+    if type(raw) is not int:
+        return [f"{label}.{field} must be an integer"]
+    if raw != expected:
+        return [f"{label}.{field} must be {expected_label}"]
+    return []
+
+
+def _public_lane_required_tron_address_errors(
+    value: Any,
+    label: str,
+    fields: tuple[str, ...],
+) -> list[str]:
+    """Return errors for required copied ready-lane TRON addresses."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field in fields:
+        raw = _hex_bytes(value.get(field), byte_length=21)
+        if raw is None or raw[0] != 0x41 or not any(raw[1:]):
+            errors.append(f"{label}.{field} must be a non-zero TRON address")
+    return errors
+
+
+def _public_lane_tron_address_match_errors(
+    value: Any,
+    label: str,
+    left_field: str,
+    right_field: str,
+) -> list[str]:
+    """Return errors when copied TRON signer address binding drifts."""
+
+    if not isinstance(value, dict):
+        return []
+    left = _hex_bytes(value.get(left_field), byte_length=21)
+    right = _hex_bytes(value.get(right_field), byte_length=21)
+    if (
+        left is not None
+        and right is not None
+        and left[0] == 0x41
+        and right[0] == 0x41
+        and any(left[1:])
+        and any(right[1:])
+        and left != right
+    ):
+        return [f"{label}.{right_field} must match {left_field}"]
+    return []
+
+
 def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
     """Return bounded public errors for copied all-lanes lane summaries."""
 
@@ -7461,6 +8745,9 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
             key=lambda field: str(field),
         ):
             errors.append(f"{lane_label} {_unexpected_record_field_detail(field)}")
+        errors.extend(
+            _public_lane_missing_field_errors(lane, lane_label, PUBLIC_LANE_FIELDS)
+        )
 
         domain = lane.get("domain")
         expected_chain: str | None = None
@@ -7483,8 +8770,11 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
         lane_ready = lane.get("production_ready")
         if type(lane_ready) is not bool:
             errors.append(f"{lane_label} production_ready must be a boolean")
-        elif require_ready and lane_ready is not True:
+        elif (require_ready or domain == SCCP_DOMAIN_ETH) and lane_ready is not True:
             errors.append(f"{lane_label} production_ready must be true")
+        lane_require_ready = (
+            require_ready or lane_ready is True or domain == SCCP_DOMAIN_ETH
+        )
 
         records = lane.get("records")
         if not isinstance(records, dict):
@@ -7498,7 +8788,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
             for field in PUBLIC_LANE_RECORD_FIELDS:
                 if type(records.get(field)) is not bool:
                     errors.append(f"{lane_label} records.{field} must be a boolean")
-                elif require_ready and records.get(field) is not True:
+                elif lane_require_ready and records.get(field) is not True:
                     errors.append(f"{lane_label} records.{field} must be true")
 
         errors.extend(
@@ -7508,9 +8798,45 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                 PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS,
             )
         )
+        errors.extend(
+            _public_lane_optional_bytes32_errors(
+                lane.get("source_record_hashes"),
+                f"{lane_label}.source_record_hashes",
+                PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS,
+            )
+        )
+        if lane_require_ready:
+            errors.extend(
+                _public_lane_missing_field_errors(
+                    lane.get("source_record_hashes"),
+                    f"{lane_label}.source_record_hashes",
+                    PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS,
+                )
+            )
+            errors.extend(
+                _public_lane_required_bytes32_errors(
+                    lane.get("source_record_hashes"),
+                    f"{lane_label}.source_record_hashes",
+                    PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS,
+                )
+            )
+        errors.extend(
+            _public_lane_source_record_template_hash_errors(
+                lane.get("source_record_hashes"),
+                f"{lane_label}.source_record_hashes",
+                domain,
+            )
+        )
         source_adapter_gate = lane.get("source_adapter_gate")
         errors.extend(
             _public_lane_object_field_errors(
+                source_adapter_gate,
+                f"{lane_label}.source_adapter_gate",
+                PUBLIC_LANE_SOURCE_ADAPTER_GATE_FIELDS,
+            )
+        )
+        errors.extend(
+            _public_lane_missing_field_errors(
                 source_adapter_gate,
                 f"{lane_label}.source_adapter_gate",
                 PUBLIC_LANE_SOURCE_ADAPTER_GATE_FIELDS,
@@ -7531,6 +8857,62 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                         audit_fields,
                     )
                 )
+                errors.extend(
+                    _public_lane_missing_field_errors(
+                        audit_hashes,
+                        f"{lane_label}.source_adapter_gate.audit_hashes",
+                        audit_fields,
+                    )
+                )
+                errors.extend(
+                    _public_lane_optional_bytes32_errors(
+                        audit_hashes,
+                        f"{lane_label}.source_adapter_gate.audit_hashes",
+                        audit_fields,
+                    )
+                )
+            gate_required = source_adapter_gate.get("required")
+            gate_ready = source_adapter_gate.get("ready")
+            if type(gate_required) is not bool:
+                errors.append(
+                    f"{lane_label}.source_adapter_gate.required must be a boolean"
+                )
+            elif lane_require_ready and gate_required is not True:
+                errors.append(
+                    f"{lane_label}.source_adapter_gate.required must be true"
+                )
+            if type(gate_ready) is not bool:
+                errors.append(
+                    f"{lane_label}.source_adapter_gate.ready must be a boolean"
+                )
+            elif lane_require_ready and gate_ready is not True:
+                errors.append(f"{lane_label}.source_adapter_gate.ready must be true")
+            errors.extend(
+                _public_lane_optional_bytes32_errors(
+                    source_adapter_gate,
+                    f"{lane_label}.source_adapter_gate",
+                    ("gate_hash",),
+                )
+            )
+            gate_blockers, gate_blocker_errors = _canonical_blocker_list(
+                source_adapter_gate.get("blockers", []),
+                f"{lane_label}.source_adapter_gate",
+            )
+            errors.extend(gate_blocker_errors)
+            if lane_require_ready and gate_blockers:
+                errors.append(f"{lane_label}.source_adapter_gate blockers must be empty")
+            if (
+                lane_require_ready
+                and type(gate_required) is bool
+                and type(gate_ready) is bool
+            ):
+                errors.extend(
+                    _source_adapter_gate_release_metadata_blockers(
+                        lane_label,
+                        lane,
+                        source_adapter_gate,
+                    )
+                )
         errors.extend(
             _public_lane_object_field_errors(
                 lane.get("evm_live_metadata"),
@@ -7539,12 +8921,220 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
             )
         )
         errors.extend(
+            _public_lane_missing_field_errors(
+                lane.get("evm_live_metadata"),
+                f"{lane_label}.evm_live_metadata",
+                PUBLIC_LANE_EVM_LIVE_METADATA_FIELDS,
+            )
+        )
+        evm_live_metadata = lane.get("evm_live_metadata")
+        errors.extend(
+            _public_lane_optional_bool_errors(
+                evm_live_metadata,
+                f"{lane_label}.evm_live_metadata",
+                ("required", "ready"),
+            )
+        )
+        errors.extend(
+            _public_lane_optional_positive_decimal_string_errors(
+                evm_live_metadata,
+                f"{lane_label}.evm_live_metadata",
+                ("source_rpc_chain_id", "destination_rpc_chain_id"),
+            )
+        )
+        errors.extend(
+            _public_lane_optional_canonical_string_errors(
+                evm_live_metadata,
+                f"{lane_label}.evm_live_metadata",
+                ("source_block_tag", "destination_block_tag"),
+                allow_empty=True,
+            )
+        )
+        if domain in EVM_EXPECTED_RPC_CHAIN_IDS:
+            expected_chain_id = EVM_EXPECTED_RPC_CHAIN_IDS[domain]
+            errors.extend(
+                _public_lane_required_true_errors(
+                    evm_live_metadata,
+                    f"{lane_label}.evm_live_metadata",
+                    ("required",),
+                )
+            )
+            if lane_require_ready and domain == SCCP_DOMAIN_ETH:
+                errors.extend(
+                    _public_lane_required_true_errors(
+                        evm_live_metadata,
+                        f"{lane_label}.evm_live_metadata",
+                        ("ready",),
+                    )
+                )
+            elif lane_require_ready:
+                errors.extend(
+                    _public_lane_required_bool_errors(
+                        evm_live_metadata,
+                        f"{lane_label}.evm_live_metadata",
+                        ("ready",),
+                    )
+                )
+            if lane_require_ready:
+                errors.extend(
+                    _public_lane_required_positive_decimal_string_errors(
+                        evm_live_metadata,
+                        f"{lane_label}.evm_live_metadata",
+                        ("source_rpc_chain_id", "destination_rpc_chain_id"),
+                    )
+                )
+            if lane_require_ready and domain == SCCP_DOMAIN_ETH:
+                errors.extend(
+                    _public_lane_required_exact_string_errors(
+                        evm_live_metadata,
+                        f"{lane_label}.evm_live_metadata",
+                        {
+                            "source_block_tag": "finalized",
+                            "destination_block_tag": "finalized",
+                        },
+                    )
+                )
+            elif lane_require_ready:
+                errors.extend(
+                    _public_lane_required_canonical_string_errors(
+                        evm_live_metadata,
+                        f"{lane_label}.evm_live_metadata",
+                        ("source_block_tag", "destination_block_tag"),
+                    )
+                )
+            if lane_require_ready:
+                errors.extend(
+                    _public_lane_optional_true_errors(
+                        evm_live_metadata,
+                        f"{lane_label}.evm_live_metadata",
+                        ("required", "ready"),
+                    )
+                )
+            for field in ("source_rpc_chain_id", "destination_rpc_chain_id"):
+                errors.extend(
+                    _public_lane_optional_decimal_constant_errors(
+                        evm_live_metadata,
+                        f"{lane_label}.evm_live_metadata",
+                        field,
+                        expected_chain_id,
+                    )
+                )
+            if domain == SCCP_DOMAIN_ETH:
+                errors.extend(
+                    _public_lane_optional_exact_string_errors(
+                        evm_live_metadata,
+                        f"{lane_label}.evm_live_metadata",
+                        {
+                            "source_block_tag": "finalized",
+                            "destination_block_tag": "finalized",
+                        },
+                    )
+                )
+        elif domain in (SCCP_DOMAIN_SOL, SCCP_DOMAIN_TON, SCCP_DOMAIN_TRON):
+            errors.extend(
+                _public_lane_non_evm_live_metadata_errors(
+                    evm_live_metadata,
+                    f"{lane_label}.evm_live_metadata",
+                )
+            )
+        errors.extend(
             _public_lane_object_field_errors(
                 lane.get("destination_binding"),
                 f"{lane_label}.destination_binding",
                 PUBLIC_LANE_DESTINATION_BINDING_FIELDS,
             )
         )
+        errors.extend(
+            _public_lane_optional_bytes32_errors(
+                lane.get("destination_binding"),
+                f"{lane_label}.destination_binding",
+                (
+                    "destination_binding_hash",
+                    "expected_destination_binding_hash",
+                ),
+            )
+        )
+        if lane_require_ready:
+            errors.extend(
+                _public_lane_missing_field_errors(
+                    lane.get("destination_binding"),
+                    f"{lane_label}.destination_binding",
+                    PUBLIC_LANE_DESTINATION_BINDING_REQUIRED_FIELDS,
+                )
+            )
+            errors.extend(
+                _public_lane_required_bytes32_errors(
+                    lane.get("destination_binding"),
+                    f"{lane_label}.destination_binding",
+                    (
+                        "destination_binding_hash",
+                        "expected_destination_binding_hash",
+                    ),
+                )
+            )
+        errors.extend(
+            _public_lane_optional_bool_errors(
+                lane.get("destination_binding"),
+                f"{lane_label}.destination_binding",
+                ("expected_destination_binding_hash_matches", "recomputed"),
+            )
+        )
+        errors.extend(
+            _public_lane_optional_true_errors(
+                lane.get("destination_binding"),
+                f"{lane_label}.destination_binding",
+                ("expected_destination_binding_hash_matches", "recomputed"),
+            )
+        )
+        errors.extend(
+            _public_lane_optional_canonical_string_errors(
+                lane.get("destination_binding"),
+                f"{lane_label}.destination_binding",
+                (
+                    "destination_binding_key",
+                    "destination_network_id",
+                    "destination_bridge_address",
+                ),
+            )
+        )
+        if lane_require_ready:
+            errors.extend(
+                _public_lane_destination_family_errors(
+                    lane.get("destination_binding"),
+                    f"{lane_label}.destination_binding",
+                    domain,
+                )
+            )
+        errors.extend(
+            _public_lane_matching_field_errors(
+                lane.get("destination_binding"),
+                f"{lane_label}.destination_binding",
+                "expected_destination_binding_hash",
+                "destination_binding_hash",
+            )
+        )
+        errors.extend(
+            _public_lane_destination_binding_recompute_errors(
+                lane,
+                f"{lane_label}.destination_binding",
+                lane.get("destination_binding"),
+            )
+        )
+        if lane_require_ready:
+            errors.extend(
+                _public_lane_required_true_errors(
+                    lane.get("destination_binding"),
+                    f"{lane_label}.destination_binding",
+                    ("expected_destination_binding_hash_matches", "recomputed"),
+                )
+            )
+            errors.extend(
+                _public_lane_required_canonical_string_errors(
+                    lane.get("destination_binding"),
+                    f"{lane_label}.destination_binding",
+                    ("destination_binding_key",),
+                )
+            )
         route_allowlist = lane.get("route_allowlist")
         errors.extend(
             _public_lane_object_field_errors(
@@ -7553,21 +9143,524 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                 PUBLIC_LANE_ROUTE_ALLOWLIST_FIELDS,
             )
         )
-        if isinstance(route_allowlist, dict):
+        errors.extend(
+            _public_lane_optional_bytes32_errors(
+                route_allowlist,
+                f"{lane_label}.route_allowlist",
+                (
+                    "route_allowlist_hash",
+                    "expected_route_allowlist_hash",
+                ),
+            )
+        )
+        if lane_require_ready:
             errors.extend(
-                _public_lane_object_field_errors(
-                    route_allowlist.get("route_canary"),
-                    f"{lane_label}.route_allowlist.route_canary",
-                    PUBLIC_LANE_ROUTE_CANARY_FIELDS,
+                _public_lane_missing_field_errors(
+                    route_allowlist,
+                    f"{lane_label}.route_allowlist",
+                    PUBLIC_LANE_ROUTE_ALLOWLIST_FIELDS,
                 )
             )
+            errors.extend(
+                _public_lane_required_bytes32_errors(
+                    route_allowlist,
+                    f"{lane_label}.route_allowlist",
+                    (
+                        "route_allowlist_hash",
+                        "expected_route_allowlist_hash",
+                    ),
+                )
+            )
+        errors.extend(
+            _public_lane_optional_bool_errors(
+                route_allowlist,
+                f"{lane_label}.route_allowlist",
+                ("expected_route_allowlist_hash_matches",),
+            )
+        )
+        errors.extend(
+            _public_lane_optional_true_errors(
+                route_allowlist,
+                f"{lane_label}.route_allowlist",
+                ("expected_route_allowlist_hash_matches",),
+            )
+        )
+        errors.extend(
+            _public_lane_matching_field_errors(
+                route_allowlist,
+                f"{lane_label}.route_allowlist",
+                "expected_route_allowlist_hash",
+                "route_allowlist_hash",
+            )
+        )
+        errors.extend(
+            _public_lane_route_allowlist_recompute_errors(
+                lane,
+                f"{lane_label}.route_allowlist",
+                route_allowlist,
+            )
+        )
+        if lane_require_ready:
+            errors.extend(
+                _public_lane_required_true_errors(
+                    route_allowlist,
+                    f"{lane_label}.route_allowlist",
+                    ("expected_route_allowlist_hash_matches",),
+                )
+            )
+        if isinstance(route_allowlist, dict):
+            route_canary = route_allowlist.get("route_canary")
+            route_canary_fields = PUBLIC_LANE_ROUTE_CANARY_FIELDS_BY_DOMAIN.get(
+                domain,
+                PUBLIC_LANE_ROUTE_CANARY_FIELDS,
+            )
+            if lane_require_ready or "route_canary" in route_allowlist:
+                errors.extend(
+                    _public_lane_object_field_errors(
+                        route_canary,
+                        f"{lane_label}.route_allowlist.route_canary",
+                        route_canary_fields,
+                    )
+                )
+            if lane_require_ready:
+                errors.extend(
+                    _public_lane_missing_field_errors(
+                        route_canary,
+                        f"{lane_label}.route_allowlist.route_canary",
+                        route_canary_fields,
+                    )
+                )
+            errors.extend(
+                _public_lane_optional_bytes32_errors(
+                    route_canary,
+                    f"{lane_label}.route_allowlist.route_canary",
+                    (
+                        "evidence_hash",
+                        "route_allowlist_hash",
+                        "destination_binding_hash",
+                        "transaction_hash",
+                        "receipt_block_hash",
+                        "block_receipts_root",
+                        "call_data_sha256",
+                        "message_id",
+                        "payload_hash",
+                        "statement_hash",
+                        "commitment_root",
+                        "finality_height",
+                        "finality_block_hash",
+                        "transaction_id",
+                        "signature_sha256",
+                        "ton_account_state_hash",
+                        "ton_last_transaction_hash",
+                    ),
+                )
+            )
+            if lane_require_ready:
+                errors.extend(
+                    _public_lane_required_bytes32_errors(
+                        route_canary,
+                        f"{lane_label}.route_allowlist.route_canary",
+                        (
+                            "evidence_hash",
+                            "route_allowlist_hash",
+                            "destination_binding_hash",
+                        ),
+                    )
+                )
+            canary_label = f"{lane_label}.route_allowlist.route_canary"
+            errors.extend(
+                _public_lane_optional_canonical_string_errors(
+                    route_canary,
+                    canary_label,
+                    ("status", "evidence_source", "solana_programdata_address"),
+                )
+            )
+            errors.extend(
+                _public_lane_optional_bool_errors(
+                    route_canary,
+                    canary_label,
+                    (
+                        "evidence_bound",
+                        "message_proof_used",
+                        "receipt_block_finalized",
+                        "raw_data_owner_matches_transaction",
+                        "signature_recovers_to_owner",
+                    ),
+                )
+            )
+            errors.extend(
+                _public_lane_optional_positive_int_errors(
+                    route_canary,
+                    canary_label,
+                    ("receipt_block_number", "block_number"),
+                )
+            )
+            errors.extend(
+                _public_lane_optional_nonnegative_int_errors(
+                    route_canary,
+                    canary_label,
+                    ("block_timestamp",),
+                )
+            )
+            errors.extend(
+                _public_lane_optional_u32_errors(
+                    route_canary,
+                    canary_label,
+                    ("log_index",),
+                )
+            )
+            errors.extend(
+                _public_lane_optional_int_errors(
+                    route_canary,
+                    canary_label,
+                    ("target_domain", "proof_version", "proof_source_domain"),
+                )
+            )
+            errors.extend(
+                _public_lane_optional_positive_decimal_string_errors(
+                    route_canary,
+                    canary_label,
+                    ("ton_last_transaction_lt", "solana_programdata_slot"),
+                )
+            )
+            errors.extend(
+                _public_lane_optional_tron_address_errors(
+                    route_canary,
+                    canary_label,
+                    (
+                        "transaction_owner_address",
+                        "signature_recovered_address",
+                    ),
+                )
+            )
+            errors.extend(
+                _public_lane_optional_exact_string_errors(
+                    route_canary,
+                    canary_label,
+                    {"status": "passed"},
+                )
+            )
+            expected_source = ROUTE_CANARY_EVIDENCE_SOURCE_BY_DOMAIN.get(domain)
+            if expected_source is not None:
+                errors.extend(
+                    _public_lane_optional_exact_string_errors(
+                        route_canary,
+                        canary_label,
+                        {"evidence_source": expected_source},
+                    )
+                )
+            errors.extend(
+                _public_lane_optional_true_errors(
+                    route_canary,
+                    canary_label,
+                    ("evidence_bound", "message_proof_used"),
+                )
+            )
+            errors.extend(
+                _public_lane_optional_lane_domain_errors(
+                    route_canary,
+                    canary_label,
+                    "target_domain",
+                    domain,
+                )
+            )
+            errors.extend(
+                _public_lane_optional_int_constant_errors(
+                    route_canary,
+                    canary_label,
+                    "proof_version",
+                    1,
+                    "1",
+                )
+            )
+            errors.extend(
+                _public_lane_optional_int_constant_errors(
+                    route_canary,
+                    canary_label,
+                    "proof_source_domain",
+                    SCCP_DOMAIN_SORA,
+                    "SORA domain",
+                )
+            )
+            errors.extend(
+                _public_lane_matching_value_errors(
+                    route_canary,
+                    canary_label,
+                    "route_allowlist_hash",
+                    route_allowlist.get("route_allowlist_hash"),
+                    "lane route_allowlist_hash",
+                )
+            )
+            destination_binding = lane.get("destination_binding")
+            if isinstance(destination_binding, dict):
+                errors.extend(
+                    _public_lane_matching_value_errors(
+                        route_canary,
+                        canary_label,
+                        "destination_binding_hash",
+                        destination_binding.get("destination_binding_hash"),
+                        "lane destination_binding_hash",
+                    )
+                )
+            errors.extend(
+                _public_lane_route_canary_hash_role_errors(
+                    lane,
+                    canary_label,
+                    route_allowlist,
+                    route_canary,
+                )
+            )
+            if domain in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC):
+                errors.extend(
+                    _public_lane_optional_true_errors(
+                        route_canary,
+                        canary_label,
+                        ("receipt_block_finalized",),
+                    )
+                )
+            elif domain == SCCP_DOMAIN_TRON:
+                errors.extend(
+                    _public_lane_tron_address_match_errors(
+                        route_canary,
+                        canary_label,
+                        "transaction_owner_address",
+                        "signature_recovered_address",
+                    )
+                )
+                errors.extend(
+                    _public_lane_optional_true_errors(
+                        route_canary,
+                        canary_label,
+                        (
+                            "raw_data_owner_matches_transaction",
+                            "signature_recovers_to_owner",
+                        ),
+                    )
+                )
+            if lane_require_ready:
+                errors.extend(
+                    _public_lane_required_exact_string_errors(
+                        route_canary,
+                        canary_label,
+                        {"status": "passed"},
+                    )
+                )
+                expected_source = ROUTE_CANARY_EVIDENCE_SOURCE_BY_DOMAIN.get(domain)
+                if expected_source is not None:
+                    errors.extend(
+                        _public_lane_required_exact_string_errors(
+                            route_canary,
+                            canary_label,
+                            {"evidence_source": expected_source},
+                        )
+                    )
+                errors.extend(
+                    _public_lane_required_true_errors(
+                        route_canary,
+                        canary_label,
+                        ("evidence_bound",),
+                    )
+                )
+                if domain in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC):
+                    errors.extend(
+                        _public_lane_required_bytes32_errors(
+                            route_canary,
+                            canary_label,
+                            (
+                                "transaction_hash",
+                                "receipt_block_hash",
+                                "block_receipts_root",
+                                "call_data_sha256",
+                                "message_id",
+                                "payload_hash",
+                                "statement_hash",
+                                "commitment_root",
+                                "finality_height",
+                                "finality_block_hash",
+                            ),
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_positive_int_errors(
+                            route_canary,
+                            canary_label,
+                            ("receipt_block_number",),
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_u32_errors(
+                            route_canary,
+                            canary_label,
+                            ("log_index",),
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_lane_domain_errors(
+                            route_canary,
+                            canary_label,
+                            "target_domain",
+                            domain,
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_int_constant_errors(
+                            route_canary,
+                            canary_label,
+                            "proof_version",
+                            1,
+                            "1",
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_int_constant_errors(
+                            route_canary,
+                            canary_label,
+                            "proof_source_domain",
+                            SCCP_DOMAIN_SORA,
+                            "SORA domain",
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_true_errors(
+                            route_canary,
+                            canary_label,
+                            ("message_proof_used", "receipt_block_finalized"),
+                        )
+                    )
+                elif domain == SCCP_DOMAIN_TRON:
+                    errors.extend(
+                        _public_lane_required_bytes32_errors(
+                            route_canary,
+                            canary_label,
+                            (
+                                "transaction_id",
+                                "message_id",
+                                "call_data_sha256",
+                                "payload_hash",
+                                "statement_hash",
+                                "commitment_root",
+                                "finality_height",
+                                "finality_block_hash",
+                                "signature_sha256",
+                            ),
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_tron_address_errors(
+                            route_canary,
+                            canary_label,
+                            (
+                                "transaction_owner_address",
+                                "signature_recovered_address",
+                            ),
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_tron_address_match_errors(
+                            route_canary,
+                            canary_label,
+                            "transaction_owner_address",
+                            "signature_recovered_address",
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_positive_int_errors(
+                            route_canary,
+                            canary_label,
+                            ("block_number",),
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_nonnegative_int_errors(
+                            route_canary,
+                            canary_label,
+                            ("block_timestamp",),
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_u32_errors(
+                            route_canary,
+                            canary_label,
+                            ("log_index",),
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_lane_domain_errors(
+                            route_canary,
+                            canary_label,
+                            "target_domain",
+                            SCCP_DOMAIN_TRON,
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_int_constant_errors(
+                            route_canary,
+                            canary_label,
+                            "proof_version",
+                            1,
+                            "1",
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_int_constant_errors(
+                            route_canary,
+                            canary_label,
+                            "proof_source_domain",
+                            SCCP_DOMAIN_SORA,
+                            "SORA domain",
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_true_errors(
+                            route_canary,
+                            canary_label,
+                            (
+                                "message_proof_used",
+                                "raw_data_owner_matches_transaction",
+                                "signature_recovers_to_owner",
+                            ),
+                        )
+                    )
+                elif domain == SCCP_DOMAIN_TON:
+                    errors.extend(
+                        _public_lane_required_bytes32_errors(
+                            route_canary,
+                            canary_label,
+                            (
+                                "ton_account_state_hash",
+                                "ton_last_transaction_hash",
+                            ),
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_positive_decimal_string_errors(
+                            route_canary,
+                            canary_label,
+                            ("ton_last_transaction_lt",),
+                        )
+                    )
+                elif domain == SCCP_DOMAIN_SOL:
+                    errors.extend(
+                        _public_lane_required_canonical_string_errors(
+                            route_canary,
+                            canary_label,
+                            ("solana_programdata_address",),
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_positive_decimal_string_errors(
+                            route_canary,
+                            canary_label,
+                            ("solana_programdata_slot",),
+                        )
+                    )
 
         canonical_blockers, blocker_errors = _canonical_blocker_list(
             lane.get("blockers", []),
             lane_label,
         )
         errors.extend(blocker_errors)
-        if require_ready and canonical_blockers:
+        if lane_require_ready and canonical_blockers:
             errors.append(f"{lane_label} blockers must be empty")
 
         errors.extend(_public_nested_lane_value_errors(lane, lane_label))
@@ -7652,20 +9745,27 @@ def _public_summary_payload(summary: Any) -> dict[str, Any]:
         blockers.append(
             f"all-lanes summary {_unexpected_record_field_detail(field)}"
         )
+    for field in ALL_LANES_PUBLIC_SUMMARY_FIELDS:
+        if field not in summary and field != "blockers":
+            blockers.append(f"all-lanes summary {field} missing")
 
+    summary_has_public_blockers = False
     if "blockers" not in summary:
         blockers.append("all-lanes summary blockers missing")
+        summary_has_public_blockers = True
     else:
         canonical_blockers, blocker_errors = _canonical_blocker_list(
             summary.get("blockers"),
             "all-lanes summary",
         )
+        summary_has_public_blockers = bool(canonical_blockers or blocker_errors)
         blockers.extend(canonical_blockers)
         blockers.extend(blocker_errors)
 
     production_ready = summary.get("production_ready")
     if type(production_ready) is not bool:
         blockers.append("all-lanes summary production_ready must be boolean")
+    enforce_ready_shape = production_ready is True and not summary_has_public_blockers
 
     root_errors: dict[str, str] = {}
     domain_list_errors, invalid_domain_fields = _public_domain_list_errors(summary)
@@ -7675,7 +9775,7 @@ def _public_summary_payload(summary: Any) -> dict[str, Any]:
     if "lanes" in summary:
         lane_errors = _public_lanes_errors(
             lanes,
-            require_ready=production_ready is True,
+            require_ready=enforce_ready_shape,
         )
         if lane_errors:
             if lane_errors == ["all-lanes summary lanes must be a list of objects"]:
@@ -7683,8 +9783,6 @@ def _public_summary_payload(summary: Any) -> dict[str, Any]:
             else:
                 blockers.extend(lane_errors)
                 root_errors["lanes"] = "all-lanes summary lanes are invalid"
-    elif production_ready is True:
-        blockers.append("all-lanes summary lanes missing")
     release_checklist = summary.get("release_checklist")
     if "release_checklist" in summary and not isinstance(release_checklist, dict):
         root_errors["release_checklist"] = (
@@ -7692,23 +9790,14 @@ def _public_summary_payload(summary: Any) -> dict[str, Any]:
         )
     elif "release_checklist" in summary:
         release_checklist_errors = _public_release_checklist_errors(
-            release_checklist
+            release_checklist,
+            require_ready=enforce_ready_shape,
         )
         if release_checklist_errors:
             blockers.extend(release_checklist_errors)
             root_errors["release_checklist"] = (
                 "all-lanes summary release_checklist is invalid"
             )
-    elif production_ready is True:
-        blockers.append("all-lanes summary release_checklist missing")
-    if production_ready is True:
-        for field in (
-            "required_domains",
-            "supported_launch_domains",
-            "unsupported_launch_domains",
-        ):
-            if field not in summary:
-                blockers.append(f"all-lanes summary {field} missing")
     blockers.extend(root_errors.values())
 
     public_summary = {

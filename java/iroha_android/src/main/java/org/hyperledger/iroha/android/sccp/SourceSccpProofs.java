@@ -4695,6 +4695,11 @@ public final class SourceSccpProofs {
       }
     }
     if (normalizedSourceDomain == DOMAIN_TRON
+        && Arrays.equals(normalizedSourceBridgeOwnerAddress, normalizedSourceBridgeEmitterAddress)) {
+      throw new IllegalArgumentException(
+          "sourceBridgeOwnerAddress must not match sourceBridgeEmitterAddress");
+    }
+    if (normalizedSourceDomain == DOMAIN_TRON
         && !Arrays.equals(
             normalizedSourceBridgeConfigHash,
             tronSourceBridgeConfigHash(

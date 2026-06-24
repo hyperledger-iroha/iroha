@@ -31,6 +31,35 @@ ALL_LANES_CHAIN_BY_DOMAIN = {
     4: "ton",
     5: "tron",
 }
+ALL_LANES_REQUIRED_DOMAINS = tuple(ALL_LANES_CHAIN_BY_DOMAIN)
+ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN = {
+    1: frozenset(("evm_source_gate_hash",)),
+    2: frozenset(("evm_source_gate_hash",)),
+    3: frozenset(
+        (
+            "solana_tower_replay_verifier_hash",
+            "solana_full_accountsdb_lattice_verifier_hash",
+            "solana_bank_fork_choice_verifier_hash",
+            "solana_full_light_client_gate_hash",
+        )
+    ),
+    4: frozenset(
+        (
+            "ton_masterchain_config_verifier_hash",
+            "ton_validator_set_transition_verifier_hash",
+            "ton_shard_accounts_dictionary_verifier_hash",
+            "ton_full_light_client_gate_hash",
+        )
+    ),
+    5: frozenset(("tron_dpos_source_gate_hash",)),
+}
+ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN = {
+    1: "evm_source_gate_hash",
+    2: "evm_source_gate_hash",
+    3: "solana_full_light_client_gate_hash",
+    4: "ton_full_light_client_gate_hash",
+    5: "tron_dpos_source_gate_hash",
+}
 READINESS_REPORT_PUBLIC_FIELDS = (
     "production_ready",
     "evidence",
@@ -47,6 +76,16 @@ READINESS_REPORT_PUBLIC_FIELDS = (
 RELEASE_CHECKLIST_PUBLIC_FIELDS = frozenset(("ready", "items"))
 RELEASE_CHECKLIST_ITEM_PUBLIC_FIELDS = frozenset(("id", "title", "ready", "blockers"))
 INPUT_ARTIFACT_PUBLIC_FIELDS = frozenset(("path", "bytes", "sha256"))
+CORRIDOR_PUBLIC_FIELDS = frozenset(
+    (
+        "production_ready",
+        "phases",
+        "evidence_artifacts",
+        "require_phase_evidence",
+        "blockers",
+    )
+)
+CORRIDOR_PUBLIC_PHASE_STATUSES = frozenset(("passed", "failed", "skipped", "missing"))
 SOURCE_INVENTORY_PUBLIC_FIELDS = frozenset(("validation_status", "validation_blockers"))
 USER_PROVER_SUBMISSION_SURFACE_PUBLIC_FIELDS = frozenset(
     (
@@ -87,6 +126,37 @@ CRYPTOGRAPHIC_EVIDENCE_PUBLIC_FIELDS = frozenset(
         "source_adapter_gate_required",
         "source_adapter_gate_hash",
         "source_adapter_gate_audit_hashes",
+    )
+)
+NATIVE_EVM_PROVER_BUNDLE_PUBLIC_FIELDS = frozenset(
+    (
+        "required",
+        "schema",
+        "artifact",
+        "bundle_id",
+        "lanes",
+        "proof_backend",
+        "proof_artifact",
+        "proof_artifact_hash",
+        "proving_key",
+        "proving_key_hash",
+        "verifier_key",
+        "verifier_key_hash",
+        "destination_binding_hash",
+        "audit_hashes",
+        "cross_sdk_fixture_parity_artifact",
+        "native_prover_self_test_artifact",
+        "sdk_artifacts",
+        "validation_status",
+        "validation_blockers",
+    )
+)
+NATIVE_EVM_PROVER_SDK_ARTIFACT_SUMMARY_PUBLIC_FIELDS = frozenset(
+    (
+        "sdk",
+        "implementation",
+        "implementation_hash",
+        "implementation_artifact",
     )
 )
 CRYPTOGRAPHIC_EVIDENCE_TEXT_FIELDS = frozenset(
@@ -184,30 +254,69 @@ USER_PROVER_CHAIN_PHASES = (*USER_PROVER_SDK_PHASES, "core-admission")
 EVM_NATIVE_DOTNET_PHASE = "dotnet-sdk"
 DOTNET_VERSION_SUCCESS_PREFIX = "SCCP .NET SDK version: 8."
 DOTNET_VERSION_SUCCESS_PATTERN = re.compile(
-    r"^SCCP \.NET SDK version:\s+8\.[0-9]+\.[0-9]+"
-    r"(?:-[A-Za-z0-9][A-Za-z0-9_.-]*)?$",
+    r"^SCCP \.NET SDK version:\s+8\.0\.[1-9][0-9]*$",
 )
 DOTNET_WINDOWS_OS_SUCCESS_LINE = "SCCP .NET SDK OS: Windows"
 DOTNET_RID_SUCCESS_PREFIX = "SCCP .NET SDK RID: win-"
 DOTNET_RID_SUCCESS_PATTERN = re.compile(
     r"^SCCP \.NET SDK RID:\s+win-(?:x64|x86|arm64|arm)$",
 )
+DOTNET_RID_ARCHITECTURES = {
+    "win-x64": "x64",
+    "win-x86": "x86",
+    "win-arm64": "arm64",
+    "win-arm": "arm",
+}
 DOTNET_ARCHITECTURE_SUCCESS_PREFIX = "SCCP .NET SDK Architecture:"
 DOTNET_ARCHITECTURE_SUCCESS_PATTERN = re.compile(
     rf"^{re.escape(DOTNET_ARCHITECTURE_SUCCESS_PREFIX)}\s+(?:x64|x86|arm64|arm)$",
 )
+DOTNET_BRIDGE_PATH_SUCCESS_PREFIX = "connect_norito_bridge native bridge:"
+DOTNET_BRIDGE_PATH_SUCCESS_PATTERN = re.compile(
+    rf"^{re.escape(DOTNET_BRIDGE_PATH_SUCCESS_PREFIX)}\s+(?P<path>.+)$",
+)
+DOTNET_BRIDGE_PATH_COMPONENT_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
+DOTNET_BRIDGE_PATH_DRIVE_PATTERN = re.compile(r"^[A-Za-z]:$")
+DOTNET_BRIDGE_SHA256_SUCCESS_PREFIX = "connect_norito_bridge native bridge sha256:"
+DOTNET_BRIDGE_SHA256_SUCCESS_PATTERN = re.compile(
+    rf"^{re.escape(DOTNET_BRIDGE_SHA256_SUCCESS_PREFIX)}\s+[0-9a-f]{{64}}$",
+)
 DOTNET_TEST_PASSED_SUCCESS_FRAGMENT = "Passed!"
+DOTNET_TEST_ASSEMBLY_SUCCESS_SUFFIX = (
+    "Hyperledger.Iroha.Sdk.Tests.dll (net8.0)"
+)
+DOTNET_TEST_DURATION_SUCCESS_PATTERN = (
+    r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\s*(?:ms|s|m|h)"
+    r"(?:\s+(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\s*(?:ms|s|m|h))*"
+)
 DOTNET_TEST_PASSED_SUCCESS_PATTERN = re.compile(
     r"^\s*Passed!\s+-\s+Failed:\s*0,\s+Passed:\s*(?P<passed>[1-9][0-9]*),"
-    r"\s+Skipped:\s*(?P<skipped>[0-9]+),"
-    r"\s+Total:\s*(?P<total>[1-9][0-9]*),\s+Duration:\s*.+$",
+    r"\s+Skipped:\s*(?P<skipped>0),"
+    rf"\s+Total:\s*(?P<total>[1-9][0-9]*),\s+Duration:\s*"
+    rf"(?P<duration>{DOTNET_TEST_DURATION_SUCCESS_PATTERN})\s+-\s+"
+    rf"{re.escape(DOTNET_TEST_ASSEMBLY_SUCCESS_SUFFIX)}$",
 )
 DOTNET_TRX_SUCCESS_PREFIX = "SCCP .NET SDK TRX:"
 DOTNET_TRX_SUCCESS_PATTERN = re.compile(
     r"^SCCP \.NET SDK TRX:\s+"
     r"csharp/tests/Hyperledger\.Iroha\.Sdk\.Tests/"
-    r"(?:[A-Za-z0-9_.-]+/)*TestResults/(?:[A-Za-z0-9_.-]+/)*"
+    r"(?:[A-Za-z0-9][A-Za-z0-9_.-]*/)*TestResults/"
+    r"(?:[A-Za-z0-9][A-Za-z0-9_.-]*/)*"
     r"sccp-dotnet-sdk\.trx$",
+)
+DOTNET_TRX_BYTES_SUCCESS_PREFIX = "SCCP .NET SDK TRX bytes:"
+DOTNET_TRX_BYTES_SUCCESS_PATTERN = re.compile(
+    r"^SCCP \.NET SDK TRX bytes:\s+[1-9][0-9]*$",
+)
+DOTNET_SUCCESS_OUTSIDE_WINDOW_ERROR_FRAGMENT = (
+    ".NET success marker appears outside its required command window"
+)
+PHASE_SUCCESS_OUTSIDE_WINDOW_ERROR_FRAGMENT = (
+    "success marker appears outside its required command window"
+)
+PHASE_DUPLICATE_COMMAND_ERROR_FRAGMENT = "command appears more than once"
+PHASE_DUPLICATE_SUCCESS_ERROR_FRAGMENT = (
+    "success marker appears more times than required command windows"
 )
 NATIVE_EVM_PROVER_BUNDLE_SCHEMA = "sccp-native-evm-groth16-prover-bundle-v1"
 NATIVE_EVM_PROVER_BUNDLE_ID = (
@@ -1913,15 +2022,20 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
     ),
     "java-android": (
         "java -version",
-        "ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests",
+        "ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests,"
+        "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests,"
+        "org.hyperledger.iroha.android.sccp.TonSccpProverTests,"
+        "org.hyperledger.iroha.android.sccp.TronSccpProverTests",
         "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests",
         "org.hyperledger.iroha.android.sccp.TonSccpProverTests",
+        "org.hyperledger.iroha.android.sccp.TronSccpProverTests",
         "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests",
         "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests",
     ),
     "dotnet-sdk": (
         "dotnet --version",
         "dotnet --info",
+        "cargo build -p connect_norito_bridge",
         "dotnet restore Hyperledger.Iroha.Sdk.sln",
         "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
         "FullyQualifiedName~Sccp",
@@ -1969,8 +2083,11 @@ PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS: dict[str, tuple[str, ...]] = {
         DOTNET_WINDOWS_OS_SUCCESS_LINE,
         DOTNET_RID_SUCCESS_PREFIX,
         DOTNET_ARCHITECTURE_SUCCESS_PREFIX,
+        DOTNET_BRIDGE_PATH_SUCCESS_PREFIX,
+        DOTNET_BRIDGE_SHA256_SUCCESS_PREFIX,
         DOTNET_TEST_PASSED_SUCCESS_FRAGMENT,
         DOTNET_TRX_SUCCESS_PREFIX,
+        DOTNET_TRX_BYTES_SUCCESS_PREFIX,
     ),
     "contract-smoke": (
         *CONTRACT_SMOKE_NODE_SUCCESS_FRAGMENTS,
@@ -1982,27 +2099,112 @@ PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS: dict[str, tuple[re.Pattern[str], ...
     "rust-sccp": (
         re.compile(r"\btest result:\s+FAILED\b", re.IGNORECASE),
         re.compile(r"\b[1-9]\d*\s+failed\b", re.IGNORECASE),
+        re.compile(r"\btest\s+\S+\s+\.\.\.\s+FAILED\b", re.IGNORECASE),
+        re.compile(r"\bfailures:", re.IGNORECASE),
+        re.compile(r"\bthread '[^']+' panicked\b", re.IGNORECASE),
+        re.compile(r"\bpanicked at\b", re.IGNORECASE),
+        re.compile(r"\berror(?:\[[A-Z0-9]+\])?:", re.IGNORECASE),
+        re.compile(r"\bcould not compile\b", re.IGNORECASE),
+        re.compile(r"\baborting due to\b", re.IGNORECASE),
     ),
     "evidence-scripts": (
         re.compile(r"\b[1-9]\d*\s+failed\b", re.IGNORECASE),
         re.compile(r"\b[1-9]\d*\s+errors?\b", re.IGNORECASE),
+        re.compile(r"\bTraceback \(most recent call last\):"),
+        re.compile(r"\bERROR collecting\b", re.IGNORECASE),
+        re.compile(r"\bFAILED\s+\S+"),
+        re.compile(
+            r"\b(?:AssertionError|ImportError|ModuleNotFoundError|RuntimeError|ValueError)\b"
+        ),
+        re.compile(r"\bInterrupted:\s+[1-9]\d*\s+errors?\b", re.IGNORECASE),
+        re.compile(r"\bINTERNALERROR>", re.IGNORECASE),
     ),
-    "js-sdk": (re.compile(r"\bfail\s+[1-9]\d*\b", re.IGNORECASE),),
+    "js-sdk": (
+        re.compile(r"\bfail\s+[1-9]\d*\b", re.IGNORECASE),
+        re.compile(r"\bnot\s+ok\b", re.IGNORECASE),
+        re.compile(r"\bERR_[A-Z0-9_]+\b"),
+        re.compile(
+            r"\b(?:AssertionError|TypeError|ReferenceError|SyntaxError|RangeError)\b"
+        ),
+        re.compile(r"\b(?:uncaughtException|unhandledRejection)\b", re.IGNORECASE),
+        re.compile(r"\b[1-9]\d*\s+errors?\b", re.IGNORECASE),
+    ),
     "python-sdk": (
         re.compile(r"\b[1-9]\d*\s+failed\b", re.IGNORECASE),
         re.compile(r"\b[1-9]\d*\s+errors?\b", re.IGNORECASE),
+        re.compile(r"\bTraceback \(most recent call last\):"),
+        re.compile(r"\bERROR collecting\b", re.IGNORECASE),
+        re.compile(r"\bFAILED\s+\S+"),
+        re.compile(
+            r"\b(?:AssertionError|ImportError|ModuleNotFoundError|RuntimeError|ValueError)\b"
+        ),
+        re.compile(r"\bInterrupted:\s+[1-9]\d*\s+errors?\b", re.IGNORECASE),
     ),
-    "swift-sdk": (re.compile(r"\b[1-9]\d*\s+failures?\b", re.IGNORECASE),),
-    "kotlin-sdk": (re.compile(r"\bBUILD FAILED\b", re.IGNORECASE),),
-    "java-android": (re.compile(r"\bBUILD FAILED\b", re.IGNORECASE),),
+    "swift-sdk": (
+        re.compile(r"\b[1-9]\d*\s+failures?\b", re.IGNORECASE),
+        re.compile(r"\berror:", re.IGNORECASE),
+        re.compile(r"\bTest Case\b.*\bfailed\b", re.IGNORECASE),
+        re.compile(r"\b[1-9]\d*\s+tests?\s+failed\b", re.IGNORECASE),
+        re.compile(r"\bfatal error\b", re.IGNORECASE),
+        re.compile(r"\bfailed\s+to\s+(?:build|compile|emit|run)\b", re.IGNORECASE),
+    ),
+    "kotlin-sdk": (
+        re.compile(r"\bBUILD FAILED\b", re.IGNORECASE),
+        re.compile(r"\bFAILURE:\s+Build failed\b", re.IGNORECASE),
+        re.compile(r"\bExecution failed for task\b", re.IGNORECASE),
+        re.compile(r"\bTask\s+:[^\n]*\s+FAILED\b", re.IGNORECASE),
+        re.compile(r"\bThere were failing tests\b", re.IGNORECASE),
+        re.compile(r"\b[1-9]\d*\s+tests?\s+failed\b", re.IGNORECASE),
+        re.compile(r"\bCompilation failed\b", re.IGNORECASE),
+        re.compile(r"\bCould not (?:compile|resolve|create|determine)\b", re.IGNORECASE),
+    ),
+    "java-android": (
+        re.compile(r"\bBUILD FAILED\b", re.IGNORECASE),
+        re.compile(r"\bFAILURE:\s+Build failed\b", re.IGNORECASE),
+        re.compile(r"\bExecution failed for task\b", re.IGNORECASE),
+        re.compile(r"\bTask\s+:[^\n]*\s+FAILED\b", re.IGNORECASE),
+        re.compile(r"\bThere were failing tests\b", re.IGNORECASE),
+        re.compile(r"\b[1-9]\d*\s+tests?\s+failed\b", re.IGNORECASE),
+        re.compile(r"\bCompilation failed\b", re.IGNORECASE),
+        re.compile(r"\bCould not (?:compile|resolve|create|determine)\b", re.IGNORECASE),
+    ),
     "dotnet-sdk": (
         re.compile(r"\bFailed!\b", re.IGNORECASE),
         re.compile(r"\bFailed:\s*[1-9]\d*\b", re.IGNORECASE),
+        re.compile(
+            r"\berror\s+(?:CS|MSB|NETSDK|NU|CA|IL|BC)\d+\b", re.IGNORECASE
+        ),
+        re.compile(r"\b[1-9]\d*\s+errors?\b", re.IGNORECASE),
+        re.compile(r"\berrors?:\s*[1-9]\d*\b", re.IGNORECASE),
+        re.compile(r"\bfailed\s+to\s+(?:restore|build|load|run)\b", re.IGNORECASE),
+        re.compile(r"\b(?:restore|build)\s+failed\b", re.IGNORECASE),
+        re.compile(r"\bthe\s+build\s+failed\b", re.IGNORECASE),
     ),
-    "contract-smoke": (re.compile(r"\bfail\s+[1-9]\d*\b", re.IGNORECASE),),
+    "contract-smoke": (
+        re.compile(r"\bfail\s+[1-9]\d*\b", re.IGNORECASE),
+        re.compile(r"\bnot\s+ok\b", re.IGNORECASE),
+        re.compile(r"\bERR_[A-Z0-9_]+\b"),
+        re.compile(
+            r"\b(?:AssertionError|TypeError|ReferenceError|SyntaxError|RangeError)\b"
+        ),
+        re.compile(r"\b(?:uncaughtException|unhandledRejection)\b", re.IGNORECASE),
+        re.compile(r"\b[1-9]\d*\s+errors?\b", re.IGNORECASE),
+        re.compile(r"\b(?:ParserError|DeclarationError|CompilerError):"),
+        re.compile(r"\bError:"),
+        re.compile(r"\bnpm ERR!", re.IGNORECASE),
+        re.compile(r"\bcommand not found\b", re.IGNORECASE),
+        re.compile(r"\bNo such file or directory\b", re.IGNORECASE),
+    ),
     "core-admission": (
         re.compile(r"\btest result:\s+FAILED\b", re.IGNORECASE),
         re.compile(r"\b[1-9]\d*\s+failed\b", re.IGNORECASE),
+        re.compile(r"\btest\s+\S+\s+\.\.\.\s+FAILED\b", re.IGNORECASE),
+        re.compile(r"\bfailures:", re.IGNORECASE),
+        re.compile(r"\bthread '[^']+' panicked\b", re.IGNORECASE),
+        re.compile(r"\bpanicked at\b", re.IGNORECASE),
+        re.compile(r"\berror(?:\[[A-Z0-9]+\])?:", re.IGNORECASE),
+        re.compile(r"\bcould not compile\b", re.IGNORECASE),
+        re.compile(r"\baborting due to\b", re.IGNORECASE),
     ),
 }
 PYTEST_OPTIONS_WITH_VALUES = frozenset(
@@ -2835,7 +3037,7 @@ def _is_nonzero_hex32(value: Any) -> bool:
         return False
     try:
         raw = bytes.fromhex(value[2:])
-    except (TypeError, ValueError):
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         return False
     return len(raw) == 32 and any(raw) and value == f"0x{raw.hex()}"
 
@@ -2883,7 +3085,7 @@ def _is_hex32(value: Any) -> bool:
         return False
     try:
         raw = bytes.fromhex(value[2:])
-    except (TypeError, ValueError):
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         return False
     return len(raw) == 32 and value == f"0x{raw.hex()}"
 
@@ -3209,15 +3411,36 @@ def _native_evm_prover_field_name_blocker(
 
 SENSITIVE_PUBLIC_FIELD_NAME_MARKERS = (
     "secret-token",
+    "secret key",
+    "secret-key",
+    "secret_key",
+    "private key",
     "private-key",
     "private_key",
     "password",
     "bearer",
     "authorization",
+    "access key",
+    "access-key",
+    "access_key",
+    "api key",
     "api-key",
     "api_key",
+    "client secret",
     "client-secret",
     "client_secret",
+    "credential",
+    "credentials",
+    "auth header",
+    "auth-header",
+    "auth_header",
+    "mnemonic",
+    "seed phrase",
+    "seed-phrase",
+    "seed_phrase",
+    "signing key",
+    "signing-key",
+    "signing_key",
     "token",
 )
 
@@ -4094,11 +4317,18 @@ def _transcript_has_full_corridor_completion(transcript: str) -> bool:
 
 
 def _phase_command_lines(phase_block: str) -> list[str]:
-    return [
-        line.strip()
-        for line in phase_block.splitlines()
-        if line.lstrip().startswith("+ ")
-    ]
+    command_lines: list[str] = []
+    for line in phase_block.splitlines():
+        if line.lstrip().startswith("+ "):
+            command_lines.append(line.strip())
+            continue
+        normalized_line = _phase_output_failure_scan_line(line)
+        if (
+            normalized_line != line
+            and normalized_line.lstrip().startswith("+ ")
+        ):
+            command_lines.append(normalized_line.strip())
+    return command_lines
 
 
 def _line_is_shell_xtrace_command(line: str) -> bool:
@@ -4116,13 +4346,129 @@ def _phase_command_tokens(command: str) -> list[str]:
     if command.startswith("+ "):
         command = command[2:]
     try:
-        return [
-            normalized
-            for token in shlex.split(command, comments=True)
-            if (normalized := token.strip("()"))
-        ]
+        raw_tokens = shlex.split(command, comments=True)
     except ValueError:
         return []
+    wrapped_command = _phase_command_has_runner_cd_wrapper(raw_tokens)
+    tokens: list[str] = []
+    for index, token in enumerate(raw_tokens):
+        normalized = token
+        if wrapped_command and index == 0 and normalized.startswith("("):
+            normalized = normalized[1:]
+        if wrapped_command and index == len(raw_tokens) - 1 and normalized.endswith(")"):
+            normalized = normalized[:-1]
+        if normalized:
+            tokens.append(normalized)
+    return tokens
+
+
+def _phase_command_has_runner_cd_wrapper(raw_tokens: list[str]) -> bool:
+    return (
+        len(raw_tokens) >= 4
+        and raw_tokens[0] == "(cd"
+        and bool(raw_tokens[1])
+        and raw_tokens[2] == "&&"
+        and raw_tokens[-1].endswith(")")
+    )
+
+
+def _phase_command_runner_cd_dir(command: str) -> str | None:
+    command = command.strip()
+    if command.startswith("+ "):
+        command = command[2:]
+    try:
+        raw_tokens = shlex.split(command, comments=True)
+    except ValueError:
+        return None
+    if not _phase_command_has_runner_cd_wrapper(raw_tokens):
+        return None
+    return raw_tokens[1]
+
+
+def _path_basename_text(path: str) -> str:
+    return PurePosixPath(path.replace("\\", "/").rstrip("/")).name
+
+
+def _phase_command_expected_wrapper_basenames(
+    phase: str,
+    command: str,
+) -> tuple[str, ...]:
+    tokens = _phase_effective_command_tokens(command)
+    if not tokens:
+        return ()
+    command_name = _command_token_basename(tokens[0])
+    if phase == "swift-sdk" and command_name == "swift":
+        return ("IrohaSwift",)
+    if phase == "kotlin-sdk" and command_name == "gradlew":
+        return ("kotlin",)
+    if phase == "java-android" and command_name == "gradlew":
+        return ("iroha_android",)
+    if phase == EVM_NATIVE_DOTNET_PHASE and command_name == "dotnet":
+        return ("csharp",)
+    return ()
+
+
+def _phase_command_has_unexpected_runner_cd_wrapper(
+    phase: str,
+    command: str,
+) -> bool:
+    cd_dir = _phase_command_runner_cd_dir(command)
+    if cd_dir is None:
+        return False
+    expected_basenames = _phase_command_expected_wrapper_basenames(phase, command)
+    if not expected_basenames:
+        return False
+    return _path_basename_text(cd_dir) not in expected_basenames
+
+
+def _phase_block_has_unexpected_runner_cd_wrapper(
+    phase: str,
+    phase_block: str,
+) -> bool:
+    return any(
+        _phase_command_has_unexpected_runner_cd_wrapper(phase, command)
+        for command in _phase_command_lines(phase_block)
+    )
+
+
+def _phase_command_has_unsupported_parenthesized_group(command: str) -> bool:
+    command = command.strip()
+    if command.startswith("+ "):
+        command = command[2:]
+    try:
+        raw_tokens = shlex.split(command, comments=True)
+    except ValueError:
+        return False
+    return bool(
+        raw_tokens
+        and raw_tokens[0].startswith("(")
+        and not _phase_command_has_runner_cd_wrapper(raw_tokens)
+    )
+
+
+def _phase_block_has_unsupported_parenthesized_group(phase_block: str) -> bool:
+    return any(
+        _phase_command_has_unsupported_parenthesized_group(command)
+        for command in _phase_command_lines(phase_block)
+    )
+
+
+def _phase_command_is_parseable(command: str) -> bool:
+    command = command.strip()
+    if command.startswith("+ "):
+        command = command[2:]
+    try:
+        shlex.split(command, comments=True)
+    except ValueError:
+        return False
+    return True
+
+
+def _phase_block_has_unparseable_command(phase_block: str) -> bool:
+    return any(
+        not _phase_command_is_parseable(command)
+        for command in _phase_command_lines(phase_block)
+    )
 
 
 def _command_token_basename(token: str) -> str:
@@ -4210,6 +4556,112 @@ def _android_harness_mains_classes(command: str) -> list[str]:
     if harness_value is None:
         return []
     return [item for item in harness_value.split(",") if item]
+
+
+DOTNET_PHASE_ALLOWED_ENV_ASSIGNMENTS = frozenset(
+    (
+        "DOTNET_ROOT",
+        "DOTNET_CLI_TELEMETRY_OPTOUT",
+        "DOTNET_CLI_UI_LANGUAGE",
+        "PATH",
+    )
+)
+DOTNET_PHASE_REQUIRED_ENV_ASSIGNMENTS = frozenset(
+    (
+        "DOTNET_ROOT",
+        "DOTNET_CLI_TELEMETRY_OPTOUT",
+        "DOTNET_CLI_UI_LANGUAGE",
+    )
+)
+DOTNET_PHASE_FIXED_ENV_VALUES = {
+    "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+    "DOTNET_CLI_UI_LANGUAGE": "en",
+}
+
+
+def _dotnet_phase_command_dir(command_token: str) -> str | None:
+    command_path = _dotnet_normalized_path_text(command_token)
+    parent, separator, leaf = command_path.rpartition("/")
+    if not separator or not leaf:
+        return None
+    return parent or "/"
+
+
+def _dotnet_phase_command_uses_bridge_path(tokens: list[str]) -> bool:
+    return (
+        len(tokens) >= 2
+        and _command_token_basename(tokens[0]) == "dotnet"
+        and tokens[1] in ("restore", "test")
+    )
+
+
+def _dotnet_phase_path_value_matches_bridge_dir(
+    value: str,
+    bridge_library_dir: str | None,
+) -> bool:
+    if bridge_library_dir is None:
+        return False
+    expected = _dotnet_normalized_path_text(bridge_library_dir)
+    actual = _dotnet_normalized_path_text(value)
+    return bool(
+        expected
+        and (
+            actual == expected
+            or actual.startswith(f"{expected}:")
+            or actual.startswith(f"{expected};")
+        )
+    )
+
+
+def _dotnet_phase_command_has_noncanonical_env_prefix(
+    command: str,
+    bridge_library_dir: str | None = None,
+) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if not tokens or _command_token_basename(tokens[0]) != "dotnet":
+        return False
+    assignments = _phase_prefix_env_assignments(command)
+    if not assignments:
+        return False
+    seen: dict[str, str] = {}
+    for assignment in assignments:
+        name, separator, value = assignment.partition("=")
+        if (
+            not separator
+            or name not in DOTNET_PHASE_ALLOWED_ENV_ASSIGNMENTS
+            or name in seen
+            or not value
+        ):
+            return True
+        expected_value = DOTNET_PHASE_FIXED_ENV_VALUES.get(name)
+        if expected_value is not None and value != expected_value:
+            return True
+        seen[name] = value
+    if not DOTNET_PHASE_REQUIRED_ENV_ASSIGNMENTS <= set(seen):
+        return True
+    command_dir = _dotnet_phase_command_dir(tokens[0])
+    if command_dir is None:
+        return True
+    return (
+        _dotnet_normalized_path_text(seen["DOTNET_ROOT"]) != command_dir
+    ) or (
+        "PATH" in seen
+        and (
+            not _dotnet_phase_command_uses_bridge_path(tokens)
+            or not _dotnet_phase_path_value_matches_bridge_dir(
+                seen["PATH"],
+                bridge_library_dir,
+            )
+        )
+    )
+
+
+def _dotnet_phase_block_has_noncanonical_env_prefix(phase_block: str) -> bool:
+    bridge_library_dir = _dotnet_phase_bridge_library_dir(phase_block)
+    return any(
+        _dotnet_phase_command_has_noncanonical_env_prefix(command, bridge_library_dir)
+        for command in _phase_command_lines(phase_block)
+    )
 
 
 def _phase_effective_command_tokens(command: str) -> list[str]:
@@ -4347,6 +4799,136 @@ def _dotnet_sdk_command_matches(tokens: list[str]) -> bool:
     )
 
 
+def _dotnet_setup_command_matches(tokens: list[str]) -> bool:
+    if not tokens or _command_token_basename(tokens[0]) != "dotnet":
+        return False
+    return (
+        (len(tokens) == 2 and tokens[1] in ("--version", "--info"))
+        or (
+            len(tokens) == 3
+            and tokens[1] == "restore"
+            and tokens[2] == "Hyperledger.Iroha.Sdk.sln"
+        )
+    )
+
+
+def _dotnet_phase_block_forbidden_test_command(phase_block: str) -> bool:
+    """Return whether the .NET phase ran a non-canonical test command."""
+
+    for command in _phase_command_lines(phase_block):
+        tokens = _phase_effective_command_tokens(command)
+        if (
+            len(tokens) >= 2
+            and _command_token_basename(tokens[0]) == "dotnet"
+            and tokens[1] == "test"
+            and not _dotnet_sdk_command_matches(tokens)
+        ):
+            return True
+    return False
+
+
+def _dotnet_phase_block_forbidden_setup_command(phase_block: str) -> bool:
+    """Return whether the .NET phase ran a non-canonical setup command."""
+
+    for command in _phase_command_lines(phase_block):
+        tokens = _phase_effective_command_tokens(command)
+        if not tokens or _command_token_basename(tokens[0]) != "dotnet":
+            continue
+        if len(tokens) >= 2 and tokens[1] == "test":
+            continue
+        if not _dotnet_setup_command_matches(tokens):
+            return True
+    return False
+
+
+def _dotnet_bridge_build_target_dir(command: str) -> str | None:
+    tokens = _phase_effective_command_tokens(command)
+    if not (
+        len(tokens) == 4
+        and _command_token_basename(tokens[0]) == "cargo"
+        and tokens[1] == "build"
+        and tokens[2] == "-p"
+        and tokens[3] == "connect_norito_bridge"
+    ):
+        return None
+    target_dirs = [
+        value
+        for assignment in _phase_prefix_env_assignments(command)
+        for name, separator, value in (assignment.partition("="),)
+        if separator and name == "CARGO_TARGET_DIR" and value
+    ]
+    if len(target_dirs) != 1:
+        return None
+    return target_dirs[0]
+
+
+def _dotnet_bridge_build_has_noncanonical_env_prefix(command: str) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if not (
+        len(tokens) == 4
+        and _command_token_basename(tokens[0]) == "cargo"
+        and tokens[1:] == ["build", "-p", "connect_norito_bridge"]
+    ):
+        return False
+    assignments = _phase_prefix_env_assignments(command)
+    if not assignments:
+        return False
+    return len(assignments) != 1 or not assignments[0].startswith("CARGO_TARGET_DIR=")
+
+
+def _dotnet_phase_block_has_noncanonical_bridge_build_env_prefix(
+    phase_block: str,
+) -> bool:
+    return any(
+        _dotnet_bridge_build_has_noncanonical_env_prefix(command)
+        for command in _phase_command_lines(phase_block)
+    )
+
+
+def _dotnet_bridge_build_command_matches(command: str) -> bool:
+    return _dotnet_bridge_build_target_dir(command) is not None
+
+
+def _dotnet_normalized_path_text(path: str) -> str:
+    return path.replace("\\", "/").rstrip("/")
+
+
+def _dotnet_phase_bridge_library_dir(phase_block: str) -> str | None:
+    bridge_dirs = []
+    for line in phase_block.splitlines():
+        match = DOTNET_BRIDGE_PATH_SUCCESS_PATTERN.fullmatch(line)
+        if match is None or not _dotnet_bridge_path_success_line_matches(line):
+            continue
+        bridge_path = _dotnet_normalized_path_text(match.group("path"))
+        suffix = "/connect_norito_bridge.dll"
+        if bridge_path.endswith(suffix):
+            bridge_dirs.append(bridge_path[: -len(suffix)])
+    if len(bridge_dirs) != 1 or not bridge_dirs[0]:
+        return None
+    return bridge_dirs[0]
+
+
+def _dotnet_phase_block_bridge_path_matches_target_dir(phase_block: str) -> bool:
+    target_dirs = [
+        target_dir
+        for command in _phase_command_lines(phase_block)
+        if (target_dir := _dotnet_bridge_build_target_dir(command)) is not None
+    ]
+    bridge_paths = [
+        match.group("path")
+        for line in phase_block.splitlines()
+        if (match := DOTNET_BRIDGE_PATH_SUCCESS_PATTERN.fullmatch(line)) is not None
+        and _dotnet_bridge_path_success_line_matches(line)
+    ]
+    if len(target_dirs) != 1 or len(bridge_paths) != 1:
+        return False
+    target_dir = _dotnet_normalized_path_text(target_dirs[0])
+    bridge_path = _dotnet_normalized_path_text(bridge_paths[0])
+    if not target_dir:
+        return False
+    return bridge_path == f"{target_dir}/debug/connect_norito_bridge.dll"
+
+
 def _gradle_test_selector_matches(expected: str, actual: str) -> bool:
     if expected.endswith("."):
         return actual in (expected, f"{expected}*")
@@ -4370,6 +4952,49 @@ def _gradle_test_command_selectors(tokens: list[str], task: str) -> list[str]:
         selectors.append(tokens[index + 1])
         index += 2
     return selectors
+
+
+def _gradle_test_selectors_match_expected(
+    expected_selectors: tuple[str, ...],
+    actual_selectors: list[str],
+) -> bool:
+    return len(actual_selectors) == len(expected_selectors) and all(
+        _gradle_test_selector_matches(expected, actual)
+        for expected, actual in zip(expected_selectors, actual_selectors)
+    )
+
+
+def _kotlin_sdk_expected_test_selectors() -> tuple[str, ...]:
+    selectors: list[str] = []
+    for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["kotlin-sdk"]:
+        if fragment.startswith("./gradlew "):
+            selectors.extend(_command_option_values(shlex.split(fragment), "--tests"))
+        elif fragment.startswith("org.hyperledger.iroha.sdk.sccp."):
+            selectors.append(fragment)
+    return tuple(selectors)
+
+
+def _java_android_expected_harness_classes() -> tuple[str, ...]:
+    assignment = next(
+        (
+            fragment
+            for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["java-android"]
+            if fragment.startswith("ANDROID_HARNESS_MAINS=")
+        ),
+        "",
+    )
+    return tuple(item for item in assignment.partition("=")[2].split(",") if item)
+
+
+def _java_android_harness_command_matches(
+    command: str,
+    test_selectors: list[str],
+) -> bool:
+    return (
+        tuple(_android_harness_mains_classes(command))
+        == _java_android_expected_harness_classes()
+        and tuple(test_selectors) == ("org.hyperledger.iroha.android.GradleHarnessTests",)
+    )
 
 
 def _evidence_pytest_command_has_fragment(
@@ -4441,6 +5066,11 @@ def _kotlin_sdk_command_has_fragment(command: str, fragment: str) -> bool:
     test_selectors = _gradle_test_command_selectors(tokens, ":core-jvm:test")
     if not test_selectors:
         return False
+    if not _gradle_test_selectors_match_expected(
+        _kotlin_sdk_expected_test_selectors(),
+        test_selectors,
+    ):
+        return False
     if fragment.startswith("./gradlew "):
         fragment_tokens = shlex.split(fragment)
         expected_tests = _command_option_values(fragment_tokens, "--tests")
@@ -4468,29 +5098,24 @@ def _java_android_command_has_fragment(command: str, fragment: str) -> bool:
         return False
     actual_harness_classes = _android_harness_mains_classes(command)
     if fragment.startswith("ANDROID_HARNESS_MAINS="):
-        expected_harness_classes = [
-            item for item in fragment.partition("=")[2].split(",") if item
-        ]
-        return bool(expected_harness_classes) and all(
-            item in actual_harness_classes for item in expected_harness_classes
-        ) and "org.hyperledger.iroha.android.GradleHarnessTests" in test_selectors
+        return _java_android_harness_command_matches(command, test_selectors)
     if (
         fragment.startswith("org.hyperledger.iroha.android.sccp.")
         and fragment.endswith("Tests")
     ):
         return (
-            fragment in actual_harness_classes
-            and "org.hyperledger.iroha.android.GradleHarnessTests" in test_selectors
+            fragment in _java_android_expected_harness_classes()
+            and _java_android_harness_command_matches(command, test_selectors)
         )
     fragment_tokens = shlex.split(fragment)
     expected_tests = _command_option_values(fragment_tokens, "--tests")
     if expected_tests:
+        if expected_tests == ["org.hyperledger.iroha.android.GradleHarnessTests"]:
+            return _java_android_harness_command_matches(command, test_selectors)
         return (
             all(part in tokens for part in fragment_tokens if part not in expected_tests)
-            and all(
-                expected in test_selectors
-                for expected in expected_tests
-            )
+            and tuple(test_selectors) == tuple(expected_tests)
+            and not actual_harness_classes
         )
     return all(part in tokens for part in shlex.split(fragment))
 
@@ -4568,7 +5193,9 @@ def _phase_command_matches_required_fragment(
     command: str,
     fragment: str,
 ) -> bool:
-    if fragment not in command:
+    if fragment not in command and not (
+        phase == "java-android" and fragment.startswith("ANDROID_HARNESS_MAINS=")
+    ):
         return False
     if phase == "evidence-scripts":
         return _evidence_pytest_command_has_fragment(phase, command, fragment)
@@ -4585,6 +5212,8 @@ def _phase_command_matches_required_fragment(
     if phase == "java-android":
         return _java_android_command_has_fragment(command, fragment)
     if phase == "dotnet-sdk":
+        if fragment == "cargo build -p connect_norito_bridge":
+            return _dotnet_bridge_build_command_matches(command)
         return _dotnet_sdk_command_has_fragment(command, fragment)
     if phase == "contract-smoke":
         return _contract_smoke_command_has_fragment(command, fragment)
@@ -4599,6 +5228,87 @@ def _phase_block_has_command_fragment(
     fragment: str,
 ) -> bool:
     return bool(_phase_block_command_fragment_line_indices(phase, phase_block, fragment))
+
+
+def _phase_block_has_ordered_command_fragments(
+    phase: str,
+    phase_block: str,
+    fragments: tuple[str, ...],
+) -> bool:
+    previous_position = -1
+    for fragment in fragments:
+        later_positions = [
+            position
+            for position in _phase_block_command_fragment_line_indices(
+                phase,
+                phase_block,
+                fragment,
+            )
+            if position > previous_position
+        ]
+        if not later_positions:
+            return False
+        previous_position = min(later_positions)
+    return True
+
+
+def _phase_block_duplicate_command_fragment(
+    phase: str,
+    phase_block: str,
+    fragments: tuple[str, ...],
+) -> str | None:
+    for fragment in fragments:
+        positions = _phase_block_command_fragment_line_indices(
+            phase,
+            phase_block,
+            fragment,
+        )
+        if len(positions) > 1:
+            return fragment
+    return None
+
+
+def _phase_block_has_ordered_output_fragments(
+    phase_block: str,
+    fragments: tuple[str, ...],
+) -> bool:
+    previous_position = -1
+    for fragment in fragments:
+        later_positions = [
+            position
+            for position in _phase_block_output_fragment_line_indices(
+                phase_block,
+                fragment,
+            )
+            if position > previous_position
+        ]
+        if not later_positions:
+            return False
+        previous_position = min(later_positions)
+    return True
+
+
+def _phase_block_output_fragments_are_strictly_ordered(
+    phase_block: str,
+    fragments: tuple[str, ...],
+) -> bool:
+    previous_max_position = -1
+    for fragment in fragments:
+        positions = _phase_block_output_fragment_line_indices(phase_block, fragment)
+        if not positions or min(positions) <= previous_max_position:
+            return False
+        previous_max_position = max(positions)
+    return True
+
+
+def _phase_block_duplicate_output_fragment(
+    phase_block: str,
+    fragments: tuple[str, ...],
+) -> str | None:
+    for fragment in fragments:
+        if len(_phase_block_output_fragment_line_indices(phase_block, fragment)) > 1:
+            return fragment
+    return None
 
 
 def _phase_success_fragment_required_command_fragment(
@@ -4647,7 +5357,16 @@ def _phase_success_fragment_required_command_fragments(
             DOTNET_ARCHITECTURE_SUCCESS_PREFIX,
         ):
             return ("dotnet --info",)
-        if fragment in (DOTNET_TEST_PASSED_SUCCESS_FRAGMENT, DOTNET_TRX_SUCCESS_PREFIX):
+        if fragment in (
+            DOTNET_BRIDGE_PATH_SUCCESS_PREFIX,
+            DOTNET_BRIDGE_SHA256_SUCCESS_PREFIX,
+        ):
+            return ("cargo build -p connect_norito_bridge",)
+        if fragment in (
+            DOTNET_TEST_PASSED_SUCCESS_FRAGMENT,
+            DOTNET_TRX_SUCCESS_PREFIX,
+            DOTNET_TRX_BYTES_SUCCESS_PREFIX,
+        ):
             return (
                 "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
             )
@@ -4737,6 +5456,31 @@ def _phase_success_fragment_has_position_after_required_command(
             for position in success_positions
         )
         for anchor_position, window_ceiling in windows
+    )
+
+
+def _phase_success_fragment_positions_are_only_in_required_command_windows(
+    phase: str,
+    phase_block: str,
+    fragment: str,
+    success_positions: list[int],
+    fallback_position: int,
+) -> bool:
+    windows = _phase_success_command_windows(
+        phase,
+        phase_block,
+        fragment,
+        fallback_position,
+    )
+    if not windows:
+        return False
+    return all(
+        any(
+            position > anchor_position
+            and (window_ceiling is None or position < window_ceiling)
+            for anchor_position, window_ceiling in windows
+        )
+        for position in success_positions
     )
 
 
@@ -4830,6 +5574,16 @@ def _phase_output_line_has_success_fragment(line: str, fragment: str) -> bool:
             DOTNET_ARCHITECTURE_SUCCESS_PATTERN.fullmatch(scan_line)
             for scan_line in scan_lines
         )
+    if fragment == DOTNET_BRIDGE_PATH_SUCCESS_PREFIX:
+        return any(
+            _dotnet_bridge_path_success_line_matches(scan_line)
+            for scan_line in scan_lines
+        )
+    if fragment == DOTNET_BRIDGE_SHA256_SUCCESS_PREFIX:
+        return any(
+            DOTNET_BRIDGE_SHA256_SUCCESS_PATTERN.fullmatch(scan_line)
+            for scan_line in scan_lines
+        )
     if fragment == DOTNET_TEST_PASSED_SUCCESS_FRAGMENT:
         return any(
             _dotnet_test_passed_success_line_matches(scan_line)
@@ -4838,6 +5592,11 @@ def _phase_output_line_has_success_fragment(line: str, fragment: str) -> bool:
     if fragment == DOTNET_TRX_SUCCESS_PREFIX:
         return any(
             DOTNET_TRX_SUCCESS_PATTERN.fullmatch(scan_line)
+            for scan_line in scan_lines
+        )
+    if fragment == DOTNET_TRX_BYTES_SUCCESS_PREFIX:
+        return any(
+            DOTNET_TRX_BYTES_SUCCESS_PATTERN.fullmatch(scan_line)
             for scan_line in scan_lines
         )
     for scan_line in scan_lines:
@@ -4860,7 +5619,56 @@ def _dotnet_test_passed_success_line_matches(line: str) -> bool:
     passed = int(match.group("passed"))
     skipped = int(match.group("skipped"))
     total = int(match.group("total"))
-    return total == passed + skipped
+    return total == passed + skipped and skipped == 0
+
+
+def _dotnet_phase_block_rid_architecture_markers_match(phase_block: str) -> bool:
+    rid_architectures: list[str] = []
+    architectures: list[str] = []
+    for line in phase_block.splitlines():
+        if _line_is_shell_xtrace_command(line):
+            continue
+        normalized_line = _phase_output_failure_scan_line(line)
+        scan_lines = (line,) if normalized_line == line else (line, normalized_line)
+        for scan_line in scan_lines:
+            if DOTNET_RID_SUCCESS_PATTERN.fullmatch(scan_line):
+                rid = scan_line.split(":", 1)[1].strip()
+                rid_architectures.append(DOTNET_RID_ARCHITECTURES[rid])
+                break
+            if DOTNET_ARCHITECTURE_SUCCESS_PATTERN.fullmatch(scan_line):
+                architecture = scan_line.split(":", 1)[1].strip()
+                architectures.append(architecture)
+                break
+    if len(rid_architectures) != 1 or len(architectures) != 1:
+        return True
+    return rid_architectures[0] == architectures[0]
+
+
+def _dotnet_bridge_path_success_line_matches(line: str) -> bool:
+    match = DOTNET_BRIDGE_PATH_SUCCESS_PATTERN.fullmatch(line)
+    if match is None:
+        return False
+    path = match.group("path")
+    raw_parts = re.split(r"[\\/]", path)
+    if raw_parts and raw_parts[0] == "":
+        raw_parts = raw_parts[1:]
+    if any(part in {"", ".", ".."} for part in raw_parts):
+        return False
+    if any(
+        any(char.isspace() or ord(char) < 0x20 for char in part)
+        for part in raw_parts
+    ):
+        return False
+    for index, part in enumerate(raw_parts):
+        if index == 0 and DOTNET_BRIDGE_PATH_DRIVE_PATTERN.fullmatch(part):
+            continue
+        if DOTNET_BRIDGE_PATH_COMPONENT_PATTERN.fullmatch(part) is None:
+            return False
+    return (
+        len(raw_parts) >= 3
+        and raw_parts[-2] == "debug"
+        and raw_parts[-1] == "connect_norito_bridge.dll"
+    )
 
 
 def _phase_block_has_exact_output_line(phase_block: str, expected: str) -> bool:
@@ -5105,6 +5913,138 @@ def _phase_transcript_errors(phase: str, artifact: Any) -> list[str]:
         errors.append(
             "evidence artifact contains non-empty output after completion sentinel"
         )
+    if phase_block is not None and _phase_block_has_unparseable_command(phase_block):
+        errors.append("evidence artifact contains unparseable traced command")
+    if (
+        phase_block is not None
+        and _phase_block_has_unsupported_parenthesized_group(phase_block)
+    ):
+        errors.append(
+            "evidence artifact contains unsupported parenthesized traced command"
+        )
+    if (
+        phase_block is not None
+        and _phase_block_has_unexpected_runner_cd_wrapper(phase, phase_block)
+    ):
+        errors.append(
+            "evidence artifact contains unexpected runner cd wrapper directory"
+        )
+    if (
+        phase == EVM_NATIVE_DOTNET_PHASE
+        and phase_block is not None
+        and _dotnet_phase_block_has_noncanonical_env_prefix(phase_block)
+    ):
+        errors.append(
+            "evidence artifact .NET phase used a non-canonical environment prefix"
+        )
+    if (
+        phase == EVM_NATIVE_DOTNET_PHASE
+        and phase_block is not None
+        and _dotnet_phase_block_has_noncanonical_bridge_build_env_prefix(phase_block)
+    ):
+        errors.append(
+            "evidence artifact .NET native bridge build used a non-canonical environment prefix"
+        )
+    if (
+        phase == EVM_NATIVE_DOTNET_PHASE
+        and phase_block is not None
+        and not _phase_block_has_ordered_command_fragments(
+            phase,
+            phase_block,
+            (
+                "dotnet --version",
+                "dotnet --info",
+                "cargo build -p connect_norito_bridge",
+                "dotnet restore Hyperledger.Iroha.Sdk.sln",
+                "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
+            ),
+        )
+    ):
+        errors.append(
+            "evidence artifact .NET commands are not in required version-info-bridge-restore-test order"
+        )
+    if phase_block is not None:
+        duplicate_phase_command = _phase_block_duplicate_command_fragment(
+            phase,
+            phase_block,
+            PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase, ()),
+        )
+        if duplicate_phase_command is not None:
+            duplicate_command_error = (
+                ".NET command appears more than once:"
+                if phase == EVM_NATIVE_DOTNET_PHASE
+                else f"{PHASE_DUPLICATE_COMMAND_ERROR_FRAGMENT}:"
+            )
+            errors.append(
+                f"evidence artifact {duplicate_command_error} "
+                f"{_phase_diagnostic_fragment(duplicate_phase_command)}"
+            )
+    if (
+        phase == EVM_NATIVE_DOTNET_PHASE
+        and phase_block is not None
+        and not _dotnet_phase_block_bridge_path_matches_target_dir(phase_block)
+    ):
+        errors.append(
+            "evidence artifact .NET native bridge path does not match "
+            "CARGO_TARGET_DIR/debug handoff"
+        )
+    if (
+        phase == EVM_NATIVE_DOTNET_PHASE
+        and phase_block is not None
+        and _dotnet_phase_block_forbidden_test_command(phase_block)
+    ):
+        errors.append("evidence artifact .NET phase ran a non-canonical dotnet test command")
+    if (
+        phase == EVM_NATIVE_DOTNET_PHASE
+        and phase_block is not None
+        and _dotnet_phase_block_forbidden_setup_command(phase_block)
+    ):
+        errors.append("evidence artifact .NET phase ran a non-canonical dotnet setup command")
+    if (
+        phase == EVM_NATIVE_DOTNET_PHASE
+        and phase_block is not None
+        and not _dotnet_phase_block_rid_architecture_markers_match(phase_block)
+    ):
+        errors.append("evidence artifact .NET RID and architecture markers disagree")
+    if (
+        phase == EVM_NATIVE_DOTNET_PHASE
+        and phase_block is not None
+        and not _phase_block_output_fragments_are_strictly_ordered(
+            phase_block,
+            (
+                DOTNET_BRIDGE_PATH_SUCCESS_PREFIX,
+                DOTNET_BRIDGE_SHA256_SUCCESS_PREFIX,
+            ),
+        )
+    ):
+        errors.append(
+            "evidence artifact .NET native bridge markers are not in required path-sha256 order"
+        )
+    if (
+        phase == EVM_NATIVE_DOTNET_PHASE
+        and phase_block is not None
+        and not _phase_block_output_fragments_are_strictly_ordered(
+            phase_block,
+            (
+                DOTNET_TEST_PASSED_SUCCESS_FRAGMENT,
+                DOTNET_TRX_SUCCESS_PREFIX,
+                DOTNET_TRX_BYTES_SUCCESS_PREFIX,
+            ),
+        )
+    ):
+        errors.append(
+            "evidence artifact .NET success markers are not in required passed-trx-bytes order"
+        )
+    if phase == EVM_NATIVE_DOTNET_PHASE and phase_block is not None:
+        duplicate_dotnet_marker = _phase_block_duplicate_output_fragment(
+            phase_block,
+            PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS.get(phase, ()),
+        )
+        if duplicate_dotnet_marker is not None:
+            errors.append(
+                "evidence artifact .NET evidence marker appears more than once: "
+                f"{_phase_diagnostic_fragment(duplicate_dotnet_marker)}"
+            )
     if (
         phase_block is not None
         and _transcript_has_multiple_known_phase_markers(transcript)
@@ -5127,12 +6067,58 @@ def _phase_transcript_errors(phase: str, artifact: Any) -> list[str]:
     if success_fragments is None:
         errors.append("evidence artifact has no expected success fragment configured")
     elif phase_block is not None:
+        phase_command_positions = [
+            position
+            for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase, ())
+            for position in _phase_block_command_fragment_line_indices(
+                phase,
+                phase_block,
+                fragment,
+            )
+        ]
+        first_phase_command_position = (
+            min(phase_command_positions) if phase_command_positions else -1
+        )
         for fragment in success_fragments:
             if not _phase_block_has_output_fragment(phase, phase_block, fragment):
                 errors.append(
                     "evidence artifact is missing expected phase-block success marker: "
                     f"{_phase_diagnostic_fragment(fragment)}"
                 )
+            elif (
+                not _phase_success_fragment_positions_are_only_in_required_command_windows(
+                    phase,
+                    phase_block,
+                    fragment,
+                    _phase_block_output_fragment_line_indices(phase_block, fragment),
+                    first_phase_command_position,
+                )
+            ):
+                outside_window_error = (
+                    DOTNET_SUCCESS_OUTSIDE_WINDOW_ERROR_FRAGMENT
+                    if phase == EVM_NATIVE_DOTNET_PHASE
+                    else PHASE_SUCCESS_OUTSIDE_WINDOW_ERROR_FRAGMENT
+                )
+                errors.append(
+                    f"evidence artifact {outside_window_error}: "
+                    f"{_phase_diagnostic_fragment(fragment)}"
+                )
+            elif phase != EVM_NATIVE_DOTNET_PHASE:
+                success_positions = _phase_block_output_fragment_line_indices(
+                    phase_block,
+                    fragment,
+                )
+                expected_windows = _phase_success_command_windows(
+                    phase,
+                    phase_block,
+                    fragment,
+                    first_phase_command_position,
+                )
+                if len(success_positions) > len(expected_windows):
+                    errors.append(
+                        f"evidence artifact {PHASE_DUPLICATE_SUCCESS_ERROR_FRAGMENT}: "
+                        f"{_phase_diagnostic_fragment(fragment)}"
+                    )
     if phase_block is not None:
         forbidden_marker = _phase_block_forbidden_output_marker(phase, phase_block)
         if forbidden_marker is not None:
@@ -5312,6 +6298,21 @@ def _public_blocker_text_issue(item: Any) -> str | None:
         return "Markdown-unsafe character"
     if any(marker in item.lower() for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS):
         return "sensitive name"
+    return None
+
+
+def _public_blocker_list_duplicate_error(value: Any, label: str) -> str | None:
+    """Return a bounded blocker when a public blocker list repeats values."""
+
+    if not isinstance(value, list):
+        return None
+    seen: set[str] = set()
+    for item in value:
+        if _public_blocker_text_issue(item) is not None:
+            continue
+        if item in seen:
+            return f"{label} must not contain duplicate strings"
+        seen.add(item)
     return None
 
 
@@ -5531,6 +6532,9 @@ def _active_launch_route_canary_blocker_container_errors(
             blockers.append(f"{label}[{index}] must be a non-empty canonical string")
         elif issue is not None:
             blockers.append(f"{label}[{index}] contains {issue}")
+    duplicate_error = _public_blocker_list_duplicate_error(canary_blockers, label)
+    if duplicate_error is not None:
+        blockers.append(duplicate_error)
     if canary_blockers:
         # Source-inventory marker: route canary blockers must be empty
         blockers.append(f"{label} must be empty")
@@ -5718,6 +6722,9 @@ def _active_launch_source_adapter_gate_blocker_container_errors(
             blockers.append(f"{label}[{index}] must be a non-empty canonical string")
         elif issue is not None:
             blockers.append(f"{label}[{index}] contains {issue}")
+    duplicate_error = _public_blocker_list_duplicate_error(gate_blockers, label)
+    if duplicate_error is not None:
+        blockers.append(duplicate_error)
     if gate_blockers:
         # Source-inventory marker: source adapter gate blockers must be empty
         blockers.append(f"{label} must be empty")
@@ -5742,6 +6749,9 @@ def _active_launch_destination_binding_blocker_container_errors(
             blockers.append(f"{label}[{index}] must be a non-empty canonical string")
         elif issue is not None:
             blockers.append(f"{label}[{index}] contains {issue}")
+    duplicate_error = _public_blocker_list_duplicate_error(destination_blockers, label)
+    if duplicate_error is not None:
+        blockers.append(duplicate_error)
     if destination_blockers:
         # Source-inventory marker: destination rollout blockers must be empty
         blockers.append(f"{label} must be empty")
@@ -7412,6 +8422,8 @@ def _markdown_string_list_cell(value: Any, *, field_label: str) -> str:
         return f"`<invalid {field_label}>`"
     if any(_public_blocker_text_issue(item) is not None for item in value):
         return f"`<invalid {field_label}>`"
+    if _public_blocker_list_duplicate_error(value, field_label) is not None:
+        return f"`<invalid {field_label}>`"
     return "<br>".join(value)
 
 
@@ -7432,6 +8444,8 @@ def _user_prover_validation_blockers_cell(value: Any) -> str:
             return f"`<invalid {field_label}>`"
         if any(marker in item.lower() for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS):
             return f"`<invalid {field_label}>`"
+    if _public_blocker_list_duplicate_error(value, field_label) is not None:
+        return f"`<invalid {field_label}>`"
     return "<br>".join(value)
 
 
@@ -7571,6 +8585,8 @@ def _native_evm_validation_blockers_cell(value: Any) -> str:
             is not None
         ):
             return f"`<invalid {field_label}>`"
+    if _public_blocker_list_duplicate_error(value, field_label) is not None:
+        return f"`<invalid {field_label}>`"
     return "<br>".join(value)
 
 
@@ -8046,6 +9062,8 @@ def _markdown_string_list_items(value: Any, *, field_label: str) -> list[str]:
         return [f"- `<invalid {field_label}>`"]
     if any(_public_blocker_text_issue(item) is not None for item in value):
         return [f"- `<invalid {field_label}>`"]
+    if _public_blocker_list_duplicate_error(value, field_label) is not None:
+        return [f"- `<invalid {field_label}>`"]
     return [f"- {item}" for item in value]
 
 
@@ -8210,7 +9228,7 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report {ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE} and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
             f"- {ACTIVE_LAUNCH_DISPLAY} route-canary transaction metadata must include a canonical non-zero transaction hash, finalized receipt block number/hash, receipts root, message id, and `{ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE}` evidence source before launch readiness can pass.",
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked. Required source-verifier evidence by lane: Ethereum recursive source-adapter verifier deployment and remaining beacon light-client update/state branches are not complete for the SCCP inbound path; BSC recursive source-adapter verifier deployment is not complete for the SCCP inbound path; Solana audited Tower replay, full-bank AccountsDB lattice, bank/fork-choice, and source-adapter verifier deployment evidence is not complete for the SCCP inbound path; TON governed full-light-client verifier deployment, canary, and source-adapter deployment evidence are not complete for the SCCP inbound path; TRON transaction-Merkle source-call verifier deployment is not complete for the SCCP inbound path.",
-            "- Windows `.NET 8` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, canonical Windows OS/RID/architecture markers, a non-zero passed VSTest summary with `Failed: 0`, and the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker before release readiness can pass.",
+            "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, the `SCCP .NET SDK version:` marker emitted after `dotnet --version`, phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order, no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, or restore/build failed markers, exact host markers `SCCP .NET SDK OS: Windows`, `SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and `SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` emitted after `dotnet --info`, exact native bridge markers `connect_norito_bridge native bridge: ...connect_norito_bridge.dll` and `connect_norito_bridge native bridge sha256: <64 lowercase hex>` emitted after `cargo build -p connect_norito_bridge`, `dotnet restore Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, a non-zero passed VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` emitted after the strict `dotnet test` command, with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a numeric unit duration, and with a positive TRX byte count plus a TRX marker that full-matches the C# test project `TestResults/sccp-dotnet-sdk.trx` path before release readiness can pass.",
             "- An audited `--native-evm-prover-bundle` manifest with `schema = sccp-native-evm-groth16-prover-bundle-v1`, `no_wasm = true`, `remote_prover_required = false`, and matching Ethereum destination binding/proving-key hashes.",
             f"- {SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE}",
             f"- {SCCP_NOT_REMAINING_WORK_SCOPE_NOTE}",
@@ -8274,7 +9292,7 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- SCCP release native-prover bundle schema source inventory must pin native EVM Groth16 manifest schema, readiness summary schema, artifact hash/path binding, copied-summary scalar exactness, and bundled-manifest drift rejection before published bundle readiness can pass.",
             "- SCCP proof-request bundle/source-proof source inventory must pin canonical bundle-byte, SORA-empty source-proof, and decoded non-SORA source-proof binding gates across Rust, JavaScript, Python, Swift, Kotlin/JVM, Java Android, and C#/.NET.",
             "- SCCP phase-evidence source inventory must pin duplicate assignment and directory override rejection across readiness-report and release-bundle CLIs before corridor phase evidence can satisfy production readiness.",
-            "- SCCP release corridor phase-transcript source inventory must pin exact phase markers, phase-local ordered non-negated/non-diagnostic shell-xtrace-free completion/success output after required commands in per-phase and full-corridor logs, phase-specific traced command shapes with exact pytest positional inputs, option-bound selectors, exact Gradle test command parsing, broad Kotlin package-suite selectors, exact Swift filter commands, exact Android harness class membership, exact Node test/check command files, exact .NET project/filter/nologo commands, exact no-suffix cargo/bash/java commands, and without bare-fragment shortcuts or shell-comment-hidden fragments, restricted cd wrappers, dry-run rejection, failure-marker scans, and forged-block rejection before corridor logs can satisfy public bundle readiness.",
+            "- SCCP release corridor phase-transcript source inventory must pin exact phase markers, phase-local ordered non-negated/non-diagnostic shell-xtrace-free completion/success output after required commands in per-phase and full-corridor logs, phase-specific traced command shapes with exact pytest positional inputs, option-bound selectors, exact Gradle test command parsing, exact Kotlin Gradle selector list, exact Swift filter commands, exact Java Android harness class list including TRON, exact Node test/check command files, exact .NET project/filter/nologo commands, exact no-suffix cargo/bash/java commands, and without bare-fragment shortcuts or shell-comment-hidden fragments, restricted cd wrappers, dry-run rejection, failure-marker scans, and forged-block rejection before corridor logs can satisfy public bundle readiness.",
             "- SCCP release bundle source-copy source inventory must pin symlink and control-character rejection for evidence inputs, phase evidence, native EVM prover manifests, and native prover payload sources before bundle copy can run.",
             "- SCCP release bundle output-path source inventory must pin symlink and control-character rejection for output directories before bundle generation can create or overwrite release artifacts.",
             "- SCCP release artifact path text source inventory must pin Markdown-unsafe character rejection for manifest artifact paths, readiness inputs, native prover manifest/payload paths, copied bundle filenames, and bundle filesystem entries before release notes can render artifact tables.",
@@ -8374,18 +9392,37 @@ def build_parser() -> argparse.ArgumentParser:
 
 SENSITIVE_CLI_ERROR_MARKERS = (
     "secret-token",
+    "secret key",
+    "secret-key",
+    "secret_key",
+    "private key",
     "private-key",
     "private_key",
     "password",
     "passphrase",
     "bearer ",
     "authorization",
+    "access key",
     "access-key",
     "access_key",
+    "api key",
     "api-key",
     "api_key",
+    "client secret",
     "client-secret",
     "client_secret",
+    "credential",
+    "credentials",
+    "auth header",
+    "auth-header",
+    "auth_header",
+    "mnemonic",
+    "seed phrase",
+    "seed-phrase",
+    "seed_phrase",
+    "signing key",
+    "signing-key",
+    "signing_key",
     "session=",
     "token=",
 )
@@ -8425,6 +9462,13 @@ def _canonical_public_report_blockers(
             errors.append(f"readiness report blockers[{index}] must be a {issue}")
         else:
             errors.append(f"readiness report blockers[{index}] contains {issue}")
+    duplicate_error = _public_blocker_list_duplicate_error(
+        value,
+        "readiness report blockers",
+    )
+    if duplicate_error is not None:
+        errors.append(duplicate_error)
+        blockers = []
     return blockers, errors
 
 
@@ -8510,8 +9554,13 @@ def _public_release_checklist_errors(value: Any) -> list[str]:
             or title != ACTIVE_LAUNCH_RELEASE_CHECKLIST_TITLES[item_key]
         ):
             errors.append(f"{item_label} title must match the canonical checklist title")
-        if type(item.get("ready")) is not bool:
+        item_ready = item.get("ready")
+        if type(item_ready) is not bool:
             errors.append(f"{item_label} ready must be boolean")
+        elif value.get("ready") is True and item_ready is not True:
+            errors.append(
+                f"{item_label} ready must be true when release_checklist ready is true"
+            )
         blockers = item.get("blockers")
         if not isinstance(blockers, list):
             errors.append(
@@ -8528,6 +9577,14 @@ def _public_release_checklist_errors(value: Any) -> list[str]:
                 )
             else:
                 errors.append(f"{item_label} blockers[{blocker_index}] contains {issue}")
+        duplicate_error = _public_blocker_list_duplicate_error(
+            blockers,
+            f"{item_label} blockers",
+        )
+        if duplicate_error is not None:
+            errors.append(duplicate_error)
+        if item_ready is True and blockers:
+            errors.append(f"{item_label} blockers must be empty when ready is true")
     for item_id in ACTIVE_LAUNCH_RELEASE_CHECKLIST_ITEM_IDS:
         if item_id not in seen_item_ids:
             errors.append(f"readiness report release_checklist missing item {item_id}")
@@ -8541,6 +9598,7 @@ def _public_input_artifact_errors(value: Any) -> list[str]:
         return ["readiness report input_artifacts must be a list of objects"]
 
     errors: list[str] = []
+    seen_paths: set[str] = set()
     for index, artifact in enumerate(value):
         artifact_label = f"readiness report input_artifacts[{index}]"
         for field in sorted(
@@ -8560,6 +9618,11 @@ def _public_input_artifact_errors(value: Any) -> list[str]:
             artifact.get("path")
         ):
             errors.append(f"{artifact_label} path must be a canonical public path")
+        elif "path" in artifact:
+            artifact_path = artifact.get("path")
+            if artifact_path in seen_paths:
+                errors.append("readiness report input_artifacts contains duplicate path")
+            seen_paths.add(artifact_path)
         if "bytes" in artifact and type(artifact.get("bytes")) is not int:
             errors.append(f"{artifact_label} bytes must be an integer")
         if "sha256" in artifact and not _is_canonical_sha256_text(
@@ -8567,6 +9630,480 @@ def _public_input_artifact_errors(value: Any) -> list[str]:
         ):
             errors.append(f"{artifact_label} sha256 must be a canonical SHA-256 hex string")
     return errors
+
+
+def _public_corridor_errors(value: Any) -> list[str]:
+    """Return bounded blockers for malformed public corridor summaries."""
+
+    if not isinstance(value, dict):
+        return ["readiness report corridor must be an object"]
+
+    errors: list[str] = []
+    for field in sorted((field for field in value if field not in CORRIDOR_PUBLIC_FIELDS), key=str):
+        errors.append(
+            _native_evm_prover_field_name_blocker(
+                "readiness report corridor",
+                field,
+                "unknown",
+            )
+        )
+    for field in sorted(CORRIDOR_PUBLIC_FIELDS - set(value)):
+        errors.append(f"readiness report corridor missing field: {field}")
+
+    production_ready = value.get("production_ready")
+    if type(production_ready) is not bool:
+        errors.append("readiness report corridor production_ready must be boolean")
+    require_phase_evidence = value.get("require_phase_evidence")
+    if type(require_phase_evidence) is not bool:
+        errors.append("readiness report corridor require_phase_evidence must be boolean")
+
+    blockers = value.get("blockers")
+    if not isinstance(blockers, list):
+        errors.append(
+            "readiness report corridor blockers must be a list of non-empty "
+            "canonical strings"
+        )
+    else:
+        for blocker_index, blocker in enumerate(blockers):
+            issue = _public_blocker_text_issue(blocker)
+            if issue is None:
+                continue
+            if issue == "non-empty canonical string":
+                errors.append(
+                    "readiness report corridor blockers"
+                    f"[{blocker_index}] must be a {issue}"
+                )
+            else:
+                errors.append(
+                    "readiness report corridor blockers"
+                    f"[{blocker_index}] contains {issue}"
+                )
+        duplicate_error = _public_blocker_list_duplicate_error(
+            blockers,
+            "readiness report corridor blockers",
+        )
+        if duplicate_error is not None:
+            errors.append(duplicate_error)
+        if production_ready is True and blockers:
+            errors.append(
+                "readiness report corridor blockers must be empty when "
+                "production_ready is true"
+            )
+
+    phases = value.get("phases")
+    known_phases: list[str] = []
+    if not isinstance(phases, dict):
+        errors.append("readiness report corridor phases must be an object")
+    else:
+        try:
+            known_phases = _corridor_phases()
+        except Exception:  # pragma: no cover - exercised through blocker text.
+            errors.append(
+                "readiness report corridor phase inventory cannot run corridor helper"
+            )
+        known_phase_set = set(known_phases)
+        for phase in sorted(set(phases) - known_phase_set, key=str):
+            phase_error = _corridor_phase_key_blocker(
+                "readiness report corridor phases",
+                phase,
+            )
+            if phase_error is not None:
+                errors.append(phase_error)
+            else:
+                errors.append(
+                    f"readiness report corridor contains unknown phase: {phase}"
+                )
+        for phase in known_phases:
+            if phase not in phases:
+                errors.append(
+                    f"readiness report corridor missing phase status: {phase}"
+                )
+                continue
+            status = phases.get(phase)
+            if status not in CORRIDOR_PUBLIC_PHASE_STATUSES:
+                errors.append(
+                    "readiness report corridor phase "
+                    f"{phase} status must be passed, failed, skipped, or missing"
+                )
+            elif production_ready is True and status != "passed":
+                errors.append(
+                    f"readiness report corridor phase {phase} must be passed "
+                    "when production_ready is true"
+                )
+
+    evidence_artifacts = value.get("evidence_artifacts")
+    if not isinstance(evidence_artifacts, dict):
+        errors.append("readiness report corridor evidence_artifacts must be an object")
+    else:
+        known_phase_set = set(known_phases)
+        for phase in sorted(set(evidence_artifacts) - known_phase_set, key=str):
+            phase_error = _corridor_phase_key_blocker(
+                "readiness report corridor evidence_artifacts",
+                phase,
+            )
+            if phase_error is not None:
+                errors.append(phase_error)
+            else:
+                errors.append(
+                    "readiness report corridor evidence_artifacts contains "
+                    f"unknown phase: {phase}"
+                )
+        for phase, artifact in sorted(evidence_artifacts.items(), key=lambda item: str(item[0])):
+            if _corridor_phase_key_blocker(
+                "readiness report corridor evidence_artifacts",
+                phase,
+            ) is not None:
+                continue
+            artifact_errors = _public_input_artifact_errors([artifact])
+            for error in artifact_errors:
+                errors.append(
+                    error.replace(
+                        "readiness report input_artifacts[0]",
+                        f"readiness report corridor evidence_artifacts.{phase}",
+                    )
+                )
+
+    if (
+        production_ready is True
+        and require_phase_evidence is True
+        and isinstance(phases, dict)
+        and isinstance(evidence_artifacts, dict)
+    ):
+        for phase in known_phases:
+            if phases.get(phase) == "passed" and phase not in evidence_artifacts:
+                errors.append(
+                    "readiness report corridor phase "
+                    f"{phase} has no hashed evidence artifact"
+                )
+
+    return errors
+
+
+def _public_native_evm_artifact_errors(
+    value: Any,
+    label: str,
+    *,
+    expected_hash: Any = None,
+) -> list[str]:
+    """Return bounded blockers for malformed native-prover artifact metadata."""
+
+    if not isinstance(value, dict):
+        return [f"{label} must be an object"]
+
+    errors: list[str] = []
+    for field in sorted(
+        (field for field in value if field not in INPUT_ARTIFACT_PUBLIC_FIELDS),
+        key=str,
+    ):
+        errors.append(_native_evm_prover_field_name_blocker(label, field, "unknown"))
+    for field in sorted(INPUT_ARTIFACT_PUBLIC_FIELDS - set(value)):
+        errors.append(f"{label} missing field: {field}")
+
+    artifact_path = value.get("path")
+    if "path" in value and not _native_evm_markdown_path_is_safe(artifact_path):
+        errors.append(f"{label} path must be a canonical public path")
+    artifact_bytes = value.get("bytes")
+    if "bytes" in value and (type(artifact_bytes) is not int or artifact_bytes < 0):
+        errors.append(f"{label} bytes must be a non-negative integer")
+    artifact_hash = value.get("sha256")
+    if "sha256" in value and not _is_canonical_sha256_text(artifact_hash):
+        errors.append(f"{label} sha256 must be a canonical SHA-256 hex string")
+    if (
+        expected_hash is not None
+        and _is_canonical_sha256_text(artifact_hash)
+        and _is_nonzero_hex32(expected_hash)
+        and f"0x{artifact_hash}" != expected_hash
+    ):
+        errors.append(f"{label} sha256 must match the paired bundle hash")
+    return errors
+
+
+def _public_native_evm_sdk_id_error(sdk: Any) -> str | None:
+    """Return a bounded blocker for malformed native-prover SDK ids."""
+
+    if (
+        not isinstance(sdk, str)
+        or not sdk
+        or _public_blocker_text_issue(sdk) is not None
+        or any(character.isspace() for character in sdk)
+    ):
+        return "sdk must be a canonical SDK id"
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-")
+    if (
+        any(character not in allowed for character in sdk)
+        or sdk.startswith("-")
+        or sdk.endswith("-")
+    ):
+        return "sdk must be a canonical SDK id"
+    if sdk not in NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS:
+        return "sdk must be a required SDK id"
+    return None
+
+
+def _public_native_evm_audit_hash_errors(
+    value: dict[str, Any],
+    label: str,
+) -> list[str]:
+    """Return bounded blockers for public native-prover audit hashes."""
+
+    audit_hashes = value.get("audit_hashes")
+    if not isinstance(audit_hashes, dict) or not audit_hashes:
+        return [f"{label} audit_hashes must be a non-empty object"]
+
+    errors: list[str] = []
+    for field in sorted(
+        set(audit_hashes) - set(NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES),
+        key=str,
+    ):
+        errors.append(
+            _native_evm_prover_field_name_blocker(
+                f"{label} audit_hashes",
+                field,
+                "unexpected",
+            )
+        )
+    for field in sorted(set(NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES) - set(audit_hashes)):
+        errors.append(f"{label} audit_hashes missing field: {field}")
+
+    reserved_hash_roles = {
+        "proof_artifact_hash": value.get("proof_artifact_hash"),
+        "proving_key_hash": value.get("proving_key_hash"),
+        "verifier_key_hash": value.get("verifier_key_hash"),
+        "destination_binding_hash": value.get("destination_binding_hash"),
+    }
+    sdk_artifacts = value.get("sdk_artifacts")
+    if isinstance(sdk_artifacts, list):
+        for index, row in enumerate(sdk_artifacts):
+            if isinstance(row, dict):
+                reserved_hash_roles[f"sdk_artifacts[{index}].implementation_hash"] = (
+                    row.get("implementation_hash")
+                )
+
+    seen_audit_hashes: dict[str, str] = {}
+    for field in NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES:
+        if field not in audit_hashes:
+            continue
+        audit_hash = audit_hashes.get(field)
+        if not _is_nonzero_hex32(audit_hash):
+            errors.append(
+                f"{label} audit_hashes.{field} must be a canonical non-zero "
+                "32-byte hex value"
+            )
+            continue
+        previous_field = seen_audit_hashes.get(audit_hash)
+        if previous_field is not None:
+            errors.append(
+                f"{label} audit_hashes.{field} must not duplicate "
+                f"audit_hashes.{previous_field}"
+            )
+        seen_audit_hashes[audit_hash] = field
+        for role, role_hash in reserved_hash_roles.items():
+            if audit_hash == role_hash:
+                errors.append(f"{label} audit_hashes.{field} must not reuse {role}")
+    return errors
+
+
+def _public_native_evm_sdk_artifact_errors(
+    value: Any,
+    label: str,
+) -> list[str]:
+    """Return bounded blockers for public native-prover SDK artifacts."""
+
+    if not isinstance(value, list) or not value:
+        return [f"{label} sdk_artifacts must be a non-empty list"]
+
+    errors: list[str] = []
+    seen_sdks: set[str] = set()
+    semantic_sdk_order: list[str] = []
+    for index, row in enumerate(value):
+        row_label = f"{label} sdk_artifacts[{index}]"
+        if not isinstance(row, dict):
+            errors.append(f"{row_label} must be an object")
+            continue
+        for field in sorted(
+            (
+                field
+                for field in row
+                if field not in NATIVE_EVM_PROVER_SDK_ARTIFACT_SUMMARY_PUBLIC_FIELDS
+            ),
+            key=str,
+        ):
+            errors.append(
+                _native_evm_prover_field_name_blocker(row_label, field, "unknown")
+            )
+        for field in sorted(
+            NATIVE_EVM_PROVER_SDK_ARTIFACT_SUMMARY_PUBLIC_FIELDS - set(row)
+        ):
+            errors.append(f"{row_label} missing field: {field}")
+
+        sdk = row.get("sdk")
+        sdk_error = _public_native_evm_sdk_id_error(sdk)
+        if sdk_error is not None:
+            errors.append(f"{row_label} {sdk_error}")
+            continue
+
+        assert isinstance(sdk, str)
+        semantic_sdk_order.append(sdk)
+        if sdk in seen_sdks:
+            errors.append(f"{row_label} sdk is duplicated")
+        seen_sdks.add(sdk)
+
+        expected_implementation = NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS[sdk]
+        if row.get("implementation") != expected_implementation:
+            errors.append(f"{row_label} implementation must match the required SDK")
+        if not _is_nonzero_hex32(row.get("implementation_hash")):
+            errors.append(
+                f"{row_label} implementation_hash must be a canonical non-zero "
+                "32-byte hex value"
+            )
+        errors.extend(
+            _public_native_evm_artifact_errors(
+                row.get("implementation_artifact"),
+                f"{row_label} implementation_artifact",
+                expected_hash=row.get("implementation_hash"),
+            )
+        )
+
+    for sdk in sorted(set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - seen_sdks):
+        errors.append(f"{label} sdk_artifacts missing sdk: {sdk}")
+    if semantic_sdk_order != sorted(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS):
+        errors.append(f"{label} sdk_artifacts must match expected SDK order")
+    return errors
+
+
+def _public_native_evm_prover_bundle_errors(value: Any) -> list[str]:
+    """Return bounded blockers for malformed public native-prover summaries."""
+
+    label = "readiness report native_evm_prover_bundle"
+    # Source-inventory markers:
+    # - readiness report native_evm_prover_bundle missing field
+    # - readiness report native_evm_prover_bundle validation_blockers
+    if not isinstance(value, dict):
+        return [f"{label} must be an object"]
+
+    errors: list[str] = []
+    for field in sorted(
+        (field for field in value if field not in NATIVE_EVM_PROVER_BUNDLE_PUBLIC_FIELDS),
+        key=str,
+    ):
+        errors.append(_native_evm_prover_field_name_blocker(label, field, "unknown"))
+    for field in sorted(NATIVE_EVM_PROVER_BUNDLE_PUBLIC_FIELDS - set(value)):
+        errors.append(f"{label} missing field: {field}")
+
+    if value.get("required") is not True:
+        errors.append(f"{label} required must be true")
+
+    expected_fields = {
+        "schema": NATIVE_EVM_PROVER_BUNDLE_SCHEMA,
+        "bundle_id": NATIVE_EVM_PROVER_BUNDLE_ID,
+        "lanes": ACTIVE_LAUNCH_CHAIN,
+        "proof_backend": "evm-groth16-bn254-v1",
+    }
+    for field, expected in expected_fields.items():
+        if field in value and value.get(field) != expected:
+            errors.append(f"{label} {field} must match the canonical native bundle")
+
+    for field in (
+        "proof_artifact_hash",
+        "proving_key_hash",
+        "verifier_key_hash",
+        "destination_binding_hash",
+    ):
+        if field in value and not _is_nonzero_hex32(value.get(field)):
+            errors.append(
+                f"{label} {field} must be a canonical non-zero 32-byte hex value"
+            )
+
+    audit_hashes = value.get("audit_hashes")
+    support_artifact_hashes = audit_hashes if isinstance(audit_hashes, dict) else {}
+    for artifact_field, hash_field in (
+        ("artifact", None),
+        ("proof_artifact", "proof_artifact_hash"),
+        ("proving_key", "proving_key_hash"),
+        ("verifier_key", "verifier_key_hash"),
+        ("cross_sdk_fixture_parity_artifact", "cross_sdk_fixture_parity"),
+        ("native_prover_self_test_artifact", "native_prover_self_test"),
+    ):
+        errors.extend(
+            _public_native_evm_artifact_errors(
+                value.get(artifact_field),
+                f"{label} {artifact_field}",
+                expected_hash=(
+                    value.get(hash_field)
+                    if hash_field in value
+                    else support_artifact_hashes.get(hash_field)
+                )
+                if hash_field is not None
+                else None,
+            )
+        )
+
+    errors.extend(_public_native_evm_audit_hash_errors(value, label))
+    errors.extend(_public_native_evm_sdk_artifact_errors(value.get("sdk_artifacts"), label))
+
+    validation_status = value.get("validation_status")
+    if validation_status not in {"passed", "blocked"}:
+        errors.append(f"{label} validation_status must be passed or blocked")
+
+    validation_blockers = value.get("validation_blockers")
+    if not isinstance(validation_blockers, list):
+        errors.append(
+            f"{label} validation_blockers must be a list of non-empty "
+            "canonical strings"
+        )
+    else:
+        for blocker_index, blocker in enumerate(validation_blockers):
+            issue = _public_blocker_text_issue(blocker)
+            if issue is None:
+                continue
+            if issue == "non-empty canonical string":
+                errors.append(
+                    f"{label} validation_blockers[{blocker_index}] must be a "
+                    f"{issue}"
+                )
+            else:
+                errors.append(
+                    f"{label} validation_blockers[{blocker_index}] contains {issue}"
+                )
+        duplicate_error = _public_blocker_list_duplicate_error(
+            validation_blockers,
+            f"{label} validation_blockers",
+        )
+        if duplicate_error is not None:
+            errors.append(duplicate_error)
+        if validation_status == "passed" and validation_blockers:
+            errors.append(
+                f"{label} validation_blockers must be empty when "
+                "validation_status is passed"
+            )
+        if validation_status == "blocked" and not validation_blockers:
+            errors.append(
+                f"{label} validation_blockers must be non-empty when "
+                "validation_status is blocked"
+            )
+
+    return errors
+
+
+def _public_embedded_evidence_errors(value: Any) -> list[str]:
+    """Return blockers for non-canonical embedded all-lanes public evidence."""
+
+    if not isinstance(value, dict):
+        return ["readiness report evidence must be an object"]
+
+    try:
+        all_lanes = _load_all_lanes_module()
+        public_summary = all_lanes._public_summary_payload(value)
+    except Exception:  # pragma: no cover - exercised through blocker text.
+        return [
+            "readiness report evidence cannot run all-lanes public summary validator"
+        ]
+
+    if public_summary != value:
+        return [
+            "readiness report evidence must be a canonical public all-lanes summary"
+        ]
+    return []
 
 
 def _public_source_inventory_gate_error(gate: Any) -> str | None:
@@ -8592,6 +10129,18 @@ def _public_source_inventory_gate_error(gate: Any) -> str | None:
     return None
 
 
+def _source_inventory_required_public_gates() -> frozenset[str]:
+    """Return the strict source-inventory gate set used by the bundle verifier."""
+
+    verifier = _load_release_bundle_verify_helpers()
+    gates = getattr(verifier, "SOURCE_INVENTORY_REQUIRED_GATES")
+    if not isinstance(gates, (set, frozenset)) or not all(
+        isinstance(gate, str) for gate in gates
+    ):
+        raise RuntimeError("release-bundle verifier source-inventory gates are invalid")
+    return frozenset(gates)
+
+
 def _public_source_inventory_errors(value: Any) -> list[str]:
     """Return bounded blockers for malformed public source-inventory rows."""
 
@@ -8599,6 +10148,26 @@ def _public_source_inventory_errors(value: Any) -> list[str]:
         return ["readiness report source_inventory must be an object"]
 
     errors: list[str] = []
+    required_gates = frozenset()
+    try:
+        required_gates = _source_inventory_required_public_gates()
+    except Exception:  # pragma: no cover - exercised through blocker text.
+        errors.append(
+            "readiness report source_inventory required gate inventory cannot run "
+            "release-bundle verifier helper"
+        )
+
+    if required_gates:
+        for gate in sorted(set(value) - required_gates, key=str):
+            if _public_source_inventory_gate_error(gate) is None:
+                errors.append(
+                    f"readiness report source_inventory contains unknown gate: {gate}"
+                )
+        for gate in sorted(required_gates - set(value)):
+            errors.append(
+                f"readiness report source_inventory missing required gate: {gate}"
+            )
+
     for index, (gate, inventory) in enumerate(
         sorted(value.items(), key=lambda item: str(item[0]))
     ):
@@ -8626,9 +10195,8 @@ def _public_source_inventory_errors(value: Any) -> list[str]:
             )
         for field in sorted(SOURCE_INVENTORY_PUBLIC_FIELDS - set(inventory)):
             errors.append(f"{inventory_label} missing field: {field}")
-        if "validation_status" in inventory and inventory.get(
-            "validation_status"
-        ) not in {"passed", "blocked"}:
+        validation_status = inventory.get("validation_status")
+        if "validation_status" in inventory and validation_status not in {"passed", "blocked"}:
             errors.append(
                 f"{inventory_label} validation_status must be passed or blocked"
             )
@@ -8654,6 +10222,22 @@ def _public_source_inventory_errors(value: Any) -> list[str]:
                             f"{inventory_label} validation_blockers[{blocker_index}] "
                             f"contains {issue}"
                         )
+                duplicate_error = _public_blocker_list_duplicate_error(
+                    validation_blockers,
+                    f"{inventory_label} validation_blockers",
+                )
+                if duplicate_error is not None:
+                    errors.append(duplicate_error)
+                if validation_status == "passed" and validation_blockers:
+                    errors.append(
+                        f"{inventory_label} validation_blockers must be empty when "
+                        "validation_status is passed"
+                    )
+                if validation_status == "blocked" and not validation_blockers:
+                    errors.append(
+                        f"{inventory_label} validation_blockers must be non-empty "
+                        "when validation_status is blocked"
+                    )
     return errors
 
 
@@ -8796,6 +10380,12 @@ def _public_user_prover_submission_surface_errors(value: Any) -> list[str]:
                         f"{surface_label} validation_blockers[{blocker_index}] "
                         f"contains {issue}"
                     )
+            duplicate_error = _public_blocker_list_duplicate_error(
+                validation_blockers,
+                f"{surface_label} validation_blockers",
+            )
+            if duplicate_error is not None:
+                errors.append(duplicate_error)
             if validation_status == "passed" and validation_blockers:
                 errors.append(
                     f"{surface_label} validation_blockers must be empty when "
@@ -8834,6 +10424,7 @@ def _public_cryptographic_evidence_errors(value: Any) -> list[str]:
         return ["readiness report cryptographic_evidence must be a list of objects"]
 
     errors: list[str] = []
+    seen_domains: set[int] = set()
     for index, row in enumerate(value):
         row_label = f"readiness report cryptographic_evidence[{index}]"
         for field in sorted(
@@ -8857,6 +10448,16 @@ def _public_cryptographic_evidence_errors(value: Any) -> list[str]:
         domain = row.get("domain")
         if type(domain) is not int:
             errors.append(f"{row_label} domain must be an integer")
+        elif domain in seen_domains:
+            errors.append(
+                f"readiness report cryptographic_evidence contains duplicate domain: {domain}"
+            )
+        else:
+            seen_domains.add(domain)
+            if domain not in ALL_LANES_CHAIN_BY_DOMAIN:
+                errors.append(
+                    f"readiness report cryptographic_evidence contains unknown domain: {domain}"
+                )
         chain = row.get("chain")
         if (
             type(domain) is not int
@@ -8883,6 +10484,9 @@ def _public_cryptographic_evidence_errors(value: Any) -> list[str]:
                 continue
             if type(value_for_field) is not int:
                 errors.append(f"{row_label} {field} must be an integer")
+        errors.extend(
+            _public_cryptographic_route_canary_hash_role_errors(row_label, row)
+        )
         if type(row.get("route_canary_evidence_bound")) is not bool:
             errors.append(f"{row_label} route_canary_evidence_bound must be boolean")
         if (
@@ -8892,36 +10496,199 @@ def _public_cryptographic_evidence_errors(value: Any) -> list[str]:
             errors.append(
                 f"{row_label} route_canary_receipt_block_finalized must be boolean"
             )
-        if (
-            row.get("source_adapter_gate_required") is not None
-            and type(row.get("source_adapter_gate_required")) is not bool
-        ):
+        if type(row.get("source_adapter_gate_required")) is not bool:
             errors.append(f"{row_label} source_adapter_gate_required must be boolean")
 
         audit_hashes = row.get("source_adapter_gate_audit_hashes")
-        if audit_hashes in (None, {}):
-            continue
+        semantic_audit_hashes: dict[str, Any] = {}
         if not isinstance(audit_hashes, dict):
+            if audit_hashes not in (None, {}):
+                errors.append(
+                    f"{row_label} source_adapter_gate_audit_hashes must be an object"
+                )
+        else:
+            for audit_field, audit_hash in sorted(
+                audit_hashes.items(),
+                key=lambda item: str(item[0]),
+            ):
+                audit_label = f"{row_label} source_adapter_gate_audit_hashes"
+                if not isinstance(audit_field, str):
+                    errors.append(f"{audit_label} contains malformed audit field name")
+                    continue
+                if _public_blocker_text_issue(audit_field) is not None:
+                    errors.append(f"{audit_label} contains malformed audit field name")
+                    continue
+                semantic_audit_hashes[audit_field] = audit_hash
+                if not _is_nonzero_hex32(audit_hash):
+                    errors.append(
+                        f"{audit_label} {audit_field} must be a canonical non-zero "
+                        "bytes32 hex string"
+                    )
+        errors.extend(
+            _public_cryptographic_source_adapter_gate_hash_role_errors(
+                row_label,
+                row,
+                semantic_audit_hashes,
+            )
+        )
+
+        gate_required = row.get("source_adapter_gate_required")
+        expected_audit_keys = (
+            ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN.get(domain)
+            if type(domain) is int and chain == ALL_LANES_CHAIN_BY_DOMAIN.get(domain)
+            else None
+        )
+        gate_hash = row.get("source_adapter_gate_hash")
+        if gate_required is True:
+            audit_label = f"{row_label} source_adapter_gate_audit_hashes"
+            if expected_audit_keys is None:
+                errors.append(
+                    f"{row_label} source_adapter_gate_required must be false "
+                    "for this domain"
+                )
+            else:
+                for audit_field in sorted(set(semantic_audit_hashes) - expected_audit_keys):
+                    errors.append(f"{audit_label} contains unexpected field: {audit_field}")
+                for audit_field in sorted(expected_audit_keys - set(semantic_audit_hashes)):
+                    errors.append(f"{audit_label} missing field: {audit_field}")
+            if not gate_hash:
+                errors.append(
+                    f"{row_label} source_adapter_gate_hash must not be empty when required"
+                )
+            if not semantic_audit_hashes:
+                errors.append(
+                    f"{audit_label} must not be empty when required"
+                )
+            if (
+                _is_nonzero_hex32(gate_hash)
+                and semantic_audit_hashes
+                and gate_hash not in set(semantic_audit_hashes.values())
+            ):
+                errors.append(
+                    f"{row_label} source_adapter_gate_hash must match one "
+                    "source_adapter_gate_audit_hashes value"
+                )
+            expected_gate_key = (
+                ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN.get(domain)
+                if type(domain) is int and chain == ALL_LANES_CHAIN_BY_DOMAIN.get(domain)
+                else None
+            )
+            expected_gate_hash = (
+                semantic_audit_hashes.get(expected_gate_key)
+                if expected_gate_key is not None
+                else None
+            )
+            if (
+                expected_gate_key is not None
+                and _is_nonzero_hex32(gate_hash)
+                and _is_nonzero_hex32(expected_gate_hash)
+                and gate_hash != expected_gate_hash
+            ):
+                errors.append(
+                    f"{row_label} source_adapter_gate_hash must match "
+                    f"source_adapter_gate_audit_hashes.{expected_gate_key}"
+                )
+        elif gate_required is False:
+            if expected_audit_keys is not None:
+                errors.append(
+                    f"{row_label} source_adapter_gate_required must be true for this domain"
+                )
+            if gate_hash not in (None, ""):
+                # Source-inventory marker: source_adapter_gate_hash must be empty when gate is not required
+                errors.append(
+                    f"{row_label} source_adapter_gate_hash must be empty when "
+                    "gate is not required"
+                )
+            if audit_hashes:
+                # Source-inventory marker: source_adapter_gate_audit_hashes must be empty when gate is not required
+                errors.append(
+                    f"{row_label} source_adapter_gate_audit_hashes must be empty "
+                    "when gate is not required"
+                )
+    for domain in ALL_LANES_REQUIRED_DOMAINS:
+        if domain not in seen_domains:
             errors.append(
-                f"{row_label} source_adapter_gate_audit_hashes must be an object"
+                f"readiness report cryptographic_evidence missing required domain: {domain}"
+            )
+    return errors
+
+
+def _public_cryptographic_source_adapter_gate_hash_role_errors(
+    row_label: str,
+    row: dict[str, Any],
+    semantic_audit_hashes: dict[str, Any],
+) -> list[str]:
+    """Return public-row blockers when source-gate audit hashes reuse roles."""
+
+    errors: list[str] = []
+    seen: dict[str, str] = {}
+    fields: list[tuple[str, Any]] = [
+        ("source_verifier_material_hash", row.get("source_verifier_material_hash")),
+        (
+            "source_adapter_engine_deployment_hash",
+            row.get("source_adapter_engine_deployment_hash"),
+        ),
+        ("destination_binding_hash", row.get("destination_binding_hash")),
+        ("route_allowlist_hash", row.get("route_allowlist_hash")),
+        ("route_canary_evidence_hash", row.get("route_canary_evidence_hash")),
+        # Source-inventory marker: public source_adapter_gate audit hashes must not reuse route_canary_message_id
+        ("route_canary_transaction_hash", row.get("route_canary_transaction_hash")),
+        (
+            "route_canary_receipt_block_hash",
+            row.get("route_canary_receipt_block_hash"),
+        ),
+        (
+            "route_canary_block_receipts_root",
+            row.get("route_canary_block_receipts_root"),
+        ),
+        ("route_canary_message_id", row.get("route_canary_message_id")),
+    ]
+    fields.extend(
+        (f"source_adapter_gate_audit_hashes.{field}", value)
+        for field, value in sorted(semantic_audit_hashes.items())
+    )
+    for field, value in fields:
+        if not _is_nonzero_hex32(value):
+            continue
+        assert isinstance(value, str)
+        prior_field = seen.get(value)
+        if prior_field is not None:
+            errors.append(
+                f"{row_label} source_adapter_gate hash role {field} "
+                f"must not reuse {prior_field}"
             )
             continue
-        for audit_field, audit_hash in sorted(
-            audit_hashes.items(),
-            key=lambda item: str(item[0]),
-        ):
-            audit_label = f"{row_label} source_adapter_gate_audit_hashes"
-            if not isinstance(audit_field, str):
-                errors.append(f"{audit_label} contains malformed audit field name")
-                continue
-            if _public_blocker_text_issue(audit_field) is not None:
-                errors.append(f"{audit_label} contains malformed audit field name")
-                continue
-            if not _is_nonzero_hex32(audit_hash):
-                errors.append(
-                    f"{audit_label} {audit_field} must be a canonical non-zero "
-                    "bytes32 hex string"
-                )
+        seen[value] = field
+    return errors
+
+
+def _public_cryptographic_route_canary_hash_role_errors(
+    row_label: str,
+    row: dict[str, Any],
+) -> list[str]:
+    """Return public-row blockers when route-canary transcript hashes are replayed."""
+
+    errors: list[str] = []
+    seen: dict[str, str] = {}
+    for field in (
+        "route_canary_transaction_hash",
+        "route_canary_receipt_block_hash",
+        "route_canary_block_receipts_root",
+        "route_canary_message_id",
+        "route_canary_evidence_hash",
+    ):
+        value = row.get(field)
+        if not _is_nonzero_hex32(value):
+            continue
+        assert isinstance(value, str)
+        prior_field = seen.get(value)
+        if prior_field is not None:
+            errors.append(
+                f"{row_label} route_canary hash role {field} "
+                f"must not reuse {prior_field}"
+            )
+            continue
+        seen[value] = field
     return errors
 
 
@@ -8966,27 +10733,38 @@ def _public_report_payload(report: Any) -> dict[str, Any]:
         if field in report and not isinstance(report.get(field), dict):
             root_errors[field] = message
     inputs = report.get("inputs")
-    if "inputs" in report and (
-        not isinstance(inputs, list)
-        or not all(
+    public_input_paths: list[str] | None = None
+    if "inputs" in report:
+        if not isinstance(inputs, list) or not all(
             isinstance(item, str)
             and item
             and _public_blocker_text_issue(item) is None
             for item in inputs
-        )
-    ):
-        root_errors["inputs"] = (
-            "readiness report inputs must be a list of canonical strings"
-        )
+        ):
+            root_errors["inputs"] = (
+                "readiness report inputs must be a list of canonical strings"
+            )
+        elif not inputs:
+            root_errors["inputs"] = (
+                "readiness report inputs must be a non-empty list of canonical strings"
+            )
+        elif len(set(inputs)) != len(inputs):
+            root_errors["inputs"] = "readiness report inputs contains duplicate path"
+        else:
+            public_input_paths = list(inputs)
 
     input_artifacts = report.get("input_artifacts")
-    if "input_artifacts" in report and (
-        not isinstance(input_artifacts, list)
-        or not all(isinstance(item, dict) for item in input_artifacts)
-    ):
-        root_errors["input_artifacts"] = (
-            "readiness report input_artifacts must be a list of objects"
-        )
+    if "input_artifacts" in report:
+        if not isinstance(input_artifacts, list) or not all(
+            isinstance(item, dict) for item in input_artifacts
+        ):
+            root_errors["input_artifacts"] = (
+                "readiness report input_artifacts must be a list of objects"
+            )
+        elif not input_artifacts:
+            root_errors["input_artifacts"] = (
+                "readiness report input_artifacts must be a non-empty list of objects"
+            )
 
     list_root_messages = {
         "cryptographic_evidence": (
@@ -9003,9 +10781,7 @@ def _public_report_payload(report: Any) -> dict[str, Any]:
         ):
             root_errors[field] = message
     native_bundle = report.get("native_evm_prover_bundle")
-    if "native_evm_prover_bundle" in report and (
-        native_bundle is not None and not isinstance(native_bundle, dict)
-    ):
+    if "native_evm_prover_bundle" in report and not isinstance(native_bundle, dict):
         root_errors["native_evm_prover_bundle"] = (
             "readiness report native_evm_prover_bundle must be an object"
         )
@@ -9018,6 +10794,42 @@ def _public_report_payload(report: Any) -> dict[str, Any]:
             root_errors["input_artifacts"] = (
                 "readiness report input_artifacts is invalid"
             )
+    if (
+        public_input_paths is not None
+        and "input_artifacts" in report
+        and "input_artifacts" not in root_errors
+        and isinstance(input_artifacts, list)
+    ):
+        artifact_paths = [artifact.get("path") for artifact in input_artifacts]
+        if artifact_paths != public_input_paths:
+            root_errors["inputs"] = (
+                "readiness report inputs do not match copied input_artifacts"
+            )
+            root_errors["input_artifacts"] = (
+                "readiness report input_artifacts do not match inputs"
+            )
+    if "corridor" in report and "corridor" not in root_errors:
+        corridor_errors = _public_corridor_errors(report.get("corridor"))
+        if corridor_errors:
+            blockers.extend(corridor_errors)
+            root_errors["corridor"] = "readiness report corridor is invalid"
+    if (
+        "native_evm_prover_bundle" in report
+        and "native_evm_prover_bundle" not in root_errors
+    ):
+        native_bundle_errors = _public_native_evm_prover_bundle_errors(
+            report.get("native_evm_prover_bundle")
+        )
+        if native_bundle_errors:
+            blockers.extend(native_bundle_errors)
+            root_errors["native_evm_prover_bundle"] = (
+                "readiness report native_evm_prover_bundle is invalid"
+            )
+    if "evidence" in report and "evidence" not in root_errors:
+        evidence_errors = _public_embedded_evidence_errors(report.get("evidence"))
+        if evidence_errors:
+            blockers.extend(evidence_errors)
+            root_errors["evidence"] = "readiness report evidence is invalid"
     if "source_inventory" in report and "source_inventory" not in root_errors:
         source_inventory_errors = _public_source_inventory_errors(
             report.get("source_inventory")

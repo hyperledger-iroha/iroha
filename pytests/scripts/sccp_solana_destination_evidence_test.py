@@ -67,43 +67,59 @@ def test_solana_destination_redacts_verifier_program_parser_failures(monkeypatch
     module = load_evidence_module()
     args = solana_args(module)
 
-    def fail_program_id(_value, *, label):
-        raise module.argparse.ArgumentTypeError(
-            f"secret-token {label} parser detail"
-        )
-
-    monkeypatch.setattr(module, "normalize_solana_program_id", fail_program_id)
-    try:
-        module._require_destination_evidence(args)
-    except ValueError as exc:
-        rendered = str(exc)
-        assert rendered == "verifier_program_id metadata is invalid"
-        assert "secret-token" not in rendered
-        assert "parser detail" not in rendered
-        assert exc.__cause__ is None
-        assert exc.__suppress_context__ is True
-    else:
-        raise AssertionError("Solana destination leaked verifier parser detail")
-
-    def fail_program_id_typeerror(_value, *, label):
-        raise TypeError(f"secret-token {label} helper TypeError detail")
-
-    monkeypatch.setattr(
-        module,
-        "normalize_solana_program_id",
-        fail_program_id_typeerror,
+    failure_cases = (
+        (
+            module.argparse.ArgumentTypeError,
+            "secret-token {label} parser detail",
+            "parser detail",
+        ),
+        (
+            SystemExit,
+            "secret-token {label} helper SystemExit detail",
+            "helper SystemExit detail",
+        ),
+        (
+            RuntimeError,
+            "secret-token {label} helper RuntimeError detail",
+            "helper RuntimeError detail",
+        ),
+        (
+            TypeError,
+            "secret-token {label} helper TypeError detail",
+            "helper TypeError detail",
+        ),
+        (
+            ValueError,
+            "secret-token {label} helper ValueError detail",
+            "helper ValueError detail",
+        ),
     )
-    try:
-        module._require_destination_evidence(args)
-    except ValueError as exc:
-        rendered = str(exc)
-        assert rendered == "verifier_program_id metadata is invalid"
-        assert "secret-token" not in rendered
-        assert "helper TypeError detail" not in rendered
-        assert exc.__cause__ is None
-        assert exc.__suppress_context__ is True
-    else:
-        raise AssertionError("Solana destination leaked helper TypeError detail")
+    for exception_type, secret_template, forbidden_detail in failure_cases:
+        with monkeypatch.context() as patch:
+
+            def fail_program_id(
+                _value,
+                *,
+                label,
+                exception_type=exception_type,
+                secret_template=secret_template,
+            ):
+                raise exception_type(secret_template.format(label=label))
+
+            patch.setattr(module, "normalize_solana_program_id", fail_program_id)
+            try:
+                module._require_destination_evidence(args)
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == "verifier_program_id metadata is invalid"
+                assert "secret-token" not in rendered
+                assert forbidden_detail not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    f"Solana destination leaked {exception_type.__name__} detail"
+                )
 
 
 def test_solana_destination_hex_parsers_redact_parser_causes():
@@ -143,41 +159,51 @@ def test_solana_destination_hex_parsers_redact_parser_causes():
         raise AssertionError("invalid Solana destination program hex was accepted")
 
 
-def test_solana_destination_hex_parsers_redact_typeerror_parser_causes(monkeypatch):
+def test_solana_destination_hex_parsers_redact_helper_exit_parser_causes(monkeypatch):
     module = load_evidence_module()
 
-    class SecretBytes:
-        @staticmethod
-        def fromhex(_text):
-            raise TypeError("secret-token Solana destination hex TypeError detail")
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+        detail = (
+            "secret-token Solana destination hex TypeError detail"
+            if exception_type is TypeError
+            else f"secret-token Solana destination hex {exception_type.__name__} detail"
+        )
 
-    monkeypatch.setattr(module, "bytes", SecretBytes, raising=False)
+        class SecretBytes:
+            @staticmethod
+            def fromhex(_text, detail=detail, exception_type=exception_type):
+                raise exception_type(detail)
 
-    for parser, value, label, kwargs in (
-        (
-            module.parse_hex_bytes,
-            "0x" + "11" * 32,
-            "verifier code hash",
-            {"byte_length": 32},
-        ),
-        (
-            module.parse_program_bytes_hex,
-            "0x" + SOLANA_VERIFIER_PROGRAM_BYTES.hex(),
-            "verifier program bytes",
-            {},
-        ),
-    ):
-        try:
-            parser(value, label=label, **kwargs)
-        except module.argparse.ArgumentTypeError as exc:
-            rendered = str(exc)
-            assert rendered == f"{label} must be hex"
-            assert "secret-token" not in rendered
-            assert "TypeError" not in rendered
-            assert exc.__cause__ is None
-            assert exc.__suppress_context__ is True
-        else:
-            raise AssertionError(f"{label} parser TypeError was accepted")
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "bytes", SecretBytes, raising=False)
+
+            for parser, value, label, kwargs in (
+                (
+                    module.parse_hex_bytes,
+                    "0x" + "11" * 32,
+                    "verifier code hash",
+                    {"byte_length": 32},
+                ),
+                (
+                    module.parse_program_bytes_hex,
+                    "0x" + SOLANA_VERIFIER_PROGRAM_BYTES.hex(),
+                    "verifier program bytes",
+                    {},
+                ),
+            ):
+                try:
+                    parser(value, label=label, **kwargs)
+                except module.argparse.ArgumentTypeError as exc:
+                    rendered = str(exc)
+                    assert rendered == f"{label} must be hex"
+                    assert "secret-token" not in rendered
+                    assert exception_type.__name__ not in rendered
+                    assert exc.__cause__ is None
+                    assert exc.__suppress_context__ is True
+                else:
+                    raise AssertionError(
+                        f"{label} parser {exception_type.__name__} was accepted"
+                    )
 
 
 def test_solana_destination_base64_parser_redacts_parser_causes(monkeypatch):
@@ -199,25 +225,34 @@ def test_solana_destination_base64_parser_redacts_parser_causes(monkeypatch):
     else:
         raise AssertionError("invalid Solana destination program base64 was accepted")
 
-    def fail_b64decode(_value, *, validate):
-        raise TypeError("secret-token Solana destination base64 decoder detail")
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
 
-    monkeypatch.setattr(module.base64, "b64decode", fail_b64decode)
-    try:
-        module.parse_program_bytes_base64(
-            SOLANA_VERIFIER_PROGRAM_BYTES_BASE64,
-            label="verifier program bytes",
-        )
-    except module.argparse.ArgumentTypeError as exc:
-        rendered = str(exc)
-        assert rendered == "verifier program bytes must be base64"
-        assert "secret-token" not in rendered
-        assert "decoder detail" not in rendered
-        assert "TypeError" not in rendered
-        assert exc.__cause__ is None
-        assert exc.__suppress_context__ is True
-    else:
-        raise AssertionError("Solana destination base64 decoder detail was accepted")
+        def fail_b64decode(_value, *, validate, exception_type=exception_type):
+            del validate
+            raise exception_type(
+                "secret-token Solana destination base64 decoder detail"
+            )
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module.base64, "b64decode", fail_b64decode)
+            try:
+                module.parse_program_bytes_base64(
+                    SOLANA_VERIFIER_PROGRAM_BYTES_BASE64,
+                    label="verifier program bytes",
+                )
+            except module.argparse.ArgumentTypeError as exc:
+                rendered = str(exc)
+                assert rendered == "verifier program bytes must be base64"
+                assert "secret-token" not in rendered
+                assert "decoder detail" not in rendered
+                assert exception_type.__name__ not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    "Solana destination base64 "
+                    f"{exception_type.__name__} decoder detail was accepted"
+                )
 
 
 def test_solana_destination_file_parser_redacts_file_read_causes(tmp_path):

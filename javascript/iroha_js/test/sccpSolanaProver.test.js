@@ -222,6 +222,7 @@ import {
   isSupportedSccpDomain,
   normalizeSolanaSccpWitness,
   normalizeSolanaSccpProofContext,
+  sccpSourceAdapterDeploymentBindingFromDeployment,
   sccpSourceAdapterDeploymentBindingHash,
   sccpSourceVerifierMaterialHash,
   sccpSourceAdapterEngineDeploymentHash,
@@ -9024,6 +9025,16 @@ test("derives SCCP source material and deployment record hashes for UI tooling",
   assert.throws(
     () =>
       normalizeSccpSourceVerifierMaterial({
+        ...sampleSourceRecordInput(SCCP_DOMAIN_TRON),
+        ownerAddress: `0x${"11".repeat(20)}`,
+        configHash:
+          "0x3af0eb31468e605a2781906d8475d2778cccfd4b5d1dd47c31f44d7933396adc",
+      }),
+    /sourceBridgeOwnerAddress must not match sourceBridgeEmitterAddress/,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
         ...sampleSourceRecordInput(SCCP_DOMAIN_ETH),
         consensusVerifierHash: `0x${"44".repeat(32)}`,
       }),
@@ -9167,6 +9178,16 @@ test("derives SCCP source material and deployment record hashes for UI tooling",
     sccpSourceAdapterEngineDeploymentHash(auditedTonDeployment),
     "0x61e5d710ccbc902be00a38a5a80d05c19de97105605a3f93d4f8067862d81f07",
   );
+  const derivedTonBinding =
+    sccpSourceAdapterDeploymentBindingFromDeployment(auditedTonDeployment);
+  assert.deepEqual(derivedTonBinding, {
+    version: 1,
+    sourceDomain: SCCP_DOMAIN_TON,
+    targetDomain: SCCP_DOMAIN_SORA,
+    sourceAdapterDeploymentHash:
+      "0x61e5d710ccbc902be00a38a5a80d05c19de97105605a3f93d4f8067862d81f07",
+    sourceAdapterDeploymentReceiptHash: auditedTonDeployment.deploymentReceiptHash,
+  });
   assert.equal(
     sccpTonFullLightClientGateHash(auditedTonDeployment),
     "0x5047e655523aa7ce8db0cc4dfb8f9551b7912c262e0b65177620c494c57faa48",
@@ -9190,6 +9211,33 @@ test("derives SCCP source material and deployment record hashes for UI tooling",
         tonMasterchainConfigVerifierHash: `0x${"bb".repeat(32)}`,
       }),
     /TON audit verifier hashes/,
+  );
+  assert.throws(
+    () =>
+      sccpSourceAdapterDeploymentBindingFromDeployment({
+        ...sampleSourceRecordInput(SCCP_DOMAIN_TON),
+        tonMasterchainConfigVerifierHash: `0x${"bb".repeat(32)}`,
+      }),
+    /TON audit verifier hashes/,
+  );
+  assert.throws(
+    () =>
+      sccpSourceAdapterDeploymentBindingFromDeployment({
+        ...auditedTonDeployment,
+        deploymentReceiptHash: sccpSourceAdapterVerifierVkHash({
+          sourceDomain: SCCP_DOMAIN_TON,
+          targetDomain: SCCP_DOMAIN_SORA,
+        }),
+      }),
+    /role-separated/,
+  );
+  assert.throws(
+    () =>
+      sccpSourceAdapterDeploymentBindingFromDeployment({
+        ...auditedTonDeployment,
+        adapterVerifierVkHash: `0x${"99".repeat(32)}`,
+      }),
+    /canonical source-adapter verifier profile/,
   );
   assert.throws(
     () =>
@@ -11228,6 +11276,31 @@ test("binds TON proof requests to relay context and source adapter deployment", 
       request.sourceAdapterDeploymentBinding,
     ),
   );
+  const auditedTonDeployment = {
+    ...sampleSourceRecordInput(SCCP_DOMAIN_TON),
+    tonMasterchainConfigVerifierHash: `0x${"bb".repeat(32)}`,
+    tonValidatorSetTransitionVerifierHash: `0x${"cc".repeat(32)}`,
+    tonShardAccountsDictionaryVerifierHash: `0x${"dd".repeat(32)}`,
+  };
+  const descriptorRequest = buildTonSccpProofRequest({
+    publicInputs: sampleTonPublicInputs,
+    bundleBytes: sampleTonBundleBytes,
+    sourceProofBytes: [],
+    statementHash: HEX32_G,
+    destinationBindingHash: HEX32_H,
+    sourceStateVerifierHash: auditedTonDeployment.sourceStateVerifierHash,
+    sourceAdapterDeployment: auditedTonDeployment,
+  });
+  assert.deepEqual(
+    descriptorRequest.sourceAdapterDeploymentBinding,
+    sccpSourceAdapterDeploymentBindingFromDeployment(auditedTonDeployment),
+  );
+  assert.equal(
+    descriptorRequest.sourceAdapterDeploymentBindingHash,
+    sccpSourceAdapterDeploymentBindingHash(
+      descriptorRequest.sourceAdapterDeploymentBinding,
+    ),
+  );
   assert.match(request.requestHash, /^0x[0-9a-f]{64}$/);
   assert.notEqual(
     request.requestHash,
@@ -11279,6 +11352,43 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     sourceAdapterDeploymentHash: HEX32_A,
     sourceAdapterDeploymentReceiptHash: HEX32_B,
   });
+  const validTonDescriptorProofRequestInput = () => ({
+    publicInputs: sampleTonPublicInputs,
+    bundleBytes: sampleTonBundleBytes,
+    sourceProofBytes: [],
+    statementHash: HEX32_G,
+    destinationBindingHash: HEX32_H,
+    sourceStateVerifierHash: auditedTonDeployment.sourceStateVerifierHash,
+    sourceAdapterDeployment: auditedTonDeployment,
+  });
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest({
+        ...validTonProofRequestInput(),
+        sourceAdapterDeployment: auditedTonDeployment,
+      }),
+    /sourceStateVerifierHash must match sourceAdapterDeployment/,
+  );
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest({
+        ...validTonDescriptorProofRequestInput(),
+        sourceAdapterDeploymentHash: HEX32_D,
+      }),
+    /sourceAdapterDeploymentBinding must match sourceAdapterDeployment/,
+  );
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest({
+        ...validTonDescriptorProofRequestInput(),
+        sourceAdapterDeploymentBinding: {
+          sourceAdapterDeploymentHash: HEX32_D,
+          sourceAdapterDeploymentReceiptHash:
+            auditedTonDeployment.deploymentReceiptHash,
+        },
+      }),
+    /sourceAdapterDeploymentBinding must match sourceAdapterDeployment/,
+  );
   assert.throws(
     () =>
       buildTonSccpProofRequest({

@@ -2257,6 +2257,79 @@ class TonSccpProverTest {
             ),
         )
         assertEquals(request.requestHash, bindingRequest.requestHash)
+        val auditedTonDeployment = sampleAuditedTonDeployment()
+        val derivedBinding = SccpTon.sourceAdapterDeploymentBindingFromDeployment(auditedTonDeployment)
+        assertEquals(SccpTon.DOMAIN_TON, derivedBinding.sourceDomain)
+        assertEquals(SccpSolana.DOMAIN_SORA, derivedBinding.targetDomain)
+        assertEquals(
+            "0x61e5d710ccbc902be00a38a5a80d05c19de97105605a3f93d4f8067862d81f07",
+            derivedBinding.sourceAdapterDeploymentHash,
+        )
+        assertEquals("0x" + "aa".repeat(32), derivedBinding.sourceAdapterDeploymentReceiptHash)
+        val descriptorRequest = SccpTon.buildProofRequest(
+            TonSccpProofRequestInput(
+                publicInputs = samplePublicInputs(),
+                bundleBytes = sampleTonBundleBytes(),
+                sourceProofBytes = ByteArray(0),
+                statementHash = "56".repeat(32),
+                destinationBindingHash = "78".repeat(32),
+                sourceStateVerifierHash = auditedTonDeployment.sourceStateVerifierHash,
+                sourceAdapterDeployment = auditedTonDeployment,
+            ),
+        )
+        assertEquals(derivedBinding, descriptorRequest.sourceAdapterDeploymentBinding)
+        assertEquals(
+            SccpSolana.sourceAdapterDeploymentBindingHash(derivedBinding),
+            descriptorRequest.sourceAdapterDeploymentBindingHash,
+        )
+        val partialAudit = assertFailsWith<IllegalArgumentException> {
+            SccpTon.sourceAdapterDeploymentBindingFromDeployment(
+                auditedTonDeployment.copy(tonMasterchainConfigVerifierHash = SccpSolana.ZERO_HASH_V1),
+            )
+        }
+        assertTrue(partialAudit.message?.contains("TON audit verifier hashes") == true)
+        val receiptVkReplay = assertFailsWith<IllegalArgumentException> {
+            SccpTon.sourceAdapterDeploymentBindingFromDeployment(
+                auditedTonDeployment.copy(
+                    deploymentReceiptHash = SccpSourceProofs.sourceAdapterVerifierVkHash(
+                        SccpSourceProofs.DOMAIN_TON,
+                    ),
+                ),
+            )
+        }
+        assertTrue(receiptVkReplay.message?.contains("role-separated") == true)
+        val verifierKeyDrift = assertFailsWith<IllegalArgumentException> {
+            SccpTon.sourceAdapterDeploymentBindingFromDeployment(
+                auditedTonDeployment.copy(adapterVerifierVkHash = "0x" + "99".repeat(32)),
+            )
+        }
+        assertTrue(
+            verifierKeyDrift.message?.contains("canonical source-adapter verifier profile") == true,
+        )
+        val sourceStateDescriptorMismatch = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(
+                sampleProofRequestInput(sourceAdapterDeployment = auditedTonDeployment),
+            )
+        }
+        assertTrue(
+            sourceStateDescriptorMismatch.message?.contains(
+                "sourceStateVerifierHash must match sourceAdapterDeployment",
+            ) == true,
+        )
+        val rawDescriptorMismatch = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(
+                sampleProofRequestInput(
+                    sourceStateVerifierHash = auditedTonDeployment.sourceStateVerifierHash,
+                    sourceAdapterDeploymentHash = "dd".repeat(32),
+                    sourceAdapterDeployment = auditedTonDeployment,
+                ),
+            )
+        }
+        assertTrue(
+            rawDescriptorMismatch.message?.contains(
+                "sourceAdapterDeploymentBinding must match sourceAdapterDeployment",
+            ) == true,
+        )
         val wrongBindingTarget = assertFailsWith<IllegalArgumentException> {
             TonSccpProofRequestInput(
                 publicInputs = samplePublicInputs(),
@@ -2806,6 +2879,7 @@ class TonSccpProverTest {
         sourceStateVerifierHash: String = "cc".repeat(32),
         sourceAdapterDeploymentHash: String = "aa".repeat(32),
         sourceAdapterDeploymentReceiptHash: String = "bb".repeat(32),
+        sourceAdapterDeployment: TonSccpSourceAdapterDeploymentInput? = null,
         backend: String = SccpTon.CONTRACT_PROOF_BACKEND_V1,
         sourceDomain: Int = SccpTon.DOMAIN_TON,
     ): TonSccpProofRequestInput =
@@ -2819,8 +2893,22 @@ class TonSccpProverTest {
             sourceStateVerifierHash = sourceStateVerifierHash,
             sourceAdapterDeploymentHash = sourceAdapterDeploymentHash,
             sourceAdapterDeploymentReceiptHash = sourceAdapterDeploymentReceiptHash,
+            sourceAdapterDeployment = sourceAdapterDeployment,
             backend = backend,
             sourceDomain = sourceDomain,
+        )
+
+    private fun sampleAuditedTonDeployment(): TonSccpSourceAdapterDeploymentInput =
+        TonSccpSourceAdapterDeploymentInput(
+            sourceTrustAnchorHash = "0x" + "44".repeat(32),
+            consensusVerifierHash = "0x" + "55".repeat(32),
+            messageInclusionVerifierHash = "0x" + "66".repeat(32),
+            finalityPolicyHash = "0x" + "88".repeat(32),
+            sourceStateVerifierHash = "0x" + "77".repeat(32),
+            deploymentReceiptHash = "0x" + "aa".repeat(32),
+            tonMasterchainConfigVerifierHash = "0x" + "bb".repeat(32),
+            tonValidatorSetTransitionVerifierHash = "0x" + "cc".repeat(32),
+            tonShardAccountsDictionaryVerifierHash = "0x" + "dd".repeat(32),
         )
 
     private fun samplePublicInputs(): TonSccpPublicInputsInput =

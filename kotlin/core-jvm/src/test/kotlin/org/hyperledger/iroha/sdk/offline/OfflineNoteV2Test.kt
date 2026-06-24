@@ -242,6 +242,10 @@ class OfflineNoteV2Test {
         val auditWirePayload = wirePayloadBytes(OfflineNoteV2.auditInstruction(audit))
         val redeemWirePayload = wirePayloadBytes(OfflineNoteV2.redeemInstruction(redeem))
         val registerWirePayload = wirePayloadBytes(OfflineNoteV2.registerDeviceAttestationInstruction(registration))
+        assertEquals(
+            string(obj(obj(fixture, "chain_vectors"), "attestation_registration"), "instruction_norito_base64"),
+            base64(registerWirePayload),
+        )
 
         assertEquals(
             base64(issue.noritoEncoded()),
@@ -1114,9 +1118,9 @@ class OfflineNoteV2Test {
         assertEquals(schema, payload.wireName)
         val outerFrame = NoritoHeader.decode(payload.payloadBytes, null)
         assertEquals(
-            NoritoHeader.COMPACT_LEN,
+            0,
             outerFrame.header.flags,
-            "instruction wrapper and bare model payload flags",
+            "instruction wrapper frame flags",
         )
         assertTrue(isNoritoFrame(modelPayload), "public model encoder still returns a framed archive")
         val wrapperPayload = decodeInstructionWrapper(schema, payload.payloadBytes)

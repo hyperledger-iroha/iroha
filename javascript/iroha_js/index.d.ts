@@ -4115,6 +4115,8 @@ export interface TonSccpProofRequestInput {
   source_adapter_deployment_hash?: string;
   sourceAdapterDeploymentReceiptHash?: string;
   source_adapter_deployment_receipt_hash?: string;
+  sourceAdapterDeployment?: SccpSourceAdapterEngineDeploymentInput;
+  source_adapter_deployment?: SccpSourceAdapterEngineDeploymentInput;
   sourceAdapterDeploymentBinding?: SccpSourceAdapterDeploymentBindingInput;
   source_adapter_deployment_binding?: SccpSourceAdapterDeploymentBindingInput;
 }
@@ -7759,6 +7761,9 @@ export function canonicalSccpSourceAdapterDeploymentBindingBytes(
 export function sccpSourceAdapterDeploymentBindingHash(
   input: SccpSourceAdapterDeploymentBindingInput,
 ): string;
+export function sccpSourceAdapterDeploymentBindingFromDeployment(
+  input: SccpSourceAdapterEngineDeploymentInput,
+): SccpSourceAdapterDeploymentBinding;
 export function sccpDestinationBindingKey(
   input: SccpDestinationBindingDomainInput,
 ): string;

@@ -9557,6 +9557,12 @@ Temporal properties:
   only by proposal-to-prepare handoff, prepare-quorum commit-vote handoff,
   NewView-quorum proposal handoff, timeout-to-NewView reset, or finality through
   honest commit vote, Byzantine commit vote, or RBC delivery.
+- The aggregate `TimeoutRecoveryAlwaysMatchesViewChangeEnvelope` theorem
+  composes the timeout and view-change recovery surface: stalled-progress gating,
+  timeout-to-`NewView` effects, commit-vote gate clearing, fresh NewView
+  handoff, RBC evidence preservation, active-view advancement provenance, live
+  progress reset provenance, vote/evidence counter provenance, and top-level
+  phase-change provenance.
 - `PreparePhaseEntryOnlyByProposal` proves that first entry into `Prepare` can
   only be an honest proposal handoff from `Propose`, with live vote and
   certificate state clean and the proposal's RBC start-or-preserve effects
@@ -9716,6 +9722,11 @@ Temporal properties:
   prepare-vote transition increments only the prepare counter while preserving
   phase, view/RBC evidence, absent commit-vote state, and absent commit
   artifacts.
+- The aggregate `PreCommitHandoffAlwaysMatchesProposalPrepareEnvelope` theorem
+  composes the pre-commit handoff surface: phase-entry provenance, NewView
+  quorum and pending branches, proposal-to-prepare handoff, prepare quorum and
+  pending branches, view-evidence completeness, stale vote exclusion, and
+  prepare-handoff confinement before commit voting.
 - `CommitEvidenceNeverPartial` proves that latched commit-certificate
   vote/stake evidence is either absent or quorum-complete, never a partial
   certificate artifact.
@@ -9801,6 +9812,10 @@ Temporal properties:
   cannot cross into finality unless both vote and stake quorum are already met.
 - `PreFinalityCommitArtifactsNeverAppear` proves that commit-certificate
   votes/stake and the commit-view witness stay absent until finality is reached.
+- The aggregate `CommitVoteHandoffAlwaysMatchesFinalityEnvelope` theorem composes
+  the commit-vote/finality surface: commit evidence completeness, prepare-quorum
+  gating, honest and Byzantine finality and pending branches, commit-vote
+  handoff confinement, and absence of pre-finality certificate artifacts.
 - `FinalityCertificateStackNeverIncomplete` proves that every finalized state
   carries the complete certificate stack: terminal phase, prepare quorum, live
   and latched commit vote/stake evidence, honest support, RBC delivery evidence,
@@ -9845,6 +9860,11 @@ Temporal properties:
   honest/fault roster budgets in every reachable state.
 - `CommitEvidenceNeverLost` proves a committed execution keeps quorum and stake
   certificate evidence above threshold for all later states.
+- The aggregate `FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope`
+  theorem composes the finalized certificate/evidence retention surface:
+  certificate-stack completeness and exactness, retained view/prepare/commit/RBC
+  evidence, progress and Byzantine commit-vote closure, vote/stake accounting,
+  roster bounds, and persistent quorum commit evidence.
 - `RbcDeliveryNeverLost` proves that once RBC reaches the delivered state, later
   view-change, vote, or fault steps cannot roll it back.
 - `RbcDeliveredEvidenceNeverRegresses` proves that once RBC is delivered, the
@@ -10830,6 +10850,11 @@ Temporal properties:
   evidence handoff confinement, Byzantine corruption/repair, CHUNK/READY/DELIVER
   availability, first-delivery outcome, and delivered-state consensus/finality
   continuation behavior.
+- The aggregate `SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope`
+  theorem composes the main consensus safety surface: terminal committed-state
+  closure, post-finality stability, timeout/view-change recovery, certified
+  finality installation, pre-commit and commit-vote handoffs, finalized
+  certificate/evidence retention, and the full RBC lifecycle envelope.
 
 Frontier recovery invariants:
 - `TypeInvariant`

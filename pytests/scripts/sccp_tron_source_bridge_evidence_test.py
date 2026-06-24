@@ -998,49 +998,59 @@ def test_tron_source_bridge_direct_parsers_redact_parser_causes(tmp_path):
             raise AssertionError("TRON source bridge parser leaked nested details")
 
 
-def test_tron_source_bridge_direct_parsers_redact_typeerror_parser_causes(
+def test_tron_source_bridge_direct_parsers_redact_helper_exit_parser_causes(
     monkeypatch,
 ):
     module = load_evidence_module()
 
-    class SecretBytes:
-        @staticmethod
-        def fromhex(_text):
-            raise TypeError("secret-token TRON source hex TypeError detail")
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+        detail = (
+            "secret-token TRON source hex TypeError detail"
+            if exception_type is TypeError
+            else f"secret-token TRON source hex {exception_type.__name__} detail"
+        )
 
-    monkeypatch.setattr(module, "bytes", SecretBytes, raising=False)
+        class SecretBytes:
+            @staticmethod
+            def fromhex(_text, detail=detail, exception_type=exception_type):
+                raise exception_type(detail)
 
-    for parser, value, label, kwargs in (
-        (
-            module.parse_hex_bytes,
-            "0x" + "33" * 32,
-            "network id",
-            {"byte_length": 32},
-        ),
-        (
-            module.parse_runtime_bytecode_hex,
-            "0x" + TRON_SOURCE_RUNTIME_BYTECODE,
-            "source bridge runtime bytecode",
-            {},
-        ),
-        (
-            module.parse_tron_address,
-            "0x" + "11" * 20,
-            "source bridge address",
-            {},
-        ),
-    ):
-        try:
-            parser(value, label=label, **kwargs)
-        except module.argparse.ArgumentTypeError as exc:
-            rendered = str(exc)
-            assert rendered == f"{label} must be hex"
-            assert "secret-token" not in rendered
-            assert "TypeError" not in rendered
-            assert exc.__cause__ is None
-            assert exc.__suppress_context__ is True
-        else:
-            raise AssertionError(f"{label} parser TypeError was accepted")
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "bytes", SecretBytes, raising=False)
+
+            for parser, value, label, kwargs in (
+                (
+                    module.parse_hex_bytes,
+                    "0x" + "33" * 32,
+                    "network id",
+                    {"byte_length": 32},
+                ),
+                (
+                    module.parse_runtime_bytecode_hex,
+                    "0x" + TRON_SOURCE_RUNTIME_BYTECODE,
+                    "source bridge runtime bytecode",
+                    {},
+                ),
+                (
+                    module.parse_tron_address,
+                    "0x" + "11" * 20,
+                    "source bridge address",
+                    {},
+                ),
+            ):
+                try:
+                    parser(value, label=label, **kwargs)
+                except module.argparse.ArgumentTypeError as exc:
+                    rendered = str(exc)
+                    assert rendered == f"{label} must be hex"
+                    assert "secret-token" not in rendered
+                    assert exception_type.__name__ not in rendered
+                    assert exc.__cause__ is None
+                    assert exc.__suppress_context__ is True
+                else:
+                    raise AssertionError(
+                        f"{label} parser {exception_type.__name__} was accepted"
+                    )
 
 
 def test_parse_runtime_bytecode_hex_rejects_padded_inline_text(tmp_path):

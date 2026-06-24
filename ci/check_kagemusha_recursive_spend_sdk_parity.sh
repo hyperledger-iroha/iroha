@@ -2344,6 +2344,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-library-evidence-script",
     ),
     (
+        "C# SDK native library SHA case negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-library-sha-case-script",
+    ),
+    (
         "C# SDK test filter script negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-test-filter-script",
     ),
@@ -17383,8 +17387,11 @@ def check_csharp(texts, errors):
         errors,
     )
     require(
-        "8.0.*) ;;" in script,
-        "Kagemusha C# SDK script must reject non-.NET-8 SDK versions",
+        '[[ ! "${DOTNET_VERSION}" =~ ^8\\.0\\.[1-9][0-9]*$ ]]' in script
+        and "stable canonical .NET SDK 8.0.x" in script
+        and "non-zero patch" in script
+        and "8.0.*) ;;" not in script,
+        "Kagemusha C# SDK script must reject prerelease and noncanonical .NET 8 SDK versions",
         errors,
     )
     require(
@@ -17420,14 +17427,17 @@ def check_csharp(texts, errors):
     require(
         "sha256sum" in script
         and "shasum -a 256" in script
+        and '[[ ! "${BRIDGE_LIBRARY_SHA256}" =~ ^[0-9a-f]{64}$ ]]' in script
+        and "lowercase canonical SHA-256" in script
         and "connect_norito_bridge native bridge sha256:" in script,
-        "Kagemusha C# SDK script must print the freshly built native bridge SHA-256",
+        "Kagemusha C# SDK script must print the freshly built native bridge lowercase SHA-256",
         errors,
     )
     js_parity_test = read(JS_PARITY_TEST_PATH)
     for marker in (
         "assertRunnerPrintsDotnetAndBridgeEvidence",
         "fake cargo bridge build",
+        "8.0.128-preview.1",
         "connect_norito_bridge native bridge sha256:",
         "Kagemusha C# SDK runner prints host and bridge evidence before tests",
     ):
@@ -25379,7 +25389,7 @@ if mode == "--negative-control-csharp-sdk-dotnet-override-script":
 if mode == "--negative-control-csharp-sdk-dotnet-major-script":
     target = CSHARP_SDK_TEST_COMMAND
     original = read(target)
-    mutated = original.replace("8.0.*) ;;", "7.0.*) ;;", 1)
+    mutated = original.replace("^8\\.0\\.[1-9][0-9]*$", "^7\\.0\\.[1-9][0-9]*$", 1)
     if mutated == original:
         raise SystemExit("negative control failed: unable to mutate C# SDK dotnet major matcher")
     text_overrides[target] = mutated
@@ -25438,6 +25448,21 @@ if mode == "--negative-control-csharp-sdk-native-library-evidence-script":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: C# SDK native library evidence drift was not detected")
+
+if mode == "--negative-control-csharp-sdk-native-library-sha-case-script":
+    target = CSHARP_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace("^[0-9a-f]{64}$", "^[0-9a-fA-F]{64}$", 1)
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate C# SDK native library SHA case guard")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected C# SDK native library SHA case drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: C# SDK native library SHA case drift was not detected")
 
 if mode == "--negative-control-csharp-sdk-test-filter-script":
     target = CSHARP_SDK_TEST_COMMAND
