@@ -72,8 +72,9 @@ def _healthy_base_payload() -> dict[str, object]:
         "commit_qc": {"height": 42, "validator_set_len": 4},
         "highest_qc": {"height": 42},
         "locked_qc": {"height": 42},
-        "canonical": {"height": 42},
+        "canonical": {"height": 42, "pending_finality": None, "rbc_status": "disabled"},
         "membership": {"height": 42},
+        "pending_rbc": {"sessions": 0, "entries": []},
         "tx_queue": {"depth": 0, "capacity": 20_000, "saturated": False},
         "view_change_causes": {"last_cause": None},
     }
@@ -90,6 +91,125 @@ def test_sumeragi_checker_allows_low_depth_legacy_saturated_queue(tmp_path: Path
     result = _run_checker(tmp_path, payload)
 
     assert result.returncode == 0, result.stderr
+
+
+def test_sumeragi_checker_allows_fresh_one_ahead_prepare(tmp_path: Path) -> None:
+    payload = _healthy_base_payload()
+    payload["commit_qc"] = {"height": 51, "validator_set_len": 4}
+    payload["highest_qc"] = {"height": 51}
+    payload["locked_qc"] = {"height": 51}
+    payload["canonical"] = {
+        "height": 52,
+        "phase": "prepare",
+        "pending_finality": None,
+        "rbc_status": "disabled",
+    }
+    payload["membership"] = {"height": 52}
+    payload["pending_rbc"] = {"sessions": 0, "entries": []}
+    payload["view_change_causes"] = {"last_cause": None}
+
+    result = _run_checker(tmp_path, payload)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_sumeragi_checker_rejects_sparse_finality_snapshot(tmp_path: Path) -> None:
+    payload = {
+        "commit_qc": {"height": 42, "validator_set_len": 4},
+        "tx_queue": {"depth": 0, "capacity": 20_000, "saturated": False},
+    }
+
+    result = _run_checker(tmp_path, payload)
+
+    assert result.returncode == 1
+    assert "did not publish required finality field" in result.stderr
+    assert "highest_qc_height" in result.stderr
+    assert "pending_rbc.sessions" in result.stderr
+    assert "canonical.pending_finality" in result.stderr
+
+
+def test_sumeragi_checker_rejects_missing_pending_finality_field(
+    tmp_path: Path,
+) -> None:
+    payload = _healthy_base_payload()
+    payload["canonical"] = {"height": 42, "rbc_status": "disabled"}
+
+    result = _run_checker(tmp_path, payload)
+
+    assert result.returncode == 1
+    assert "did not publish required finality field" in result.stderr
+    assert "canonical.pending_finality" in result.stderr
+
+
+def test_sumeragi_checker_rejects_one_ahead_prepare_with_quorum_timeout(
+    tmp_path: Path,
+) -> None:
+    payload = _healthy_base_payload()
+    payload["commit_qc"] = {"height": 9532, "validator_set_len": 4}
+    payload["highest_qc"] = {"height": 9532}
+    payload["locked_qc"] = {"height": 9532}
+    payload["canonical"] = {
+        "height": 9533,
+        "phase": "prepare",
+        "pending_finality": None,
+        "rbc_status": "disabled",
+    }
+    payload["membership"] = {"height": 9533}
+    payload["pending_rbc"] = {"sessions": 0, "entries": []}
+    payload["view_change_causes"] = {"last_cause": "quorum_timeout"}
+
+    result = _run_checker(tmp_path, payload)
+
+    assert result.returncode == 1
+    assert "one-block-ahead prepare did not settle" in result.stderr
+    assert "quorum_timeout" in result.stderr
+
+
+def test_sumeragi_checker_rejects_one_ahead_prepare_with_pending_finality(
+    tmp_path: Path,
+) -> None:
+    payload = _healthy_base_payload()
+    payload["commit_qc"] = {"height": 51, "validator_set_len": 4}
+    payload["highest_qc"] = {"height": 51}
+    payload["locked_qc"] = {"height": 51}
+    payload["canonical"] = {
+        "height": 52,
+        "phase": "prepare",
+        "pending_finality": {"block_hash": "abc"},
+        "rbc_status": "disabled",
+    }
+    payload["membership"] = {"height": 52}
+    payload["pending_rbc"] = {"sessions": 0, "entries": []}
+    payload["view_change_causes"] = {"last_cause": None}
+
+    result = _run_checker(tmp_path, payload)
+
+    assert result.returncode == 1
+    assert "pending_finality" in result.stderr
+
+
+def test_sumeragi_checker_rejects_one_ahead_prepare_with_pending_rbc(
+    tmp_path: Path,
+) -> None:
+    payload = _healthy_base_payload()
+    payload["commit_qc"] = {"height": 51, "validator_set_len": 4}
+    payload["highest_qc"] = {"height": 51}
+    payload["locked_qc"] = {"height": 51}
+    payload["canonical"] = {
+        "height": 52,
+        "phase": "prepare",
+        "pending_finality": None,
+        "rbc_status": "pending",
+    }
+    payload["membership"] = {"height": 52}
+    payload["pending_rbc"] = {"sessions": 1, "entries": [{"age_ms": 1_000}]}
+    payload["view_change_causes"] = {"last_cause": None}
+
+    result = _run_checker(tmp_path, payload)
+
+    assert result.returncode == 1
+    assert "rbc_status='pending'" in result.stderr
+    assert "pending_rbc_sessions=1" in result.stderr
 
 
 def test_status_checker_accepts_expected_git_sha_prefix(tmp_path: Path) -> None:
@@ -207,7 +327,7 @@ def test_status_checker_rejects_non_hex_published_expected_git_sha(
     assert "is not a 7 to 40 character hexadecimal SHA prefix" in result.stderr
 
 
-def test_status_checker_rejects_nested_highest_qc_behind_commit(
+def test_status_checker_leaves_finality_to_detailed_sumeragi_status(
     tmp_path: Path,
 ) -> None:
     payload = {
@@ -223,8 +343,27 @@ def test_status_checker_rejects_nested_highest_qc_behind_commit(
 
     result = _run_status_checker(tmp_path, payload, expected_git_sha="490dacc")
 
+    assert result.returncode == 0, result.stderr
+
+
+def test_sumeragi_checker_rejects_highest_qc_behind_commit(tmp_path: Path) -> None:
+    payload = _healthy_base_payload()
+    payload["commit_qc"] = {"height": 9532, "validator_set_len": 4}
+    payload["highest_qc"] = {"height": 6544}
+    payload["locked_qc"] = {"height": 9532}
+    payload["tx_queue"] = {
+        "depth": 20_000,
+        "capacity": 20_000,
+        "saturated": True,
+        "saturated_by_count": True,
+        "saturated_by_age": False,
+    }
+
+    result = _run_checker(tmp_path, payload)
+
     assert result.returncode == 1
     assert "highest QC height 6544 is behind commit QC height 9532" in result.stderr
+    assert "capacity saturation" not in result.stderr
 
 
 def test_sumeragi_checker_rejects_explicit_count_saturation(tmp_path: Path) -> None:

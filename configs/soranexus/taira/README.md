@@ -302,9 +302,9 @@ docker run --rm \
 ```
 
 The checked-in `check_mcp_rollout.sh --skip-public --local-root ...` helper
-still expects at least 4 live validators in `/status`, so a one-node smoke
-should be validated directly with `curl /health`, `curl /status`, and
-`curl /v1/mcp` instead of the full rollout script.
+still expects at least 4 live validators in `/v1/sumeragi/status`, so a
+one-node smoke should be validated directly with `curl /health`,
+`curl /status`, and `curl /v1/mcp` instead of the full rollout script.
 
 For a local 4-validator container proof, render container-ready configs from a
 fresh `kagami localnet` bundle and start the peers on one user-defined Docker
@@ -327,9 +327,9 @@ bash configs/soranexus/taira/check_mcp_rollout.sh \
   --skip-write-canary
 ```
 
-That path is now validated on this host: peer0 publishes `/status` with
-`commit_qc_validator_set_len = 4`, and the repo rollout script passes end to
-end against the local cluster.
+That path is now validated on this host: peer0 publishes Torii counters on
+`/status`, detailed commit-QC validator health on `/v1/sumeragi/status`, and
+the repo rollout script passes end to end against the local cluster.
 
 ## Minimum viable topology
 
@@ -555,14 +555,14 @@ is stale and missing the SoraFS capacity/order entries in
 otherwise up.
 
 On a freshly reset local bundle, the same signed canary now tolerates the brief
-startup window where `/status` has no commit QC yet, submits the first
-post-genesis write, and then re-checks `/status` strictly after that write
-lands.
+startup window where detailed Sumeragi commit-QC health is not published yet,
+submits the first post-genesis write, and then re-checks `/status` plus
+`/v1/sumeragi/status` strictly after that write lands.
 
-The rollout script now also requires the live `/status` snapshot to show at
-least 4 validators in the commit QC set. If it fails that check, rebuild the
-validator configs from the shared roster before debugging ingress or MCP.
-It also verifies that the same direct node serves:
+The rollout script now also requires `/v1/sumeragi/status` to show at least 4
+validators in the commit QC set. If it fails that check, rebuild the validator
+configs from the shared roster before debugging ingress or MCP. It also
+verifies that the same direct node serves:
 
 - `/v1/sccp/capabilities`
 - `/v1/sccp/manifests`
@@ -606,9 +606,10 @@ full validator-set outage.
 Before long public writes such as Soracloud releases or large SoraFS publishes:
 
 - treat `https://taira.sora.org` as the current primary public Torii/API root
-- confirm that the public read path is advancing before trusting writes:
-  - `curl -sS "${PUBLIC_TORII_ROOT}/status" | jq '{blocks, queue_size, peers, sumeragi: {commit_qc_height, commit_qc_validator_set_len, tx_queue_depth, tx_queue_saturated}, teu_dataspace_backlog}'`
-  - `curl -sS "${PUBLIC_TORII_ROOT}/v1/sumeragi/status" | jq '{commit_qc_height: (.commit_qc_height // .commit_qc.height // null), highest_qc_height: (.highest_qc_height // .highest_qc.height // null), view_change_last_cause: (.view_change_causes.last_cause // null), worker_loop_stage: (.worker_loop.stage // null)}'`
+- confirm that `/status` counters advance and use `/v1/sumeragi/status` for
+  detailed finality and queue health:
+  - `curl -sS "${PUBLIC_TORII_ROOT}/status" | jq '{build_git_sha: .build.git_commit_sha, blocks, queue_size, peers, teu_dataspace_backlog}'`
+  - `curl -sS "${PUBLIC_TORII_ROOT}/v1/sumeragi/status" | jq '{commit_qc_height: (.commit_qc_height // .commit_qc.height // null), highest_qc_height: (.highest_qc_height // .highest_qc.height // null), locked_qc_height: (.locked_qc_height // .locked_qc.height // null), canonical_height: (.canonical.height // null), canonical_phase: (.canonical.phase // null), membership_height: (.membership.height // null), pending_finality: (.canonical.pending_finality // null), pending_rbc_sessions: (.pending_rbc.sessions // null), view_change_last_cause: (.view_change_causes.last_cause // null), tx_queue_depth: (.tx_queue_depth // .tx_queue.depth // null), tx_queue_capacity: (.tx_queue_capacity // .tx_queue.capacity // null), saturated_by_count: (.tx_queue_saturated_by_count // .tx_queue.saturated_by_count // null), saturated_by_age: (.tx_queue_saturated_by_age // .tx_queue.saturated_by_age // null), oldest_queued_age_ms: (.tx_queue_oldest_queued_age_ms // .tx_queue.oldest_queued_age_ms // null)}'`
 - verify the signer you intend to use still exists on the current Taira chain
   and still has a positive fee-asset balance
 - for Soracloud mutations specifically, also verify that the signer still
@@ -641,9 +642,11 @@ Interpret the common public failures as follows:
   samples before deciding the request is fully healthy.
 - `Transaction expired`:
   likely chain-health, consensus-latency, or queue-saturation trouble first.
-  Report the current `blocks`, `commit_qc_height`, `queue_size`,
-  `tx_queue_depth`, `tx_queue_saturated`, `teu_dataspace_backlog`,
-  `highest_qc_height`, and `view_change_last_cause` samples alongside the
+  Report the current `blocks`, `queue_size`, `teu_dataspace_backlog`,
+  `commit_qc_height`, `highest_qc_height`, `locked_qc_height`,
+  `membership_height`, `tx_queue_depth`, `tx_queue_capacity`,
+  `tx_queue_saturated_by_count`, `tx_queue_saturated_by_age`,
+  `pending_rbc_sessions`, and `view_change_last_cause` samples alongside the
   failure.
 - `403 Forbidden` immediately after a reset or redeploy:
   likely signer-permission or signer-state drift first. Re-check that the
@@ -1012,12 +1015,14 @@ From `../iroha2-block-explorer-web`:
      `curl -sS "${PUBLIC_TORII_ROOT}/v1/mcp" | jq .`
    - verify curated `iroha.*` exposure:
      `curl -sS "${PUBLIC_TORII_ROOT}/v1/mcp" -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | jq .`
-   - verify the native status snapshot is healthy before trusting public writes:
-     `curl -sS "${PUBLIC_TORII_ROOT}/status" | jq '{blocks, queue_size, peers, sumeragi: {commit_qc_height, commit_qc_validator_set_len, tx_queue_depth, tx_queue_saturated}, teu_dataspace_backlog}'`
+   - verify native counters and detailed Sumeragi health before trusting public
+     writes:
+     `curl -sS "${PUBLIC_TORII_ROOT}/status" | jq '{build_git_sha: .build.git_commit_sha, blocks, queue_size, peers, teu_dataspace_backlog}'`
+     `curl -sS "${PUBLIC_TORII_ROOT}/v1/sumeragi/status" | jq '{commit_qc_height: (.commit_qc_height // .commit_qc.height // null), highest_qc_height: (.highest_qc_height // .highest_qc.height // null), locked_qc_height: (.locked_qc_height // .locked_qc.height // null), commit_qc_validator_set_len: (.commit_qc_validator_set_len // .commit_qc.validator_set_len // null), tx_queue_depth: (.tx_queue_depth // .tx_queue.depth // null), tx_queue_capacity: (.tx_queue_capacity // .tx_queue.capacity // null), saturated_by_count: (.tx_queue_saturated_by_count // .tx_queue.saturated_by_count // null), saturated_by_age: (.tx_queue_saturated_by_age // .tx_queue.saturated_by_age // null), view_change_last_cause: (.view_change_causes.last_cause // null)}'`
    - remember that `/status.peers` is the queried node's current remote-peer
      count, not the validator-set size; use
-     `.sumeragi.commit_qc_validator_set_len` or `/v1/sumeragi/validator-sets`
-     for validator-set visibility.
+     `/v1/sumeragi/status` commit-QC validator fields or
+     `/v1/sumeragi/validator-sets` for validator-set visibility.
    - create a Connect session through the proxy and ask explicitly for JSON:
      `curl -sS -X POST "${PUBLIC_TORII_ROOT}/v1/connect/session" -H 'content-type: application/json' -H 'accept: application/json' -d '{"sid":"<32-byte-base64url-sid>"}'`
    - verify Connect websocket upgrades on both public hostnames with the
