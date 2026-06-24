@@ -9,9 +9,10 @@ use sorafs_manifest::repair::QueuedRepairStateV1;
 use sorafs_manifest::{
     GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1, GovernanceDagBlockV1,
     GovernanceDagHeadV1, GovernanceLogNodeV1, GovernanceLogSignatureV1,
-    GovernanceSignatureAlgorithm, POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrStatus,
-    ProofStreamTier, REPAIR_TASK_VERSION_V1, RepairTaskRecordV1, RepairTaskStateV1, RepairTicketId,
-    SignatureAlgorithm, SignedReplicationOrderV1, governance_dag_block_cid_v1,
+    GovernanceSignatureAlgorithm, OrderRequestV1, POTR_RECEIPT_VERSION_V1, PotrReceiptV1,
+    PotrStatus, ProofStreamTier, REPAIR_TASK_VERSION_V1, RepairTaskRecordV1, RepairTaskStateV1,
+    RepairTicketId, SignatureAlgorithm, SignedReplicationOrderV1, governance_dag_block_cid_v1,
+    verify_order_request_signature_v1,
 };
 use tempfile::tempdir;
 
@@ -456,6 +457,70 @@ fn sorafs_validate_orderbook_accepts_committed_receipt_fixture() {
 }
 
 #[test]
+fn sorafs_validate_sign_orderbook_writes_verified_order_payload() {
+    let temp = tempdir().expect("tempdir");
+    let fixture = workspace_fixture("fixtures/sorafs_manifest/orderbook/order_request_v1.to");
+    let output_path = temp.path().join("signed-orderbook-order.to");
+    let seed_hex = "b7".repeat(32);
+    let expected_key = SigningKey::from_bytes(&[0xB7; 32])
+        .verifying_key()
+        .to_bytes()
+        .to_vec();
+
+    let output = cargo_bin_cmd!("sorafs-validate")
+        .args([
+            "sign",
+            "--kind",
+            "orderbook",
+            "--payload-kind",
+            "order-request",
+            "--input",
+            fixture.to_str().expect("fixture path is utf-8"),
+            "--out",
+            output_path.to_str().expect("output path is utf-8"),
+            "--key-hex",
+            &seed_hex,
+            "--generated-at",
+            "123",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("run sorafs-validate sign orderbook");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
+    assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
+    assert!(
+        outcome
+            .get("telemetry_tags")
+            .and_then(Value::as_array)
+            .is_some_and(|tags| tags
+                .iter()
+                .any(|tag| { tag.as_str() == Some("sorafs.reference.sign.orderbook") }))
+    );
+    assert!(
+        outcome
+            .get("context")
+            .and_then(Value::as_array)
+            .is_some_and(|fields| fields.iter().any(|field| {
+                field.get("key").and_then(Value::as_str) == Some("payload_kind")
+                    && field.get("value").and_then(Value::as_str) == Some("order-request")
+            }))
+    );
+
+    let signed_bytes = fs::read(output_path).expect("read signed orderbook order");
+    let signed_order: OrderRequestV1 =
+        norito::decode_from_bytes(&signed_bytes).expect("decode signed orderbook order");
+    assert_eq!(signed_order.signature.public_key, expected_key);
+    verify_order_request_signature_v1(&signed_order).expect("signed order verifies");
+}
+
+#[test]
 fn sorafs_validate_pdp_accepts_committed_fixtures() {
     let commitment = workspace_fixture("fixtures/sorafs_manifest/pdp/commitment_v1.to");
     let challenge = workspace_fixture("fixtures/sorafs_manifest/pdp/challenge_v1.to");
@@ -882,6 +947,16 @@ fn sorafs_validate_bundle_accepts_committed_fixture_root() {
                     .get("path")
                     .and_then(Value::as_str)
                     .is_some_and(|path| path.ends_with("orderbook/settlement_receipt_v1.to"))
+        }),
+        "{outcome:?}"
+    );
+    assert!(
+        inputs.iter().any(|input| {
+            input.get("kind").and_then(Value::as_str) == Some("orderbook_runtime_snapshot")
+                && input
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .is_some_and(|path| path.ends_with("orderbook/runtime_snapshot_v1.to"))
         }),
         "{outcome:?}"
     );

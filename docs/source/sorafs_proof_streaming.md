@@ -31,6 +31,8 @@ sorafs_cli proof stream \
 - The command POSTs to `--torii-url/v1/sorafs/proof/stream` with a Norito payload
   matching the `ProofStreamRequestV1` schema (digest, proof kind, nonce,
   and either `sample_count` or `deadline_ms` depending on the proof kind).
+- PoR `sample_count` is bounded to `1..=500`; oversized requests fail before
+  manifest lookup so gateways do not perform unbounded sampling work.
 - The request body supplies `manifest_digest_hex` (BLAKE3-256 of the canonical
   manifest) and `provider_id_hex` so gateways can resolve the stored manifest
   deterministically.
@@ -47,9 +49,9 @@ sorafs_cli proof stream \
   PoR verification rejects a proof. Tune the budgets via `--max-failures=N` and
   `--max-verification-failures=N` (defaults: `0` for both) when you need to
   allow a small number of retries during rehearsals.
-- `--samples` defaults to `32` for PoR. For PoTR pass `--proof-kind=potr`
-  with `--deadline-ms=<millis>`; the stream will return the recorded receipts
-  currently cached by the gateway.
+- `--samples` defaults to `32` for PoR and must not exceed `500`. For PoTR pass
+  `--proof-kind=potr` with `--deadline-ms=<millis>`; the stream will return the
+  recorded receipts currently cached by the gateway.
 
 ### PoTR HTTP headers
 

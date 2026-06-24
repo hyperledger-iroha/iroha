@@ -209,17 +209,19 @@ CREATE TABLE sorafs_vrf_history (
 - **Storage hooks:** The runtime uses `sorafs_node::NodeHandle` as its `PorStorage`, plans
   challenges from the local manifest/capacity state, records accepted challenges, and leaves
   proof/verdict persistence to the existing Torii PoR submission routes. The ingestion status
-  endpoint (`GET /v1/sorafs/por/ingestion/{manifest_digest_hex}`) reports backlog depth,
-  oldest epoch/deadline, and last success/failure timestamps.
+  endpoint (`GET /v1/sorafs/por/ingestion/{manifest_digest_hex}?limit=N`) reports
+  backlog depth, oldest epoch/deadline, and last success/failure timestamps with
+  `limit`-bounded provider status entries and total provider counts.
 - **Governance events:** Published challenges and weekly reports are materialised by
   `FilesystemGovernancePublisher` under the configured governance DAG directory. Status,
   export, and report endpoints expose the coordinator history as canonical Norito payloads.
 - **Alerts:** `dashboards/alerts/sorafs_por_rules.yml` covers scheduler failures, forced
   challenges, ingestion backlog, and duplicate sample spikes.
 
-Implementation status: Torii exposes `/v1/sorafs/por/ingestion/{manifest_digest_hex}`, which
-delegates to `sorafs_node::NodeHandle::por_ingestion_status` for backlog depth, oldest epoch/deadline,
-and last verdict timestamps. A dedicated sampler (`SharedAppState::spawn_por_ingestion_metrics_worker`)
+Implementation status: Torii exposes `/v1/sorafs/por/ingestion/{manifest_digest_hex}?limit=N`,
+which delegates to `sorafs_node::NodeHandle::por_ingestion_status` for backlog
+depth, oldest epoch/deadline, and last verdict timestamps while bounding the
+returned provider status array. A dedicated sampler (`SharedAppState::spawn_por_ingestion_metrics_worker`)
 collects `por_ingestion_overview` snapshots every 30 seconds and drives the
 `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` gauges so dashboards and
 alerts stay fresh even when providers are idle; stale providers are zeroed out whenever they drop

@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-23
+Last updated: 2026-06-24
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -2398,10 +2398,11 @@ and completed history lives in [`status.md`](./status.md).
   exposes the local SoraFS reputation publish/latest/provider-proof surface at
   `/v1/sorafs/reputation/*`. `sorafs_cli reputation publish`, `snapshot`, and
   `fetch` exercise that surface for operators. Historical snapshot lookup,
-  latest-weight discovery, sequenced snapshot events, and bounded CLI event
-  watching are also covered locally, with deterministic `ETag`/`Cache-Control`
-  validators on reputation GET responses and a live server-sent event stream
-  plus `/ws/reputation` WebSocket parity for snapshot publications. The
+  latest-weight discovery, sequenced snapshot events, bounded latest/historical
+  snapshot provider readback, and bounded CLI event watching are also covered
+  locally, with deterministic `ETag`/`Cache-Control` validators on reputation
+  GET responses and a live server-sent event stream plus `/ws/reputation`
+  WebSocket parity for snapshot publications. The
   `iroha_js_host` NAPI bridge, `iroha_python_rs` bridge, and
   `connect_norito_bridge` JSON decoder now also carry telemetry
   `reputation_score_bps` into the SoraFS local-fetch scheduler, and the shared
@@ -2463,7 +2464,14 @@ and completed history lives in [`status.md`](./status.md).
   `include/`, records its SHA256 in the per-target manifest, writes
   metadata-normalized tar/gzip archives with sorted entries and fixed ownership,
   mode, and mtime, and the local SoraFS release gate runs the header-contract
-  guard before Clippy/tests. It also ships the
+  guard before Clippy/tests. The JavaScript SDK now exposes the Rust-backed
+  orderbook and PDP reference validators from both the package root and
+  `@iroha/iroha-js/sorafs`, while the Python SDK exposes the same
+  `ValidationOutcomeV1` contract from `iroha_python.sorafs` and the package
+  root for orderbook payloads, PDP single payloads, PDP commitment/challenge
+  pairs, PDP challenge/proof pairs, and full PDP commitment/challenge/proof
+  bundles. Kotlin/JVM, Java Android, and Swift expose matching source wrappers
+  through the shared `connect_norito_bridge` native facade. It also ships the
   `sorafs-validate advert` /
   `sorafs-validate admission` / `sorafs-validate order` /
   `sorafs-validate orderbook` / `sorafs-validate por` /
@@ -2471,6 +2479,7 @@ and completed history lives in [`status.md`](./status.md).
   `sorafs-validate repair` / `sorafs-validate bundle` /
   `sorafs-validate governance` / `sorafs-validate sign --kind advert` /
   `sorafs-validate sign --kind order` /
+  `sorafs-validate sign --kind orderbook` /
   `sorafs-validate sign --kind governance` CLI commands. The CLI emits stable
   Norito JSON/table/YAML outcomes, returns code `2` for
   validation/policy/signature/Norito payload failures, and points `docs_url` at
@@ -2491,14 +2500,14 @@ and completed history lives in [`status.md`](./status.md).
   signing bytes. Advert, order, and governance signing sign canonical payload
   bytes with runtime-supplied Ed25519 seeds, write Norito output only after
   validation succeeds, and emit the same reference outcome contract. Committed
-  fixtures now include deterministic orderbook/streaming-settlement payloads,
-  PDP commitment/challenge/proof payloads plus initial negative fixtures, PoTR
-  receipt, and repair task payloads under
+  fixtures now include deterministic orderbook/streaming-settlement payloads
+  plus runtime replay snapshot bytes, PDP commitment/challenge/proof payloads
+  plus initial negative fixtures, PoTR receipt, and repair task payloads under
   `fixtures/sorafs_manifest/orderbook/`, `fixtures/sorafs_manifest/pdp/`,
   `fixtures/sorafs_manifest/potr/`, and `fixtures/sorafs_manifest/repair/`, so
   orderbook and PDP fixture tests cover the committed bytes and bundle
-  validation exercises orderbook, PDP, PoTR receipt, and repair payloads
-  directly from a clean checkout. PDP remains fail-closed in embedded Torii
+  validation exercises orderbook runtime snapshots, PDP, PoTR receipt, and
+  repair payloads directly from a clean checkout. PDP remains fail-closed in embedded Torii
   proof streaming until provider transport, live signature/inclusion
   verification, governance archival, and repair handoff land.
   `docs/examples/sorafs_reference_sdk/` ships a runnable cookbook that validates
@@ -2509,7 +2518,9 @@ and completed history lives in [`status.md`](./status.md).
   `validate_manifest_car_replay_bytes`, and `soranet_trustless_verifier
   --validation-outcome` emits `ValidationOutcomeV1` for manifest policy plus
   CARv2 digest, root, chunk-plan, payload, and PoR replay. Remaining SF-11 work
-  is live release evidence and downstream package publication rather than local
+  is live release evidence plus downstream package publication for the SDK
+  wrappers
+  rather than local
   admission renewal/revocation, signing, governance publisher verification,
   reference cookbook, manifest/CAR replay coverage, or `sorafs-validate`
   packaging support: the packaging helper now records staged-file and smoke
@@ -2519,11 +2530,14 @@ and completed history lives in [`status.md`](./status.md).
   `PorCoordinatorRuntime` from `torii.sorafs_por`, starts it when the runtime and
   embedded storage are enabled, records scheduler challenge/forced/failure and
   duplicate-sample metrics through the existing telemetry handle, registers the
-  PoR ingestion/scheduler metrics for Prometheus export, and adds PoR scheduler
-  panels plus alert fixtures. Remaining SF-9 work is live drand/VRF/auditor run
+  PoR ingestion/scheduler metrics for Prometheus export, bounds PoR ingestion
+  provider status readback with total/returned counts, caps manual
+  `/v1/sorafs/storage/por-sample` requests to `count=1..500` before manifest
+  lookup while still capping returned samples by manifest leaves, and adds PoR
+  scheduler panels plus alert fixtures. Remaining SF-9 work is live drand/VRF/auditor run
   evidence and any operator-specific governance archive handoff, not the local
-  Torii runtime, status/export/report endpoints, reference PoR validator command,
-  or local scheduler observability.
+  Torii runtime, status/export/report endpoints, bounded ingestion readback,
+  reference PoR validator command, or local scheduler observability.
 - SoraFS provider admission observability now has a checked-in Grafana board
   (`dashboards/grafana/sorafs_provider_admission.json`) plus Prometheus alert
   rules and test vectors for missing admission envelopes, stale admission
@@ -2534,7 +2548,11 @@ and completed history lives in [`status.md`](./status.md).
   range-fetch state: provider discovery exposes parsed range metadata, CAR and
   chunk range endpoints enforce stream-token validation plus
   quota/byte-rate/concurrency guards, and the range-fetch telemetry metrics feed
-  the SoraFS fetch dashboard. The stale scheduler-telemetry/token-integration
+  the SoraFS fetch dashboard. The local `/v1/sorafs/providers` discovery list
+  and configured `/v1/sorafs/storage/peers` publish-discovery readback now also
+  accept `limit` (default 50, max 500), preserve full configured/cache counts,
+  and emit `returned_count` plus `truncated` metadata for bounded
+  inventory/readback scripts. The stale scheduler-telemetry/token-integration
   remaining-work note is closed.
 - SoraFS Pin Registry validation policy wiring now covers the governance config
   surface exposed today: `manifest_pin_policy_constraints_from_config` maps
@@ -2553,9 +2571,13 @@ and completed history lives in [`status.md`](./status.md).
   base64 or raw manifest-byte aliases and failing closed on duplicate or
   malformed payload aliases before request submission, and the SoraFS
   pin-register SDK guard now pins those manifest payload surfaces across
-  JavaScript, Python, Swift, and C#. Focus future SF-4 submission work on
-  rollout and production evidence instead of reopening the completed
-  SORAFS-215/SORAFS-216 validator wiring tasks.
+  JavaScript, Python, Swift, and C#. The manifest-detail readback endpoint
+  `/v1/sorafs/pin/{digest}` now also accepts `limit` (default 50, max 500) for
+  embedded alias and replication-order arrays, emits full counts, returned
+  counts, and truncation flags, and keeps heavyweight manifest audits on the
+  paginated list endpoints. Focus future SF-4 submission work on rollout and
+  production evidence instead of reopening the completed SORAFS-215/SORAFS-216
+  validator wiring tasks.
 - SoraFS pricing docs now reflect the implemented egress accounting path:
   `RecordCapacityTelemetry.egress_bytes` is charged through
   `PricingScheduleRecord::egress_charge_bytes_nano`, recorded in the capacity
@@ -2564,31 +2586,205 @@ and completed history lives in [`status.md`](./status.md).
   gateway/orchestrator telemetry counters, `torii_sorafs_egress_bytes`,
   `torii_sorafs_egress_drift_ratio`, the capacity dashboard drift panels, and
   the `SoraFSEgressCounterDrift` alert for sustained gateway/orchestrator drift.
+- SoraFS capacity-state readback hardening is now shipped locally:
+  `/v1/sorafs/capacity/state` accepts `limit` (default 50, max 500), bounds
+  declarations, fee-ledger entries, credit-ledger entries, and disputes before
+  JSON serialization, and preserves full totals with returned-count and
+  truncation metadata for each array. Remaining production work stays focused
+  on durable contract-backed capacity/dispute flows, reconciliation evidence,
+  dashboard rollout, and live deployment validation.
+- SoraFS embedded-storage metadata readback hardening is now shipped locally:
+  `/v1/sorafs/storage/manifest/{manifest_id}` accepts an optional `limit`
+  (max 500) to bound returned file descriptors while omitting `limit` preserves
+  the complete file list required by remote gateway cache fetches; the response
+  carries full file counts, returned counts, and truncation metadata either way.
+  `/v1/sorafs/storage/plan/{manifest_id}` bounds `files`,
+  `chunk_digests_blake3`, and `chunks` by `limit` (default 50, max 500) while
+  preserving full plan counts and returned/truncation metadata for operator
+  probes.
+- SFM-4a gateway moderation foundations now include bounded Torii denylist
+  catalog readback: `/v1/sorafs/denylist/catalog` accepts `limit` (default 50,
+  max 500), bounds returned `packs`, `opt_out_packs`, and `extra_packs`, and
+  preserves full counts/truncation metadata while
+  `/v1/sorafs/denylist/packs/{pack_id}` serves exact pack metadata. Torii CID
+  lookup and `/.well-known/sorafs/manifest` metadata now also accept `limit`
+  (default 50, max 500) for embedded site-file listings, preserve full file
+  counts/returned counts/truncation flags, and keep `manifest_b64` plus gateway
+  content serving complete. `sorafs_node` now also admits validated moderation
+  reproducibility and adversarial corpus manifests into a local model registry
+  snapshot, rejects conflicting manifest ids, keys corpus entries by canonical
+  Norito BLAKE3 digest, persists the snapshot as a Norito checkpoint when
+  storage is enabled, reloads it on node startup, and exposes canonical-
+  authenticated Torii admission plus bounded readback endpoints under
+  `/v1/sorafs/moderation/model-registry`. `sorafs_node` also persists
+  deterministic local screening-result records and pending local quarantine
+  records under `moderation-screening/screening-snapshot.to`; `quarantine` and
+  `escalate` verdicts enqueue pending review records, and Torii exposes
+  canonical-authenticated `POST /v1/sorafs/moderation/screening-results` plus
+  bounded readback through `GET /v1/sorafs/moderation/screening-results` and
+  `GET /v1/sorafs/moderation/quarantine`. Remaining rollout work stays focused
+  on the persistent production model registry service, deterministic runner,
+  committee service, encrypted quarantine object store/review workflow,
+  operator panel, and live ingest/quarantine/appeal/transparency evidence
+  rather than local catalog, metadata readback, registry-admission/checkpoint/
+  API hardening, or local screening/quarantine evidence persistence.
+- SFM-4c transparency ledger V1 data-model payloads are now shipped:
+  `iroha_data_model::sorafs::transparency` defines
+  `ModerationLedgerEntryV1`, `ModerationLedgerBlockV1`, and
+  `ModerationLedgerProofV1` with Norito schemas, domain-separated BLAKE3
+  entry/block hashing, deterministic cycle entry sorting, Merkle root/proof
+  verification helpers, and focused roundtrip/tamper/ordering coverage. It now
+  also defines `ModerationLedgerCyclePublicationV1`, and `sorafs_node` can
+  publish validated publication bundles through the local Governance DAG
+  filesystem sink, publish index, digest sidecars, and CAR queue under the
+  `transparency_ledger_publication` payload kind. `sorafs_manifest` now also
+  provides `GovernanceExternalPayloadV1`, and the local node signs canonical
+  transparency publication bytes into the optional runtime Governance DAG when
+  a signer is configured. Torii now also exposes local readback endpoints for
+  published transparency cycles and entry inclusion proofs, with artifact path,
+  BLAKE3, Norito decode, and Merkle-proof verification against the Governance
+  DAG publish-index, and cycle detail readback bounds returned publication
+  proofs with full verification counts preserved. Torii also exposes local
+  SFGT proof-token verification for
+  caller-supplied gateway public keys and optional runtime-only evidence-binding
+  material, now honoring configured Torii API-token enforcement and the shared
+  proof API rate limiter with `429`/`Retry-After` throttle responses. The
+  proof-token issuance index foundation is now also shipped:
+  `ProofTokenIssuanceV1` records privacy-safe issued-token summaries with
+  canonical Norito hashing and `ProofTokenIssuance` ledger-entry conversion,
+  `sorafs_node::NodeHandle::publish_proof_token_issuance(...)` writes validated
+  issuance records through the local Governance DAG filesystem sink under the
+  `proof_token_issuance` payload kind, `sorafs_node` can derive and publish
+  those issuance records from signed `SFGT` frames via
+  `proof_token_issuance_from_base64(...)` /
+  `NodeHandle::publish_proof_token_base64_issuance(...)` after verifying the
+  raw Ed25519 signer key, and Torii lists those local issuance entries at
+  `/v1/sorafs/transparency/tokens` with action-code, signer, token,
+  bound-entry, expiry, evidence-digest summaries, total/returned counts, and a
+  bounded `limit` query for returned entries. `sorafs_node` also now
+  exposes a generic local transparency source-entry worker via
+  `TransparencyLedgerSourceEntry`,
+  `record_transparency_ledger_source_entry(...)`, and
+  `publish_transparency_ledger_cycle_from_source_entries(...)`, covering
+  privacy-safe GAR/moderation/appeal/legal-hold/redaction/evidence-access style
+  entries with duplicate-id rejection, deterministic cycle-window sorting,
+  stable ledger entry ids, cycle publication construction, and Governance DAG
+  publication. Concrete local source-entry adapters are now shipped for
+  `GarEnforcementReceiptV1`, `SoraFsModerationBallotGovernanceEventV1`,
+  `SoraFsAppealFinanceReportV1`, and
+  `SoraFsAppealFinanceSettlementReceiptV1`; they derive canonical Norito
+  payload digests plus sorted public metadata, and the local moderation/appeal
+  paths now record best-effort source entries for governance ballot events and
+  derived appeal finance reports. Torii now also exposes
+  `/v1/sorafs/transparency/source-entries/{source_kind}` as a
+  canonical-authenticated local feed boundary for those concrete source
+  payloads plus public legal-hold/redaction/evidence-access summaries,
+  returning only the derived public source-entry summary while routing accepted
+  entries into the duplicate-checked local worker. The remaining SFM-4c
+  production work is deployed producers for GAR, moderation, appeal,
+  legal-hold, redaction, and evidence-viewer events plus rollout evidence
+  around that feed boundary, deployed anchoring/publisher identities, deployed
+  proof API hardening beyond the local verifier throttle and bounded readback
+  arrays, deployed proof-token issuance producers/explorer linking, public
+  receipt explorer UI, and live privacy-safe moderation aggregate publisher.
+  Torii now also exposes
+  `/v1/sorafs/transparency/tokens/issuances` as a canonical-authenticated local
+  proof-token issuance feed; it accepts one URL-safe base64 `SFGT` frame, the
+  Ed25519 signer public key, optional evidence/policy digests, and sorted public
+  metadata, then verifies and publishes the derived `ProofTokenIssuanceV1`
+  through the local Governance DAG publisher when configured, without accepting
+  blinded-digest keys. Torii now also exposes
+  `/v1/sorafs/transparency/explorer` as a local read-only explorer snapshot over
+  the Governance DAG publish-index, returning cycle summaries, proof-token
+  issuance summaries, payload-kind counts, source paths, index digests, cache
+  validators, total/returned counts, and `limit`-bounded arrays for public UI
+  integration without exposing private proof-token digest keys. The
+  data-model foundation for that publisher is now shipped as
+  `ModerationPrivacyAggregateV1` plus explicit
+  `ModerationPrivacyParametersV1` epsilon/delta/suppression metadata,
+  deterministic aggregate hashing, sorted metric/metadata validation, and
+  conversion into `PrivacyAggregate` ledger entries. `sorafs_node` now also
+  exposes `NodeHandle::publish_privacy_aggregate_cycle(...)` to validate
+  aggregate payloads, require them to fit the target cycle window, sort them
+  deterministically, derive stable transparency entry ids, build a cycle
+  publication, and publish it through the configured Governance DAG publisher.
+  `sorafs_node` now also exposes local aggregate source-event ingestion via
+  `record_privacy_aggregate_source_event(...)` and publication from retained
+  source events via `publish_privacy_aggregate_cycle_from_source_events(...)`,
+  including duplicate source-event rejection, cycle-window filtering,
+  suppression-threshold enforcement, deterministic bounded noising from runtime
+  seed material, source-payload digest binding, and publication through the
+  existing Governance DAG bridge. `PrivacyAggregateScheduleConfig` plus
+  `publish_due_privacy_aggregate_cycle_from_source_events(...)` now derive due
+  publication windows, deterministic cycle ids, stale-window catch-up for the
+  oldest due unpublished window with retained source events, and structured
+  skip outcomes for not-due, already-published, empty, and fully suppressed
+  cycles while publishing each due cycle at most once per node runtime.
+  `iroha_config` now also exposes dormant-by-default `[sorafs.storage.privacy_aggregates]`
+  enablement/cadence knobs, `sorafs_node::StorageConfig` projects enabled
+  config into the scheduler, and
+  `publish_due_configured_privacy_aggregate_cycle_from_source_events(...)`
+  runs due-cycle publication from the configured cadence while keeping privacy
+  policy and noise seed material runtime-only. Torii now also exposes
+  `/v1/sorafs/transparency/privacy-aggregates/source-events` as a
+  canonical-authenticated local feed boundary for privacy aggregate source
+  events, routing accepted events into the duplicate-checked aggregate worker
+  and returning only event ids, digests, and counts rather than raw metric
+  values. Torii now also exposes
+  `/v1/sorafs/transparency/privacy-aggregates/publish-due` as a
+  canonical-authenticated local trigger for configured due aggregate
+  publication, with stale due event-backed window catch-up, runtime-only
+  privacy policy/noise seed inputs, and structured
+  published/skipped/already-published outcomes. The remaining
+  aggregate work is deployed source-event producers, deployed scheduler jobs,
+  and rollout evidence around this worker.
 - SoraFS economics/governance plan status is current for the remaining local
   production gaps: SFM-2 now has initial orderbook/streaming-settlement Norito
   payloads and validators in `sorafs_manifest::orderbook` plus Rust reference
-  validator, reference FFI selectors, committed fixtures, bundle validation,
+  validator, reference FFI selectors, committed fixtures including bundle
+  validation for runtime replay snapshots,
   deterministic pair and full-book snapshot matching/fee/settlement helpers,
+  deterministic generated matcher invariant and permutation-stability coverage,
+  canonical Norito local orderbook runtime replay snapshots with
+  storage-data-dir checkpoint reload and committed fixture parity,
+  Rust Ed25519 signing helpers, shared encoded-payload signing through
+  `sorafs_manifest::sign_orderbook_payload_bytes_ed25519_v1`,
+  `sorafs-validate sign --kind orderbook` CLI signing, and
+  JavaScript/Python/Kotlin/JVM/Java Android/Swift SDK
+  `signOrderbookPayload` / `sign_orderbook_payload` wrappers for
+  already-encoded order/cancel/receipt payload bytes, plus Rust/JavaScript/
+  Python/Kotlin/JVM/Java Android/Swift field-level signed order/cancel/receipt
+  payload builders,
   target dashboard/alert fixtures, Prometheus metric handles/helper methods for
   the `torii_sorafs_orderbook_*` families, `sorafs-validate orderbook` CLI
-  coverage, a local in-memory `sorafs_node` orderbook mirror, local Torii
-  order/cancel/receipt/book/trade/channel/event routes, local settlement
+  coverage, JavaScript, Python, Kotlin/JVM, Java Android, and Swift SDK
+  orderbook reference-validation bindings, JavaScript and Python Torii read
+  helpers for local orderbook book/trades/channels/receipts/events, JavaScript
+  and `iroha_python` local orderbook SSE/WebSocket stream helpers, JavaScript,
+  `iroha_python`, and standalone `iroha_torii_client` local submit helpers for
+  already signed Norito order/cancel/receipt bytes, a local in-memory `sorafs_node` orderbook mirror, local Torii
+  order/cancel/receipt/book/trade/channel/event routes with `limit`-bounded
+  book/trades/channels/receipts readbacks and full total counts, local settlement
   receipt application with duplicate-id and overlapping-range rejection,
-  replayable local orderbook event history, local SSE/WebSocket event streams
-  with frame-shape coverage,
+  local orderbook settlement receipt Governance DAG publication, replayable
+  local orderbook event history, local SSE/WebSocket event streams with
+  frame-shape coverage,
   embedded Ed25519 payload signature digests/verification with local runtime
   enforcement, local request-authenticated orderbook POST envelope/account/
   signer binding, local known-channel receipt provider-role authorization,
   local provider-advert capability authorization for asks and known-channel
-  receipts, and
-  local runtime metric emission for order flow, depth, matcher lag, settlement
+  receipts, local config-backed order admission policy for minimum order
+  quantity and price tick, and local runtime metric emission for order flow,
+  depth, matcher lag, settlement
   backlog, escrow runway, API error ratios, and mirror divergence,
   but still needs the on-chain contract surface, durable matcher service,
-  daemonized settlement receipt service with governance publication and escrow
-  custody mutation, contract-backed capability policy authorization, contract
-  forwarding, durable contract/matcher-backed WebSocket/SSE streams,
-  downstream SDK bindings, live dashboard wiring and alert routing, contract/mirror
-  reconciliation tests, and staged/live evidence;
+  daemonized settlement receipt service with escrow custody mutation,
+  on-chain/governance-backed admission policy, contract-backed capability
+  policy authorization, contract forwarding,
+  durable contract/matcher-backed WebSocket/SSE streams,
+  SDK release artifacts/live smoke evidence,
+  live dashboard wiring and alert routing,
+  contract/mirror reconciliation tests, and staged/live evidence;
   SFM-4b2 appeal finance now has deterministic orchestrator pricing/settlement
   helpers, CLI quote/settle/disburse commands, read-only Torii config,
   readiness, and quote endpoints for the baseline pricing formula, and
@@ -2603,8 +2799,9 @@ and completed history lives in [`status.md`](./status.md).
   Governance DAG publish endpoints for appeal finance reports and weekly
   rollups, plus local publish-index-backed report and weekly rollup dashboard
   endpoints. A checked-in Grafana/Prometheus appeal-finance dashboard and alert
-  pack now covers report/weekly-rollup publication freshness, failures, payload
-  throughput, rollup lag, and Governance DAG backlog.
+  pack now covers report/weekly-rollup/settlement-receipt publication
+  freshness, failures, payload throughput, rollup lag, receipt/report lag, and
+  Governance DAG backlog.
   SoraFS reconciliation reports now embed local appeal-finance rollup summaries
   for treasury review. Torii now exposes a canonical-authenticated native
   `OpenAssetLock` instruction builder plus participant-gated runtime asset-lock
@@ -2614,14 +2811,32 @@ and completed history lives in [`status.md`](./status.md).
   `DrawdownAssetLock`/`CancelAssetLock` settlement instructions for confirmed
   appeal deposit locks, and it can reconcile the current runtime asset-lock
   ledger state after those client-submitted settlement transactions with
-  deterministic audit digests for peer/operator comparison. Deposit-backed
+  deterministic audit digests for peer/operator comparison, and a
+  configured-signer submitter can queue the next pending native settlement step
+  when the required authority key is configured and publish a typed
+  `SoraFsAppealFinanceSettlementReceiptV1` to the local Governance DAG when a
+  publisher is configured, with the signing/queueing/reconciliation/receipt
+  publication path now factored into a reusable internal helper. Torii now also
+  starts a moderation-derived settlement worker when SoraFS storage and
+  configured submitter keys are available; it replays/subscribes to local
+  `BallotTallied` events, reconstructs the moderation-captured deposit
+  fingerprint including evidence hashes, validates the runtime ledger, and
+  queues pending settlement steps through the same helper, with a configured
+  follow-up scan interval plus persisted transaction hash, pipeline status,
+  attempt count, and last-error tracking for unchanged ledger states across
+  process restarts and rejected/expired worker transaction retries.
+  Deposit-backed
   local moderation tallies now derive and publish deterministic
   `SoraFsAppealFinanceReportV1` records from the final decision, confirmed
-  deposit snapshot, panel roster, revealed jurors, and no-show jurors, and Torii
-  now serves local published report summaries for operator dashboards, and the
-  checked-in observability pack covers local rollout signals, but SFM-4b2 still
-  needs the signed ledger settlement transaction submitter, hosted live/public
-  dashboard wiring, and multi-peer end-to-end ledger reconciliation;
+  deposit snapshot, evidence-hash fingerprint, panel roster, revealed jurors,
+  and no-show jurors, and Torii now serves local published report, weekly
+  rollup, and settlement receipt summaries for operator dashboards with
+  aggregate totals over the full local publish-index plus `limit`-bounded source
+  entry arrays, and the checked-in observability pack now
+  covers report/weekly-rollup/settlement-receipt throughput, freshness,
+  failures, receipt/report lag, and local Governance DAG backlog, but SFM-4b2 still
+  needs hosted live/public dashboard wiring and multi-peer end-to-end ledger
+  reconciliation;
   SFM-4b4 now has SoraFS-specific moderation ballot context/commit/reveal
   payloads in `iroha_data_model::sorafs::moderation` that bind case ids,
   evidence bundle digests, appeal finance config versions, panel roster hashes,
@@ -2630,9 +2845,13 @@ and completed history lives in [`status.md`](./status.md).
   windows, challenge-buffered reveals, deterministic quorum tallies, contested
   tie detection, replayable local events, and Torii JSON endpoints for
   announcement, list/get, commit, reveal, tally, and event backlog under
-  `/v1/sorafs/moderation/ballots*`. Announcement intake requires a confirmed
-  native asset-lock appeal deposit bound to the same case, round, and evidence
-  bundle. Local moderation ballot lifecycle events now publish into the SoraFS Governance DAG filesystem publisher,
+  `/v1/sorafs/moderation/ballots*`. The local ballot list endpoint keeps full
+  totals visible while bounding returned records through `limit` (default 50,
+  max 500), and ballot list/detail records bound embedded commit/reveal arrays
+  with returned-count and truncation metadata. Announcement intake requires a
+  confirmed native asset-lock appeal deposit bound to the same case, round, and
+  evidence bundle. Local moderation
+  ballot lifecycle events now publish into the SoraFS Governance DAG filesystem publisher,
   `publish-index.json`, CAR queue, and optional signed runtime DAG, but still
   need durable or contract-backed orchestration, on-chain or ledger recording,
   juror CLI/portal flows, public decision/challenge DAG rollout, and
@@ -2653,11 +2872,13 @@ and completed history lives in [`status.md`](./status.md).
   packaging, verification, and local recovery for verified heads/CAR/mirror
   indexes, local mirror index build/query commands, filesystem-publisher
   `publish-index.json` maintenance for runtime-local artifact feeds, Torii
-  read-only publish-index lookup endpoints, runtime-local `car-queue.json`
-  maintenance and CARv2 segment assembly for filesystem-published governance
-  artifacts, config-backed local signed runtime block/head assembly for
-  supported filesystem-published payloads, Torii read-only CAR queue lookup
-  endpoints, Torii read-only runtime signed-DAG lookup endpoints, and checked-in
+  read-only publish-index top-level/lookup endpoints with `limit`-bounded
+  returned entry arrays, runtime-local `car-queue.json` maintenance and CARv2 segment assembly
+  for filesystem-published governance artifacts, config-backed local signed
+  runtime block/head assembly for supported filesystem-published payloads,
+  Torii read-only CAR queue lookup endpoints with `limit`-bounded returned
+  segment arrays, Torii read-only runtime signed-DAG lookup endpoints with
+  `limit`-bounded returned block arrays, and checked-in
   Grafana/Alertmanager fixtures, plus a Torii read-only local mirror
   dashboard/query API, but still needs the always-on ingest/publisher services,
   IPFS/IPNS publication, runtime RocksDB/IPLD mirror datastore and query service,
@@ -5588,7 +5809,9 @@ and completed history lives in [`status.md`](./status.md).
 	  hosted-proxy, integration-test, binary, and bench targets gated behind
 	  their owning features. SoraFS proof streaming rejects reserved
 	  `proof_kind=pdp` as `400 Bad Request` until the SF-13 provider protocol
-	  lands. The code-only placeholder/TODO sweep now leaves only intentional
+	  lands, and PoR/PDP proof-stream request envelopes cap `sample_count` at
+	  `500` before manifest lookup. The code-only placeholder/TODO sweep now
+	  leaves only intentional
 	  negative tests, fail-closed placeholder-material guards, fallback skeleton
 	  naming, manifest-derived source rendering, and telemetry peer compatibility
 	  handling. The

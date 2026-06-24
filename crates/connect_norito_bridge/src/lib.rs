@@ -72,13 +72,34 @@ use sorafs_car::{
         TransportHintInput,
     },
 };
+use sorafs_manifest::{
+    OrderCancelReasonV1, OrderSideV1, OrderTierV1, OrderbookOrderCancelFieldsV1,
+    OrderbookOrderRequestFieldsV1, OrderbookPayloadSigningError,
+    OrderbookSettlementReceiptFieldsV1, OrderbookValidationPayloadKindV1, ValidationContextFieldV1,
+    ValidationOutcomeV1, build_signed_orderbook_order_cancel_bytes_ed25519_v1,
+    build_signed_orderbook_order_request_bytes_ed25519_v1,
+    build_signed_orderbook_settlement_receipt_bytes_ed25519_v1,
+    reference_ffi as sorafs_reference_ffi, sign_orderbook_payload_bytes_ed25519_v1,
+};
 use zeroize::Zeroizing;
 
 #[cfg(feature = "privacy-production-enabled")]
 mod privacy_production;
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 8;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 10;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
+const SORAFS_ORDERBOOK_SIDE_BID: u32 = 1;
+const SORAFS_ORDERBOOK_SIDE_ASK: u32 = 2;
+const SORAFS_ORDERBOOK_TIER_HOT: u32 = 1;
+const SORAFS_ORDERBOOK_TIER_WARM: u32 = 2;
+const SORAFS_ORDERBOOK_TIER_ARCHIVE: u32 = 3;
+const SORAFS_ORDERBOOK_CANCEL_REASON_OWNER_REQUESTED: u32 = 1;
+const SORAFS_ORDERBOOK_CANCEL_REASON_EXPIRED: u32 = 2;
+const SORAFS_ORDERBOOK_CANCEL_REASON_GOVERNANCE: u32 = 3;
+const SORAFS_ORDERBOOK_CANCEL_REASON_REPLACED: u32 = 4;
+const SORAFS_REFERENCE_PDP_KIND_COMMITMENT: u32 = 1;
+const SORAFS_REFERENCE_PDP_KIND_CHALLENGE: u32 = 2;
+const SORAFS_REFERENCE_PDP_KIND_PROOF: u32 = 3;
 
 const ERR_NULL_PTR: c_int = -1;
 const ERR_UTF8: c_int = -2;
@@ -127,6 +148,7 @@ const ERR_FETCH_SCOREBOARD_EXCLUDED: c_int = -110;
 const ERR_FETCH_SCOREBOARD_BUILD: c_int = -111;
 const ERR_FETCH_EXECUTION: c_int = -112;
 const ERR_FETCH_UNKNOWN_CHUNKER: c_int = -113;
+const ERR_SORAFS_REFERENCE: c_int = -114;
 const ERR_ACCOUNT_ADDRESS: c_int = -200;
 const ERR_ASSET_ID_PARSE: c_int = -301;
 const ERR_JSON_SERIALIZE: c_int = -304;
@@ -9429,6 +9451,7 @@ pub extern "C" fn connect_norito_free(ptr_: *mut c_uchar) {
 }
 
 #[unsafe(no_mangle)]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn iroha_privacy_free_buffer(ptr_: *mut c_uchar) {
     if !ptr_.is_null() {
         unsafe {
@@ -10882,8 +10905,8 @@ mod offline_note_prover_tests {
     }
 
     #[test]
-    fn bridge_abi_version_advertises_kagemusha_compact_prover() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 8);
+    fn bridge_abi_version_advertises_sorafs_orderbook_field_builders() {
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 10);
     }
 
     #[test]
@@ -21320,6 +21343,657 @@ fn read_java_byte_array(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_sorafs_reference_generated_at(generated_at: jni::sys::jlong) -> Result<u64, String> {
+    u64::try_from(generated_at).map_err(|_| "generatedAtUnix must be non-negative".to_owned())
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+unsafe fn java_sorafs_reference_buffer_bytes(
+    buffer: sorafs_reference_ffi::SorafsReferenceFfiBuffer,
+) -> Vec<u8> {
+    let bytes = if buffer.ptr.is_null() || buffer.len == 0 {
+        Vec::new()
+    } else {
+        unsafe { slice::from_raw_parts(buffer.ptr.cast_const(), buffer.len) }.to_vec()
+    };
+    unsafe { sorafs_reference_ffi::sorafs_reference_free_buffer(buffer) };
+    bytes
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+unsafe fn java_sorafs_reference_buffer_to_array(
+    env: &mut jni::JNIEnv<'_>,
+    buffer: sorafs_reference_ffi::SorafsReferenceFfiBuffer,
+    context: &str,
+) -> Result<jni::sys::jbyteArray, String> {
+    let bytes = unsafe { java_sorafs_reference_buffer_bytes(buffer) };
+    if bytes.is_empty() {
+        return Err(format!("{context} returned empty outcome JSON"));
+    }
+    env.byte_array_from_slice(&bytes)
+        .map(|array| array.into_raw())
+        .map_err(|err| err.to_string())
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_sorafs_reference_validate_orderbook_payload_json(
+    env: &mut jni::JNIEnv<'_>,
+    kind: jni::sys::jint,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let payload_bytes = read_java_byte_array(env, &payload, "noritoBytes")
+            .ok_or_else(|| "invalid orderbook payload bytes".to_owned())?;
+        let label_bytes = read_java_byte_array(env, &label, "label")
+            .ok_or_else(|| "invalid orderbook label bytes".to_owned())?;
+        let kind = u32::try_from(kind).map_err(|_| "kind must be non-negative".to_owned())?;
+        let generated_at = java_sorafs_reference_generated_at(generated_at)?;
+        let buffer = unsafe {
+            sorafs_reference_ffi::sorafs_reference_validate_orderbook_json(
+                kind,
+                payload_bytes.as_ptr(),
+                payload_bytes.len(),
+                label_bytes.as_ptr(),
+                label_bytes.len(),
+                generated_at,
+            )
+        };
+        unsafe { java_sorafs_reference_buffer_to_array(env, buffer, "SoraFS orderbook validation") }
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_sorafs_reference_sign_orderbook_payload(
+    env: &mut jni::JNIEnv<'_>,
+    kind: jni::sys::jint,
+    payload: jni::objects::JByteArray<'_>,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let payload_bytes = read_java_byte_array(env, &payload, "noritoBytes")
+            .ok_or_else(|| "invalid orderbook payload bytes".to_owned())?;
+        let private_key_bytes = Zeroizing::new(
+            read_java_byte_array(env, &private_key, "privateKey")
+                .ok_or_else(|| "invalid orderbook private key bytes".to_owned())?,
+        );
+        let kind = u32::try_from(kind).map_err(|_| "kind must be non-negative".to_owned())?;
+        let kind = sorafs_reference_orderbook_kind_from_bridge(kind)
+            .map_err(|_| "unsupported orderbook payload kind".to_owned())?;
+        let signed = sign_orderbook_payload_bytes_ed25519_v1(
+            kind,
+            &payload_bytes,
+            private_key_bytes.as_slice(),
+        )
+        .map_err(|err| err.to_string())?;
+        env.byte_array_from_slice(&signed)
+            .map(|array| array.into_raw())
+            .map_err(|err| err.to_string())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_sorafs_orderbook_u64(value: jni::sys::jlong, field: &str) -> Result<u64, String> {
+    u64::try_from(value).map_err(|_| format!("{field} must be non-negative"))
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_sorafs_orderbook_fee_bps(value: jni::sys::jint, field: &str) -> Result<u16, String> {
+    u16::try_from(value).map_err(|_| format!("{field} must fit in u16 basis points"))
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_sorafs_orderbook_fixed32(bytes: Vec<u8>, field: &str) -> Result<[u8; 32], String> {
+    if bytes.len() != 32 {
+        return Err(format!("{field} must be 32 bytes"));
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_sorafs_orderbook_non_empty(bytes: Vec<u8>, field: &str) -> Result<Vec<u8>, String> {
+    if bytes.is_empty() {
+        return Err(format!("{field} must not be empty"));
+    }
+    Ok(bytes)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_sorafs_orderbook_decimal_u128(bytes: Vec<u8>, field: &str) -> Result<u128, String> {
+    sorafs_decimal_u128_from_bytes(&bytes)
+        .map_err(|_| format!("{field} must be an unsigned 128-bit decimal integer"))
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_sorafs_reference_build_signed_orderbook_order_request(
+    env: &mut jni::JNIEnv<'_>,
+    inputs: JavaSorafsOrderbookOrderRequestArrays<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let private_key_bytes = Zeroizing::new(
+            read_java_byte_array(env, &inputs.private_key, "privateKey")
+                .ok_or_else(|| "invalid orderbook private key bytes".to_owned())?,
+        );
+        let fields = OrderbookOrderRequestFieldsV1 {
+            order_id: java_sorafs_orderbook_fixed32(
+                read_java_byte_array(env, &inputs.order_id, "orderId")
+                    .ok_or_else(|| "invalid orderId bytes".to_owned())?,
+                "orderId",
+            )?,
+            side: sorafs_orderbook_side_from_bridge(
+                u32::try_from(inputs.side).map_err(|_| "side must be non-negative".to_owned())?,
+            )
+            .map_err(|_| "unsupported orderbook side".to_owned())?,
+            tier: sorafs_orderbook_tier_from_bridge(
+                u32::try_from(inputs.tier).map_err(|_| "tier must be non-negative".to_owned())?,
+            )
+            .map_err(|_| "unsupported orderbook tier".to_owned())?,
+            price_per_gib_micro_xor: java_sorafs_orderbook_decimal_u128(
+                read_java_byte_array(env, &inputs.price_per_gib_micro_xor, "pricePerGibMicroXor")
+                    .ok_or_else(|| "invalid pricePerGibMicroXor bytes".to_owned())?,
+                "pricePerGibMicroXor",
+            )?,
+            quantity_gib: java_sorafs_orderbook_u64(inputs.quantity_gib, "quantityGib")?,
+            remaining_gib: java_sorafs_orderbook_u64(inputs.remaining_gib, "remainingGib")?,
+            owner_account: java_sorafs_orderbook_non_empty(
+                read_java_byte_array(env, &inputs.owner_account, "ownerAccount")
+                    .ok_or_else(|| "invalid ownerAccount bytes".to_owned())?,
+                "ownerAccount",
+            )?,
+            expiry_unix: java_sorafs_orderbook_u64(inputs.expiry_unix, "expiryUnix")?,
+            nonce: java_sorafs_orderbook_u64(inputs.nonce, "nonce")?,
+            maker_fee_bps: java_sorafs_orderbook_fee_bps(inputs.maker_fee_bps, "makerFeeBps")?,
+            taker_fee_bps: java_sorafs_orderbook_fee_bps(inputs.taker_fee_bps, "takerFeeBps")?,
+        };
+        let signed = build_signed_orderbook_order_request_bytes_ed25519_v1(
+            fields,
+            private_key_bytes.as_slice(),
+        )
+        .map_err(|err| err.to_string())?;
+        env.byte_array_from_slice(&signed)
+            .map(|array| array.into_raw())
+            .map_err(|err| err.to_string())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+struct JavaSorafsOrderbookOrderRequestArrays<'a> {
+    order_id: jni::objects::JByteArray<'a>,
+    side: jni::sys::jint,
+    tier: jni::sys::jint,
+    price_per_gib_micro_xor: jni::objects::JByteArray<'a>,
+    quantity_gib: jni::sys::jlong,
+    remaining_gib: jni::sys::jlong,
+    owner_account: jni::objects::JByteArray<'a>,
+    expiry_unix: jni::sys::jlong,
+    nonce: jni::sys::jlong,
+    maker_fee_bps: jni::sys::jint,
+    taker_fee_bps: jni::sys::jint,
+    private_key: jni::objects::JByteArray<'a>,
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_sorafs_reference_build_signed_orderbook_order_cancel(
+    env: &mut jni::JNIEnv<'_>,
+    order_id: jni::objects::JByteArray<'_>,
+    owner_account: jni::objects::JByteArray<'_>,
+    reason: jni::sys::jint,
+    nonce: jni::sys::jlong,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let private_key_bytes = Zeroizing::new(
+            read_java_byte_array(env, &private_key, "privateKey")
+                .ok_or_else(|| "invalid orderbook private key bytes".to_owned())?,
+        );
+        let fields = OrderbookOrderCancelFieldsV1 {
+            order_id: java_sorafs_orderbook_fixed32(
+                read_java_byte_array(env, &order_id, "orderId")
+                    .ok_or_else(|| "invalid orderId bytes".to_owned())?,
+                "orderId",
+            )?,
+            owner_account: java_sorafs_orderbook_non_empty(
+                read_java_byte_array(env, &owner_account, "ownerAccount")
+                    .ok_or_else(|| "invalid ownerAccount bytes".to_owned())?,
+                "ownerAccount",
+            )?,
+            reason: sorafs_orderbook_cancel_reason_from_bridge(
+                u32::try_from(reason).map_err(|_| "reason must be non-negative".to_owned())?,
+            )
+            .map_err(|_| "unsupported orderbook cancel reason".to_owned())?,
+            nonce: java_sorafs_orderbook_u64(nonce, "nonce")?,
+        };
+        let signed = build_signed_orderbook_order_cancel_bytes_ed25519_v1(
+            fields,
+            private_key_bytes.as_slice(),
+        )
+        .map_err(|err| err.to_string())?;
+        env.byte_array_from_slice(&signed)
+            .map(|array| array.into_raw())
+            .map_err(|err| err.to_string())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_sorafs_reference_build_signed_orderbook_settlement_receipt(
+    env: &mut jni::JNIEnv<'_>,
+    inputs: JavaSorafsOrderbookSettlementReceiptArrays<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let private_key_bytes = Zeroizing::new(
+            read_java_byte_array(env, &inputs.private_key, "privateKey")
+                .ok_or_else(|| "invalid orderbook private key bytes".to_owned())?,
+        );
+        let fields = OrderbookSettlementReceiptFieldsV1 {
+            receipt_id: java_sorafs_orderbook_fixed32(
+                read_java_byte_array(env, &inputs.receipt_id, "receiptId")
+                    .ok_or_else(|| "invalid receiptId bytes".to_owned())?,
+                "receiptId",
+            )?,
+            channel_id: java_sorafs_orderbook_fixed32(
+                read_java_byte_array(env, &inputs.channel_id, "channelId")
+                    .ok_or_else(|| "invalid channelId bytes".to_owned())?,
+                "channelId",
+            )?,
+            trade_id: java_sorafs_orderbook_fixed32(
+                read_java_byte_array(env, &inputs.trade_id, "tradeId")
+                    .ok_or_else(|| "invalid tradeId bytes".to_owned())?,
+                "tradeId",
+            )?,
+            range_start: java_sorafs_orderbook_u64(inputs.range_start, "rangeStart")?,
+            range_end: java_sorafs_orderbook_u64(inputs.range_end, "rangeEnd")?,
+            chunk_hash: java_sorafs_orderbook_fixed32(
+                read_java_byte_array(env, &inputs.chunk_hash, "chunkHash")
+                    .ok_or_else(|| "invalid chunkHash bytes".to_owned())?,
+                "chunkHash",
+            )?,
+            bytes_delivered: java_sorafs_orderbook_u64(inputs.bytes_delivered, "bytesDelivered")?,
+            xor_debited_micro_xor: java_sorafs_orderbook_decimal_u128(
+                read_java_byte_array(env, &inputs.xor_debited_micro_xor, "xorDebitedMicroXor")
+                    .ok_or_else(|| "invalid xorDebitedMicroXor bytes".to_owned())?,
+                "xorDebitedMicroXor",
+            )?,
+            provider_credit_micro_xor: java_sorafs_orderbook_decimal_u128(
+                read_java_byte_array(
+                    env,
+                    &inputs.provider_credit_micro_xor,
+                    "providerCreditMicroXor",
+                )
+                .ok_or_else(|| "invalid providerCreditMicroXor bytes".to_owned())?,
+                "providerCreditMicroXor",
+            )?,
+            fee_amount_micro_xor: java_sorafs_orderbook_decimal_u128(
+                read_java_byte_array(env, &inputs.fee_amount_micro_xor, "feeAmountMicroXor")
+                    .ok_or_else(|| "invalid feeAmountMicroXor bytes".to_owned())?,
+                "feeAmountMicroXor",
+            )?,
+            issued_at_unix: java_sorafs_orderbook_u64(inputs.issued_at_unix, "issuedAtUnix")?,
+        };
+        let signed = build_signed_orderbook_settlement_receipt_bytes_ed25519_v1(
+            fields,
+            private_key_bytes.as_slice(),
+        )
+        .map_err(|err| err.to_string())?;
+        env.byte_array_from_slice(&signed)
+            .map(|array| array.into_raw())
+            .map_err(|err| err.to_string())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+struct JavaSorafsOrderbookSettlementReceiptArrays<'a> {
+    receipt_id: jni::objects::JByteArray<'a>,
+    channel_id: jni::objects::JByteArray<'a>,
+    trade_id: jni::objects::JByteArray<'a>,
+    range_start: jni::sys::jlong,
+    range_end: jni::sys::jlong,
+    chunk_hash: jni::objects::JByteArray<'a>,
+    bytes_delivered: jni::sys::jlong,
+    xor_debited_micro_xor: jni::objects::JByteArray<'a>,
+    provider_credit_micro_xor: jni::objects::JByteArray<'a>,
+    fee_amount_micro_xor: jni::objects::JByteArray<'a>,
+    issued_at_unix: jni::sys::jlong,
+    private_key: jni::objects::JByteArray<'a>,
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_sorafs_reference_validate_pdp_payload_json(
+    env: &mut jni::JNIEnv<'_>,
+    kind: jni::sys::jint,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let payload_bytes = read_java_byte_array(env, &payload, "noritoBytes")
+            .ok_or_else(|| "invalid PDP payload bytes".to_owned())?;
+        let label_bytes = read_java_byte_array(env, &label, "label")
+            .ok_or_else(|| "invalid PDP label bytes".to_owned())?;
+        let kind = u32::try_from(kind).map_err(|_| "kind must be non-negative".to_owned())?;
+        let generated_at = java_sorafs_reference_generated_at(generated_at)?;
+        let buffer = unsafe {
+            sorafs_reference_validate_pdp_payload_buffer(
+                kind,
+                payload_bytes.as_ptr(),
+                payload_bytes.len() as c_ulong,
+                label_bytes.as_ptr(),
+                label_bytes.len() as c_ulong,
+                generated_at,
+            )
+        };
+        unsafe { java_sorafs_reference_buffer_to_array(env, buffer, "SoraFS PDP validation") }
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_sorafs_reference_validate_pdp_commitment_challenge_json(
+    env: &mut jni::JNIEnv<'_>,
+    commitment: jni::objects::JByteArray<'_>,
+    commitment_label: jni::objects::JByteArray<'_>,
+    challenge: jni::objects::JByteArray<'_>,
+    challenge_label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let commitment_bytes = read_java_byte_array(env, &commitment, "commitment")
+            .ok_or_else(|| "invalid PDP commitment bytes".to_owned())?;
+        let commitment_label_bytes =
+            read_java_byte_array(env, &commitment_label, "commitmentLabel")
+                .ok_or_else(|| "invalid PDP commitment label bytes".to_owned())?;
+        let challenge_bytes = read_java_byte_array(env, &challenge, "challenge")
+            .ok_or_else(|| "invalid PDP challenge bytes".to_owned())?;
+        let challenge_label_bytes =
+            read_java_byte_array(env, &challenge_label, "challengeLabel")
+                .ok_or_else(|| "invalid PDP challenge label bytes".to_owned())?;
+        let generated_at = java_sorafs_reference_generated_at(generated_at)?;
+        let buffer = unsafe {
+            sorafs_reference_ffi::sorafs_reference_validate_pdp_commitment_challenge_json(
+                commitment_bytes.as_ptr(),
+                commitment_bytes.len(),
+                commitment_label_bytes.as_ptr(),
+                commitment_label_bytes.len(),
+                challenge_bytes.as_ptr(),
+                challenge_bytes.len(),
+                challenge_label_bytes.as_ptr(),
+                challenge_label_bytes.len(),
+                generated_at,
+            )
+        };
+        unsafe {
+            java_sorafs_reference_buffer_to_array(
+                env,
+                buffer,
+                "SoraFS PDP commitment/challenge validation",
+            )
+        }
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_sorafs_reference_validate_pdp_challenge_proof_json(
+    env: &mut jni::JNIEnv<'_>,
+    challenge: jni::objects::JByteArray<'_>,
+    challenge_label: jni::objects::JByteArray<'_>,
+    proof: jni::objects::JByteArray<'_>,
+    proof_label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let challenge_bytes = read_java_byte_array(env, &challenge, "challenge")
+            .ok_or_else(|| "invalid PDP challenge bytes".to_owned())?;
+        let challenge_label_bytes =
+            read_java_byte_array(env, &challenge_label, "challengeLabel")
+                .ok_or_else(|| "invalid PDP challenge label bytes".to_owned())?;
+        let proof_bytes = read_java_byte_array(env, &proof, "proof")
+            .ok_or_else(|| "invalid PDP proof bytes".to_owned())?;
+        let proof_label_bytes = read_java_byte_array(env, &proof_label, "proofLabel")
+            .ok_or_else(|| "invalid PDP proof label bytes".to_owned())?;
+        let generated_at = java_sorafs_reference_generated_at(generated_at)?;
+        let buffer = unsafe {
+            sorafs_reference_ffi::sorafs_reference_validate_pdp_challenge_proof_json(
+                challenge_bytes.as_ptr(),
+                challenge_bytes.len(),
+                challenge_label_bytes.as_ptr(),
+                challenge_label_bytes.len(),
+                proof_bytes.as_ptr(),
+                proof_bytes.len(),
+                proof_label_bytes.as_ptr(),
+                proof_label_bytes.len(),
+                generated_at,
+            )
+        };
+        unsafe {
+            java_sorafs_reference_buffer_to_array(
+                env,
+                buffer,
+                "SoraFS PDP challenge/proof validation",
+            )
+        }
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+struct JavaSorafsPdpBundleArrays<'local> {
+    commitment: jni::objects::JByteArray<'local>,
+    commitment_label: jni::objects::JByteArray<'local>,
+    challenge: jni::objects::JByteArray<'local>,
+    challenge_label: jni::objects::JByteArray<'local>,
+    proof: jni::objects::JByteArray<'local>,
+    proof_label: jni::objects::JByteArray<'local>,
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_sorafs_reference_validate_pdp_bundle_json(
+    env: &mut jni::JNIEnv<'_>,
+    arrays: JavaSorafsPdpBundleArrays<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let commitment_bytes = read_java_byte_array(env, &arrays.commitment, "commitment")
+            .ok_or_else(|| "invalid PDP commitment bytes".to_owned())?;
+        let commitment_label_bytes =
+            read_java_byte_array(env, &arrays.commitment_label, "commitmentLabel")
+                .ok_or_else(|| "invalid PDP commitment label bytes".to_owned())?;
+        let challenge_bytes = read_java_byte_array(env, &arrays.challenge, "challenge")
+            .ok_or_else(|| "invalid PDP challenge bytes".to_owned())?;
+        let challenge_label_bytes =
+            read_java_byte_array(env, &arrays.challenge_label, "challengeLabel")
+                .ok_or_else(|| "invalid PDP challenge label bytes".to_owned())?;
+        let proof_bytes = read_java_byte_array(env, &arrays.proof, "proof")
+            .ok_or_else(|| "invalid PDP proof bytes".to_owned())?;
+        let proof_label_bytes = read_java_byte_array(env, &arrays.proof_label, "proofLabel")
+            .ok_or_else(|| "invalid PDP proof label bytes".to_owned())?;
+        let generated_at = java_sorafs_reference_generated_at(generated_at)?;
+        let buffer = unsafe {
+            sorafs_reference_ffi::sorafs_reference_validate_pdp_json(
+                commitment_bytes.as_ptr(),
+                commitment_bytes.len(),
+                commitment_label_bytes.as_ptr(),
+                commitment_label_bytes.len(),
+                challenge_bytes.as_ptr(),
+                challenge_bytes.len(),
+                challenge_label_bytes.as_ptr(),
+                challenge_label_bytes.len(),
+                proof_bytes.as_ptr(),
+                proof_bytes.len(),
+                proof_label_bytes.as_ptr(),
+                proof_label_bytes.len(),
+                generated_at,
+            )
+        };
+        unsafe {
+            java_sorafs_reference_buffer_to_array(env, buffer, "SoraFS PDP bundle validation")
+        }
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_public_key_from_private_bytes(
     algorithm_code: jni::sys::jint,
     private_key: &[u8],
@@ -23727,6 +24401,560 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_Privacy
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeBridgeAbiVersion(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateOrderbookPayloadJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    kind: jni::sys::jint,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_orderbook_payload_json(
+        &mut env,
+        kind,
+        payload,
+        label,
+        generated_at,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeSignOrderbookPayload(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    kind: jni::sys::jint,
+    payload: jni::objects::JByteArray<'_>,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_sign_orderbook_payload(&mut env, kind, payload, private_key)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeBuildSignedOrderbookOrderRequest(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    order_id: jni::objects::JByteArray<'_>,
+    side: jni::sys::jint,
+    tier: jni::sys::jint,
+    price_per_gib_micro_xor: jni::objects::JByteArray<'_>,
+    quantity_gib: jni::sys::jlong,
+    remaining_gib: jni::sys::jlong,
+    owner_account: jni::objects::JByteArray<'_>,
+    expiry_unix: jni::sys::jlong,
+    nonce: jni::sys::jlong,
+    maker_fee_bps: jni::sys::jint,
+    taker_fee_bps: jni::sys::jint,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_build_signed_orderbook_order_request(
+        &mut env,
+        JavaSorafsOrderbookOrderRequestArrays {
+            order_id,
+            side,
+            tier,
+            price_per_gib_micro_xor,
+            quantity_gib,
+            remaining_gib,
+            owner_account,
+            expiry_unix,
+            nonce,
+            maker_fee_bps,
+            taker_fee_bps,
+            private_key,
+        },
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeBuildSignedOrderbookOrderCancel(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    order_id: jni::objects::JByteArray<'_>,
+    owner_account: jni::objects::JByteArray<'_>,
+    reason: jni::sys::jint,
+    nonce: jni::sys::jlong,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_build_signed_orderbook_order_cancel(
+        &mut env,
+        order_id,
+        owner_account,
+        reason,
+        nonce,
+        private_key,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeBuildSignedOrderbookSettlementReceipt(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    receipt_id: jni::objects::JByteArray<'_>,
+    channel_id: jni::objects::JByteArray<'_>,
+    trade_id: jni::objects::JByteArray<'_>,
+    range_start: jni::sys::jlong,
+    range_end: jni::sys::jlong,
+    chunk_hash: jni::objects::JByteArray<'_>,
+    bytes_delivered: jni::sys::jlong,
+    xor_debited_micro_xor: jni::objects::JByteArray<'_>,
+    provider_credit_micro_xor: jni::objects::JByteArray<'_>,
+    fee_amount_micro_xor: jni::objects::JByteArray<'_>,
+    issued_at_unix: jni::sys::jlong,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_build_signed_orderbook_settlement_receipt(
+        &mut env,
+        JavaSorafsOrderbookSettlementReceiptArrays {
+            receipt_id,
+            channel_id,
+            trade_id,
+            range_start,
+            range_end,
+            chunk_hash,
+            bytes_delivered,
+            xor_debited_micro_xor,
+            provider_credit_micro_xor,
+            fee_amount_micro_xor,
+            issued_at_unix,
+            private_key,
+        },
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidatePdpPayloadJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    kind: jni::sys::jint,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_pdp_payload_json(&mut env, kind, payload, label, generated_at)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidatePdpCommitmentChallengeJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    commitment: jni::objects::JByteArray<'_>,
+    commitment_label: jni::objects::JByteArray<'_>,
+    challenge: jni::objects::JByteArray<'_>,
+    challenge_label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_pdp_commitment_challenge_json(
+        &mut env,
+        commitment,
+        commitment_label,
+        challenge,
+        challenge_label,
+        generated_at,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidatePdpChallengeProofJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    challenge: jni::objects::JByteArray<'_>,
+    challenge_label: jni::objects::JByteArray<'_>,
+    proof: jni::objects::JByteArray<'_>,
+    proof_label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_pdp_challenge_proof_json(
+        &mut env,
+        challenge,
+        challenge_label,
+        proof,
+        proof_label,
+        generated_at,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidatePdpBundleJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    commitment: jni::objects::JByteArray<'_>,
+    commitment_label: jni::objects::JByteArray<'_>,
+    challenge: jni::objects::JByteArray<'_>,
+    challenge_label: jni::objects::JByteArray<'_>,
+    proof: jni::objects::JByteArray<'_>,
+    proof_label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_pdp_bundle_json(
+        &mut env,
+        JavaSorafsPdpBundleArrays {
+            commitment,
+            commitment_label,
+            challenge,
+            challenge_label,
+            proof,
+            proof_label,
+        },
+        generated_at,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeBridgeAbiVersion(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateOrderbookPayloadJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    kind: jni::sys::jint,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_orderbook_payload_json(
+        &mut env,
+        kind,
+        payload,
+        label,
+        generated_at,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeSignOrderbookPayload(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    kind: jni::sys::jint,
+    payload: jni::objects::JByteArray<'_>,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_sign_orderbook_payload(&mut env, kind, payload, private_key)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeBuildSignedOrderbookOrderRequest(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    order_id: jni::objects::JByteArray<'_>,
+    side: jni::sys::jint,
+    tier: jni::sys::jint,
+    price_per_gib_micro_xor: jni::objects::JByteArray<'_>,
+    quantity_gib: jni::sys::jlong,
+    remaining_gib: jni::sys::jlong,
+    owner_account: jni::objects::JByteArray<'_>,
+    expiry_unix: jni::sys::jlong,
+    nonce: jni::sys::jlong,
+    maker_fee_bps: jni::sys::jint,
+    taker_fee_bps: jni::sys::jint,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_build_signed_orderbook_order_request(
+        &mut env,
+        JavaSorafsOrderbookOrderRequestArrays {
+            order_id,
+            side,
+            tier,
+            price_per_gib_micro_xor,
+            quantity_gib,
+            remaining_gib,
+            owner_account,
+            expiry_unix,
+            nonce,
+            maker_fee_bps,
+            taker_fee_bps,
+            private_key,
+        },
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeBuildSignedOrderbookOrderCancel(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    order_id: jni::objects::JByteArray<'_>,
+    owner_account: jni::objects::JByteArray<'_>,
+    reason: jni::sys::jint,
+    nonce: jni::sys::jlong,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_build_signed_orderbook_order_cancel(
+        &mut env,
+        order_id,
+        owner_account,
+        reason,
+        nonce,
+        private_key,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeBuildSignedOrderbookSettlementReceipt(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    receipt_id: jni::objects::JByteArray<'_>,
+    channel_id: jni::objects::JByteArray<'_>,
+    trade_id: jni::objects::JByteArray<'_>,
+    range_start: jni::sys::jlong,
+    range_end: jni::sys::jlong,
+    chunk_hash: jni::objects::JByteArray<'_>,
+    bytes_delivered: jni::sys::jlong,
+    xor_debited_micro_xor: jni::objects::JByteArray<'_>,
+    provider_credit_micro_xor: jni::objects::JByteArray<'_>,
+    fee_amount_micro_xor: jni::objects::JByteArray<'_>,
+    issued_at_unix: jni::sys::jlong,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_build_signed_orderbook_settlement_receipt(
+        &mut env,
+        JavaSorafsOrderbookSettlementReceiptArrays {
+            receipt_id,
+            channel_id,
+            trade_id,
+            range_start,
+            range_end,
+            chunk_hash,
+            bytes_delivered,
+            xor_debited_micro_xor,
+            provider_credit_micro_xor,
+            fee_amount_micro_xor,
+            issued_at_unix,
+            private_key,
+        },
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidatePdpPayloadJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    kind: jni::sys::jint,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_pdp_payload_json(&mut env, kind, payload, label, generated_at)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidatePdpCommitmentChallengeJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    commitment: jni::objects::JByteArray<'_>,
+    commitment_label: jni::objects::JByteArray<'_>,
+    challenge: jni::objects::JByteArray<'_>,
+    challenge_label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_pdp_commitment_challenge_json(
+        &mut env,
+        commitment,
+        commitment_label,
+        challenge,
+        challenge_label,
+        generated_at,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidatePdpChallengeProofJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    challenge: jni::objects::JByteArray<'_>,
+    challenge_label: jni::objects::JByteArray<'_>,
+    proof: jni::objects::JByteArray<'_>,
+    proof_label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_pdp_challenge_proof_json(
+        &mut env,
+        challenge,
+        challenge_label,
+        proof,
+        proof_label,
+        generated_at,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidatePdpBundleJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    commitment: jni::objects::JByteArray<'_>,
+    commitment_label: jni::objects::JByteArray<'_>,
+    challenge: jni::objects::JByteArray<'_>,
+    challenge_label: jni::objects::JByteArray<'_>,
+    proof: jni::objects::JByteArray<'_>,
+    proof_label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_pdp_bundle_json(
+        &mut env,
+        JavaSorafsPdpBundleArrays {
+            commitment,
+            commitment_label,
+            challenge,
+            challenge_label,
+            proof,
+            proof_label,
+        },
+        generated_at,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_NativeOfflineNoteProver_nativeProveNoteRedeemWithVk(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -26079,6 +27307,601 @@ fn value_from_usize(value: usize) -> JsonValue {
 
 fn value_from_u32(value: u32) -> JsonValue {
     JsonValue::from(u64::from(value))
+}
+
+unsafe fn write_sorafs_reference_json_buffer(
+    buffer: sorafs_reference_ffi::SorafsReferenceFfiBuffer,
+    out_json_ptr: *mut *mut c_uchar,
+    out_json_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_json_ptr, out_json_len);
+    if out_json_ptr.is_null() || out_json_len.is_null() {
+        unsafe { sorafs_reference_ffi::sorafs_reference_free_buffer(buffer) };
+        return ERR_NULL_PTR;
+    }
+    let bytes = if buffer.ptr.is_null() || buffer.len == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(buffer.ptr.cast_const(), buffer.len) }
+    };
+    let status =
+        unsafe { write_bytes(out_json_ptr, out_json_len, bytes) }.map_or_else(|err| err, |_| 0);
+    unsafe { sorafs_reference_ffi::sorafs_reference_free_buffer(buffer) };
+    status
+}
+
+fn sorafs_reference_json_buffer_from_bytes(
+    bytes: Vec<u8>,
+) -> sorafs_reference_ffi::SorafsReferenceFfiBuffer {
+    let len = bytes.len();
+    if len == 0 {
+        return sorafs_reference_ffi::SorafsReferenceFfiBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+    }
+    let ptr = Box::into_raw(bytes.into_boxed_slice()).cast::<u8>();
+    sorafs_reference_ffi::SorafsReferenceFfiBuffer { ptr, len }
+}
+
+fn sorafs_reference_invalid_pdp_kind_buffer(
+    kind: u32,
+    generated_at: u64,
+) -> sorafs_reference_ffi::SorafsReferenceFfiBuffer {
+    let outcome = ValidationOutcomeV1::error(
+        "SFS-FFI-001",
+        "internal",
+        format!("unsupported pdp_kind selector: {kind}"),
+        "Use PDP selector 1 for commitment, 2 for challenge, or 3 for proof.",
+        vec![
+            "sorafs.reference.ffi".to_owned(),
+            "sorafs.reference.code.SFS-FFI-001".to_owned(),
+        ],
+        vec![ValidationContextFieldV1::new("pdp_kind", kind.to_string())],
+        Vec::new(),
+        generated_at,
+    );
+    match norito::json::to_string_pretty(&outcome) {
+        Ok(mut rendered) => {
+            rendered.push('\n');
+            sorafs_reference_json_buffer_from_bytes(rendered.into_bytes())
+        }
+        Err(_) => sorafs_reference_json_buffer_from_bytes(
+            b"{\"status\":\"Error\",\"code\":\"SFS-FFI-001\",\"category\":\"internal\",\"message\":\"unsupported PDP selector\",\"action\":\"Use a supported PDP selector.\",\"docs_url\":\"docs/portal/docs/sorafs/reference-sdk/errors.md\",\"telemetry_tags\":[\"sorafs.reference.ffi\",\"sorafs.reference.code.SFS-FFI-001\"],\"context\":[],\"inputs\":[],\"version\":1,\"generated_at\":0}\n".to_vec(),
+        ),
+    }
+}
+
+fn sorafs_reference_orderbook_kind_from_bridge(
+    kind: u32,
+) -> Result<OrderbookValidationPayloadKindV1, c_int> {
+    match kind {
+        sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST => {
+            Ok(OrderbookValidationPayloadKindV1::OrderRequest)
+        }
+        sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_CANCEL => {
+            Ok(OrderbookValidationPayloadKindV1::OrderCancel)
+        }
+        sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_TRADE_EVENT => {
+            Ok(OrderbookValidationPayloadKindV1::TradeEvent)
+        }
+        sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_CHANNEL => {
+            Ok(OrderbookValidationPayloadKindV1::SettlementChannel)
+        }
+        sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_RECEIPT => {
+            Ok(OrderbookValidationPayloadKindV1::SettlementReceipt)
+        }
+        sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_RUNTIME_SNAPSHOT => {
+            Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot)
+        }
+        _ => Err(ERR_SORAFS_REFERENCE),
+    }
+}
+
+fn sorafs_reference_orderbook_signing_error_code(error: &OrderbookPayloadSigningError) -> c_int {
+    match error {
+        OrderbookPayloadSigningError::InvalidSigningKeyLength { .. }
+        | OrderbookPayloadSigningError::InvalidSigningKeyMaterial => ERR_PRIVATE_KEY_PARSE,
+        OrderbookPayloadSigningError::UnsupportedPayloadKind { .. }
+        | OrderbookPayloadSigningError::Decode { .. }
+        | OrderbookPayloadSigningError::Sign { .. }
+        | OrderbookPayloadSigningError::Encode { .. } => ERR_SORAFS_REFERENCE,
+    }
+}
+
+fn sorafs_orderbook_side_from_bridge(code: u32) -> Result<OrderSideV1, c_int> {
+    match code {
+        SORAFS_ORDERBOOK_SIDE_BID => Ok(OrderSideV1::Bid),
+        SORAFS_ORDERBOOK_SIDE_ASK => Ok(OrderSideV1::Ask),
+        _ => Err(ERR_SORAFS_REFERENCE),
+    }
+}
+
+fn sorafs_orderbook_tier_from_bridge(code: u32) -> Result<OrderTierV1, c_int> {
+    match code {
+        SORAFS_ORDERBOOK_TIER_HOT => Ok(OrderTierV1::Hot),
+        SORAFS_ORDERBOOK_TIER_WARM => Ok(OrderTierV1::Warm),
+        SORAFS_ORDERBOOK_TIER_ARCHIVE => Ok(OrderTierV1::Archive),
+        _ => Err(ERR_SORAFS_REFERENCE),
+    }
+}
+
+fn sorafs_orderbook_cancel_reason_from_bridge(code: u32) -> Result<OrderCancelReasonV1, c_int> {
+    match code {
+        SORAFS_ORDERBOOK_CANCEL_REASON_OWNER_REQUESTED => Ok(OrderCancelReasonV1::OwnerRequested),
+        SORAFS_ORDERBOOK_CANCEL_REASON_EXPIRED => Ok(OrderCancelReasonV1::Expired),
+        SORAFS_ORDERBOOK_CANCEL_REASON_GOVERNANCE => Ok(OrderCancelReasonV1::Governance),
+        SORAFS_ORDERBOOK_CANCEL_REASON_REPLACED => Ok(OrderCancelReasonV1::Replaced),
+        _ => Err(ERR_SORAFS_REFERENCE),
+    }
+}
+
+fn sorafs_fee_bps_from_bridge(value: u32) -> Result<u16, c_int> {
+    u16::try_from(value).map_err(|_| ERR_SORAFS_REFERENCE)
+}
+
+fn sorafs_decimal_u128_from_bytes(bytes: &[u8]) -> Result<u128, c_int> {
+    let text = std::str::from_utf8(bytes).map_err(|_| ERR_UTF8)?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() || !trimmed.as_bytes().iter().all(u8::is_ascii_digit) {
+        return Err(ERR_SORAFS_REFERENCE);
+    }
+    trimmed.parse::<u128>().map_err(|_| ERR_SORAFS_REFERENCE)
+}
+
+unsafe fn sorafs_read_fixed32(ptr_: *const c_uchar, len: c_ulong) -> Result<[u8; 32], c_int> {
+    if ptr_.is_null() || len as usize != 32 {
+        return Err(ERR_SORAFS_REFERENCE);
+    }
+    let bytes = unsafe { slice::from_raw_parts(ptr_, 32) };
+    let mut out = [0u8; 32];
+    out.copy_from_slice(bytes);
+    Ok(out)
+}
+
+unsafe fn sorafs_read_non_empty_bytes(
+    ptr_: *const c_uchar,
+    len: c_ulong,
+) -> Result<Vec<u8>, c_int> {
+    let bytes = unsafe { read_vec_bytes(ptr_, len) }.map_err(|err| err.code())?;
+    if bytes.is_empty() {
+        return Err(ERR_SORAFS_REFERENCE);
+    }
+    Ok(bytes)
+}
+
+unsafe fn sorafs_read_decimal_u128(ptr_: *const c_uchar, len: c_ulong) -> Result<u128, c_int> {
+    let bytes = unsafe { read_vec_bytes(ptr_, len) }.map_err(|err| err.code())?;
+    sorafs_decimal_u128_from_bytes(&bytes)
+}
+
+unsafe fn sorafs_reference_validate_pdp_payload_buffer(
+    kind: u32,
+    bytes_ptr: *const c_uchar,
+    bytes_len: c_ulong,
+    label_ptr: *const c_uchar,
+    label_len: c_ulong,
+    generated_at: u64,
+) -> sorafs_reference_ffi::SorafsReferenceFfiBuffer {
+    let bytes_len = bytes_len as usize;
+    let label_len = label_len as usize;
+    match kind {
+        SORAFS_REFERENCE_PDP_KIND_COMMITMENT => unsafe {
+            sorafs_reference_ffi::sorafs_reference_validate_pdp_commitment_json(
+                bytes_ptr,
+                bytes_len,
+                label_ptr,
+                label_len,
+                generated_at,
+            )
+        },
+        SORAFS_REFERENCE_PDP_KIND_CHALLENGE => unsafe {
+            sorafs_reference_ffi::sorafs_reference_validate_pdp_challenge_json(
+                bytes_ptr,
+                bytes_len,
+                label_ptr,
+                label_len,
+                generated_at,
+            )
+        },
+        SORAFS_REFERENCE_PDP_KIND_PROOF => unsafe {
+            sorafs_reference_ffi::sorafs_reference_validate_pdp_proof_json(
+                bytes_ptr,
+                bytes_len,
+                label_ptr,
+                label_len,
+                generated_at,
+            )
+        },
+        other => sorafs_reference_invalid_pdp_kind_buffer(other, generated_at),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_sorafs_reference_validate_orderbook_json(
+    kind: u32,
+    bytes_ptr: *const c_uchar,
+    bytes_len: c_ulong,
+    label_ptr: *const c_uchar,
+    label_len: c_ulong,
+    generated_at: u64,
+    out_json_ptr: *mut *mut c_uchar,
+    out_json_len: *mut c_ulong,
+) -> c_int {
+    let buffer = unsafe {
+        sorafs_reference_ffi::sorafs_reference_validate_orderbook_json(
+            kind,
+            bytes_ptr,
+            bytes_len as usize,
+            label_ptr,
+            label_len as usize,
+            generated_at,
+        )
+    };
+    unsafe { write_sorafs_reference_json_buffer(buffer, out_json_ptr, out_json_len) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_sorafs_reference_sign_orderbook_payload(
+    kind: u32,
+    bytes_ptr: *const c_uchar,
+    bytes_len: c_ulong,
+    private_key_ptr: *const c_uchar,
+    private_key_len: c_ulong,
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_signed_ptr, out_signed_len);
+    if out_signed_ptr.is_null() || out_signed_len.is_null() {
+        return ERR_NULL_PTR;
+    }
+    let kind = match sorafs_reference_orderbook_kind_from_bridge(kind) {
+        Ok(kind) => kind,
+        Err(code) => return code,
+    };
+    let payload = match unsafe { read_vec_bytes(bytes_ptr, bytes_len) } {
+        Ok(payload) => payload,
+        Err(err) => return err.code(),
+    };
+    let private_key = match unsafe { read_vec_bytes(private_key_ptr, private_key_len) } {
+        Ok(private_key) => Zeroizing::new(private_key),
+        Err(err) => return err.code(),
+    };
+    let signed =
+        match sign_orderbook_payload_bytes_ed25519_v1(kind, &payload, private_key.as_slice()) {
+            Ok(signed) => signed,
+            Err(error) => return sorafs_reference_orderbook_signing_error_code(&error),
+        };
+    unsafe { write_bytes(out_signed_ptr, out_signed_len, &signed) }.map_or_else(|err| err, |_| 0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_sorafs_reference_build_signed_orderbook_order_request(
+    order_id_ptr: *const c_uchar,
+    order_id_len: c_ulong,
+    side: u32,
+    tier: u32,
+    price_per_gib_micro_xor_ptr: *const c_uchar,
+    price_per_gib_micro_xor_len: c_ulong,
+    quantity_gib: u64,
+    remaining_gib: u64,
+    owner_account_ptr: *const c_uchar,
+    owner_account_len: c_ulong,
+    expiry_unix: u64,
+    nonce: u64,
+    maker_fee_bps: u32,
+    taker_fee_bps: u32,
+    private_key_ptr: *const c_uchar,
+    private_key_len: c_ulong,
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_signed_ptr, out_signed_len);
+    if out_signed_ptr.is_null() || out_signed_len.is_null() {
+        return ERR_NULL_PTR;
+    }
+    let private_key = match unsafe { read_vec_bytes(private_key_ptr, private_key_len) } {
+        Ok(private_key) => Zeroizing::new(private_key),
+        Err(err) => return err.code(),
+    };
+    let fields = OrderbookOrderRequestFieldsV1 {
+        order_id: match unsafe { sorafs_read_fixed32(order_id_ptr, order_id_len) } {
+            Ok(value) => value,
+            Err(code) => return code,
+        },
+        side: match sorafs_orderbook_side_from_bridge(side) {
+            Ok(value) => value,
+            Err(code) => return code,
+        },
+        tier: match sorafs_orderbook_tier_from_bridge(tier) {
+            Ok(value) => value,
+            Err(code) => return code,
+        },
+        price_per_gib_micro_xor: match unsafe {
+            sorafs_read_decimal_u128(price_per_gib_micro_xor_ptr, price_per_gib_micro_xor_len)
+        } {
+            Ok(value) => value,
+            Err(code) => return code,
+        },
+        quantity_gib,
+        remaining_gib,
+        owner_account: match unsafe {
+            sorafs_read_non_empty_bytes(owner_account_ptr, owner_account_len)
+        } {
+            Ok(value) => value,
+            Err(code) => return code,
+        },
+        expiry_unix,
+        nonce,
+        maker_fee_bps: match sorafs_fee_bps_from_bridge(maker_fee_bps) {
+            Ok(value) => value,
+            Err(code) => return code,
+        },
+        taker_fee_bps: match sorafs_fee_bps_from_bridge(taker_fee_bps) {
+            Ok(value) => value,
+            Err(code) => return code,
+        },
+    };
+    let signed =
+        match build_signed_orderbook_order_request_bytes_ed25519_v1(fields, private_key.as_slice())
+        {
+            Ok(signed) => signed,
+            Err(error) => return sorafs_reference_orderbook_signing_error_code(&error),
+        };
+    unsafe { write_bytes(out_signed_ptr, out_signed_len, &signed) }.map_or_else(|err| err, |_| 0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_sorafs_reference_build_signed_orderbook_order_cancel(
+    order_id_ptr: *const c_uchar,
+    order_id_len: c_ulong,
+    owner_account_ptr: *const c_uchar,
+    owner_account_len: c_ulong,
+    reason: u32,
+    nonce: u64,
+    private_key_ptr: *const c_uchar,
+    private_key_len: c_ulong,
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_signed_ptr, out_signed_len);
+    if out_signed_ptr.is_null() || out_signed_len.is_null() {
+        return ERR_NULL_PTR;
+    }
+    let private_key = match unsafe { read_vec_bytes(private_key_ptr, private_key_len) } {
+        Ok(private_key) => Zeroizing::new(private_key),
+        Err(err) => return err.code(),
+    };
+    let fields = OrderbookOrderCancelFieldsV1 {
+        order_id: match unsafe { sorafs_read_fixed32(order_id_ptr, order_id_len) } {
+            Ok(value) => value,
+            Err(code) => return code,
+        },
+        owner_account: match unsafe {
+            sorafs_read_non_empty_bytes(owner_account_ptr, owner_account_len)
+        } {
+            Ok(value) => value,
+            Err(code) => return code,
+        },
+        reason: match sorafs_orderbook_cancel_reason_from_bridge(reason) {
+            Ok(value) => value,
+            Err(code) => return code,
+        },
+        nonce,
+    };
+    let signed = match build_signed_orderbook_order_cancel_bytes_ed25519_v1(
+        fields,
+        private_key.as_slice(),
+    ) {
+        Ok(signed) => signed,
+        Err(error) => return sorafs_reference_orderbook_signing_error_code(&error),
+    };
+    unsafe { write_bytes(out_signed_ptr, out_signed_len, &signed) }.map_or_else(|err| err, |_| 0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_sorafs_reference_build_signed_orderbook_settlement_receipt(
+    receipt_id_ptr: *const c_uchar,
+    receipt_id_len: c_ulong,
+    channel_id_ptr: *const c_uchar,
+    channel_id_len: c_ulong,
+    trade_id_ptr: *const c_uchar,
+    trade_id_len: c_ulong,
+    range_start: u64,
+    range_end: u64,
+    chunk_hash_ptr: *const c_uchar,
+    chunk_hash_len: c_ulong,
+    bytes_delivered: u64,
+    xor_debited_micro_xor_ptr: *const c_uchar,
+    xor_debited_micro_xor_len: c_ulong,
+    provider_credit_micro_xor_ptr: *const c_uchar,
+    provider_credit_micro_xor_len: c_ulong,
+    fee_amount_micro_xor_ptr: *const c_uchar,
+    fee_amount_micro_xor_len: c_ulong,
+    issued_at_unix: u64,
+    private_key_ptr: *const c_uchar,
+    private_key_len: c_ulong,
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_signed_ptr, out_signed_len);
+    if out_signed_ptr.is_null() || out_signed_len.is_null() {
+        return ERR_NULL_PTR;
+    }
+    let private_key = match unsafe { read_vec_bytes(private_key_ptr, private_key_len) } {
+        Ok(private_key) => Zeroizing::new(private_key),
+        Err(err) => return err.code(),
+    };
+    let fields = OrderbookSettlementReceiptFieldsV1 {
+        receipt_id: match unsafe { sorafs_read_fixed32(receipt_id_ptr, receipt_id_len) } {
+            Ok(value) => value,
+            Err(code) => return code,
+        },
+        channel_id: match unsafe { sorafs_read_fixed32(channel_id_ptr, channel_id_len) } {
+            Ok(value) => value,
+            Err(code) => return code,
+        },
+        trade_id: match unsafe { sorafs_read_fixed32(trade_id_ptr, trade_id_len) } {
+            Ok(value) => value,
+            Err(code) => return code,
+        },
+        range_start,
+        range_end,
+        chunk_hash: match unsafe { sorafs_read_fixed32(chunk_hash_ptr, chunk_hash_len) } {
+            Ok(value) => value,
+            Err(code) => return code,
+        },
+        bytes_delivered,
+        xor_debited_micro_xor: match unsafe {
+            sorafs_read_decimal_u128(xor_debited_micro_xor_ptr, xor_debited_micro_xor_len)
+        } {
+            Ok(value) => value,
+            Err(code) => return code,
+        },
+        provider_credit_micro_xor: match unsafe {
+            sorafs_read_decimal_u128(provider_credit_micro_xor_ptr, provider_credit_micro_xor_len)
+        } {
+            Ok(value) => value,
+            Err(code) => return code,
+        },
+        fee_amount_micro_xor: match unsafe {
+            sorafs_read_decimal_u128(fee_amount_micro_xor_ptr, fee_amount_micro_xor_len)
+        } {
+            Ok(value) => value,
+            Err(code) => return code,
+        },
+        issued_at_unix,
+    };
+    let signed = match build_signed_orderbook_settlement_receipt_bytes_ed25519_v1(
+        fields,
+        private_key.as_slice(),
+    ) {
+        Ok(signed) => signed,
+        Err(error) => return sorafs_reference_orderbook_signing_error_code(&error),
+    };
+    unsafe { write_bytes(out_signed_ptr, out_signed_len, &signed) }.map_or_else(|err| err, |_| 0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_sorafs_reference_validate_pdp_payload_json(
+    kind: u32,
+    bytes_ptr: *const c_uchar,
+    bytes_len: c_ulong,
+    label_ptr: *const c_uchar,
+    label_len: c_ulong,
+    generated_at: u64,
+    out_json_ptr: *mut *mut c_uchar,
+    out_json_len: *mut c_ulong,
+) -> c_int {
+    let buffer = unsafe {
+        sorafs_reference_validate_pdp_payload_buffer(
+            kind,
+            bytes_ptr,
+            bytes_len,
+            label_ptr,
+            label_len,
+            generated_at,
+        )
+    };
+    unsafe { write_sorafs_reference_json_buffer(buffer, out_json_ptr, out_json_len) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_sorafs_reference_validate_pdp_commitment_challenge_json(
+    commitment_ptr: *const c_uchar,
+    commitment_len: c_ulong,
+    commitment_label_ptr: *const c_uchar,
+    commitment_label_len: c_ulong,
+    challenge_ptr: *const c_uchar,
+    challenge_len: c_ulong,
+    challenge_label_ptr: *const c_uchar,
+    challenge_label_len: c_ulong,
+    generated_at: u64,
+    out_json_ptr: *mut *mut c_uchar,
+    out_json_len: *mut c_ulong,
+) -> c_int {
+    let buffer = unsafe {
+        sorafs_reference_ffi::sorafs_reference_validate_pdp_commitment_challenge_json(
+            commitment_ptr,
+            commitment_len as usize,
+            commitment_label_ptr,
+            commitment_label_len as usize,
+            challenge_ptr,
+            challenge_len as usize,
+            challenge_label_ptr,
+            challenge_label_len as usize,
+            generated_at,
+        )
+    };
+    unsafe { write_sorafs_reference_json_buffer(buffer, out_json_ptr, out_json_len) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_sorafs_reference_validate_pdp_challenge_proof_json(
+    challenge_ptr: *const c_uchar,
+    challenge_len: c_ulong,
+    challenge_label_ptr: *const c_uchar,
+    challenge_label_len: c_ulong,
+    proof_ptr: *const c_uchar,
+    proof_len: c_ulong,
+    proof_label_ptr: *const c_uchar,
+    proof_label_len: c_ulong,
+    generated_at: u64,
+    out_json_ptr: *mut *mut c_uchar,
+    out_json_len: *mut c_ulong,
+) -> c_int {
+    let buffer = unsafe {
+        sorafs_reference_ffi::sorafs_reference_validate_pdp_challenge_proof_json(
+            challenge_ptr,
+            challenge_len as usize,
+            challenge_label_ptr,
+            challenge_label_len as usize,
+            proof_ptr,
+            proof_len as usize,
+            proof_label_ptr,
+            proof_label_len as usize,
+            generated_at,
+        )
+    };
+    unsafe { write_sorafs_reference_json_buffer(buffer, out_json_ptr, out_json_len) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_sorafs_reference_validate_pdp_bundle_json(
+    commitment_ptr: *const c_uchar,
+    commitment_len: c_ulong,
+    commitment_label_ptr: *const c_uchar,
+    commitment_label_len: c_ulong,
+    challenge_ptr: *const c_uchar,
+    challenge_len: c_ulong,
+    challenge_label_ptr: *const c_uchar,
+    challenge_label_len: c_ulong,
+    proof_ptr: *const c_uchar,
+    proof_len: c_ulong,
+    proof_label_ptr: *const c_uchar,
+    proof_label_len: c_ulong,
+    generated_at: u64,
+    out_json_ptr: *mut *mut c_uchar,
+    out_json_len: *mut c_ulong,
+) -> c_int {
+    let buffer = unsafe {
+        sorafs_reference_ffi::sorafs_reference_validate_pdp_json(
+            commitment_ptr,
+            commitment_len as usize,
+            commitment_label_ptr,
+            commitment_label_len as usize,
+            challenge_ptr,
+            challenge_len as usize,
+            challenge_label_ptr,
+            challenge_label_len as usize,
+            proof_ptr,
+            proof_len as usize,
+            proof_label_ptr,
+            proof_label_len as usize,
+            generated_at,
+        )
+    };
+    unsafe { write_sorafs_reference_json_buffer(buffer, out_json_ptr, out_json_len) }
 }
 
 #[unsafe(no_mangle)]
@@ -32255,5 +34078,351 @@ mod sorafs_tests {
         if !out_report_ptr.is_null() {
             connect_norito_free(out_report_ptr);
         }
+    }
+
+    fn repo_fixture(path: &str) -> Vec<u8> {
+        fs::read(format!("{}/../../{}", env!("CARGO_MANIFEST_DIR"), path))
+            .expect("read repository fixture")
+    }
+
+    unsafe fn take_bridge_json(ptr_: *mut c_uchar, len: c_ulong) -> JsonValue {
+        let value: JsonValue = unsafe {
+            let bytes = slice::from_raw_parts(ptr_, len as usize);
+            norito::json::from_slice(bytes).expect("parse outcome JSON")
+        };
+        if !ptr_.is_null() {
+            connect_norito_free(ptr_);
+        }
+        value
+    }
+
+    #[test]
+    fn sorafs_reference_orderbook_validator_via_bridge_ffi() {
+        let payload = repo_fixture("fixtures/sorafs_manifest/orderbook/order_request_v1.to");
+        let label = b"order-request.to";
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_sorafs_reference_validate_orderbook_json(
+                sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST,
+                payload.as_ptr(),
+                payload.len() as c_ulong,
+                label.as_ptr(),
+                label.len() as c_ulong,
+                123,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, 0, "bridge validator call should succeed");
+        let outcome = unsafe { take_bridge_json(out_ptr, out_len) };
+        assert_eq!(
+            outcome.get("status").and_then(JsonValue::as_str),
+            Some("Ok")
+        );
+        assert_eq!(
+            outcome.get("code").and_then(JsonValue::as_str),
+            Some("SFS-OK-000")
+        );
+    }
+
+    #[test]
+    fn sorafs_reference_orderbook_signing_via_bridge_ffi() {
+        let payload = repo_fixture("fixtures/sorafs_manifest/orderbook/order_request_v1.to");
+        let private_key = [0xB7; 32];
+        let mut signed_ptr: *mut c_uchar = ptr::null_mut();
+        let mut signed_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_sorafs_reference_sign_orderbook_payload(
+                sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST,
+                payload.as_ptr(),
+                payload.len() as c_ulong,
+                private_key.as_ptr(),
+                private_key.len() as c_ulong,
+                &mut signed_ptr,
+                &mut signed_len,
+            )
+        };
+        assert_eq!(rc, 0, "bridge signer call should succeed");
+        let signed = unsafe { slice::from_raw_parts(signed_ptr, signed_len as usize).to_vec() };
+        assert!(!signed.is_empty(), "signed payload should be returned");
+        assert_ne!(signed, payload, "signature must change the encoded payload");
+        if !signed_ptr.is_null() {
+            connect_norito_free(signed_ptr);
+        }
+
+        let label = b"signed-order-request.to";
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+        let validate_rc = unsafe {
+            connect_norito_sorafs_reference_validate_orderbook_json(
+                sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST,
+                signed.as_ptr(),
+                signed.len() as c_ulong,
+                label.as_ptr(),
+                label.len() as c_ulong,
+                123,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(validate_rc, 0, "signed payload should validate");
+        let outcome = unsafe { take_bridge_json(out_ptr, out_len) };
+        assert_eq!(
+            outcome.get("status").and_then(JsonValue::as_str),
+            Some("Ok")
+        );
+    }
+
+    #[test]
+    fn sorafs_reference_orderbook_signing_rejects_runtime_payload_via_bridge_ffi() {
+        let payload = repo_fixture("fixtures/sorafs_manifest/orderbook/runtime_snapshot_v1.to");
+        let private_key = [0xB7; 32];
+        let mut signed_ptr: *mut c_uchar = ptr::null_mut();
+        let mut signed_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_sorafs_reference_sign_orderbook_payload(
+                sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_RUNTIME_SNAPSHOT,
+                payload.as_ptr(),
+                payload.len() as c_ulong,
+                private_key.as_ptr(),
+                private_key.len() as c_ulong,
+                &mut signed_ptr,
+                &mut signed_len,
+            )
+        };
+        assert_eq!(rc, ERR_SORAFS_REFERENCE);
+        assert!(signed_ptr.is_null());
+        assert_eq!(signed_len, 0);
+    }
+
+    fn validate_signed_orderbook_payload(kind: u32, payload: &[u8], label: &[u8]) -> JsonValue {
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+        let validate_rc = unsafe {
+            connect_norito_sorafs_reference_validate_orderbook_json(
+                kind,
+                payload.as_ptr(),
+                payload.len() as c_ulong,
+                label.as_ptr(),
+                label.len() as c_ulong,
+                123,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(validate_rc, 0, "signed payload should validate");
+        unsafe { take_bridge_json(out_ptr, out_len) }
+    }
+
+    #[test]
+    fn sorafs_reference_orderbook_field_builders_via_bridge_ffi() {
+        let private_key = [0xB7; 32];
+        let owner = b"merchant@paynet";
+        let price = b"1000000";
+        let mut order_ptr: *mut c_uchar = ptr::null_mut();
+        let mut order_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_sorafs_reference_build_signed_orderbook_order_request(
+                [0x11; 32].as_ptr(),
+                32,
+                SORAFS_ORDERBOOK_SIDE_BID,
+                SORAFS_ORDERBOOK_TIER_HOT,
+                price.as_ptr(),
+                price.len() as c_ulong,
+                12,
+                12,
+                owner.as_ptr(),
+                owner.len() as c_ulong,
+                1_700_010_000,
+                7,
+                25,
+                30,
+                private_key.as_ptr(),
+                private_key.len() as c_ulong,
+                &mut order_ptr,
+                &mut order_len,
+            )
+        };
+        assert_eq!(rc, 0, "order request builder should succeed");
+        let order_bytes = unsafe { slice::from_raw_parts(order_ptr, order_len as usize).to_vec() };
+        assert!(!order_bytes.is_empty());
+        if !order_ptr.is_null() {
+            connect_norito_free(order_ptr);
+        }
+        let order_outcome = validate_signed_orderbook_payload(
+            sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST,
+            &order_bytes,
+            b"built-order-request.to",
+        );
+        assert_eq!(
+            order_outcome.get("status").and_then(JsonValue::as_str),
+            Some("Ok")
+        );
+
+        let mut cancel_ptr: *mut c_uchar = ptr::null_mut();
+        let mut cancel_len: c_ulong = 0;
+        let cancel_rc = unsafe {
+            connect_norito_sorafs_reference_build_signed_orderbook_order_cancel(
+                [0x11; 32].as_ptr(),
+                32,
+                owner.as_ptr(),
+                owner.len() as c_ulong,
+                SORAFS_ORDERBOOK_CANCEL_REASON_OWNER_REQUESTED,
+                8,
+                private_key.as_ptr(),
+                private_key.len() as c_ulong,
+                &mut cancel_ptr,
+                &mut cancel_len,
+            )
+        };
+        assert_eq!(cancel_rc, 0, "order cancel builder should succeed");
+        let cancel_bytes =
+            unsafe { slice::from_raw_parts(cancel_ptr, cancel_len as usize).to_vec() };
+        if !cancel_ptr.is_null() {
+            connect_norito_free(cancel_ptr);
+        }
+        let cancel_outcome = validate_signed_orderbook_payload(
+            sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_CANCEL,
+            &cancel_bytes,
+            b"built-order-cancel.to",
+        );
+        assert_eq!(
+            cancel_outcome.get("status").and_then(JsonValue::as_str),
+            Some("Ok")
+        );
+
+        let debit = b"100";
+        let credit = b"90";
+        let fee = b"10";
+        let mut receipt_ptr: *mut c_uchar = ptr::null_mut();
+        let mut receipt_len: c_ulong = 0;
+        let receipt_rc = unsafe {
+            connect_norito_sorafs_reference_build_signed_orderbook_settlement_receipt(
+                [0x21; 32].as_ptr(),
+                32,
+                [0x22; 32].as_ptr(),
+                32,
+                [0x23; 32].as_ptr(),
+                32,
+                0,
+                4096,
+                [0x24; 32].as_ptr(),
+                32,
+                4096,
+                debit.as_ptr(),
+                debit.len() as c_ulong,
+                credit.as_ptr(),
+                credit.len() as c_ulong,
+                fee.as_ptr(),
+                fee.len() as c_ulong,
+                1_700_000_999,
+                private_key.as_ptr(),
+                private_key.len() as c_ulong,
+                &mut receipt_ptr,
+                &mut receipt_len,
+            )
+        };
+        assert_eq!(receipt_rc, 0, "settlement receipt builder should succeed");
+        let receipt_bytes =
+            unsafe { slice::from_raw_parts(receipt_ptr, receipt_len as usize).to_vec() };
+        if !receipt_ptr.is_null() {
+            connect_norito_free(receipt_ptr);
+        }
+        let receipt_outcome = validate_signed_orderbook_payload(
+            sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_RECEIPT,
+            &receipt_bytes,
+            b"built-settlement-receipt.to",
+        );
+        assert_eq!(
+            receipt_outcome.get("status").and_then(JsonValue::as_str),
+            Some("Ok")
+        );
+    }
+
+    #[test]
+    fn sorafs_reference_orderbook_field_builder_rejects_imbalanced_receipt_via_bridge_ffi() {
+        let private_key = [0xB7; 32];
+        let debit = b"100";
+        let credit = b"91";
+        let fee = b"10";
+        let mut receipt_ptr: *mut c_uchar = ptr::null_mut();
+        let mut receipt_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_sorafs_reference_build_signed_orderbook_settlement_receipt(
+                [0x31; 32].as_ptr(),
+                32,
+                [0x32; 32].as_ptr(),
+                32,
+                [0x33; 32].as_ptr(),
+                32,
+                0,
+                4096,
+                [0x34; 32].as_ptr(),
+                32,
+                4096,
+                debit.as_ptr(),
+                debit.len() as c_ulong,
+                credit.as_ptr(),
+                credit.len() as c_ulong,
+                fee.as_ptr(),
+                fee.len() as c_ulong,
+                1_700_000_999,
+                private_key.as_ptr(),
+                private_key.len() as c_ulong,
+                &mut receipt_ptr,
+                &mut receipt_len,
+            )
+        };
+        assert_eq!(rc, ERR_SORAFS_REFERENCE);
+        assert!(receipt_ptr.is_null());
+        assert_eq!(receipt_len, 0);
+    }
+
+    #[test]
+    fn sorafs_reference_pdp_bundle_validator_via_bridge_ffi() {
+        let commitment = repo_fixture("fixtures/sorafs_manifest/pdp/commitment_v1.to");
+        let challenge = repo_fixture("fixtures/sorafs_manifest/pdp/challenge_v1.to");
+        let proof = repo_fixture("fixtures/sorafs_manifest/pdp/proof_v1.to");
+        let commitment_label = b"commitment.to";
+        let challenge_label = b"challenge.to";
+        let proof_label = b"proof.to";
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_sorafs_reference_validate_pdp_bundle_json(
+                commitment.as_ptr(),
+                commitment.len() as c_ulong,
+                commitment_label.as_ptr(),
+                commitment_label.len() as c_ulong,
+                challenge.as_ptr(),
+                challenge.len() as c_ulong,
+                challenge_label.as_ptr(),
+                challenge_label.len() as c_ulong,
+                proof.as_ptr(),
+                proof.len() as c_ulong,
+                proof_label.as_ptr(),
+                proof_label.len() as c_ulong,
+                123,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, 0, "bridge PDP bundle validator call should succeed");
+        let outcome = unsafe { take_bridge_json(out_ptr, out_len) };
+        assert_eq!(
+            outcome.get("status").and_then(JsonValue::as_str),
+            Some("Ok")
+        );
+        assert_eq!(
+            outcome.get("code").and_then(JsonValue::as_str),
+            Some("SFS-OK-000")
+        );
     }
 }

@@ -57,6 +57,8 @@ pub const SORAFS_REFERENCE_ORDERBOOK_KIND_TRADE_EVENT: u32 = 3;
 pub const SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_CHANNEL: u32 = 4;
 /// FFI orderbook payload kind selector for `SettlementReceiptV1`.
 pub const SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_RECEIPT: u32 = 5;
+/// FFI orderbook payload kind selector for `OrderbookRuntimeSnapshotV1`.
+pub const SORAFS_REFERENCE_ORDERBOOK_KIND_RUNTIME_SNAPSHOT: u32 = 6;
 
 /// FFI bundle payload kind selector for `ProviderAdvertV1`.
 pub const SORAFS_REFERENCE_BUNDLE_KIND_PROVIDER_ADVERT: u32 = 1;
@@ -96,6 +98,8 @@ pub const SORAFS_REFERENCE_BUNDLE_KIND_PDP_COMMITMENT: u32 = 17;
 pub const SORAFS_REFERENCE_BUNDLE_KIND_PDP_CHALLENGE: u32 = 18;
 /// FFI bundle payload kind selector for `PdpProofV1`.
 pub const SORAFS_REFERENCE_BUNDLE_KIND_PDP_PROOF: u32 = 19;
+/// FFI bundle payload kind selector for `OrderbookRuntimeSnapshotV1`.
+pub const SORAFS_REFERENCE_BUNDLE_KIND_ORDERBOOK_RUNTIME_SNAPSHOT: u32 = 20;
 
 /// FFI proof-stream profile selector for an omitted PoTR profile.
 pub const SORAFS_REFERENCE_PROFILE_NONE: u32 = 0;
@@ -1073,6 +1077,9 @@ fn orderbook_kind_from_ffi(
         SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_RECEIPT => {
             Ok(OrderbookValidationPayloadKindV1::SettlementReceipt)
         }
+        SORAFS_REFERENCE_ORDERBOOK_KIND_RUNTIME_SNAPSHOT => {
+            Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot)
+        }
         other => Err(unsupported_selector_error(
             "orderbook_kind",
             other,
@@ -1125,6 +1132,9 @@ fn bundle_kind_from_ffi(
         }
         SORAFS_REFERENCE_BUNDLE_KIND_ORDERBOOK_SETTLEMENT_RECEIPT => {
             Ok(FixtureBundlePayloadKindV1::OrderbookSettlementReceipt)
+        }
+        SORAFS_REFERENCE_BUNDLE_KIND_ORDERBOOK_RUNTIME_SNAPSHOT => {
+            Ok(FixtureBundlePayloadKindV1::OrderbookRuntimeSnapshot)
         }
         SORAFS_REFERENCE_BUNDLE_KIND_PDP_COMMITMENT => {
             Ok(FixtureBundlePayloadKindV1::PdpCommitment)
@@ -1197,9 +1207,12 @@ mod tests {
     use norito::json::Value;
 
     use crate::{
-        ByteRangeV1, OrderbookSignatureV1, ReplicationOrderSignatureV1, ReplicationOrderV1,
-        SETTLEMENT_RECEIPT_VERSION_V1, SIGNED_REPLICATION_ORDER_VERSION_V1, SettlementReceiptV1,
-        SignatureAlgorithm, SignedReplicationOrderV1, XorAmount,
+        ByteRangeV1, ORDERBOOK_ORDER_VERSION_V1, ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
+        ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderBookEntryV1, OrderRequestV1, OrderSideV1,
+        OrderTierV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1, ReplicationOrderSignatureV1,
+        ReplicationOrderV1, SETTLEMENT_CHANNEL_VERSION_V1, SETTLEMENT_RECEIPT_VERSION_V1,
+        SIGNED_REPLICATION_ORDER_VERSION_V1, SettlementChannelStatusV1, SettlementChannelV1,
+        SettlementReceiptV1, SignatureAlgorithm, SignedReplicationOrderV1, TradeEventV1, XorAmount,
     };
 
     use super::*;
@@ -1264,6 +1277,67 @@ mod tests {
                 public_key: vec![0xD7; PUBLIC_KEY_LENGTH],
                 signature: vec![0x57; SIGNATURE_LENGTH],
             },
+        }
+    }
+
+    fn orderbook_runtime_snapshot() -> OrderbookRuntimeSnapshotV1 {
+        let signature = OrderbookSignatureV1 {
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: vec![0xD7; PUBLIC_KEY_LENGTH],
+            signature: vec![0x57; SIGNATURE_LENGTH],
+        };
+        let order = OrderRequestV1 {
+            version: ORDERBOOK_ORDER_VERSION_V1,
+            order_id: [0x73; 32],
+            side: OrderSideV1::Ask,
+            tier: OrderTierV1::Hot,
+            price_per_gib: XorAmount::from_micro(1_250_000),
+            quantity_gib: 4,
+            remaining_gib: 4,
+            owner_account: b"provider@sora".to_vec(),
+            expiry_unix: 1_800_000_500,
+            nonce: 8,
+            maker_fee_bps: 10,
+            taker_fee_bps: 15,
+            signature,
+        };
+        let trade = TradeEventV1 {
+            version: ORDERBOOK_TRADE_EVENT_VERSION_V1,
+            trade_id: [0x83; 32],
+            maker_order_id: [0x71; 32],
+            taker_order_id: [0x72; 32],
+            tier: OrderTierV1::Hot,
+            price_per_gib: XorAmount::from_micro(1_250_000),
+            filled_gib: 2,
+            maker_fee: XorAmount::from_micro(2_500),
+            taker_fee: XorAmount::from_micro(3_750),
+            timestamp_unix: 1_800_000_005,
+        };
+        let channel = SettlementChannelV1 {
+            version: SETTLEMENT_CHANNEL_VERSION_V1,
+            channel_id: [0x82; 32],
+            trade_id: trade.trade_id,
+            buyer_account: b"buyer@sora".to_vec(),
+            provider_id: [0x91; 32],
+            total_bytes: 512,
+            remaining_bytes: 256,
+            xor_locked: XorAmount::from_micro(900),
+            status: SettlementChannelStatusV1::Open,
+            opened_at_unix: 1_800_000_005,
+            updated_at_unix: 1_800_000_010,
+        };
+        let mut receipt = orderbook_settlement_receipt();
+        receipt.channel_id = channel.channel_id;
+        receipt.trade_id = channel.trade_id;
+        OrderbookRuntimeSnapshotV1 {
+            version: ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
+            next_sequence: 4,
+            generated_at_unix: 1_800_000_020,
+            open_orders: vec![OrderBookEntryV1 { order, sequence: 3 }],
+            trades: vec![trade],
+            settlement_channels: vec![channel],
+            settlement_receipts: vec![receipt],
+            expired_order_ids: vec![[0x74; 32]],
         }
     }
 
@@ -1446,6 +1520,31 @@ mod tests {
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_orderbook_json(
                 SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_RECEIPT,
+                bytes.as_ptr(),
+                bytes.len(),
+                label.as_ptr(),
+                label.len(),
+                123,
+            )
+        });
+
+        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
+        assert_eq!(
+            outcome.get("code").and_then(Value::as_str),
+            Some("SFS-OK-000")
+        );
+    }
+
+    #[test]
+    fn ffi_orderbook_validator_accepts_runtime_snapshot_selector() {
+        let snapshot = orderbook_runtime_snapshot();
+        let bytes = norito::to_bytes(&snapshot).expect("encode runtime snapshot");
+        let label = b"orderbook-runtime-snapshot.to";
+
+        // SAFETY: the pointers reference live test vectors for the duration of the call.
+        let outcome = outcome_from_buffer(unsafe {
+            sorafs_reference_validate_orderbook_json(
+                SORAFS_REFERENCE_ORDERBOOK_KIND_RUNTIME_SNAPSHOT,
                 bytes.as_ptr(),
                 bytes.len(),
                 label.as_ptr(),
@@ -1737,9 +1836,14 @@ mod tests {
             "fixtures/sorafs_manifest/orderbook/settlement_receipt_v1.to",
         ))
         .expect("read orderbook receipt fixture");
+        let snapshot = fs::read(workspace_fixture(
+            "fixtures/sorafs_manifest/orderbook/runtime_snapshot_v1.to",
+        ))
+        .expect("read orderbook runtime snapshot fixture");
         let order_label = b"order.to";
         let proof_label = b"proof.to";
         let receipt_label = b"orderbook/settlement_receipt_v1.to";
+        let snapshot_label = b"orderbook/runtime_snapshot_v1.to";
         let payloads = [
             SorafsReferenceFfiBundlePayload {
                 kind: SORAFS_REFERENCE_BUNDLE_KIND_REPLICATION_ORDER,
@@ -1762,6 +1866,13 @@ mod tests {
                 label_ptr: receipt_label.as_ptr(),
                 label_len: receipt_label.len(),
             },
+            SorafsReferenceFfiBundlePayload {
+                kind: SORAFS_REFERENCE_BUNDLE_KIND_ORDERBOOK_RUNTIME_SNAPSHOT,
+                bytes_ptr: snapshot.as_ptr(),
+                bytes_len: snapshot.len(),
+                label_ptr: snapshot_label.as_ptr(),
+                label_len: snapshot_label.len(),
+            },
         ];
 
         // SAFETY: payload descriptors point at live fixture bytes and labels.
@@ -1773,6 +1884,20 @@ mod tests {
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-OK-000")
+        );
+        let inputs = outcome
+            .get("inputs")
+            .and_then(Value::as_array)
+            .expect("bundle outcome should include inputs");
+        assert!(
+            inputs.iter().any(|input| {
+                input.get("kind").and_then(Value::as_str) == Some("orderbook_runtime_snapshot")
+                    && input
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .is_some_and(|path| path.ends_with("orderbook/runtime_snapshot_v1.to"))
+            }),
+            "{outcome:?}"
         );
     }
 

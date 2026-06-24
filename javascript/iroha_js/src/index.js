@@ -1017,7 +1017,18 @@ export {
 } from "./sccp.js";
 export {
   decodeReplicationOrder,
+  SORAFS_ORDERBOOK_PAYLOAD_KINDS,
+  SORAFS_PDP_PAYLOAD_KINDS,
   SorafsGatewayFetchError,
+  validatePdpBundle,
+  validatePdpChallengeProof,
+  validatePdpCommitmentChallenge,
+  validatePdpPayload,
+  validateOrderbookPayload,
+  signOrderbookPayload,
+  buildSignedOrderbookOrderRequest,
+  buildSignedOrderbookOrderCancel,
+  buildSignedOrderbookSettlementReceipt,
   sorafsGatewayFetch,
 } from "./sorafs.js";
 export {

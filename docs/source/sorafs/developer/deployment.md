@@ -25,6 +25,8 @@ rolling the tooling out to real gateways and storage providers.
 
 - Gateways must enable the proof streaming endpoint (`POST /v1/sorafs/proof/stream`)
   so the CLI can emit telemetry summaries.
+- Size PoR proof-stream smoke tests with `sample_count` in `1..=500`; gateways
+  reject larger requests before manifest lookup.
 - Configure `sorafs_alias_cache` policy using the defaults in
   `iroha_config` or the CLI helper (`sorafs_cli manifest submit --alias-*`).
 - Provide stream tokens (or Torii credentials) via a secure secret manager.

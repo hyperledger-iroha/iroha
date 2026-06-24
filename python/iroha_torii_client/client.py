@@ -31,6 +31,7 @@ import binascii
 import hashlib
 import json
 import math
+import re
 import secrets
 import time
 from dataclasses import dataclass
@@ -84,6 +85,20 @@ I105_NUMERIC_SENTINEL_PREFIX = "n"
 I105_DISCRIMINANT_MAX = 0xFFFF
 I105_SENTINEL_DISCRIMINANTS = {"sora": 0x02F1, "test": 0x0171, "dev": 0}
 I105_PROFILE_NAMES = {0x02F1: "minamoto", 0x0171: "taira", 0: "dev"}
+_SORAFS_ORDERBOOK_SIDE_VALUES = {"bid", "ask"}
+_SORAFS_ORDERBOOK_TIER_VALUES = {"hot", "warm", "archive"}
+_SORAFS_ORDERBOOK_CHANNEL_STATUS_VALUES = {
+    "open",
+    "closing",
+    "closed",
+    "breached",
+    "refunded",
+}
+_SORAFS_ORDERBOOK_EVENT_KIND_VALUES = {
+    "order_accepted",
+    "order_cancelled",
+    "settlement_receipt_accepted",
+}
 SCCP_FINALITY_MODEL_VALUES = {
     "EthereumBeaconExecution",
     "BscValidatorSet",
@@ -3921,6 +3936,230 @@ class ToriiClient:
         return text
 
     # ------------------------------------------------------------------
+    # SoraFS orderbook
+    # ------------------------------------------------------------------
+    def get_sorafs_orderbook(
+        self,
+        *,
+        headers: Optional[Mapping[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """Fetch the local SoraFS orderbook mirror snapshot."""
+
+        response = self._request(
+            "GET",
+            "/v1/sorafs/orderbook/book",
+            headers=self._sorafs_orderbook_headers(
+                headers=headers,
+                context="get_sorafs_orderbook",
+            ),
+        )
+        self._expect_status(response, {200})
+        payload = self._maybe_json(response)
+        if payload is None:
+            raise RuntimeError("sorafs orderbook book endpoint returned no payload")
+        return self._parse_sorafs_orderbook_book(payload, context="sorafs orderbook book response")
+
+    def list_sorafs_orderbook_trades(
+        self,
+        *,
+        headers: Optional[Mapping[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """List trades emitted by the local SoraFS orderbook mirror."""
+
+        response = self._request(
+            "GET",
+            "/v1/sorafs/orderbook/trades",
+            headers=self._sorafs_orderbook_headers(
+                headers=headers,
+                context="list_sorafs_orderbook_trades",
+            ),
+        )
+        self._expect_status(response, {200})
+        payload = self._maybe_json(response)
+        if payload is None:
+            raise RuntimeError("sorafs orderbook trades endpoint returned no payload")
+        return self._parse_sorafs_orderbook_list(
+            payload,
+            field="trades",
+            normalizer=self._parse_sorafs_orderbook_trade,
+            context="sorafs orderbook trades response",
+        )
+
+    def list_sorafs_orderbook_channels(
+        self,
+        *,
+        headers: Optional[Mapping[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """List settlement channels opened by the local SoraFS orderbook mirror."""
+
+        response = self._request(
+            "GET",
+            "/v1/sorafs/orderbook/channels",
+            headers=self._sorafs_orderbook_headers(
+                headers=headers,
+                context="list_sorafs_orderbook_channels",
+            ),
+        )
+        self._expect_status(response, {200})
+        payload = self._maybe_json(response)
+        if payload is None:
+            raise RuntimeError("sorafs orderbook channels endpoint returned no payload")
+        return self._parse_sorafs_orderbook_list(
+            payload,
+            field="channels",
+            normalizer=self._parse_sorafs_orderbook_channel,
+            context="sorafs orderbook channels response",
+        )
+
+    def list_sorafs_orderbook_receipts(
+        self,
+        *,
+        headers: Optional[Mapping[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """List settlement receipts accepted by the local SoraFS orderbook mirror."""
+
+        response = self._request(
+            "GET",
+            "/v1/sorafs/orderbook/receipts",
+            headers=self._sorafs_orderbook_headers(
+                headers=headers,
+                context="list_sorafs_orderbook_receipts",
+            ),
+        )
+        self._expect_status(response, {200})
+        payload = self._maybe_json(response)
+        if payload is None:
+            raise RuntimeError("sorafs orderbook receipts endpoint returned no payload")
+        return self._parse_sorafs_orderbook_list(
+            payload,
+            field="receipts",
+            normalizer=self._parse_sorafs_orderbook_receipt,
+            context="sorafs orderbook receipts response",
+        )
+
+    def submit_sorafs_orderbook_order(
+        self,
+        payload: Any,
+        *,
+        canonical_auth: ToriiCanonicalRequestAuth,
+        headers: Optional[Mapping[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """Submit signed Norito ``OrderRequestV1`` bytes to the local mirror."""
+
+        return self._submit_sorafs_orderbook_payload(
+            "/v1/sorafs/orderbook/orders",
+            payload,
+            canonical_auth=canonical_auth,
+            headers=headers,
+            context="submit_sorafs_orderbook_order",
+            normalizer=self._parse_sorafs_orderbook_submit_response,
+        )
+
+    def submit_sorafs_orderbook_cancel(
+        self,
+        payload: Any,
+        *,
+        canonical_auth: ToriiCanonicalRequestAuth,
+        headers: Optional[Mapping[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """Submit signed Norito ``OrderCancelV1`` bytes to the local mirror."""
+
+        return self._submit_sorafs_orderbook_payload(
+            "/v1/sorafs/orderbook/cancel",
+            payload,
+            canonical_auth=canonical_auth,
+            headers=headers,
+            context="submit_sorafs_orderbook_cancel",
+            normalizer=self._parse_sorafs_orderbook_cancel_response,
+        )
+
+    def submit_sorafs_orderbook_receipt(
+        self,
+        payload: Any,
+        *,
+        canonical_auth: ToriiCanonicalRequestAuth,
+        headers: Optional[Mapping[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """Submit signed Norito ``SettlementReceiptV1`` bytes to the local mirror."""
+
+        return self._submit_sorafs_orderbook_payload(
+            "/v1/sorafs/orderbook/receipts",
+            payload,
+            canonical_auth=canonical_auth,
+            headers=headers,
+            context="submit_sorafs_orderbook_receipt",
+            normalizer=self._parse_sorafs_orderbook_receipt_submit_response,
+        )
+
+    def _submit_sorafs_orderbook_payload(
+        self,
+        path: str,
+        payload: Any,
+        *,
+        canonical_auth: ToriiCanonicalRequestAuth,
+        headers: Optional[Mapping[str, str]],
+        context: str,
+        normalizer: Callable[..., Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        body = self._sorafs_orderbook_payload_bytes(payload, f"{context}.payload")
+        response = self._request(
+            "POST",
+            path,
+            headers=self._sorafs_orderbook_submit_headers(
+                method="POST",
+                path=path,
+                body=body,
+                canonical_auth=canonical_auth,
+                headers=headers,
+                context=context,
+            ),
+            data=body,
+        )
+        self._expect_status(response, {200})
+        response_payload = self._maybe_json(response)
+        if response_payload is None:
+            raise RuntimeError(f"{context} endpoint returned no payload")
+        return normalizer(response_payload, context=f"{context} response")
+
+    def list_sorafs_orderbook_events(
+        self,
+        *,
+        since: Optional[Any] = None,
+        limit: Optional[Any] = None,
+        if_none_match: Optional[str] = None,
+        etag: Optional[str] = None,
+        headers: Optional[Mapping[str, str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """List replayable local SoraFS orderbook events."""
+
+        response = self._request(
+            "GET",
+            "/v1/sorafs/orderbook/events",
+            params=self._sorafs_orderbook_event_params(
+                since=since,
+                limit=limit,
+                context="list_sorafs_orderbook_events",
+            ),
+            headers=self._sorafs_orderbook_headers(
+                if_none_match=if_none_match,
+                etag=etag,
+                headers=headers,
+                context="list_sorafs_orderbook_events",
+                cache=True,
+            ),
+        )
+        self._expect_status(response, {200, 304})
+        if response.status_code == 304:
+            return None
+        payload = self._maybe_json(response)
+        if payload is None:
+            raise RuntimeError("sorafs orderbook events endpoint returned no payload")
+        return self._parse_sorafs_orderbook_events(
+            payload,
+            context="sorafs orderbook events response",
+        )
+
+    # ------------------------------------------------------------------
     # Explorer helpers
     # ------------------------------------------------------------------
     def get_explorer_account_qr(
@@ -6875,6 +7114,669 @@ class ToriiClient:
                 continue
             cleaned[key] = value
         return cleaned or None
+
+    @classmethod
+    def _sorafs_orderbook_payload_bytes(cls, value: Any, context: str) -> bytes:
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            payload = bytes(value)
+        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            try:
+                payload = bytes(int(entry) for entry in value)
+            except (TypeError, ValueError) as exc:
+                raise TypeError(f"{context} must be bytes-like or a sequence of byte values") from exc
+        else:
+            raise TypeError(f"{context} must be bytes-like or a sequence of byte values")
+        if not payload:
+            raise ValueError(f"{context} must not be empty")
+        return payload
+
+    @classmethod
+    def _sorafs_orderbook_submit_headers(
+        cls,
+        *,
+        method: str,
+        path: str,
+        body: bytes,
+        canonical_auth: Optional[ToriiCanonicalRequestAuth],
+        headers: Optional[Mapping[str, str]],
+        context: str,
+    ) -> Dict[str, str]:
+        if canonical_auth is None:
+            raise ValueError(f"{context}.canonical_auth is required")
+        final_headers: Dict[str, str] = {
+            "Accept": "application/json",
+            "Content-Type": "application/octet-stream",
+        }
+        if headers is not None:
+            if not isinstance(headers, Mapping):
+                raise TypeError(f"{context}.headers must be a mapping")
+            final_headers.update({str(key): str(value) for key, value in headers.items()})
+        final_headers.update(
+            build_canonical_request_headers(
+                account_id=canonical_auth.account_id,
+                signer=canonical_auth.signer,
+                method=method,
+                path=path,
+                body=body,
+                timestamp_ms=canonical_auth.timestamp_ms,
+                nonce=canonical_auth.nonce,
+            )
+        )
+        return final_headers
+
+    @classmethod
+    def _sorafs_orderbook_headers(
+        cls,
+        *,
+        if_none_match: Optional[str] = None,
+        etag: Optional[str] = None,
+        headers: Optional[Mapping[str, str]] = None,
+        context: str,
+        cache: bool = False,
+    ) -> Dict[str, str]:
+        if if_none_match is not None and etag is not None:
+            raise ValueError(f"{context} accepts only one of if_none_match or etag")
+        if not cache and (if_none_match is not None or etag is not None):
+            raise ValueError(f"{context} does not accept cache validators")
+        final_headers: Dict[str, str] = {"Accept": "application/json"}
+        if headers is not None:
+            if not isinstance(headers, Mapping):
+                raise TypeError(f"{context}.headers must be a mapping")
+            final_headers.update({str(key): str(value) for key, value in headers.items()})
+        validator = if_none_match if if_none_match is not None else etag
+        if validator is not None:
+            final_headers["If-None-Match"] = cls._require_non_empty_string(
+                validator,
+                f"{context}.if_none_match",
+            )
+        return final_headers
+
+    @classmethod
+    def _sorafs_orderbook_event_params(
+        cls,
+        *,
+        since: Optional[Any] = None,
+        limit: Optional[Any] = None,
+        context: str,
+    ) -> Optional[Dict[str, int]]:
+        params: Dict[str, int] = {}
+        if since is not None:
+            params["since"] = cls._normalize_sorafs_orderbook_unsigned(
+                since,
+                f"{context}.since",
+                allow_zero=True,
+            )
+        if limit is not None:
+            params["limit"] = cls._normalize_sorafs_orderbook_unsigned(
+                limit,
+                f"{context}.limit",
+                allow_zero=False,
+            )
+        return params or None
+
+    @classmethod
+    def _parse_sorafs_orderbook_book(cls, payload: Any, *, context: str) -> Dict[str, Any]:
+        record = cls._ensure_mapping(payload, context)
+        return {
+            "schema": cls._require_non_empty_string(record.get("schema"), f"{context}.schema"),
+            "source": cls._require_non_empty_string(record.get("source"), f"{context}.source"),
+            "generated_at_unix": cls._coerce_unsigned(
+                record.get("generated_at_unix"),
+                f"{context}.generated_at_unix",
+            ),
+            "next_sequence": cls._coerce_unsigned(
+                record.get("next_sequence"),
+                f"{context}.next_sequence",
+            ),
+            "open_order_count": cls._coerce_unsigned(
+                record.get("open_order_count"),
+                f"{context}.open_order_count",
+            ),
+            "trade_count": cls._coerce_unsigned(
+                record.get("trade_count"),
+                f"{context}.trade_count",
+            ),
+            "settlement_channel_count": cls._coerce_unsigned(
+                record.get("settlement_channel_count"),
+                f"{context}.settlement_channel_count",
+            ),
+            "settlement_receipt_count": cls._coerce_unsigned(
+                record.get("settlement_receipt_count"),
+                f"{context}.settlement_receipt_count",
+            ),
+            "depth": cls._parse_sorafs_orderbook_depth(record.get("depth"), context=f"{context}.depth"),
+            "open_orders": cls._parse_sorafs_orderbook_array(
+                record.get("open_orders"),
+                context=f"{context}.open_orders",
+                normalizer=cls._parse_sorafs_orderbook_entry,
+            ),
+            "trades": cls._parse_sorafs_orderbook_array(
+                record.get("trades"),
+                context=f"{context}.trades",
+                normalizer=cls._parse_sorafs_orderbook_trade,
+            ),
+            "settlement_channels": cls._parse_sorafs_orderbook_array(
+                record.get("settlement_channels"),
+                context=f"{context}.settlement_channels",
+                normalizer=cls._parse_sorafs_orderbook_channel,
+            ),
+            "settlement_receipts": cls._parse_sorafs_orderbook_array(
+                record.get("settlement_receipts"),
+                context=f"{context}.settlement_receipts",
+                normalizer=cls._parse_sorafs_orderbook_receipt,
+            ),
+            "expired_order_ids_hex": cls._parse_sorafs_orderbook_hex_list(
+                record.get("expired_order_ids_hex"),
+                context=f"{context}.expired_order_ids_hex",
+            ),
+        }
+
+    @classmethod
+    def _parse_sorafs_orderbook_list(
+        cls,
+        payload: Any,
+        *,
+        field: str,
+        normalizer: Any,
+        context: str,
+    ) -> Dict[str, Any]:
+        record = cls._ensure_mapping(payload, context)
+        return {
+            "count": cls._coerce_unsigned(record.get("count"), f"{context}.count"),
+            field: cls._parse_sorafs_orderbook_array(
+                record.get(field),
+                context=f"{context}.{field}",
+                normalizer=normalizer,
+            ),
+        }
+
+    @classmethod
+    def _parse_sorafs_orderbook_submit_response(cls, payload: Any, *, context: str) -> Dict[str, Any]:
+        record = cls._ensure_mapping(payload, context)
+        return {
+            "status": cls._normalize_sorafs_orderbook_status(
+                record.get("status"),
+                "accepted",
+                f"{context}.status",
+            ),
+            "sequence": cls._coerce_unsigned(record.get("sequence"), f"{context}.sequence"),
+            "open_order_count": cls._coerce_unsigned(
+                record.get("open_order_count"),
+                f"{context}.open_order_count",
+            ),
+            "accepted_order": cls._parse_sorafs_orderbook_order(
+                record.get("accepted_order"),
+                context=f"{context}.accepted_order",
+            ),
+            "fills": cls._parse_sorafs_orderbook_array(
+                record.get("fills"),
+                context=f"{context}.fills",
+                normalizer=cls._parse_sorafs_orderbook_fill,
+            ),
+            "settlement_channels_opened": cls._parse_sorafs_orderbook_array(
+                record.get("settlement_channels_opened"),
+                context=f"{context}.settlement_channels_opened",
+                normalizer=cls._parse_sorafs_orderbook_channel,
+            ),
+            "expired_order_ids_hex": cls._parse_sorafs_orderbook_hex_list(
+                record.get("expired_order_ids_hex"),
+                context=f"{context}.expired_order_ids_hex",
+            ),
+        }
+
+    @classmethod
+    def _parse_sorafs_orderbook_cancel_response(cls, payload: Any, *, context: str) -> Dict[str, Any]:
+        record = cls._ensure_mapping(payload, context)
+        return {
+            "status": cls._normalize_sorafs_orderbook_status(
+                record.get("status"),
+                "cancelled",
+                f"{context}.status",
+            ),
+            "reason": cls._require_non_empty_string(record.get("reason"), f"{context}.reason"),
+            "open_order_count": cls._coerce_unsigned(
+                record.get("open_order_count"),
+                f"{context}.open_order_count",
+            ),
+            "cancelled_order": cls._parse_sorafs_orderbook_order(
+                record.get("cancelled_order"),
+                context=f"{context}.cancelled_order",
+            ),
+        }
+
+    @classmethod
+    def _parse_sorafs_orderbook_receipt_submit_response(
+        cls,
+        payload: Any,
+        *,
+        context: str,
+    ) -> Dict[str, Any]:
+        record = cls._ensure_mapping(payload, context)
+        return {
+            "status": cls._normalize_sorafs_orderbook_status(
+                record.get("status"),
+                "accepted",
+                f"{context}.status",
+            ),
+            "settlement_receipt_count": cls._coerce_unsigned(
+                record.get("settlement_receipt_count"),
+                f"{context}.settlement_receipt_count",
+            ),
+            "open_settlement_channel_count": cls._coerce_unsigned(
+                record.get("open_settlement_channel_count"),
+                f"{context}.open_settlement_channel_count",
+            ),
+            "accepted_receipt": cls._parse_sorafs_orderbook_receipt(
+                record.get("accepted_receipt"),
+                context=f"{context}.accepted_receipt",
+            ),
+            "updated_channel": cls._parse_sorafs_orderbook_channel(
+                record.get("updated_channel"),
+                context=f"{context}.updated_channel",
+            ),
+        }
+
+    @classmethod
+    def _parse_sorafs_orderbook_events(cls, payload: Any, *, context: str) -> Dict[str, Any]:
+        record = cls._ensure_mapping(payload, context)
+        since = record.get("since")
+        next_since = record.get("next_since")
+        return {
+            "since": None
+            if since is None
+            else cls._coerce_unsigned(since, f"{context}.since"),
+            "limit": cls._normalize_sorafs_orderbook_unsigned(
+                record.get("limit"),
+                f"{context}.limit",
+                allow_zero=False,
+            ),
+            "count": cls._coerce_unsigned(record.get("count"), f"{context}.count"),
+            "next_since": None
+            if next_since is None
+            else cls._coerce_unsigned(next_since, f"{context}.next_since"),
+            "events": cls._parse_sorafs_orderbook_array(
+                record.get("events"),
+                context=f"{context}.events",
+                normalizer=cls._parse_sorafs_orderbook_event,
+            ),
+        }
+
+    @classmethod
+    def _parse_sorafs_orderbook_depth(cls, payload: Any, *, context: str) -> Dict[str, int]:
+        record = cls._ensure_mapping(payload, context)
+        return {
+            key: cls._coerce_unsigned(record.get(key), f"{context}.{key}")
+            for key in (
+                "hot_bid_gib",
+                "hot_ask_gib",
+                "warm_bid_gib",
+                "warm_ask_gib",
+                "archive_bid_gib",
+                "archive_ask_gib",
+            )
+        }
+
+    @classmethod
+    def _parse_sorafs_orderbook_entry(cls, payload: Any, *, context: str) -> Dict[str, Any]:
+        record = cls._ensure_mapping(payload, context)
+        return {
+            "sequence": cls._coerce_unsigned(record.get("sequence"), f"{context}.sequence"),
+            "order": cls._parse_sorafs_orderbook_order(record.get("order"), context=f"{context}.order"),
+        }
+
+    @classmethod
+    def _parse_sorafs_orderbook_order(cls, payload: Any, *, context: str) -> Dict[str, Any]:
+        record = cls._ensure_mapping(payload, context)
+        return {
+            "version": cls._normalize_sorafs_orderbook_unsigned(
+                record.get("version"),
+                f"{context}.version",
+                allow_zero=False,
+            ),
+            "order_id_hex": cls._normalize_sorafs_orderbook_hex32(
+                record.get("order_id_hex"),
+                f"{context}.order_id_hex",
+            ),
+            "side": cls._normalize_sorafs_orderbook_label(
+                record.get("side"),
+                _SORAFS_ORDERBOOK_SIDE_VALUES,
+                f"{context}.side",
+            ),
+            "tier": cls._normalize_sorafs_orderbook_label(
+                record.get("tier"),
+                _SORAFS_ORDERBOOK_TIER_VALUES,
+                f"{context}.tier",
+            ),
+            "price_per_gib_micro_xor": cls._normalize_sorafs_orderbook_decimal(
+                record.get("price_per_gib_micro_xor"),
+                f"{context}.price_per_gib_micro_xor",
+            ),
+            "quantity_gib": cls._coerce_unsigned(record.get("quantity_gib"), f"{context}.quantity_gib"),
+            "remaining_gib": cls._coerce_unsigned(record.get("remaining_gib"), f"{context}.remaining_gib"),
+            "owner_account_hex": cls._normalize_sorafs_orderbook_hex_bytes(
+                record.get("owner_account_hex"),
+                f"{context}.owner_account_hex",
+            ),
+            "expiry_unix": cls._coerce_unsigned(record.get("expiry_unix"), f"{context}.expiry_unix"),
+            "nonce": cls._coerce_unsigned(record.get("nonce"), f"{context}.nonce"),
+            "maker_fee_bps": cls._coerce_unsigned(record.get("maker_fee_bps"), f"{context}.maker_fee_bps"),
+            "taker_fee_bps": cls._coerce_unsigned(record.get("taker_fee_bps"), f"{context}.taker_fee_bps"),
+            "signature": cls._parse_sorafs_orderbook_signature(
+                record.get("signature"),
+                context=f"{context}.signature",
+            ),
+        }
+
+    @classmethod
+    def _parse_sorafs_orderbook_signature(cls, payload: Any, *, context: str) -> Dict[str, str]:
+        record = cls._ensure_mapping(payload, context)
+        return {
+            "algorithm": cls._require_non_empty_string(record.get("algorithm"), f"{context}.algorithm"),
+            "public_key_hex": cls._normalize_sorafs_orderbook_hex_bytes(
+                record.get("public_key_hex"),
+                f"{context}.public_key_hex",
+            ),
+            "signature_hex": cls._normalize_sorafs_orderbook_hex_bytes(
+                record.get("signature_hex"),
+                f"{context}.signature_hex",
+            ),
+        }
+
+    @classmethod
+    def _parse_sorafs_orderbook_fill(cls, payload: Any, *, context: str) -> Dict[str, Any]:
+        record = cls._ensure_mapping(payload, context)
+        return {
+            "trade": cls._parse_sorafs_orderbook_trade(record.get("trade"), context=f"{context}.trade"),
+            "maker_remaining_gib": cls._coerce_unsigned(
+                record.get("maker_remaining_gib"),
+                f"{context}.maker_remaining_gib",
+            ),
+            "taker_remaining_gib": cls._coerce_unsigned(
+                record.get("taker_remaining_gib"),
+                f"{context}.taker_remaining_gib",
+            ),
+            "gross_value_micro_xor": cls._normalize_sorafs_orderbook_decimal(
+                record.get("gross_value_micro_xor"),
+                f"{context}.gross_value_micro_xor",
+            ),
+        }
+
+    @classmethod
+    def _parse_sorafs_orderbook_trade(cls, payload: Any, *, context: str) -> Dict[str, Any]:
+        record = cls._ensure_mapping(payload, context)
+        return {
+            "version": cls._normalize_sorafs_orderbook_unsigned(
+                record.get("version"),
+                f"{context}.version",
+                allow_zero=False,
+            ),
+            "trade_id_hex": cls._normalize_sorafs_orderbook_hex32(
+                record.get("trade_id_hex"),
+                f"{context}.trade_id_hex",
+            ),
+            "maker_order_id_hex": cls._normalize_sorafs_orderbook_hex32(
+                record.get("maker_order_id_hex"),
+                f"{context}.maker_order_id_hex",
+            ),
+            "taker_order_id_hex": cls._normalize_sorafs_orderbook_hex32(
+                record.get("taker_order_id_hex"),
+                f"{context}.taker_order_id_hex",
+            ),
+            "tier": cls._normalize_sorafs_orderbook_label(
+                record.get("tier"),
+                _SORAFS_ORDERBOOK_TIER_VALUES,
+                f"{context}.tier",
+            ),
+            "price_per_gib_micro_xor": cls._normalize_sorafs_orderbook_decimal(
+                record.get("price_per_gib_micro_xor"),
+                f"{context}.price_per_gib_micro_xor",
+            ),
+            "filled_gib": cls._coerce_unsigned(record.get("filled_gib"), f"{context}.filled_gib"),
+            "maker_fee_micro_xor": cls._normalize_sorafs_orderbook_decimal(
+                record.get("maker_fee_micro_xor"),
+                f"{context}.maker_fee_micro_xor",
+            ),
+            "taker_fee_micro_xor": cls._normalize_sorafs_orderbook_decimal(
+                record.get("taker_fee_micro_xor"),
+                f"{context}.taker_fee_micro_xor",
+            ),
+            "timestamp_unix": cls._coerce_unsigned(record.get("timestamp_unix"), f"{context}.timestamp_unix"),
+        }
+
+    @classmethod
+    def _parse_sorafs_orderbook_channel(cls, payload: Any, *, context: str) -> Dict[str, Any]:
+        record = cls._ensure_mapping(payload, context)
+        return {
+            "version": cls._normalize_sorafs_orderbook_unsigned(
+                record.get("version"),
+                f"{context}.version",
+                allow_zero=False,
+            ),
+            "channel_id_hex": cls._normalize_sorafs_orderbook_hex32(
+                record.get("channel_id_hex"),
+                f"{context}.channel_id_hex",
+            ),
+            "trade_id_hex": cls._normalize_sorafs_orderbook_hex32(
+                record.get("trade_id_hex"),
+                f"{context}.trade_id_hex",
+            ),
+            "buyer_account_hex": cls._normalize_sorafs_orderbook_hex_bytes(
+                record.get("buyer_account_hex"),
+                f"{context}.buyer_account_hex",
+            ),
+            "provider_id_hex": cls._normalize_sorafs_orderbook_hex32(
+                record.get("provider_id_hex"),
+                f"{context}.provider_id_hex",
+            ),
+            "total_bytes": cls._coerce_unsigned(record.get("total_bytes"), f"{context}.total_bytes"),
+            "remaining_bytes": cls._coerce_unsigned(record.get("remaining_bytes"), f"{context}.remaining_bytes"),
+            "xor_locked_micro": cls._normalize_sorafs_orderbook_decimal(
+                record.get("xor_locked_micro"),
+                f"{context}.xor_locked_micro",
+            ),
+            "status": cls._normalize_sorafs_orderbook_label(
+                record.get("status"),
+                _SORAFS_ORDERBOOK_CHANNEL_STATUS_VALUES,
+                f"{context}.status",
+            ),
+            "opened_at_unix": cls._coerce_unsigned(record.get("opened_at_unix"), f"{context}.opened_at_unix"),
+            "updated_at_unix": cls._coerce_unsigned(record.get("updated_at_unix"), f"{context}.updated_at_unix"),
+        }
+
+    @classmethod
+    def _parse_sorafs_orderbook_receipt(cls, payload: Any, *, context: str) -> Dict[str, Any]:
+        record = cls._ensure_mapping(payload, context)
+        return {
+            "version": cls._normalize_sorafs_orderbook_unsigned(
+                record.get("version"),
+                f"{context}.version",
+                allow_zero=False,
+            ),
+            "receipt_id_hex": cls._normalize_sorafs_orderbook_hex32(
+                record.get("receipt_id_hex"),
+                f"{context}.receipt_id_hex",
+            ),
+            "channel_id_hex": cls._normalize_sorafs_orderbook_hex32(
+                record.get("channel_id_hex"),
+                f"{context}.channel_id_hex",
+            ),
+            "trade_id_hex": cls._normalize_sorafs_orderbook_hex32(
+                record.get("trade_id_hex"),
+                f"{context}.trade_id_hex",
+            ),
+            "range": cls._parse_sorafs_orderbook_byte_range(record.get("range"), context=f"{context}.range"),
+            "chunk_hash_hex": cls._normalize_sorafs_orderbook_hex32(
+                record.get("chunk_hash_hex"),
+                f"{context}.chunk_hash_hex",
+            ),
+            "bytes_delivered": cls._coerce_unsigned(
+                record.get("bytes_delivered"),
+                f"{context}.bytes_delivered",
+            ),
+            "xor_debited_micro": cls._normalize_sorafs_orderbook_decimal(
+                record.get("xor_debited_micro"),
+                f"{context}.xor_debited_micro",
+            ),
+            "provider_credit_micro": cls._normalize_sorafs_orderbook_decimal(
+                record.get("provider_credit_micro"),
+                f"{context}.provider_credit_micro",
+            ),
+            "fee_amount_micro": cls._normalize_sorafs_orderbook_decimal(
+                record.get("fee_amount_micro"),
+                f"{context}.fee_amount_micro",
+            ),
+            "issued_at_unix": cls._coerce_unsigned(record.get("issued_at_unix"), f"{context}.issued_at_unix"),
+            "settlement_signature": cls._parse_sorafs_orderbook_signature(
+                record.get("settlement_signature"),
+                context=f"{context}.settlement_signature",
+            ),
+        }
+
+    @classmethod
+    def _parse_sorafs_orderbook_byte_range(cls, payload: Any, *, context: str) -> Dict[str, int]:
+        record = cls._ensure_mapping(payload, context)
+        return {
+            "start": cls._coerce_unsigned(record.get("start"), f"{context}.start"),
+            "end": cls._coerce_unsigned(record.get("end"), f"{context}.end"),
+        }
+
+    @classmethod
+    def _parse_sorafs_orderbook_event(cls, payload: Any, *, context: str) -> Dict[str, Any]:
+        record = cls._ensure_mapping(payload, context)
+        order_id = record.get("order_id_hex")
+        receipt_id = record.get("receipt_id_hex")
+        return {
+            "sequence": cls._coerce_unsigned(record.get("sequence"), f"{context}.sequence"),
+            "kind": cls._normalize_sorafs_orderbook_label(
+                record.get("kind"),
+                _SORAFS_ORDERBOOK_EVENT_KIND_VALUES,
+                f"{context}.kind",
+            ),
+            "generated_at_unix": cls._coerce_unsigned(
+                record.get("generated_at_unix"),
+                f"{context}.generated_at_unix",
+            ),
+            "order_id_hex": None
+            if order_id is None
+            else cls._normalize_sorafs_orderbook_hex32(order_id, f"{context}.order_id_hex"),
+            "trade_ids_hex": cls._parse_sorafs_orderbook_hex_list(
+                record.get("trade_ids_hex"),
+                context=f"{context}.trade_ids_hex",
+            ),
+            "settlement_channel_ids_hex": cls._parse_sorafs_orderbook_hex_list(
+                record.get("settlement_channel_ids_hex"),
+                context=f"{context}.settlement_channel_ids_hex",
+            ),
+            "receipt_id_hex": None
+            if receipt_id is None
+            else cls._normalize_sorafs_orderbook_hex32(receipt_id, f"{context}.receipt_id_hex"),
+            "expired_order_ids_hex": cls._parse_sorafs_orderbook_hex_list(
+                record.get("expired_order_ids_hex"),
+                context=f"{context}.expired_order_ids_hex",
+            ),
+            "open_order_count": cls._coerce_unsigned(
+                record.get("open_order_count"),
+                f"{context}.open_order_count",
+            ),
+            "open_settlement_channel_count": cls._coerce_unsigned(
+                record.get("open_settlement_channel_count"),
+                f"{context}.open_settlement_channel_count",
+            ),
+            "settlement_receipt_count": cls._coerce_unsigned(
+                record.get("settlement_receipt_count"),
+                f"{context}.settlement_receipt_count",
+            ),
+        }
+
+    @classmethod
+    def _parse_sorafs_orderbook_array(cls, value: Any, *, context: str, normalizer: Any) -> List[Any]:
+        if not isinstance(value, list):
+            raise RuntimeError(f"{context} must be a list")
+        return [
+            normalizer(entry, context=f"{context}[{index}]")
+            for index, entry in enumerate(value)
+        ]
+
+    @classmethod
+    def _parse_sorafs_orderbook_hex_list(cls, value: Any, *, context: str) -> List[str]:
+        if not isinstance(value, list):
+            raise RuntimeError(f"{context} must be a list")
+        return [
+            cls._normalize_sorafs_orderbook_hex32(entry, f"{context}[{index}]")
+            for index, entry in enumerate(value)
+        ]
+
+    @classmethod
+    def _normalize_sorafs_orderbook_label(
+        cls,
+        value: Any,
+        allowed: set[str],
+        context: str,
+    ) -> str:
+        label = cls._require_non_empty_string(value, context).lower()
+        if label not in allowed:
+            raise ValueError(f"{context} must be one of {', '.join(sorted(allowed))}")
+        return label
+
+    @classmethod
+    def _normalize_sorafs_orderbook_status(
+        cls,
+        value: Any,
+        expected: str,
+        context: str,
+    ) -> str:
+        status = cls._require_non_empty_string(value, context)
+        if status != expected:
+            raise ValueError(f"{context} must be {expected}")
+        return status
+
+    @classmethod
+    def _normalize_sorafs_orderbook_hex32(cls, value: Any, context: str) -> str:
+        return cls._normalize_sorafs_orderbook_hex_bytes(value, context, expected_length=64)
+
+    @classmethod
+    def _normalize_sorafs_orderbook_hex_bytes(
+        cls,
+        value: Any,
+        context: str,
+        *,
+        expected_length: Optional[int] = None,
+    ) -> str:
+        return cls._normalize_hex_string(
+            value,
+            context=context,
+            expected_length=expected_length,
+        )
+
+    @classmethod
+    def _normalize_sorafs_orderbook_decimal(cls, value: Any, context: str) -> str:
+        literal = cls._require_non_empty_string(value, context)
+        if not re.fullmatch(r"(0|[1-9][0-9]*)", literal):
+            raise ValueError(f"{context} must be a non-negative decimal integer string")
+        return literal
+
+    @classmethod
+    def _normalize_sorafs_orderbook_unsigned(
+        cls,
+        value: Any,
+        context: str,
+        *,
+        allow_zero: bool,
+    ) -> int:
+        if isinstance(value, bool):
+            raise TypeError(f"{context} must be an integer")
+        if isinstance(value, int):
+            number = value
+        elif isinstance(value, str):
+            literal = value.strip()
+            if not re.fullmatch(r"[+-]?\d+", literal):
+                raise TypeError(f"{context} must be an integer")
+            number = int(literal)
+        else:
+            raise TypeError(f"{context} must be an integer")
+        if number < 0 or (number == 0 and not allow_zero):
+            raise ValueError(f"{context} must be {'non-negative' if allow_zero else 'positive'}")
+        return number
 
     @staticmethod
     def _require_non_empty_string(value: Any, context: str) -> str:

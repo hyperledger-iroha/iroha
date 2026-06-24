@@ -296,8 +296,10 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
 `--emit-events=false`) and emits an aggregate summary that tracks success,
 failure, latency, and—when `--por-root-hex` is provided—local verification
 results. Requests address manifests by `manifest_digest_hex` (BLAKE3-256 of the
-canonical manifest) so proof streams remain deterministic across gateways. The
-summary JSON mirrors the Torii Prometheus metrics that the gateway
+canonical manifest) so proof streams remain deterministic across gateways.
+PoR `--samples` defaults to `32` and must stay in `1..=500`; Torii rejects
+oversized proof-stream requests before manifest lookup. The summary JSON
+mirrors the Torii Prometheus metrics that the gateway
 exports (`torii_sorafs_proof_stream_events_total`,
 `torii_sorafs_proof_stream_latency_ms`, and
 `torii_sorafs_proof_stream_inflight`) and feeds the example Grafana dashboard in

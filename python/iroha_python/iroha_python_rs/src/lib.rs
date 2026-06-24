@@ -124,11 +124,21 @@ use sorafs_car::{
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
+    OrderCancelReasonV1, OrderSideV1, OrderTierV1, OrderbookOrderCancelFieldsV1,
+    OrderbookOrderRequestFieldsV1, OrderbookSettlementReceiptFieldsV1,
+    OrderbookValidationPayloadKindV1, ValidationOutcomeV1,
     alias_cache::{AliasCachePolicy, AliasProofState, decode_alias_proof, unix_now_secs},
+    build_signed_orderbook_order_cancel_bytes_ed25519_v1,
+    build_signed_orderbook_order_request_bytes_ed25519_v1,
+    build_signed_orderbook_settlement_receipt_bytes_ed25519_v1,
     capacity::ReplicationOrderV1,
     pin_registry::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
     },
+    sign_orderbook_payload_bytes_ed25519_v1, validate_orderbook_payload_bytes,
+    validate_pdp_challenge_bytes, validate_pdp_challenge_proof_bytes,
+    validate_pdp_commitment_bytes, validate_pdp_commitment_challenge_bytes,
+    validate_pdp_commitment_challenge_proof_bytes, validate_pdp_proof_bytes,
 };
 use sorafs_orchestrator::{
     AnonymityPolicy, OrchestratorConfig, RolloutPhase, TransportPolicy, fetch_via_gateway,
@@ -4006,6 +4016,373 @@ fn sorafs_decode_replication_order_py(py: Python<'_>, norito_bytes: &[u8]) -> Py
     dict.set_item("metadata", metadata_list)?;
 
     Ok(dict.unbind())
+}
+
+fn sorafs_validation_outcome_json(outcome: &ValidationOutcomeV1) -> PyResult<String> {
+    json::to_string(outcome).map_err(|err| {
+        PyValueError::new_err(format!("failed to serialize validation outcome: {err}"))
+    })
+}
+
+fn parse_sorafs_orderbook_payload_kind(kind: &str) -> PyResult<OrderbookValidationPayloadKindV1> {
+    let normalized = kind.trim().to_ascii_lowercase().replace('_', "-");
+    match normalized.as_str() {
+        "order" | "order-request" | "request" | "orderbook-order-request" => {
+            Ok(OrderbookValidationPayloadKindV1::OrderRequest)
+        }
+        "cancel" | "order-cancel" | "orderbook-order-cancel" => {
+            Ok(OrderbookValidationPayloadKindV1::OrderCancel)
+        }
+        "trade" | "trade-event" | "orderbook-trade-event" => {
+            Ok(OrderbookValidationPayloadKindV1::TradeEvent)
+        }
+        "channel" | "settlement-channel" => Ok(OrderbookValidationPayloadKindV1::SettlementChannel),
+        "receipt" | "settlement-receipt" => Ok(OrderbookValidationPayloadKindV1::SettlementReceipt),
+        "snapshot" | "runtime-snapshot" | "orderbook-runtime-snapshot" => {
+            Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot)
+        }
+        _ => Err(PyValueError::new_err(format!(
+            "unsupported SoraFS orderbook payload kind `{kind}`"
+        ))),
+    }
+}
+
+fn parse_sorafs_orderbook_side_py(side: &str) -> PyResult<OrderSideV1> {
+    let normalized = side.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "bid" => Ok(OrderSideV1::Bid),
+        "ask" => Ok(OrderSideV1::Ask),
+        _ => Err(PyValueError::new_err(format!(
+            "unsupported SoraFS orderbook side `{side}`"
+        ))),
+    }
+}
+
+fn parse_sorafs_orderbook_tier_py(tier: &str) -> PyResult<OrderTierV1> {
+    let normalized = tier.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "hot" => Ok(OrderTierV1::Hot),
+        "warm" => Ok(OrderTierV1::Warm),
+        "archive" => Ok(OrderTierV1::Archive),
+        _ => Err(PyValueError::new_err(format!(
+            "unsupported SoraFS orderbook tier `{tier}`"
+        ))),
+    }
+}
+
+fn parse_sorafs_orderbook_cancel_reason_py(reason: &str) -> PyResult<OrderCancelReasonV1> {
+    let normalized = reason.trim().to_ascii_lowercase().replace('_', "-");
+    match normalized.as_str() {
+        "owner-requested" | "owner" | "requested" => Ok(OrderCancelReasonV1::OwnerRequested),
+        "expired" => Ok(OrderCancelReasonV1::Expired),
+        "governance" => Ok(OrderCancelReasonV1::Governance),
+        "replaced" => Ok(OrderCancelReasonV1::Replaced),
+        _ => Err(PyValueError::new_err(format!(
+            "unsupported SoraFS orderbook cancel reason `{reason}`"
+        ))),
+    }
+}
+
+fn parse_sorafs_decimal_u64_text_py(value: &str, context: &str) -> PyResult<u64> {
+    value.trim().parse::<u64>().map_err(|err| {
+        PyValueError::new_err(format!(
+            "{context} must be an unsigned 64-bit decimal integer: {err}"
+        ))
+    })
+}
+
+fn parse_sorafs_decimal_u128_text_py(value: &str, context: &str) -> PyResult<u128> {
+    value.trim().parse::<u128>().map_err(|err| {
+        PyValueError::new_err(format!(
+            "{context} must be an unsigned 128-bit decimal integer: {err}"
+        ))
+    })
+}
+
+fn parse_sorafs_fee_bps_py(value: u32, context: &str) -> PyResult<u16> {
+    u16::try_from(value)
+        .map_err(|_| PyValueError::new_err(format!("{context} must fit in u16 basis points")))
+}
+
+fn sorafs_fixed32_from_bytes_py(value: &[u8], context: &str) -> PyResult<[u8; 32]> {
+    fixed_array::<32>(value, context)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SorafsPdpPayloadKind {
+    Commitment,
+    Challenge,
+    Proof,
+}
+
+fn parse_sorafs_pdp_payload_kind(kind: &str) -> PyResult<SorafsPdpPayloadKind> {
+    let normalized = kind.trim().to_ascii_lowercase().replace('_', "-");
+    match normalized.as_str() {
+        "commitment" | "pdp-commitment" => Ok(SorafsPdpPayloadKind::Commitment),
+        "challenge" | "pdp-challenge" => Ok(SorafsPdpPayloadKind::Challenge),
+        "proof" | "pdp-proof" => Ok(SorafsPdpPayloadKind::Proof),
+        _ => Err(PyValueError::new_err(format!(
+            "unsupported SoraFS PDP payload kind `{kind}`"
+        ))),
+    }
+}
+
+#[pyfunction]
+#[pyo3(name = "sorafs_validate_orderbook_payload_json")]
+fn sorafs_validate_orderbook_payload_json_py(
+    kind: &str,
+    norito_bytes: &[u8],
+    label: &str,
+    generated_at_unix: u64,
+) -> PyResult<String> {
+    let kind = parse_sorafs_orderbook_payload_kind(kind)?;
+    let outcome =
+        validate_orderbook_payload_bytes(kind, norito_bytes, label.to_owned(), generated_at_unix);
+    sorafs_validation_outcome_json(&outcome)
+}
+
+#[pyfunction]
+#[pyo3(name = "sorafs_sign_orderbook_payload")]
+fn sorafs_sign_orderbook_payload_py(
+    py: Python<'_>,
+    kind: &str,
+    norito_bytes: &[u8],
+    private_key: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let kind = parse_sorafs_orderbook_payload_kind(kind)?;
+    let signed = sign_orderbook_payload_bytes_ed25519_v1(kind, norito_bytes, private_key)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    Ok(Py::from(PyBytes::new(py, &signed)))
+}
+
+#[pyfunction]
+#[pyo3(name = "sorafs_build_signed_orderbook_order_request")]
+fn sorafs_build_signed_orderbook_order_request_py(
+    py: Python<'_>,
+    order_id: &[u8],
+    side: &str,
+    tier: &str,
+    price_per_gib_micro_xor: &str,
+    quantity_gib: &str,
+    remaining_gib: Option<&str>,
+    owner_account: &[u8],
+    expiry_unix: &str,
+    nonce: &str,
+    maker_fee_bps: u32,
+    taker_fee_bps: u32,
+    private_key: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let quantity_gib = parse_sorafs_decimal_u64_text_py(quantity_gib, "quantity_gib")?;
+    let fields = OrderbookOrderRequestFieldsV1 {
+        order_id: sorafs_fixed32_from_bytes_py(order_id, "order_id")?,
+        side: parse_sorafs_orderbook_side_py(side)?,
+        tier: parse_sorafs_orderbook_tier_py(tier)?,
+        price_per_gib_micro_xor: parse_sorafs_decimal_u128_text_py(
+            price_per_gib_micro_xor,
+            "price_per_gib_micro_xor",
+        )?,
+        quantity_gib,
+        remaining_gib: match remaining_gib {
+            Some(value) => parse_sorafs_decimal_u64_text_py(value, "remaining_gib")?,
+            None => quantity_gib,
+        },
+        owner_account: owner_account.to_vec(),
+        expiry_unix: parse_sorafs_decimal_u64_text_py(expiry_unix, "expiry_unix")?,
+        nonce: parse_sorafs_decimal_u64_text_py(nonce, "nonce")?,
+        maker_fee_bps: parse_sorafs_fee_bps_py(maker_fee_bps, "maker_fee_bps")?,
+        taker_fee_bps: parse_sorafs_fee_bps_py(taker_fee_bps, "taker_fee_bps")?,
+    };
+    let signed = build_signed_orderbook_order_request_bytes_ed25519_v1(fields, private_key)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    Ok(Py::from(PyBytes::new(py, &signed)))
+}
+
+#[pyfunction]
+#[pyo3(name = "sorafs_build_signed_orderbook_order_cancel")]
+fn sorafs_build_signed_orderbook_order_cancel_py(
+    py: Python<'_>,
+    order_id: &[u8],
+    owner_account: &[u8],
+    reason: &str,
+    nonce: &str,
+    private_key: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let fields = OrderbookOrderCancelFieldsV1 {
+        order_id: sorafs_fixed32_from_bytes_py(order_id, "order_id")?,
+        owner_account: owner_account.to_vec(),
+        reason: parse_sorafs_orderbook_cancel_reason_py(reason)?,
+        nonce: parse_sorafs_decimal_u64_text_py(nonce, "nonce")?,
+    };
+    let signed = build_signed_orderbook_order_cancel_bytes_ed25519_v1(fields, private_key)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    Ok(Py::from(PyBytes::new(py, &signed)))
+}
+
+#[pyfunction]
+#[pyo3(name = "sorafs_build_signed_orderbook_settlement_receipt")]
+fn sorafs_build_signed_orderbook_settlement_receipt_py(
+    py: Python<'_>,
+    receipt_id: &[u8],
+    channel_id: &[u8],
+    trade_id: &[u8],
+    range_start: &str,
+    range_end: &str,
+    chunk_hash: &[u8],
+    bytes_delivered: &str,
+    xor_debited_micro_xor: &str,
+    provider_credit_micro_xor: &str,
+    fee_amount_micro_xor: &str,
+    issued_at_unix: &str,
+    private_key: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let fields = OrderbookSettlementReceiptFieldsV1 {
+        receipt_id: sorafs_fixed32_from_bytes_py(receipt_id, "receipt_id")?,
+        channel_id: sorafs_fixed32_from_bytes_py(channel_id, "channel_id")?,
+        trade_id: sorafs_fixed32_from_bytes_py(trade_id, "trade_id")?,
+        range_start: parse_sorafs_decimal_u64_text_py(range_start, "range_start")?,
+        range_end: parse_sorafs_decimal_u64_text_py(range_end, "range_end")?,
+        chunk_hash: sorafs_fixed32_from_bytes_py(chunk_hash, "chunk_hash")?,
+        bytes_delivered: parse_sorafs_decimal_u64_text_py(bytes_delivered, "bytes_delivered")?,
+        xor_debited_micro_xor: parse_sorafs_decimal_u128_text_py(
+            xor_debited_micro_xor,
+            "xor_debited_micro_xor",
+        )?,
+        provider_credit_micro_xor: parse_sorafs_decimal_u128_text_py(
+            provider_credit_micro_xor,
+            "provider_credit_micro_xor",
+        )?,
+        fee_amount_micro_xor: parse_sorafs_decimal_u128_text_py(
+            fee_amount_micro_xor,
+            "fee_amount_micro_xor",
+        )?,
+        issued_at_unix: parse_sorafs_decimal_u64_text_py(issued_at_unix, "issued_at_unix")?,
+    };
+    let signed = build_signed_orderbook_settlement_receipt_bytes_ed25519_v1(fields, private_key)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    Ok(Py::from(PyBytes::new(py, &signed)))
+}
+
+#[pyfunction]
+#[pyo3(name = "sorafs_validate_pdp_payload_json")]
+fn sorafs_validate_pdp_payload_json_py(
+    kind: &str,
+    norito_bytes: &[u8],
+    label: &str,
+    generated_at_unix: u64,
+) -> PyResult<String> {
+    let kind = parse_sorafs_pdp_payload_kind(kind)?;
+    let outcome = match kind {
+        SorafsPdpPayloadKind::Commitment => {
+            validate_pdp_commitment_bytes(norito_bytes, label.to_owned(), generated_at_unix)
+        }
+        SorafsPdpPayloadKind::Challenge => {
+            validate_pdp_challenge_bytes(norito_bytes, label.to_owned(), generated_at_unix)
+        }
+        SorafsPdpPayloadKind::Proof => {
+            validate_pdp_proof_bytes(norito_bytes, label.to_owned(), generated_at_unix)
+        }
+    };
+    sorafs_validation_outcome_json(&outcome)
+}
+
+#[pyfunction]
+#[pyo3(name = "sorafs_validate_pdp_commitment_challenge_json")]
+fn sorafs_validate_pdp_commitment_challenge_json_py(
+    commitment: &[u8],
+    commitment_label: &str,
+    challenge: &[u8],
+    challenge_label: &str,
+    generated_at_unix: u64,
+) -> PyResult<String> {
+    let outcome = validate_pdp_commitment_challenge_bytes(
+        commitment,
+        challenge,
+        commitment_label.to_owned(),
+        challenge_label.to_owned(),
+        generated_at_unix,
+    );
+    sorafs_validation_outcome_json(&outcome)
+}
+
+#[pyfunction]
+#[pyo3(name = "sorafs_validate_pdp_challenge_proof_json")]
+fn sorafs_validate_pdp_challenge_proof_json_py(
+    challenge: &[u8],
+    challenge_label: &str,
+    proof: &[u8],
+    proof_label: &str,
+    generated_at_unix: u64,
+) -> PyResult<String> {
+    let outcome = validate_pdp_challenge_proof_bytes(
+        challenge,
+        proof,
+        challenge_label.to_owned(),
+        proof_label.to_owned(),
+        generated_at_unix,
+    );
+    sorafs_validation_outcome_json(&outcome)
+}
+
+#[pyfunction]
+#[pyo3(name = "sorafs_validate_pdp_bundle_json")]
+fn sorafs_validate_pdp_bundle_json_py(
+    commitment: &[u8],
+    commitment_label: &str,
+    challenge: &[u8],
+    challenge_label: &str,
+    proof: &[u8],
+    proof_label: &str,
+    generated_at_unix: u64,
+) -> PyResult<String> {
+    let outcome = validate_pdp_commitment_challenge_proof_bytes(
+        commitment,
+        challenge,
+        proof,
+        commitment_label.to_owned(),
+        challenge_label.to_owned(),
+        proof_label.to_owned(),
+        generated_at_unix,
+    );
+    sorafs_validation_outcome_json(&outcome)
+}
+
+#[cfg(test)]
+mod sorafs_reference_validation_py_tests {
+    use super::*;
+
+    #[test]
+    fn parse_sorafs_orderbook_payload_kind_accepts_sdk_aliases() {
+        assert!(matches!(
+            parse_sorafs_orderbook_payload_kind("orderbook_order_request"),
+            Ok(OrderbookValidationPayloadKindV1::OrderRequest)
+        ));
+        assert!(matches!(
+            parse_sorafs_orderbook_payload_kind("settlement-receipt"),
+            Ok(OrderbookValidationPayloadKindV1::SettlementReceipt)
+        ));
+        assert!(matches!(
+            parse_sorafs_orderbook_payload_kind("runtime_snapshot"),
+            Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot)
+        ));
+        assert!(parse_sorafs_orderbook_payload_kind("bad-kind").is_err());
+    }
+
+    #[test]
+    fn parse_sorafs_pdp_payload_kind_accepts_sdk_aliases() {
+        assert_eq!(
+            parse_sorafs_pdp_payload_kind("pdp_commitment").expect("commitment alias"),
+            SorafsPdpPayloadKind::Commitment
+        );
+        assert_eq!(
+            parse_sorafs_pdp_payload_kind("challenge").expect("challenge alias"),
+            SorafsPdpPayloadKind::Challenge
+        );
+        assert_eq!(
+            parse_sorafs_pdp_payload_kind("pdp-proof").expect("proof alias"),
+            SorafsPdpPayloadKind::Proof
+        );
+        assert!(parse_sorafs_pdp_payload_kind("bad-kind").is_err());
+    }
 }
 
 #[pyfunction]
@@ -22160,6 +22537,39 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(sorafs_gateway_fetch_py, module)?)?;
     module.add_function(wrap_pyfunction!(
         sorafs_decode_replication_order_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        sorafs_validate_orderbook_payload_json_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(sorafs_sign_orderbook_payload_py, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        sorafs_build_signed_orderbook_order_request_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        sorafs_build_signed_orderbook_order_cancel_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        sorafs_build_signed_orderbook_settlement_receipt_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        sorafs_validate_pdp_payload_json_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        sorafs_validate_pdp_commitment_challenge_json_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        sorafs_validate_pdp_challenge_proof_json_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        sorafs_validate_pdp_bundle_json_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

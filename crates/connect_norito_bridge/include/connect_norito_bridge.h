@@ -24,6 +24,26 @@ extern "C" {
 #define CONNECT_NORITO_ERR_KAGEMUSHA_PROVE -311
 #define CONNECT_NORITO_ERR_KAGEMUSHA_RECURSIVE_COMPACT_UNAVAILABLE -312
 #define CONNECT_NORITO_ERR_OFFLINE_NOTE_VERIFY -313
+#define CONNECT_NORITO_ERR_SORAFS_REFERENCE -114
+
+#define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST 1
+#define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_CANCEL 2
+#define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_TRADE_EVENT 3
+#define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_CHANNEL 4
+#define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_RECEIPT 5
+#define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_RUNTIME_SNAPSHOT 6
+#define CONNECT_NORITO_SORAFS_ORDERBOOK_SIDE_BID 1
+#define CONNECT_NORITO_SORAFS_ORDERBOOK_SIDE_ASK 2
+#define CONNECT_NORITO_SORAFS_ORDERBOOK_TIER_HOT 1
+#define CONNECT_NORITO_SORAFS_ORDERBOOK_TIER_WARM 2
+#define CONNECT_NORITO_SORAFS_ORDERBOOK_TIER_ARCHIVE 3
+#define CONNECT_NORITO_SORAFS_ORDERBOOK_CANCEL_REASON_OWNER_REQUESTED 1
+#define CONNECT_NORITO_SORAFS_ORDERBOOK_CANCEL_REASON_EXPIRED 2
+#define CONNECT_NORITO_SORAFS_ORDERBOOK_CANCEL_REASON_GOVERNANCE 3
+#define CONNECT_NORITO_SORAFS_ORDERBOOK_CANCEL_REASON_REPLACED 4
+#define CONNECT_NORITO_SORAFS_REFERENCE_PDP_KIND_COMMITMENT 1
+#define CONNECT_NORITO_SORAFS_REFERENCE_PDP_KIND_CHALLENGE 2
+#define CONNECT_NORITO_SORAFS_REFERENCE_PDP_KIND_PROOF 3
 
 // ---------------- Bridge ABI ----------------
 uint32_t connect_norito_bridge_abi_version(void);
@@ -579,6 +599,134 @@ int32_t connect_norito_sm2_compute_za(
     unsigned long out_za_len);
 
 // ---------------- SoraFS helpers ----------------
+int32_t connect_norito_sorafs_reference_validate_orderbook_json(
+    uint32_t kind,
+    const uint8_t* bytes_ptr,
+    unsigned long bytes_len,
+    const uint8_t* label_ptr,
+    unsigned long label_len,
+    uint64_t generated_at,
+    uint8_t** out_json_ptr,
+    unsigned long* out_json_len);
+
+int32_t connect_norito_sorafs_reference_sign_orderbook_payload(
+    uint32_t kind,
+    const uint8_t* bytes_ptr,
+    unsigned long bytes_len,
+    const uint8_t* private_key_ptr,
+    unsigned long private_key_len,
+    uint8_t** out_signed_ptr,
+    unsigned long* out_signed_len);
+
+int32_t connect_norito_sorafs_reference_build_signed_orderbook_order_request(
+    const uint8_t* order_id_ptr,
+    unsigned long order_id_len,
+    uint32_t side,
+    uint32_t tier,
+    const uint8_t* price_per_gib_micro_xor_ptr,
+    unsigned long price_per_gib_micro_xor_len,
+    uint64_t quantity_gib,
+    uint64_t remaining_gib,
+    const uint8_t* owner_account_ptr,
+    unsigned long owner_account_len,
+    uint64_t expiry_unix,
+    uint64_t nonce,
+    uint32_t maker_fee_bps,
+    uint32_t taker_fee_bps,
+    const uint8_t* private_key_ptr,
+    unsigned long private_key_len,
+    uint8_t** out_signed_ptr,
+    unsigned long* out_signed_len);
+
+int32_t connect_norito_sorafs_reference_build_signed_orderbook_order_cancel(
+    const uint8_t* order_id_ptr,
+    unsigned long order_id_len,
+    const uint8_t* owner_account_ptr,
+    unsigned long owner_account_len,
+    uint32_t reason,
+    uint64_t nonce,
+    const uint8_t* private_key_ptr,
+    unsigned long private_key_len,
+    uint8_t** out_signed_ptr,
+    unsigned long* out_signed_len);
+
+int32_t connect_norito_sorafs_reference_build_signed_orderbook_settlement_receipt(
+    const uint8_t* receipt_id_ptr,
+    unsigned long receipt_id_len,
+    const uint8_t* channel_id_ptr,
+    unsigned long channel_id_len,
+    const uint8_t* trade_id_ptr,
+    unsigned long trade_id_len,
+    uint64_t range_start,
+    uint64_t range_end,
+    const uint8_t* chunk_hash_ptr,
+    unsigned long chunk_hash_len,
+    uint64_t bytes_delivered,
+    const uint8_t* xor_debited_micro_xor_ptr,
+    unsigned long xor_debited_micro_xor_len,
+    const uint8_t* provider_credit_micro_xor_ptr,
+    unsigned long provider_credit_micro_xor_len,
+    const uint8_t* fee_amount_micro_xor_ptr,
+    unsigned long fee_amount_micro_xor_len,
+    uint64_t issued_at_unix,
+    const uint8_t* private_key_ptr,
+    unsigned long private_key_len,
+    uint8_t** out_signed_ptr,
+    unsigned long* out_signed_len);
+
+int32_t connect_norito_sorafs_reference_validate_pdp_payload_json(
+    uint32_t kind,
+    const uint8_t* bytes_ptr,
+    unsigned long bytes_len,
+    const uint8_t* label_ptr,
+    unsigned long label_len,
+    uint64_t generated_at,
+    uint8_t** out_json_ptr,
+    unsigned long* out_json_len);
+
+int32_t connect_norito_sorafs_reference_validate_pdp_commitment_challenge_json(
+    const uint8_t* commitment_ptr,
+    unsigned long commitment_len,
+    const uint8_t* commitment_label_ptr,
+    unsigned long commitment_label_len,
+    const uint8_t* challenge_ptr,
+    unsigned long challenge_len,
+    const uint8_t* challenge_label_ptr,
+    unsigned long challenge_label_len,
+    uint64_t generated_at,
+    uint8_t** out_json_ptr,
+    unsigned long* out_json_len);
+
+int32_t connect_norito_sorafs_reference_validate_pdp_challenge_proof_json(
+    const uint8_t* challenge_ptr,
+    unsigned long challenge_len,
+    const uint8_t* challenge_label_ptr,
+    unsigned long challenge_label_len,
+    const uint8_t* proof_ptr,
+    unsigned long proof_len,
+    const uint8_t* proof_label_ptr,
+    unsigned long proof_label_len,
+    uint64_t generated_at,
+    uint8_t** out_json_ptr,
+    unsigned long* out_json_len);
+
+int32_t connect_norito_sorafs_reference_validate_pdp_bundle_json(
+    const uint8_t* commitment_ptr,
+    unsigned long commitment_len,
+    const uint8_t* commitment_label_ptr,
+    unsigned long commitment_label_len,
+    const uint8_t* challenge_ptr,
+    unsigned long challenge_len,
+    const uint8_t* challenge_label_ptr,
+    unsigned long challenge_label_len,
+    const uint8_t* proof_ptr,
+    unsigned long proof_len,
+    const uint8_t* proof_label_ptr,
+    unsigned long proof_label_len,
+    uint64_t generated_at,
+    uint8_t** out_json_ptr,
+    unsigned long* out_json_len);
+
 int32_t connect_norito_sorafs_local_fetch(
     const char* plan_json,
     unsigned long plan_len,

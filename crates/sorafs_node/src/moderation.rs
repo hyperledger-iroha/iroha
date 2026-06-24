@@ -3,9 +3,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_data_model::sorafs::moderation::{
-    SoraFsModerationBallotCommitV1, SoraFsModerationBallotContextV1, SoraFsModerationBallotError,
-    SoraFsModerationBallotRevealV1, SoraFsModerationVoteChoice,
+    AdversarialCorpusManifestV1, ModerationReproManifestV1, SoraFsModerationBallotCommitV1,
+    SoraFsModerationBallotContextV1, SoraFsModerationBallotError, SoraFsModerationBallotRevealV1,
+    SoraFsModerationVoteChoice,
 };
+use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use sorafs_manifest::{
     SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1,
     SoraFsModerationBallotGovernanceEventKindV1, SoraFsModerationBallotGovernanceEventV1,
@@ -15,6 +17,9 @@ use sorafs_manifest::{
 use thiserror::Error;
 
 const MODERATION_ROSTER_HASH_DOMAIN_V1: &[u8] = b"sorafs.moderation.local.panel-roster-hash.v1";
+const MODERATION_SCREENING_RECORD_DOMAIN_V1: &[u8] = b"sorafs.moderation.local.screening-record.v1";
+const MODERATION_QUARANTINE_RECORD_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.local.quarantine-record.v1";
 
 /// Derive the local moderation panel roster hash for an ordered juror roster.
 ///
@@ -79,6 +84,1094 @@ pub struct ModerationAppealDeposit {
     pub expires_at_ms: Option<u64>,
     /// Client-supplied idempotency key used to derive the escrow id.
     pub idempotency_key: String,
+    /// Canonical lowercase evidence hashes used to derive the escrow id.
+    pub evidence_hashes_hex: Vec<String>,
+}
+
+/// Local registry record for an admitted moderation reproducibility manifest.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ModerationReproRegistryRecord {
+    /// Referenced moderation committee manifest id.
+    pub manifest_id: [u8; 16],
+    /// BLAKE3 digest of the manifest payload recorded in the manifest body.
+    pub manifest_digest: [u8; 32],
+    /// BLAKE3 digest of the compiled deterministic runner binary.
+    pub runner_hash: [u8; 32],
+    /// Runner version string recorded in the manifest body.
+    pub runtime_version: String,
+    /// Unix timestamp (seconds) when the manifest was issued.
+    pub issued_at_unix: u64,
+    /// Number of model fingerprint entries covered by the manifest.
+    pub model_count: u32,
+    /// Number of validated signer entries on the manifest.
+    pub signer_count: u32,
+}
+
+/// Local registry record for an admitted adversarial corpus manifest.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ModerationCorpusRegistryRecord {
+    /// BLAKE3 digest of the canonical Norito corpus manifest bytes.
+    pub corpus_digest: [u8; 32],
+    /// Unix timestamp (seconds) when the corpus manifest was assembled.
+    pub issued_at_unix: u64,
+    /// Optional cohort label for the calibration window.
+    pub cohort_label: Option<String>,
+    /// Number of perceptual families in the corpus.
+    pub family_count: u32,
+    /// Number of variants across all corpus families.
+    pub variant_count: u32,
+}
+
+/// Snapshot of the local SoraFS moderation model registry.
+#[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ModerationModelRegistrySnapshot {
+    /// Admitted reproducibility manifests sorted by manifest id.
+    pub reproducibility_manifests: Vec<ModerationReproRegistryRecord>,
+    /// Admitted adversarial corpus manifests sorted by corpus digest.
+    pub adversarial_corpora: Vec<ModerationCorpusRegistryRecord>,
+}
+
+/// Local SFM-4a screening verdict.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
+)]
+#[repr(u8)]
+pub enum ModerationScreeningVerdict {
+    /// Screening passed without additional moderation action.
+    Pass = 1,
+    /// Screening passed with a warning or low-severity policy hit.
+    Warn = 2,
+    /// Content must be quarantined for operator review.
+    Quarantine = 3,
+    /// Content must be escalated to a moderation panel or appeal workflow.
+    Escalate = 4,
+    /// Content must be blocked outright.
+    Block = 5,
+}
+
+impl ModerationScreeningVerdict {
+    /// Stable lower-case label used in JSON and digest material.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Warn => "warn",
+            Self::Quarantine => "quarantine",
+            Self::Escalate => "escalate",
+            Self::Block => "block",
+        }
+    }
+
+    fn requires_quarantine_record(self) -> bool {
+        matches!(self, Self::Quarantine | Self::Escalate)
+    }
+}
+
+/// Candidate local screening result to record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModerationScreeningInput {
+    /// Gateway or content subject identifier.
+    pub subject: String,
+    /// BLAKE3 digest of the screened payload or stable content reference.
+    pub subject_digest: [u8; 32],
+    /// Governance-approved reproducibility manifest id used for screening.
+    pub manifest_id: [u8; 16],
+    /// BLAKE3 digest of the deterministic runner binary.
+    pub runner_hash: [u8; 32],
+    /// Combined moderation score in basis points.
+    pub combined_score_bps: u16,
+    /// Screening verdict.
+    pub verdict: ModerationScreeningVerdict,
+    /// Unix timestamp (seconds) when screening completed.
+    pub screened_at_unix: u64,
+    /// Optional digest of evidence material retained outside this local index.
+    pub evidence_digest: Option<[u8; 32]>,
+    /// Optional digest of the policy/configuration used for the run.
+    pub policy_digest: Option<[u8; 32]>,
+    /// Optional operator note.
+    pub notes: Option<String>,
+}
+
+/// Persisted local SFM-4a screening result.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ModerationScreeningRecord {
+    /// Stable record id derived from the deterministic record digest.
+    pub record_id: [u8; 16],
+    /// BLAKE3 digest over canonical screening record fields.
+    pub record_digest: [u8; 32],
+    /// Gateway or content subject identifier.
+    pub subject: String,
+    /// BLAKE3 digest of the screened payload or stable content reference.
+    pub subject_digest: [u8; 32],
+    /// Governance-approved reproducibility manifest id used for screening.
+    pub manifest_id: [u8; 16],
+    /// BLAKE3 digest of the deterministic runner binary.
+    pub runner_hash: [u8; 32],
+    /// Combined moderation score in basis points.
+    pub combined_score_bps: u16,
+    /// Screening verdict.
+    pub verdict: ModerationScreeningVerdict,
+    /// Unix timestamp (seconds) when screening completed.
+    pub screened_at_unix: u64,
+    /// Optional digest of evidence material retained outside this local index.
+    pub evidence_digest: Option<[u8; 32]>,
+    /// Optional digest of the policy/configuration used for the run.
+    pub policy_digest: Option<[u8; 32]>,
+    /// Optional operator note.
+    pub notes: Option<String>,
+}
+
+/// Local state of a quarantined screening record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[repr(u8)]
+pub enum ModerationQuarantineState {
+    /// Awaiting operator or panel review.
+    PendingReview = 1,
+    /// Reviewed by an operator and ready for a release decision.
+    Reviewed = 2,
+    /// Released by an authorized operator after review.
+    Released = 3,
+}
+
+impl ModerationQuarantineState {
+    /// Stable lower-case label used in JSON.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PendingReview => "pending_review",
+            Self::Reviewed => "reviewed",
+            Self::Released => "released",
+        }
+    }
+}
+
+/// Local review action for a quarantined screening record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModerationQuarantineReviewInput {
+    /// Stable quarantine id to review.
+    pub quarantine_id: [u8; 16],
+    /// Canonical operator or panel member that reviewed the record.
+    pub reviewed_by: String,
+    /// Unix timestamp (seconds) when review completed.
+    pub reviewed_at_unix: u64,
+    /// Optional review note.
+    pub notes: Option<String>,
+}
+
+/// Local release action for a reviewed quarantine record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModerationQuarantineReleaseInput {
+    /// Stable quarantine id to release.
+    pub quarantine_id: [u8; 16],
+    /// Canonical operator or release authority approving release.
+    pub release_authority: String,
+    /// Unix timestamp (seconds) when release completed.
+    pub released_at_unix: u64,
+    /// Optional release note.
+    pub notes: Option<String>,
+}
+
+/// Persisted local quarantine queue record derived from a screening result.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ModerationQuarantineRecord {
+    /// Stable quarantine id derived from screening id and subject digest.
+    pub quarantine_id: [u8; 16],
+    /// Screening record that produced this queue entry.
+    pub screening_record_id: [u8; 16],
+    /// Gateway or content subject identifier.
+    pub subject: String,
+    /// BLAKE3 digest of the quarantined payload or stable content reference.
+    pub subject_digest: [u8; 32],
+    /// Triggering verdict.
+    pub verdict: ModerationScreeningVerdict,
+    /// Unix timestamp (seconds) when the record entered local quarantine.
+    pub queued_at_unix: u64,
+    /// Local review state.
+    pub state: ModerationQuarantineState,
+    /// Unix timestamp (seconds) when local review completed.
+    pub reviewed_at_unix: Option<u64>,
+    /// Canonical operator or panel member that reviewed the record.
+    pub reviewed_by: Option<String>,
+    /// Optional local review note.
+    pub review_notes: Option<String>,
+    /// Unix timestamp (seconds) when the local record was released.
+    pub released_at_unix: Option<u64>,
+    /// Canonical operator or authority that approved release.
+    pub release_authority: Option<String>,
+    /// Optional local release note.
+    pub release_notes: Option<String>,
+}
+
+/// Outcome of recording one local screening result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModerationScreeningOutcome {
+    /// Persisted screening record.
+    pub record: ModerationScreeningRecord,
+    /// Quarantine queue record when the verdict requires review.
+    pub quarantine: Option<ModerationQuarantineRecord>,
+}
+
+/// Snapshot of local SFM-4a screening and quarantine state.
+#[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ModerationScreeningSnapshot {
+    /// Screening records sorted by record id.
+    pub screening_records: Vec<ModerationScreeningRecord>,
+    /// Quarantine records sorted by quarantine id.
+    pub quarantine_records: Vec<ModerationQuarantineRecord>,
+}
+
+/// Error raised by the local screening/quarantine runtime.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum ModerationScreeningError {
+    /// Screening input is invalid.
+    #[error("invalid moderation screening input: {message}")]
+    InvalidInput {
+        /// Validation detail.
+        message: String,
+    },
+    /// A screening record id collided with different content.
+    #[error("moderation screening record `{record_id_hex}` conflicts with local state")]
+    ConflictingRecord {
+        /// Conflicting screening record id as lowercase hex.
+        record_id_hex: String,
+    },
+    /// A requested quarantine queue record does not exist.
+    #[error("moderation quarantine record `{quarantine_id_hex}` is unknown")]
+    UnknownQuarantine {
+        /// Unknown quarantine id as lowercase hex.
+        quarantine_id_hex: String,
+    },
+    /// A quarantine state transition was invalid.
+    #[error("moderation quarantine record `{quarantine_id_hex}` transition is invalid: {message}")]
+    InvalidTransition {
+        /// Quarantine id as lowercase hex.
+        quarantine_id_hex: String,
+        /// Transition validation detail.
+        message: String,
+    },
+    /// A restored snapshot is internally inconsistent.
+    #[error("moderation screening snapshot is invalid: {message}")]
+    InvalidSnapshot {
+        /// Validation detail.
+        message: String,
+    },
+    /// The local screening runtime lock was poisoned.
+    #[error("moderation screening state lock poisoned")]
+    StateLockPoisoned,
+}
+
+/// Error raised while admitting moderation model registry material.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum ModerationModelRegistryError {
+    /// A reproducibility manifest failed canonical validation.
+    #[error("moderation reproducibility manifest validation failed: {message}")]
+    InvalidReproManifest {
+        /// Validation detail.
+        message: String,
+    },
+    /// An adversarial corpus manifest failed canonical validation.
+    #[error("moderation adversarial corpus manifest validation failed: {message}")]
+    InvalidCorpusManifest {
+        /// Validation detail.
+        message: String,
+    },
+    /// A reproducibility manifest conflicts with a previously admitted manifest id.
+    #[error("moderation reproducibility manifest `{manifest_id_hex}` conflicts with registry")]
+    ConflictingReproManifest {
+        /// Conflicting manifest id as lowercase hex.
+        manifest_id_hex: String,
+    },
+    /// A persisted registry snapshot is not internally consistent.
+    #[error("moderation model registry snapshot is invalid: {message}")]
+    InvalidRegistrySnapshot {
+        /// Validation detail.
+        message: String,
+    },
+    /// Corpus manifest canonical encoding failed.
+    #[error("failed to encode moderation adversarial corpus manifest: {message}")]
+    CorpusEncoding {
+        /// Encoding detail.
+        message: String,
+    },
+    /// The local moderation model registry lock was poisoned.
+    #[error("moderation model registry state lock poisoned")]
+    StateLockPoisoned,
+}
+
+/// Local in-memory registry for moderation model release artifacts.
+#[derive(Debug, Default)]
+pub(crate) struct ModerationModelRegistry {
+    repro_manifests: BTreeMap<[u8; 16], ModerationReproRegistryRecord>,
+    corpora: BTreeMap<[u8; 32], ModerationCorpusRegistryRecord>,
+}
+
+impl ModerationModelRegistry {
+    pub(crate) fn admit_repro_manifest(
+        &mut self,
+        manifest: ModerationReproManifestV1,
+    ) -> Result<ModerationReproRegistryRecord, ModerationModelRegistryError> {
+        let summary = manifest.validate().map_err(|err| {
+            ModerationModelRegistryError::InvalidReproManifest {
+                message: err.to_string(),
+            }
+        })?;
+        let record = ModerationReproRegistryRecord {
+            manifest_id: summary.manifest_id,
+            manifest_digest: manifest.body.manifest_digest,
+            runner_hash: manifest.body.runner_hash,
+            runtime_version: manifest.body.runtime_version,
+            issued_at_unix: summary.issued_at_unix,
+            model_count: summary.model_count,
+            signer_count: summary.signer_count,
+        };
+        match self.repro_manifests.get(&record.manifest_id) {
+            Some(existing) if existing != &record => {
+                Err(ModerationModelRegistryError::ConflictingReproManifest {
+                    manifest_id_hex: hex::encode(record.manifest_id),
+                })
+            }
+            Some(existing) => Ok(existing.clone()),
+            None => {
+                self.repro_manifests
+                    .insert(record.manifest_id, record.clone());
+                Ok(record)
+            }
+        }
+    }
+
+    pub(crate) fn admit_corpus_manifest(
+        &mut self,
+        manifest: AdversarialCorpusManifestV1,
+    ) -> Result<ModerationCorpusRegistryRecord, ModerationModelRegistryError> {
+        manifest
+            .validate()
+            .map_err(|err| ModerationModelRegistryError::InvalidCorpusManifest {
+                message: err.to_string(),
+            })?;
+        let encoded = norito::to_bytes(&manifest).map_err(|err| {
+            ModerationModelRegistryError::CorpusEncoding {
+                message: err.to_string(),
+            }
+        })?;
+        let corpus_digest = *blake3::hash(&encoded).as_bytes();
+        let family_count = manifest.families.len().min(u32::MAX as usize) as u32;
+        let variant_count = manifest
+            .families
+            .iter()
+            .map(|family| family.variants.len())
+            .sum::<usize>()
+            .min(u32::MAX as usize) as u32;
+        let record = ModerationCorpusRegistryRecord {
+            corpus_digest,
+            issued_at_unix: manifest.issued_at_unix,
+            cohort_label: manifest.cohort_label,
+            family_count,
+            variant_count,
+        };
+        Ok(self
+            .corpora
+            .entry(record.corpus_digest)
+            .or_insert_with(|| record.clone())
+            .clone())
+    }
+
+    pub(crate) fn snapshot(&self) -> ModerationModelRegistrySnapshot {
+        ModerationModelRegistrySnapshot {
+            reproducibility_manifests: self.repro_manifests.values().cloned().collect(),
+            adversarial_corpora: self.corpora.values().cloned().collect(),
+        }
+    }
+
+    pub(crate) fn restore_snapshot(
+        &mut self,
+        snapshot: ModerationModelRegistrySnapshot,
+    ) -> Result<(), ModerationModelRegistryError> {
+        let mut repro_manifests = BTreeMap::new();
+        for record in snapshot.reproducibility_manifests {
+            if record.runtime_version.trim().is_empty() {
+                return Err(ModerationModelRegistryError::InvalidRegistrySnapshot {
+                    message: format!(
+                        "reproducibility manifest `{}` has an empty runtime version",
+                        hex::encode(record.manifest_id)
+                    ),
+                });
+            }
+            if record.model_count == 0 {
+                return Err(ModerationModelRegistryError::InvalidRegistrySnapshot {
+                    message: format!(
+                        "reproducibility manifest `{}` has no model fingerprints",
+                        hex::encode(record.manifest_id)
+                    ),
+                });
+            }
+            if record.signer_count == 0 {
+                return Err(ModerationModelRegistryError::InvalidRegistrySnapshot {
+                    message: format!(
+                        "reproducibility manifest `{}` has no governance signers",
+                        hex::encode(record.manifest_id)
+                    ),
+                });
+            }
+            if repro_manifests.insert(record.manifest_id, record).is_some() {
+                return Err(ModerationModelRegistryError::InvalidRegistrySnapshot {
+                    message: "duplicate reproducibility manifest id".to_string(),
+                });
+            }
+        }
+
+        let mut corpora = BTreeMap::new();
+        for record in snapshot.adversarial_corpora {
+            if record.family_count == 0 {
+                return Err(ModerationModelRegistryError::InvalidRegistrySnapshot {
+                    message: format!(
+                        "adversarial corpus `{}` has no perceptual families",
+                        hex::encode(record.corpus_digest)
+                    ),
+                });
+            }
+            if record.variant_count == 0 {
+                return Err(ModerationModelRegistryError::InvalidRegistrySnapshot {
+                    message: format!(
+                        "adversarial corpus `{}` has no variants",
+                        hex::encode(record.corpus_digest)
+                    ),
+                });
+            }
+            if corpora.insert(record.corpus_digest, record).is_some() {
+                return Err(ModerationModelRegistryError::InvalidRegistrySnapshot {
+                    message: "duplicate adversarial corpus digest".to_string(),
+                });
+            }
+        }
+
+        self.repro_manifests = repro_manifests;
+        self.corpora = corpora;
+        Ok(())
+    }
+}
+
+/// Local in-memory runtime for SFM-4a screening and quarantine evidence.
+#[derive(Debug, Default)]
+pub(crate) struct ModerationScreeningRuntime {
+    screening_records: BTreeMap<[u8; 16], ModerationScreeningRecord>,
+    quarantine_records: BTreeMap<[u8; 16], ModerationQuarantineRecord>,
+}
+
+impl ModerationScreeningRuntime {
+    pub(crate) fn record_screening(
+        &mut self,
+        input: ModerationScreeningInput,
+    ) -> Result<ModerationScreeningOutcome, ModerationScreeningError> {
+        let record = screening_record_from_input(input)?;
+        let quarantine = record
+            .verdict
+            .requires_quarantine_record()
+            .then(|| quarantine_record_from_screening(&record));
+
+        match self.screening_records.get(&record.record_id) {
+            Some(existing) if existing != &record => {
+                return Err(ModerationScreeningError::ConflictingRecord {
+                    record_id_hex: hex::encode(record.record_id),
+                });
+            }
+            Some(existing) => {
+                let quarantine = quarantine
+                    .as_ref()
+                    .and_then(|record| self.quarantine_records.get(&record.quarantine_id))
+                    .cloned();
+                return Ok(ModerationScreeningOutcome {
+                    record: existing.clone(),
+                    quarantine,
+                });
+            }
+            None => {
+                self.screening_records
+                    .insert(record.record_id, record.clone());
+            }
+        }
+
+        if let Some(quarantine) = quarantine.clone() {
+            self.quarantine_records
+                .insert(quarantine.quarantine_id, quarantine);
+        }
+
+        Ok(ModerationScreeningOutcome { record, quarantine })
+    }
+
+    pub(crate) fn snapshot(&self) -> ModerationScreeningSnapshot {
+        ModerationScreeningSnapshot {
+            screening_records: self.screening_records.values().cloned().collect(),
+            quarantine_records: self.quarantine_records.values().cloned().collect(),
+        }
+    }
+
+    pub(crate) fn review_quarantine(
+        &mut self,
+        input: ModerationQuarantineReviewInput,
+    ) -> Result<ModerationQuarantineRecord, ModerationScreeningError> {
+        let reviewed_by =
+            clean_required_text(input.reviewed_by, "reviewed_by", input.quarantine_id, true)?;
+        if input.reviewed_at_unix == 0 {
+            return Err(ModerationScreeningError::InvalidTransition {
+                quarantine_id_hex: hex::encode(input.quarantine_id),
+                message: "reviewed_at_unix must be non-zero".to_string(),
+            });
+        }
+        let review_notes = clean_optional_text(input.notes);
+        let record = self
+            .quarantine_records
+            .get_mut(&input.quarantine_id)
+            .ok_or(ModerationScreeningError::UnknownQuarantine {
+                quarantine_id_hex: hex::encode(input.quarantine_id),
+            })?;
+
+        match record.state {
+            ModerationQuarantineState::PendingReview => {
+                record.state = ModerationQuarantineState::Reviewed;
+                record.reviewed_at_unix = Some(input.reviewed_at_unix);
+                record.reviewed_by = Some(reviewed_by);
+                record.review_notes = review_notes;
+                Ok(record.clone())
+            }
+            ModerationQuarantineState::Reviewed
+                if record.reviewed_at_unix == Some(input.reviewed_at_unix)
+                    && record.reviewed_by.as_deref() == Some(reviewed_by.as_str())
+                    && record.review_notes == review_notes =>
+            {
+                Ok(record.clone())
+            }
+            ModerationQuarantineState::Reviewed => {
+                Err(ModerationScreeningError::InvalidTransition {
+                    quarantine_id_hex: hex::encode(input.quarantine_id),
+                    message: "record is already reviewed with different metadata".to_string(),
+                })
+            }
+            ModerationQuarantineState::Released => {
+                Err(ModerationScreeningError::InvalidTransition {
+                    quarantine_id_hex: hex::encode(input.quarantine_id),
+                    message: "released records cannot be reviewed again".to_string(),
+                })
+            }
+        }
+    }
+
+    pub(crate) fn release_quarantine(
+        &mut self,
+        input: ModerationQuarantineReleaseInput,
+    ) -> Result<ModerationQuarantineRecord, ModerationScreeningError> {
+        let release_authority = clean_required_text(
+            input.release_authority,
+            "release_authority",
+            input.quarantine_id,
+            true,
+        )?;
+        if input.released_at_unix == 0 {
+            return Err(ModerationScreeningError::InvalidTransition {
+                quarantine_id_hex: hex::encode(input.quarantine_id),
+                message: "released_at_unix must be non-zero".to_string(),
+            });
+        }
+        let release_notes = clean_optional_text(input.notes);
+        let record = self
+            .quarantine_records
+            .get_mut(&input.quarantine_id)
+            .ok_or(ModerationScreeningError::UnknownQuarantine {
+                quarantine_id_hex: hex::encode(input.quarantine_id),
+            })?;
+
+        match record.state {
+            ModerationQuarantineState::PendingReview => {
+                Err(ModerationScreeningError::InvalidTransition {
+                    quarantine_id_hex: hex::encode(input.quarantine_id),
+                    message: "record must be reviewed before release".to_string(),
+                })
+            }
+            ModerationQuarantineState::Reviewed => {
+                if record
+                    .reviewed_at_unix
+                    .is_some_and(|reviewed_at| input.released_at_unix < reviewed_at)
+                {
+                    return Err(ModerationScreeningError::InvalidTransition {
+                        quarantine_id_hex: hex::encode(input.quarantine_id),
+                        message: "released_at_unix must be >= reviewed_at_unix".to_string(),
+                    });
+                }
+                record.state = ModerationQuarantineState::Released;
+                record.released_at_unix = Some(input.released_at_unix);
+                record.release_authority = Some(release_authority);
+                record.release_notes = release_notes;
+                Ok(record.clone())
+            }
+            ModerationQuarantineState::Released
+                if record.released_at_unix == Some(input.released_at_unix)
+                    && record.release_authority.as_deref() == Some(release_authority.as_str())
+                    && record.release_notes == release_notes =>
+            {
+                Ok(record.clone())
+            }
+            ModerationQuarantineState::Released => {
+                Err(ModerationScreeningError::InvalidTransition {
+                    quarantine_id_hex: hex::encode(input.quarantine_id),
+                    message: "record is already released with different metadata".to_string(),
+                })
+            }
+        }
+    }
+
+    pub(crate) fn restore_snapshot(
+        &mut self,
+        snapshot: ModerationScreeningSnapshot,
+    ) -> Result<(), ModerationScreeningError> {
+        let mut screening_records = BTreeMap::new();
+        for record in snapshot.screening_records {
+            validate_screening_record(&record)?;
+            if screening_records.insert(record.record_id, record).is_some() {
+                return Err(ModerationScreeningError::InvalidSnapshot {
+                    message: "duplicate moderation screening record id".to_string(),
+                });
+            }
+        }
+
+        let mut quarantine_records = BTreeMap::new();
+        for quarantine in snapshot.quarantine_records {
+            validate_quarantine_record(&quarantine)?;
+            let Some(screening_record) = screening_records.get(&quarantine.screening_record_id)
+            else {
+                return Err(ModerationScreeningError::InvalidSnapshot {
+                    message: format!(
+                        "quarantine record `{}` references unknown screening record `{}`",
+                        hex::encode(quarantine.quarantine_id),
+                        hex::encode(quarantine.screening_record_id)
+                    ),
+                });
+            };
+            validate_quarantine_record_matches_screening(&quarantine, screening_record)?;
+            if quarantine_records
+                .insert(quarantine.quarantine_id, quarantine)
+                .is_some()
+            {
+                return Err(ModerationScreeningError::InvalidSnapshot {
+                    message: "duplicate moderation quarantine record id".to_string(),
+                });
+            }
+        }
+
+        self.screening_records = screening_records;
+        self.quarantine_records = quarantine_records;
+        Ok(())
+    }
+}
+
+fn screening_record_from_input(
+    input: ModerationScreeningInput,
+) -> Result<ModerationScreeningRecord, ModerationScreeningError> {
+    if input.subject.trim().is_empty() {
+        return Err(ModerationScreeningError::InvalidInput {
+            message: "subject must not be blank".to_string(),
+        });
+    }
+    if input.combined_score_bps > 10_000 {
+        return Err(ModerationScreeningError::InvalidInput {
+            message: "combined_score_bps must be <= 10000".to_string(),
+        });
+    }
+    if input.screened_at_unix == 0 {
+        return Err(ModerationScreeningError::InvalidInput {
+            message: "screened_at_unix must be non-zero".to_string(),
+        });
+    }
+
+    let record_digest = screening_record_digest(
+        &input.subject,
+        input.subject_digest,
+        input.manifest_id,
+        input.runner_hash,
+        input.combined_score_bps,
+        input.verdict,
+        input.screened_at_unix,
+        input.evidence_digest,
+        input.policy_digest,
+        input.notes.as_deref(),
+    );
+    let mut record_id = [0u8; 16];
+    record_id.copy_from_slice(&record_digest[..16]);
+    Ok(ModerationScreeningRecord {
+        record_id,
+        record_digest,
+        subject: input.subject,
+        subject_digest: input.subject_digest,
+        manifest_id: input.manifest_id,
+        runner_hash: input.runner_hash,
+        combined_score_bps: input.combined_score_bps,
+        verdict: input.verdict,
+        screened_at_unix: input.screened_at_unix,
+        evidence_digest: input.evidence_digest,
+        policy_digest: input.policy_digest,
+        notes: input.notes,
+    })
+}
+
+fn validate_screening_record(
+    record: &ModerationScreeningRecord,
+) -> Result<(), ModerationScreeningError> {
+    if record.subject.trim().is_empty() {
+        return Err(ModerationScreeningError::InvalidSnapshot {
+            message: "screening record subject must not be blank".to_string(),
+        });
+    }
+    if record.combined_score_bps > 10_000 {
+        return Err(ModerationScreeningError::InvalidSnapshot {
+            message: format!(
+                "screening record `{}` has combined_score_bps > 10000",
+                hex::encode(record.record_id)
+            ),
+        });
+    }
+    if record.screened_at_unix == 0 {
+        return Err(ModerationScreeningError::InvalidSnapshot {
+            message: format!(
+                "screening record `{}` has zero screened_at_unix",
+                hex::encode(record.record_id)
+            ),
+        });
+    }
+    let expected_digest = screening_record_digest(
+        &record.subject,
+        record.subject_digest,
+        record.manifest_id,
+        record.runner_hash,
+        record.combined_score_bps,
+        record.verdict,
+        record.screened_at_unix,
+        record.evidence_digest,
+        record.policy_digest,
+        record.notes.as_deref(),
+    );
+    let mut expected_id = [0u8; 16];
+    expected_id.copy_from_slice(&expected_digest[..16]);
+    if record.record_digest != expected_digest || record.record_id != expected_id {
+        return Err(ModerationScreeningError::InvalidSnapshot {
+            message: format!(
+                "screening record `{}` digest/id mismatch",
+                hex::encode(record.record_id)
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn quarantine_record_from_screening(
+    record: &ModerationScreeningRecord,
+) -> ModerationQuarantineRecord {
+    let quarantine_digest = quarantine_record_digest(
+        record.record_id,
+        record.subject_digest,
+        record.verdict,
+        record.screened_at_unix,
+    );
+    let mut quarantine_id = [0u8; 16];
+    quarantine_id.copy_from_slice(&quarantine_digest[..16]);
+    ModerationQuarantineRecord {
+        quarantine_id,
+        screening_record_id: record.record_id,
+        subject: record.subject.clone(),
+        subject_digest: record.subject_digest,
+        verdict: record.verdict,
+        queued_at_unix: record.screened_at_unix,
+        state: ModerationQuarantineState::PendingReview,
+        reviewed_at_unix: None,
+        reviewed_by: None,
+        review_notes: None,
+        released_at_unix: None,
+        release_authority: None,
+        release_notes: None,
+    }
+}
+
+fn validate_quarantine_record(
+    record: &ModerationQuarantineRecord,
+) -> Result<(), ModerationScreeningError> {
+    if !record.verdict.requires_quarantine_record() {
+        return Err(ModerationScreeningError::InvalidSnapshot {
+            message: format!(
+                "quarantine record `{}` has non-quarantine verdict `{}`",
+                hex::encode(record.quarantine_id),
+                record.verdict.as_str()
+            ),
+        });
+    }
+    if record.subject.trim().is_empty() {
+        return Err(ModerationScreeningError::InvalidSnapshot {
+            message: format!(
+                "quarantine record `{}` has blank subject",
+                hex::encode(record.quarantine_id)
+            ),
+        });
+    }
+    if record.queued_at_unix == 0 {
+        return Err(ModerationScreeningError::InvalidSnapshot {
+            message: format!(
+                "quarantine record `{}` has zero queued_at_unix",
+                hex::encode(record.quarantine_id)
+            ),
+        });
+    }
+    validate_quarantine_state_fields(record)?;
+    Ok(())
+}
+
+fn validate_quarantine_record_matches_screening(
+    record: &ModerationQuarantineRecord,
+    screening_record: &ModerationScreeningRecord,
+) -> Result<(), ModerationScreeningError> {
+    let expected = quarantine_record_from_screening(screening_record);
+    if record.quarantine_id != expected.quarantine_id
+        || record.screening_record_id != expected.screening_record_id
+        || record.subject != expected.subject
+        || record.subject_digest != expected.subject_digest
+        || record.verdict != expected.verdict
+        || record.queued_at_unix != expected.queued_at_unix
+    {
+        return Err(ModerationScreeningError::InvalidSnapshot {
+            message: format!(
+                "quarantine record `{}` does not match its screening record",
+                hex::encode(record.quarantine_id)
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn validate_quarantine_state_fields(
+    record: &ModerationQuarantineRecord,
+) -> Result<(), ModerationScreeningError> {
+    match record.state {
+        ModerationQuarantineState::PendingReview => {
+            if record.reviewed_at_unix.is_some()
+                || record.reviewed_by.is_some()
+                || record.review_notes.is_some()
+                || record.released_at_unix.is_some()
+                || record.release_authority.is_some()
+                || record.release_notes.is_some()
+            {
+                return Err(ModerationScreeningError::InvalidSnapshot {
+                    message: format!(
+                        "pending quarantine record `{}` must not carry review/release metadata",
+                        hex::encode(record.quarantine_id)
+                    ),
+                });
+            }
+        }
+        ModerationQuarantineState::Reviewed => {
+            validate_nonzero_optional_timestamp(
+                record.quarantine_id,
+                "reviewed_at_unix",
+                record.reviewed_at_unix,
+            )?;
+            validate_nonblank_optional_text(
+                record.quarantine_id,
+                "reviewed_by",
+                &record.reviewed_by,
+            )?;
+            if record.released_at_unix.is_some()
+                || record.release_authority.is_some()
+                || record.release_notes.is_some()
+            {
+                return Err(ModerationScreeningError::InvalidSnapshot {
+                    message: format!(
+                        "reviewed quarantine record `{}` must not carry release metadata",
+                        hex::encode(record.quarantine_id)
+                    ),
+                });
+            }
+        }
+        ModerationQuarantineState::Released => {
+            validate_nonzero_optional_timestamp(
+                record.quarantine_id,
+                "reviewed_at_unix",
+                record.reviewed_at_unix,
+            )?;
+            validate_nonblank_optional_text(
+                record.quarantine_id,
+                "reviewed_by",
+                &record.reviewed_by,
+            )?;
+            validate_nonzero_optional_timestamp(
+                record.quarantine_id,
+                "released_at_unix",
+                record.released_at_unix,
+            )?;
+            validate_nonblank_optional_text(
+                record.quarantine_id,
+                "release_authority",
+                &record.release_authority,
+            )?;
+            if let (Some(reviewed_at), Some(released_at)) =
+                (record.reviewed_at_unix, record.released_at_unix)
+            {
+                if released_at < reviewed_at {
+                    return Err(ModerationScreeningError::InvalidSnapshot {
+                        message: format!(
+                            "released quarantine record `{}` has released_at_unix < reviewed_at_unix",
+                            hex::encode(record.quarantine_id)
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    validate_optional_note(record.quarantine_id, "review_notes", &record.review_notes)?;
+    validate_optional_note(record.quarantine_id, "release_notes", &record.release_notes)
+}
+
+fn validate_nonzero_optional_timestamp(
+    quarantine_id: [u8; 16],
+    field: &str,
+    value: Option<u64>,
+) -> Result<(), ModerationScreeningError> {
+    match value {
+        Some(0) | None => Err(ModerationScreeningError::InvalidSnapshot {
+            message: format!(
+                "quarantine record `{}` requires non-zero {field}",
+                hex::encode(quarantine_id)
+            ),
+        }),
+        Some(_) => Ok(()),
+    }
+}
+
+fn validate_nonblank_optional_text(
+    quarantine_id: [u8; 16],
+    field: &str,
+    value: &Option<String>,
+) -> Result<(), ModerationScreeningError> {
+    match value.as_deref() {
+        Some(value) if !value.trim().is_empty() => Ok(()),
+        _ => Err(ModerationScreeningError::InvalidSnapshot {
+            message: format!(
+                "quarantine record `{}` requires non-blank {field}",
+                hex::encode(quarantine_id)
+            ),
+        }),
+    }
+}
+
+fn validate_optional_note(
+    quarantine_id: [u8; 16],
+    field: &str,
+    value: &Option<String>,
+) -> Result<(), ModerationScreeningError> {
+    if value
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return Err(ModerationScreeningError::InvalidSnapshot {
+            message: format!(
+                "quarantine record `{}` has blank {field}",
+                hex::encode(quarantine_id)
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn clean_required_text(
+    value: String,
+    field: &str,
+    quarantine_id: [u8; 16],
+    transition_error: bool,
+) -> Result<String, ModerationScreeningError> {
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        let message = format!("{field} must not be blank");
+        if transition_error {
+            return Err(ModerationScreeningError::InvalidTransition {
+                quarantine_id_hex: hex::encode(quarantine_id),
+                message,
+            });
+        }
+        return Err(ModerationScreeningError::InvalidInput { message });
+    }
+    Ok(value)
+}
+
+fn clean_optional_text(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let value = value.trim().to_string();
+        (!value.is_empty()).then_some(value)
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn screening_record_digest(
+    subject: &str,
+    subject_digest: [u8; 32],
+    manifest_id: [u8; 16],
+    runner_hash: [u8; 32],
+    combined_score_bps: u16,
+    verdict: ModerationScreeningVerdict,
+    screened_at_unix: u64,
+    evidence_digest: Option<[u8; 32]>,
+    policy_digest: Option<[u8; 32]>,
+    notes: Option<&str>,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(MODERATION_SCREENING_RECORD_DOMAIN_V1);
+    update_string(&mut hasher, subject);
+    hasher.update(&subject_digest);
+    hasher.update(&manifest_id);
+    hasher.update(&runner_hash);
+    hasher.update(&combined_score_bps.to_le_bytes());
+    update_string(&mut hasher, verdict.as_str());
+    hasher.update(&screened_at_unix.to_le_bytes());
+    update_optional_digest(&mut hasher, evidence_digest);
+    update_optional_digest(&mut hasher, policy_digest);
+    update_optional_string(&mut hasher, notes);
+    *hasher.finalize().as_bytes()
+}
+
+fn quarantine_record_digest(
+    screening_record_id: [u8; 16],
+    subject_digest: [u8; 32],
+    verdict: ModerationScreeningVerdict,
+    queued_at_unix: u64,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(MODERATION_QUARANTINE_RECORD_DOMAIN_V1);
+    hasher.update(&screening_record_id);
+    hasher.update(&subject_digest);
+    update_string(&mut hasher, verdict.as_str());
+    hasher.update(&queued_at_unix.to_le_bytes());
+    *hasher.finalize().as_bytes()
+}
+
+fn update_string(hasher: &mut blake3::Hasher, value: &str) {
+    hasher.update(&(value.len() as u64).to_le_bytes());
+    hasher.update(value.as_bytes());
+}
+
+fn update_optional_digest(hasher: &mut blake3::Hasher, value: Option<[u8; 32]>) {
+    match value {
+        Some(value) => {
+            hasher.update(&[1]);
+            hasher.update(&value);
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    };
+}
+
+fn update_optional_string(hasher: &mut blake3::Hasher, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            hasher.update(&[1]);
+            update_string(hasher, value);
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    };
 }
 
 /// Sequenced local moderation ballot event kind.

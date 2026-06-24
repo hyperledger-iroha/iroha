@@ -125,9 +125,10 @@ evidence, governance policy tuning, and SDK management ergonomics.
 | Governance telemetry | Implemented locally for ingest backlog/failure counters and dashboard export. | `crates/iroha_telemetry/src/metrics.rs`, `docs/source/sorafs_observability_plan.md`. |
 | Operator tooling | Implemented locally with `sorafs-node ingest por` and runbook coverage. | `crates/sorafs_node/src/bin/sorafs-node.rs`, `docs/source/sorafs/runbooks/sorafs_node_ops.md`. |
 
-- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` now delegates to
-  `sorafs_node::NodeHandle::por_ingestion_status`, returning backlog depth, the oldest epoch/deadline, and the
-  most recent success/failure timestamps per provider while Torii updates
+- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}?limit=N` now delegates to
+  `sorafs_node::NodeHandle::por_ingestion_status`, returning bounded backlog
+  entries, the oldest epoch/deadline, and the most recent success/failure
+  timestamps per provider while preserving total provider counts and Torii updates
   `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` so the dashboards track stalled manifests
   automatically.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 - ✅ `sorafs-node ingest por` now replays PoR challenges, proofs, and optional verdicts against the embedded

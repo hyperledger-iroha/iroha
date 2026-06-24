@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/sorafs_orderbook_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: dd8565edf5a4820a4ea209508fd1f16f986a91184642d24ad0cc86e713caadc0
-source_last_modified: "2025-12-29T18:16:36.172183+00:00"
+source_hash: b75bd1c503167f40a912c0ce001e35ae4cc471a470abd5e8d515971f76f37f1d
+source_last_modified: 2026-06-24T09:38:42.574539Z
 translation_last_reviewed: 2026-02-07
 title: SoraFS XOR Orderbook & Streaming Settlement
 summary: SFM-2 target architecture and current gap status for XOR orderbook, streaming settlement, APIs, telemetry, and rollout.
@@ -16,9 +16,10 @@ summary: SFM-2 target architecture and current gap status for XOR orderbook, str
 ## Status
 SFM-2 now has an initial Norito payload, reference-validator foundation, and
 local runtime mirror surface. `crates/sorafs_manifest` ships the `orderbook`
-module with versioned order, cancel, trade, settlement-channel, and
-settlement-receipt payloads plus structural/accounting validators. The module
-also exposes pure deterministic helpers for matching one maker/taker pair,
+module with versioned order, cancel, trade, settlement-channel,
+settlement-receipt, and runtime replay snapshot payloads plus
+structural/accounting validators. The module also exposes pure deterministic
+helpers for matching one maker/taker pair,
 matching full order-book snapshots with price-time priority, calculating fees
 and escrow requirements, opening settlement channels for trades, and applying
 settlement receipts to channel snapshots. It also exposes domain-separated
@@ -29,38 +30,56 @@ settlement-receipt payloads.
 the `sorafs-validate orderbook` CLI validates those payloads by kind or alias.
 The composite fixture-bundle validator also accepts the committed orderbook
 payloads so release smoke checks catch drift in order, trade, channel, and
-settlement receipt fixtures.
+settlement receipt, and runtime snapshot fixtures.
 
 `sorafs_node` also owns an in-memory local orderbook mirror for rollout and
 operator testing. It accepts canonical `OrderRequestV1`, `OrderCancelV1`, and
 `SettlementReceiptV1` payloads, verifies their embedded Ed25519 payload
-signatures, assigns deterministic local admission sequences, runs
+signatures, enforces config-backed minimum order quantity and price tick policy,
+assigns deterministic local admission sequences, runs
 `match_order_book_v1`, records emitted `TradeEventV1` values, opens local
 `SettlementChannelV1` snapshots for fills, applies non-overlapping settlement
-receipts to local channel state, and updates the existing
+receipts to local channel state, publishes accepted receipts to a configured
+local Governance DAG filesystem/signed-runtime-DAG sink, and updates the existing
 `torii_sorafs_orderbook_*` metric handles for order flow, open depth, matcher
-lag, settlement backlog/age, and contract/mirror divergence. Torii exposes that
-local mirror through Norito POST routes for order, cancel, and settlement
-receipt submissions, requiring canonical `X-Iroha-*` request authentication
-and binding the embedded payload signer to the verified request signer. Order
-and cancel submissions also bind `owner_account` bytes to the authenticated
-canonical `AccountId`; known-channel receipt submissions additionally require
-the authenticated signer account to derive to the channel provider id. Torii
-also exposes JSON GET routes for the book, trades, settlement channels,
-accepted settlement receipts, and replayable event history, plus SSE/WebSocket
-streams for local orderbook events.
+lag, settlement backlog/age, and contract/mirror divergence. It can also export
+and restore a validated canonical Norito local runtime replay snapshot for the
+open order set, emitted trades/channels, accepted receipts, and expired-order
+tombstones. When storage is enabled, accepted local order/cancel/receipt
+mutations atomically checkpoint that snapshot under
+`<sorafs.data_dir>/orderbook/runtime-snapshot.to`, and startup reloads a
+validated checkpoint if present. Torii exposes that local mirror through Norito
+POST routes for order, cancel, and settlement receipt submissions, requiring
+canonical `X-Iroha-*` request authentication and binding the embedded payload
+signer to the verified request signer. Order and cancel submissions also bind
+`owner_account` bytes to the authenticated canonical `AccountId`; known-channel
+receipt submissions additionally require the authenticated signer account to
+derive to the channel provider id. Torii also exposes JSON GET routes for the
+book, trades, settlement channels, accepted settlement receipts, and replayable
+event history, plus SSE/WebSocket streams for local orderbook events.
 
 The repository still does not ship an on-chain SoraFS orderbook contract, a
 durable off-chain matcher service, an on-chain/daemonized streaming-settlement
-receipt service, contract-backed authenticated orderbook streams, SoraFS orderbook client crates, downstream SDK
-bindings for the orderbook validator, or live rollout evidence. The Rust
+receipt service, contract-backed authenticated orderbook streams, published SDK
+release artifacts for the orderbook validator/submitter helpers, or live
+rollout evidence. The Rust
 reference API, C ABI facade, CLI, committed fixture payloads, deterministic
 helper surface, local runtime mirror, local Torii routes, local receipt
-application path, local event streams, local payload signature verification,
-local request-authenticated POST envelope binding, local known-channel receipt
-provider-role checks, runtime metric emission, target observability fixtures,
-Prometheus metric handles/helper methods, and bundle-validation selectors exist
-locally.
+application path, local receipt Governance DAG publication, local runtime replay
+snapshots, local event streams, local payload signature verification, local
+request-authenticated POST envelope binding, local known-channel receipt
+provider-role checks, local config-backed order admission policy, runtime metric
+emission, JavaScript, Python, Kotlin/JVM, Java Android, and Swift orderbook
+validator bindings, Rust/JavaScript/Python/Kotlin/JVM/Java Android/Swift
+encoded Ed25519 signing helpers for order/cancel/receipt payloads,
+Rust/JavaScript/Python/Kotlin/JVM/Java Android/Swift field-level signed
+order/cancel/receipt payload builders, JavaScript and Python local orderbook
+read helpers,
+JavaScript and `iroha_python` local orderbook SSE/WebSocket stream helpers,
+JavaScript, `iroha_python`, and standalone `iroha_torii_client` local
+order/cancel/receipt submit helpers for already signed Norito payload bytes,
+target observability fixtures, Prometheus metric handles/helper methods, and
+bundle-validation selectors exist locally.
 
 Other foundations that this work can build on include generic settlement and
 deal payloads, SoraFS pricing/reserve helpers, repair/PoR governance evidence,
@@ -78,10 +97,10 @@ until they are implemented and verified.
 | Component | Responsibility | Current workspace status |
 |-----------|----------------|--------------------------|
 | On-chain orderbook contract | Store bids/asks, match orders, record fills, and enforce escrow requirements. | Not shipped. |
-| Off-chain matching engine | Maintain an order-book mirror, submit transactions, and stream depth/trade events. | Local in-memory mirror is shipped in `sorafs_node` for deterministic matching and Torii/API testing; durable service and contract submission are not shipped. |
-| Escrow and streaming-settlement service | Manage escrow channels and debit buyers per delivered chunk range. | Local settlement-channel snapshots are opened for fills and canonical receipts can update local channel state; durable receipt daemon, governance publication, and escrow custody mutation are not shipped. |
+| Off-chain matching engine | Maintain an order-book mirror, submit transactions, and stream depth/trade events. | Local mirror is shipped in `sorafs_node` for deterministic matching and Torii/API testing, with canonical Norito replay snapshots and storage-data-dir checkpoint reload; daemonized matcher service and contract submission are not shipped. |
+| Escrow and streaming-settlement service | Manage escrow channels and debit buyers per delivered chunk range. | Local settlement-channel snapshots are opened for fills, canonical receipts can update local channel state, and accepted local receipts publish Governance DAG evidence; durable receipt daemon and escrow custody mutation are not shipped. |
 | Pricing oracle feeder | Supply XOR/USD price, tier multipliers, and fee schedules. | Generic oracle/pricing foundations exist, but no SoraFS orderbook feeder is wired. |
-| API gateway | Expose order placement, cancellation, depth, trades, settlement receipt submission, and event streams. | Local Torii order/cancel/receipt/book/trade/channel/event routes plus SSE/WebSocket local event streams are shipped; embedded payload signatures are verified by the local runtime; local POST routes require canonical request authentication, bind owner/signing keys, require known-channel receipts to be signed by the channel provider account, and enforce provider-advert `torii_gateway` capability for ask placement/known-channel receipts when capability enforcement is enabled; contract forwarding, durable streams, and SDK clients are not shipped. |
+| API gateway | Expose order placement, cancellation, depth, trades, settlement receipt submission, and event streams. | Local Torii order/cancel/receipt/book/trade/channel/event routes plus SSE/WebSocket local event streams are shipped; embedded payload signatures are verified by the local runtime; local POST routes require canonical request authentication, bind owner/signing keys, require known-channel receipts to be signed by the channel provider account, and enforce provider-advert `torii_gateway` capability for ask placement/known-channel receipts when capability enforcement is enabled; JavaScript and Python Torii clients expose typed local read helpers and field-level signed order/cancel/receipt payload builders, Kotlin/JVM, Java Android, and Swift expose field-level signed orderbook payload builders through `connect_norito_bridge`, JavaScript and `iroha_python` expose local stream helpers, and JavaScript, `iroha_python`, and standalone `iroha_torii_client` expose local submit helpers for already signed Norito order/cancel/receipt bytes; contract forwarding and durable streams are not shipped. |
 | Analytics and dashboards | Publish pricing, fee, utilization, depth, and settlement reports. | Local runtime mirror emits the existing order flow/depth/lag/backlog/divergence metric families; live dashboard wiring and rollout evidence are not shipped. |
 
 ### Target Data Flow
@@ -98,6 +117,9 @@ until they are implemented and verified.
 - `TradeEventV1`: trade id, maker/taker order ids, tier, price, filled quantity, maker/taker fees, and timestamp.
 - `SettlementChannelV1`: channel id, trade id, buyer account bytes, provider id, total/remaining bytes, locked XOR, status, and timestamps.
 - `SettlementReceiptV1`: receipt id, channel id, trade id, byte range, chunk hash, bytes delivered, XOR debited, provider credit, fee amount, issued timestamp, and signature material.
+- `OrderbookRuntimeSnapshotV1`: local replay checkpoint carrying next admission
+  sequence, generated timestamp, open orders, emitted trades, settlement
+  channels, accepted receipts, and expired-order tombstones.
 - `ByteRangeV1`, `OrderSideV1`, `OrderTierV1`, `OrderCancelReasonV1`, `SettlementChannelStatusV1`, and `OrderbookSignatureV1`.
 
 The payloads use Norito, deterministic `XorAmount` micro-XOR values, and
@@ -126,8 +148,9 @@ of truth.
   fill value.
 - `match_order_book_v1` accepts `OrderBookEntryV1` snapshots with canonical
   admission sequences, skips expired orders, rejects duplicate order ids or
-  sequences, matches independently by tier, and applies deterministic
-  price-time priority with partial fills.
+  sequences, returns expired-order tombstones in sequence order, matches
+  independently by tier, and applies deterministic price-time priority with
+  partial fills.
 - `derive_orderbook_trade_id_v1` derives domain-separated BLAKE3 trade ids for
   full-book fills from fill index, timestamp, order ids, and pre-fill
   remaining quantities.
@@ -147,32 +170,64 @@ of truth.
 - `verify_order_request_signature_v1`, `verify_order_cancel_signature_v1`, and
   `verify_settlement_receipt_signature_v1` validate payload structure and
   verify embedded Ed25519 signatures.
+- `OrderbookRuntimeSnapshotV1::validate` checks canonical local replay
+  snapshots for version/timestamp validity, unique open-order ids/sequences,
+  sequence-window consistency, unique emitted trade/channel/receipt ids, channel
+  trade references, receipt channel references, non-overlapping accepted receipt
+  ranges, and expired-order tombstone consistency.
 
 These helpers are deterministic local mechanics only. They verify the embedded
 payload signer but do not by themselves bind that signer to a
 request/capability, submit transactions, or persist runtime escrow/order state.
+`sorafs_node` adds local checkpoint persistence for its mirror on top of these
+pure helpers when storage is enabled.
 
 ## Implemented Reference Validation Surface
 - `validate_orderbook_payload_bytes` accepts `OrderRequestV1`, `OrderCancelV1`,
-  `TradeEventV1`, `SettlementChannelV1`, and `SettlementReceiptV1` bytes through
-  `OrderbookValidationPayloadKindV1`.
+  `TradeEventV1`, `SettlementChannelV1`, `SettlementReceiptV1`, and
+  `OrderbookRuntimeSnapshotV1` bytes through `OrderbookValidationPayloadKindV1`.
 - The validator emits stable `ValidationOutcomeV1` records and maps orderbook
   structural, settlement-accounting, policy, signature, and Norito decode
   failures into the reference SDK error catalogue.
 - The `sorafs-validate orderbook` CLI supports `--kind <payload-kind> --input
   <path>` plus payload aliases: `--order`, `--cancel`, `--trade`, `--channel`,
-  and `--receipt`.
+  `--receipt`, and `--snapshot`.
+- The `sorafs-validate sign --kind orderbook --payload-kind
+  order-request|order-cancel|settlement-receipt` CLI path signs those
+  orderbook payloads with runtime-only Ed25519 seeds, validates the signed
+  Norito bytes, and writes output only after validation succeeds.
+- `sorafs_manifest::sign_orderbook_payload_bytes_ed25519_v1(...)` exposes the
+  same encoded-payload signing path for downstream bindings. JavaScript
+  `signOrderbookPayload(...)`, Python `sign_orderbook_payload(...)`,
+  Kotlin/JVM `SorafsReferenceValidators.signOrderbookPayload(...)`, Java
+  Android `SorafsReferenceValidators.signOrderbookPayload(...)`, and Swift
+  `SorafsReferenceValidators.signOrderbookPayload(...)` wrap it for
+  already-encoded order, cancel, and settlement-receipt bytes.
+- `sorafs_manifest::build_signed_orderbook_*_bytes_ed25519_v1(...)` builds,
+  signs, validates, and encodes canonical field-level order request, order
+  cancel, and settlement receipt payloads. JavaScript wraps these as
+  `buildSignedOrderbookOrderRequest(...)`,
+  `buildSignedOrderbookOrderCancel(...)`, and
+  `buildSignedOrderbookSettlementReceipt(...)`; Python wraps them as
+  `build_signed_orderbook_order_request(...)`,
+  `build_signed_orderbook_order_cancel(...)`, and
+  `build_signed_orderbook_settlement_receipt(...)`; Kotlin/JVM, Java Android,
+  and Swift wrap them through the shared `connect_norito_bridge` C/JNI/native
+  facade.
 - The `reference_ffi` C ABI exposes `sorafs_reference_validate_orderbook_json`
-  with stable `SORAFS_REFERENCE_ORDERBOOK_KIND_*` selectors for SDK bindings.
+  with stable `SORAFS_REFERENCE_ORDERBOOK_KIND_*` selectors for SDK bindings,
+  including `SORAFS_REFERENCE_ORDERBOOK_KIND_RUNTIME_SNAPSHOT`.
 - Fixture-bundle validation accepts orderbook order, cancel, trade, settlement
-  channel, and settlement receipt payloads alongside the existing
-  manifest-linked SoraFS artifacts.
+  channel, settlement receipt, and runtime snapshot payloads alongside the
+  existing manifest-linked SoraFS artifacts.
 
 ## Target Matching And Settlement Rules
 - Runtime and on-chain matching must preserve the `match_order_book_v1`
   price-time priority and partial-fill semantics.
 - Deterministic expiry handling and stale order cancellation.
-- Minimum order size and tick size sourced from configuration/governance, not environment variables.
+- The local mirror enforces minimum order size and price tick from
+  `sorafs.storage.orderbook`; durable on-chain/governance policy must preserve
+  the same environment-free control surface.
 - Maker/taker fee accounting with deterministic treasury accrual.
 - Escrow checks before order acceptance; settlement debits must preserve double-entry accounting.
 - Provider failures must close or breach settlement channels in a way that feeds reputation, repair/slashing, and governance evidence.
@@ -185,9 +240,10 @@ Implemented local Torii routes:
   validates the payload, verifies the embedded Ed25519 signature, requires the
   `owner_account` bytes to decode to the authenticated canonical `AccountId`,
   requires the embedded payload signer key to match a verified request signer,
-  inserts the order into the local mirror, runs deterministic matching, and
-  returns accepted order, fills, opened settlement channels, expired order ids,
-  and open-order count.
+  enforces the configured minimum order quantity and price tick, inserts the
+  order into the local mirror, runs deterministic matching, and returns
+  accepted order, fills, opened settlement channels, expired order ids, and
+  open-order count.
 - `POST /v1/sorafs/orderbook/cancel` accepts canonical Norito `OrderCancelV1`
   bytes with canonical `X-Iroha-*` request authentication, verifies the
   embedded Ed25519 signature, requires the `owner_account` bytes to decode to
@@ -204,12 +260,19 @@ Implemented local Torii routes:
   receipt plus updated channel.
 - `GET /v1/sorafs/orderbook/book` returns the local mirror summary, depth by
   tier/side, open orders, emitted trades, settlement channels, settlement
-  receipts, and expired ids.
-- `GET /v1/sorafs/orderbook/trades` returns local trade events.
+  receipts, and expired ids. The full count/depth fields remain computed over
+  the full local mirror while the returned `open_orders`, `trades`,
+  `settlement_channels`, and `settlement_receipts` arrays are bounded by
+  `limit` (default 50, max 500).
+- `GET /v1/sorafs/orderbook/trades` returns local trade events, keeping the
+  full `count` visible while bounding the returned `trades` array with `limit`
+  (default 50, max 500).
 - `GET /v1/sorafs/orderbook/channels` returns local settlement-channel
-  snapshots opened by fills.
+  snapshots opened by fills, keeping the full `count` visible while bounding
+  the returned `channels` array with `limit` (default 50, max 500).
 - `GET /v1/sorafs/orderbook/receipts` returns local settlement receipts
-  accepted for settlement channels.
+  accepted for settlement channels, keeping the full `count` visible while
+  bounding the returned `receipts` array with `limit` (default 50, max 500).
 - `GET /v1/sorafs/orderbook/events` returns replayable local orderbook events
   with `since` and `limit` cursors.
 - `GET /v1/sorafs/orderbook/events/stream` emits server-sent local orderbook
@@ -223,7 +286,8 @@ Still-target API work:
 - Durable receipt daemon, governance publication, and escrow custody mutation.
 - Durable contract/matcher-backed SSE/WebSocket streams for depth, trades, and
   settlement updates.
-- REST/gRPC parity and downstream SDK clients.
+- REST/gRPC parity, signed downstream SDK submitter clients, and durable
+  contract/matcher stream clients.
 
 The local runtime now verifies embedded signatures over canonical Norito
 payloads, and the local Torii POST surface authenticates the canonical request
@@ -280,7 +344,12 @@ Implemented:
   partial fills, expired-order filtering, duplicate snapshot guards, fee
   calculation, settlement channel opening, receipt-driven channel closure,
   canonical signature digest stability, valid order/cancel/receipt signature
-  verification, and tampered order-signature rejection.
+  verification, tampered order-signature rejection, and deterministic generated
+  order-stream invariant scenarios for filled/open balance conservation and
+  non-crossing book remainders, deterministic permutation-invariance scenarios
+  that prove canonical sequence drives matching and expired tombstone ordering,
+  plus runtime replay snapshot round-trips and overlapping receipt-range
+  rejection.
 - `crates/sorafs_manifest/src/reference.rs` unit tests cover accepted orderbook
   payloads, malformed Norito, policy failures, signature failures, and
   settlement-accounting imbalance outcomes; bundle tests cover orderbook
@@ -289,19 +358,25 @@ Implemented:
   orderbook CLI kind path, receipt alias, duplicate alias rejection, and
   supported kind aliases.
 - `crates/sorafs_manifest/src/reference_ffi.rs` tests cover accepted orderbook
-  FFI validation, bundle validation with an orderbook payload, and unsupported
-  selector rejection.
+  FFI validation, bundle validation with orderbook payloads including runtime
+  snapshots, and unsupported selector rejection.
 - `fixtures/sorafs_manifest/orderbook/` contains deterministic `.to` and JSON
   commentary fixtures for orders, cancellations, trades, settlement channels,
-  and settlement receipts; regenerate them with `cargo run -p sorafs_manifest
-  --bin generate_orderbook_fixtures`.
+  settlement receipts, and runtime replay snapshots; regenerate them with
+  `cargo run -p sorafs_manifest --bin generate_orderbook_fixtures`.
 - `crates/sorafs_manifest/tests/orderbook_fixtures.rs` round-trips the
   committed orderbook fixtures and checks JSON `norito_bytes_hex` commentary
   against the canonical bytes.
 - `crates/sorafs_node` unit tests cover local runtime matching, settlement
   channel opening, owner-checked cancellation, receipt application,
   overlapping-range rejection, tampered signed-order rejection, `NodeHandle`
-  snapshot state, and orderbook metric updates.
+  snapshot state, local Governance DAG receipt publication, and orderbook
+  metric updates, plus canonical runtime snapshot export/restore and
+  storage-data-dir checkpoint reload, and config-backed minimum order
+  quantity/price tick rejection.
+- `crates/iroha_config` unit and fixture tests cover
+  `sorafs.storage.orderbook` parsing, nonzero clamping, and default snapshot
+  visibility for the local orderbook admission policy.
 - `crates/iroha_torii` app-API tests cover the local order/cancel/book/trade/
   channel/receipt handler round trip, wrong-owner cancellation rejection, and
   overlapping receipt rejection, missing canonical request-auth rejection,
@@ -314,10 +389,11 @@ Required before rollout:
 - Runtime/service tests proving contract and durable matcher parity with the
   reference full-book price-time semantics, receipt authorization, durable
   order/escrow mutation, and contract reconciliation once those layers exist.
-- Property tests for random order streams that preserve balance and order-book invariants.
+- External fuzz harnesses for random order streams beyond the deterministic
+  generated matcher invariant and permutation-invariance scenarios.
 - Integration tests spanning contract, matcher, settlement service, API, and governance evidence publication.
 - Load and disaster-recovery tests for oracle outage, contract pause, queue lag, and settlement backlog.
 
 ## Rollout Status
-- Done: target architecture and requirements are documented; initial SoraFS orderbook Norito payloads, structural/accounting validators, canonical embedded Ed25519 payload signature digests/verification, deterministic pair and full-book snapshot matching/fee/settlement helpers, Rust reference validator, reference FFI selector surface, CLI parser surface, committed fixtures, bundle-validator coverage, target dashboard/alert fixtures, orderbook Prometheus metric handles/helper methods, local in-memory runtime mirror, local settlement receipt application, local Torii order/cancel/receipt/book/trade/channel/event API, local request-authenticated orderbook POST envelope/account/signer binding, local known-channel receipt provider-role authorization, local provider-advert capability authorization for asks and known-channel receipts, local SSE/WebSocket event streams with frame-shape coverage, local runtime metric emission including provider escrow runway and API error ratios, and focused unit tests are implemented; adjacent settlement, pricing, reserve, validation, and governance foundations exist.
-- Remaining: implement on-chain contract surface, durable matcher service, daemonized settlement receipt service with governance publication and escrow custody mutation, contract-backed capability policy authorization, contract forwarding, durable contract/matcher-backed WebSocket/SSE streams, downstream SDK bindings, live dashboard wiring and alert routing, contract/mirror reconciliation tests, and staged/live rollout evidence.
+- Done: target architecture and requirements are documented; initial SoraFS orderbook Norito payloads, structural/accounting validators, canonical embedded Ed25519 payload signature digests/verification, Rust/JavaScript/Python/Kotlin/JVM/Java Android/Swift encoded Ed25519 signing helpers for order/cancel/receipt payloads, Rust/JavaScript/Python/Kotlin/JVM/Java Android/Swift field-level signed order/cancel/receipt payload builders, deterministic pair and full-book snapshot matching/fee/settlement helpers, deterministic generated matcher invariant coverage, canonical Norito local runtime replay snapshots with storage-data-dir checkpoint reload, Rust reference validator, reference FFI selector surface, CLI parser surface, committed fixtures, bundle-validator coverage, JavaScript, Python, Kotlin/JVM, Java Android, and Swift orderbook validator bindings, JavaScript and Python Torii read helpers for local book/trades/channels/receipts/events, JavaScript and `iroha_python` local orderbook SSE/WebSocket stream helpers, JavaScript, `iroha_python`, and standalone `iroha_torii_client` local submit helpers for already signed Norito order/cancel/receipt bytes, target dashboard/alert fixtures, orderbook Prometheus metric handles/helper methods, local runtime mirror, local config-backed order admission policy, local settlement receipt application, local orderbook settlement receipt Governance DAG publication, local Torii order/cancel/receipt/book/trade/channel/event API with `limit`-bounded book/trades/channels/receipts readbacks and full total counts, local request-authenticated orderbook POST envelope/account/signer binding, local known-channel receipt provider-role authorization, local provider-advert capability authorization for asks and known-channel receipts, local SSE/WebSocket event streams with frame-shape coverage, local runtime metric emission including provider escrow runway and API error ratios, and focused unit tests are implemented; adjacent settlement, pricing, reserve, validation, and governance foundations exist.
+- Remaining: implement on-chain contract surface, durable matcher service, daemonized settlement receipt service with escrow custody mutation, on-chain/governance-backed admission policy, contract-backed capability policy authorization, contract forwarding, durable contract/matcher-backed WebSocket/SSE streams, SDK release artifacts/live smoke evidence, live dashboard wiring and alert routing, contract/mirror reconciliation tests, and staged/live rollout evidence.

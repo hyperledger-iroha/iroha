@@ -727,7 +727,7 @@ impl Actor {
         let canonical_roster =
             roster::canonicalize_roster_for_mode(topology.as_ref().to_vec(), consensus_mode);
         let canonical_topology = super::network_topology::Topology::new(canonical_roster);
-        let signer_peers = signer_peers_for_topology(signers, &canonical_topology).ok()?;
+        let signer_peers = signer_peers_for_topology(signers, topology).ok()?;
         let signer_peer_by_public_key: BTreeMap<PublicKey, PeerId> = signer_peers
             .iter()
             .map(|peer| (peer.public_key().clone(), peer.clone()))

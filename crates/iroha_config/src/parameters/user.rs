@@ -1069,6 +1069,7 @@ impl Root {
             sorafs_alias_cache,
             sorafs_gateway,
             sorafs_por,
+            sorafs_appeal_finance_settlement,
         ) = self.sorafs.parse();
         let (mut torii, live_query_store) = self.torii.parse(&mut emitter);
         let soracloud_runtime = self.soracloud_runtime.parse();
@@ -1120,6 +1121,7 @@ impl Root {
         torii.sorafs_alias_cache = sorafs_alias_cache;
         torii.sorafs_gateway = sorafs_gateway;
         torii.sorafs_por = sorafs_por;
+        torii.sorafs_appeal_finance_settlement = sorafs_appeal_finance_settlement;
         let crypto = self.crypto.parse(&mut emitter);
         let settlement = self.settlement.parse(&mut emitter);
         let hijiri = self.hijiri.parse(&mut emitter);
@@ -18891,6 +18893,7 @@ impl Torii {
             sorafs_alias_cache,
             sorafs_gateway,
             sorafs_por,
+            sorafs_appeal_finance_settlement,
         ) = self.sorafs.parse();
         let receipt_signer = Self::parse_receipt_signer(
             self.receipt_public_key.as_ref(),
@@ -19061,6 +19064,7 @@ impl Torii {
             sorafs_alias_cache,
             sorafs_gateway,
             sorafs_por,
+            sorafs_appeal_finance_settlement,
             transport: self.transport.into(),
             mcp: self.mcp.into(),
             cors: self.cors.parse(emitter),
@@ -21282,6 +21286,9 @@ pub struct Sorafs {
     /// Proof-of-Retrievability coordinator configuration.
     #[config(nested)]
     pub por: SorafsPor,
+    /// Appeal-finance settlement submitter configuration.
+    #[config(nested)]
+    pub appeal_finance_settlement: SorafsAppealFinanceSettlement,
 }
 
 impl Sorafs {
@@ -21296,6 +21303,7 @@ impl Sorafs {
         actual::SorafsAliasCachePolicy,
         actual::SorafsGateway,
         actual::SorafsPor,
+        actual::SorafsAppealFinanceSettlement,
     ) {
         (
             self.storage.parse(),
@@ -21306,7 +21314,64 @@ impl Sorafs {
             self.alias_cache.parse(),
             self.gateway.parse(),
             self.por.parse(),
+            self.appeal_finance_settlement.parse(),
         )
+    }
+}
+
+/// User-level SoraFS appeal-finance settlement submitter configuration.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsAppealFinanceSettlement {
+    /// Runtime signer private keys allowed to submit settlement transactions.
+    ///
+    /// Each key is mapped to its canonical `AccountId`; the submitter only signs
+    /// a settlement step when that step's required authority exactly matches one
+    /// configured signer.
+    #[config(default)]
+    pub submitter_private_keys: Vec<ExposedPrivateKey>,
+    /// Interval between worker reconciliation scans for follow-up settlement steps.
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_SCAN_INTERVAL_MS))"
+    )]
+    pub worker_scan_interval_ms: DurationMs,
+    /// Maximum queue attempts for one unchanged worker settlement state.
+    #[config(
+        default = "defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_RETRY_ATTEMPTS"
+    )]
+    pub worker_max_retry_attempts: u32,
+}
+
+impl Default for SorafsAppealFinanceSettlement {
+    fn default() -> Self {
+        Self {
+            submitter_private_keys: Vec::new(),
+            worker_scan_interval_ms: DurationMs(std::time::Duration::from_millis(
+                defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_SCAN_INTERVAL_MS,
+            )),
+            worker_max_retry_attempts:
+                defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_RETRY_ATTEMPTS,
+        }
+    }
+}
+
+impl SorafsAppealFinanceSettlement {
+    fn parse(self) -> actual::SorafsAppealFinanceSettlement {
+        actual::SorafsAppealFinanceSettlement {
+            submitter_signers: self
+                .submitter_private_keys
+                .into_iter()
+                .map(|private_key| {
+                    KeyPair::from_private_key(private_key.0).unwrap_or_else(|err| {
+                        panic!("invalid torii.sorafs.appeal_finance_settlement submitter private key: {err}")
+                    })
+                })
+                .collect(),
+            worker_scan_interval: self
+                .worker_scan_interval_ms
+                .get()
+                .max(std::time::Duration::from_millis(1)),
+            worker_max_retry_attempts: self.worker_max_retry_attempts.max(1),
+        }
     }
 }
 
@@ -21348,6 +21413,12 @@ pub struct SorafsStorage {
     /// Stream-token issuance configuration for chunk-range gateways.
     #[config(nested)]
     pub stream_tokens: SorafsStreamTokenConfig,
+    /// Local orderbook admission policy.
+    #[config(nested)]
+    pub orderbook: SorafsOrderbookConfig,
+    /// Local SFM-4c privacy aggregate publication scheduler.
+    #[config(nested)]
+    pub privacy_aggregates: SorafsPrivacyAggregateScheduleConfig,
     /// Authentication and rate limits for manifest pin submissions.
     #[config(nested)]
     pub pin: SorafsStoragePin,
@@ -21374,6 +21445,8 @@ impl Default for SorafsStorage {
             adverts: SorafsAdvertOverrides::default(),
             metering_smoothing: SorafsMeteringSmoothing::default(),
             stream_tokens: SorafsStreamTokenConfig::default(),
+            orderbook: SorafsOrderbookConfig::default(),
+            privacy_aggregates: SorafsPrivacyAggregateScheduleConfig::default(),
             pin: SorafsStoragePin::default(),
             governance_dag_dir: defaults::sorafs::storage::governance_dir(),
             governance_dag_publisher_peer_id:
@@ -21396,10 +21469,76 @@ impl SorafsStorage {
             adverts: self.adverts.parse(),
             metering_smoothing: self.metering_smoothing.parse(),
             stream_tokens: self.stream_tokens.parse(),
+            orderbook: self.orderbook.parse(),
+            privacy_aggregates: self.privacy_aggregates.parse(),
             pin: self.pin.parse(),
             governance_dag_dir: self.governance_dag_dir,
             governance_dag_publisher_peer_id: self.governance_dag_publisher_peer_id,
             governance_dag_signing_key_path: self.governance_dag_signing_key_path,
+        }
+    }
+}
+
+/// Local orderbook admission policy.
+#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+pub struct SorafsOrderbookConfig {
+    /// Minimum accepted order quantity in GiB.
+    #[config(default = "defaults::sorafs::storage::orderbook::MIN_ORDER_GIB")]
+    pub min_order_gib: u64,
+    /// Accepted price tick in micro-XOR per GiB.
+    #[config(default = "defaults::sorafs::storage::orderbook::PRICE_TICK_MICRO_XOR")]
+    pub price_tick_micro_xor: u64,
+}
+
+impl Default for SorafsOrderbookConfig {
+    fn default() -> Self {
+        Self {
+            min_order_gib: defaults::sorafs::storage::orderbook::MIN_ORDER_GIB,
+            price_tick_micro_xor: defaults::sorafs::storage::orderbook::PRICE_TICK_MICRO_XOR,
+        }
+    }
+}
+
+impl SorafsOrderbookConfig {
+    fn parse(self) -> actual::SorafsOrderbook {
+        actual::SorafsOrderbook {
+            min_order_gib: self.min_order_gib.max(1),
+            price_tick_micro_xor: self.price_tick_micro_xor.max(1),
+        }
+    }
+}
+
+/// Local SFM-4c privacy aggregate publication scheduler.
+#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+pub struct SorafsPrivacyAggregateScheduleConfig {
+    /// Whether config-backed due-cycle publication is enabled.
+    #[config(default = "defaults::sorafs::storage::privacy_aggregates::ENABLED")]
+    pub enabled: bool,
+    /// Width of each privacy aggregate cycle, in seconds.
+    #[config(default = "defaults::sorafs::storage::privacy_aggregates::CYCLE_SECONDS")]
+    pub cycle_seconds: u64,
+    /// Delay after a cycle closes before publication, in seconds.
+    #[config(default = "defaults::sorafs::storage::privacy_aggregates::PUBLISH_DELAY_SECONDS")]
+    pub publish_delay_seconds: u64,
+}
+
+impl Default for SorafsPrivacyAggregateScheduleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sorafs::storage::privacy_aggregates::ENABLED,
+            cycle_seconds: defaults::sorafs::storage::privacy_aggregates::CYCLE_SECONDS,
+            publish_delay_seconds:
+                defaults::sorafs::storage::privacy_aggregates::PUBLISH_DELAY_SECONDS,
+        }
+    }
+}
+
+impl SorafsPrivacyAggregateScheduleConfig {
+    fn parse(self) -> actual::SorafsPrivacyAggregateSchedule {
+        actual::SorafsPrivacyAggregateSchedule {
+            enabled: self.enabled,
+            cycle_seconds: self.cycle_seconds.max(1),
+            publish_delay_seconds: self.publish_delay_seconds,
         }
     }
 }
@@ -21629,11 +21768,13 @@ mod sorafs_repair_gc_tests {
 
         let default_repair = SorafsRepair::default().parse();
         assert_eq!(
-            default_repair.auditor_rate_per_sec.map(|value| value.get()),
+            default_repair
+                .auditor_rate_per_sec
+                .map(std::num::NonZeroU32::get),
             defaults::sorafs::repair::AUDITOR_RATE_PER_SEC
         );
         assert_eq!(
-            default_repair.auditor_burst.map(|value| value.get()),
+            default_repair.auditor_burst.map(std::num::NonZeroU32::get),
             defaults::sorafs::repair::AUDITOR_BURST
         );
 
@@ -21650,6 +21791,30 @@ mod sorafs_repair_gc_tests {
         assert_eq!(actual_gc.max_deletions_per_run, 1);
         assert_eq!(actual_gc.retention_grace_secs, 42);
         assert!(!actual_gc.pre_admission_sweep);
+    }
+
+    #[test]
+    fn sorafs_appeal_finance_settlement_parse_derives_submitter_accounts() {
+        let key_pair = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
+            .expect("derive settlement submitter keypair");
+        let config = SorafsAppealFinanceSettlement {
+            submitter_private_keys: vec![ExposedPrivateKey(key_pair.private_key().clone())],
+            worker_scan_interval_ms: DurationMs(std::time::Duration::from_millis(30_000)),
+            worker_max_retry_attempts: 3,
+        };
+
+        let actual = config.parse();
+
+        assert_eq!(actual.submitter_signers.len(), 1);
+        assert_eq!(
+            actual.submitter_signers[0].public_key(),
+            key_pair.public_key()
+        );
+        assert_eq!(
+            actual.worker_scan_interval,
+            std::time::Duration::from_millis(30_000)
+        );
+        assert_eq!(actual.worker_max_retry_attempts, 3);
     }
 }
 
@@ -23387,6 +23552,46 @@ pin_torii_urls = [
                 "https://taira-validator-2.sora.org".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn sorafs_storage_orderbook_policy_parses_and_clamps_nonzero() {
+        let mut table = base_table();
+        let sorafs: Table = toml::from_str(
+            r"
+[storage.orderbook]
+min_order_gib = 0
+price_tick_micro_xor = 0
+",
+        )
+        .expect("parse sorafs orderbook policy");
+        table.insert("sorafs".into(), Value::Table(sorafs));
+
+        let actual = load_root(table);
+        let policy = actual.torii.sorafs_storage.orderbook;
+        assert_eq!(policy.min_order_gib, 1);
+        assert_eq!(policy.price_tick_micro_xor, 1);
+    }
+
+    #[test]
+    fn sorafs_storage_privacy_aggregate_schedule_parses_and_clamps_cycle() {
+        let mut table = base_table();
+        let sorafs: Table = toml::from_str(
+            r"
+[storage.privacy_aggregates]
+enabled = true
+cycle_seconds = 0
+publish_delay_seconds = 17
+",
+        )
+        .expect("parse sorafs privacy aggregate schedule");
+        table.insert("sorafs".into(), Value::Table(sorafs));
+
+        let actual = load_root(table);
+        let schedule = actual.torii.sorafs_storage.privacy_aggregates;
+        assert!(schedule.enabled);
+        assert_eq!(schedule.cycle_seconds, 1);
+        assert_eq!(schedule.publish_delay_seconds, 17);
     }
 
     #[test]

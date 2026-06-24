@@ -104,6 +104,9 @@ adverts:
   key `profile.sample_multiplier` (integer `1-4`). The value may be a single
   number/string or an object with per-profile overrides, e.g.
   `{"default":2,"sorafs.sf2@1.0.0":3}`.
+  Manual Torii `/v1/sorafs/storage/por-sample` probes reject `count` values
+  outside `1..=500` before manifest lookup, then cap returned samples by the
+  stored manifest leaf count.
 - `adverts`: structure used by the provider advert generator to fill
   `ProviderAdvertV1` fields (stake pointer, QoS hints, topics). If omitted the
   node uses defaults from the governance registry.
@@ -149,9 +152,15 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
 > `NodeHandle`:
 >
 > - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — returns the stored
->   Norito manifest (base64) alongside digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
+>   Norito manifest (base64) alongside digest/metadata. Supplying `?limit=N`
+>   bounds the returned `files` metadata array (max 500) while preserving
+>   `file_count`/`returned_file_count`/`truncated_files`; omitting `limit`
+>   returns the complete file list for remote cache compatibility.【crates/iroha_torii/src/sorafs/api.rs:1207】
 > - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — returns the deterministic
->   chunk plan JSON (`chunk_fetch_specs`) for downstream tooling.【crates/iroha_torii/src/sorafs/api.rs:1259】
+>   chunk plan JSON (`chunk_fetch_specs`) for downstream tooling. The `files`,
+>   `chunk_digests_blake3`, and `chunks` arrays are bounded by `limit` (default
+>   50, max 500), with full count/returned count/truncation metadata for
+>   inventory probes.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > These endpoints mirror the CLI output so pipelines can switch from local
 > scripts to HTTP probes without changing parsers.【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】

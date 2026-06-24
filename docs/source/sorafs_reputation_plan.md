@@ -196,12 +196,14 @@ CREATE TABLE reputation_snapshots (
   - Implemented locally: `POST /v1/sorafs/reputation/latest` accepts a
     canonical `ReputationSnapshotV1`, validates it, persists configured
     governance artifacts, and caches it as latest.
-  - Implemented locally: `GET /v1/sorafs/reputation/latest` returns full latest
-    snapshot metadata and provider scores.
+  - Implemented locally: `GET /v1/sorafs/reputation/latest` returns latest
+    snapshot metadata plus a `limit`-bounded provider-score array while
+    preserving the total `provider_count`.
   - Implemented locally: `GET /v1/sorafs/reputation/providers/{provider_id}`
     returns the provider entry with Merkle proof.
   - Implemented locally: `GET /v1/sorafs/reputation/snapshots/{snapshot_id_hex}`
-    returns a previously accepted snapshot by 16-byte id.
+    returns a previously accepted snapshot by 16-byte id with the same
+    `limit`-bounded provider-score readback.
   - Implemented locally: `GET /v1/sorafs/reputation/weights` returns the
     weights and smoothing parameters from the latest snapshot.
   - Implemented locally: `GET /v1/sorafs/reputation/events` returns sequenced

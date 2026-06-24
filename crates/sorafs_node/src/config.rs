@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use iroha_config::parameters::actual;
 
-use crate::metering::SmoothingConfig;
+use crate::{metering::SmoothingConfig, transparency::PrivacyAggregateScheduleConfig};
 
 /// Convenience wrapper around the Torii-level SoraFS storage configuration.
 #[derive(Debug, Clone)]
@@ -19,6 +19,8 @@ pub struct StorageConfig {
     adverts: AdvertOverrides,
     metering_smoothing: MeteringSmoothingConfig,
     stream_token_signing_key_path: Option<PathBuf>,
+    orderbook: OrderbookAdmissionPolicy,
+    privacy_aggregate_schedule: Option<PrivacyAggregateScheduleConfig>,
     governance_dir: Option<PathBuf>,
     governance_dag_publisher_peer_id: Option<String>,
     governance_dag_signing_key_path: Option<PathBuf>,
@@ -92,6 +94,18 @@ impl StorageConfig {
         self.stream_token_signing_key_path.as_ref()
     }
 
+    /// Local orderbook admission policy.
+    #[must_use]
+    pub fn orderbook_admission_policy(&self) -> OrderbookAdmissionPolicy {
+        self.orderbook
+    }
+
+    /// Optional config-backed privacy aggregate due-cycle scheduler.
+    #[must_use]
+    pub fn privacy_aggregate_schedule(&self) -> Option<PrivacyAggregateScheduleConfig> {
+        self.privacy_aggregate_schedule
+    }
+
     /// Optional directory used to materialise governance artefacts.
     #[must_use]
     pub fn governance_dir(&self) -> Option<&PathBuf> {
@@ -154,6 +168,8 @@ impl StorageConfig {
             adverts: AdvertOverrides::from(&storage.adverts),
             metering_smoothing: MeteringSmoothingConfig::from(&storage.metering_smoothing),
             stream_token_signing_key_path: storage.stream_tokens.signing_key_path.clone(),
+            orderbook: OrderbookAdmissionPolicy::from(storage.orderbook),
+            privacy_aggregate_schedule: storage.privacy_aggregates.into_schedule_config(),
             governance_dir: storage.governance_dag_dir.clone(),
             governance_dag_publisher_peer_id: storage.governance_dag_publisher_peer_id.clone(),
             governance_dag_signing_key_path: storage.governance_dag_signing_key_path.clone(),
@@ -244,6 +260,23 @@ impl StorageConfigBuilder {
         self
     }
 
+    /// Override the local orderbook admission policy.
+    #[must_use]
+    pub fn orderbook_admission_policy(mut self, policy: OrderbookAdmissionPolicy) -> Self {
+        self.inner.orderbook = policy;
+        self
+    }
+
+    /// Override the optional config-backed privacy aggregate scheduler.
+    #[must_use]
+    pub fn privacy_aggregate_schedule(
+        mut self,
+        schedule: Option<PrivacyAggregateScheduleConfig>,
+    ) -> Self {
+        self.inner.privacy_aggregate_schedule = schedule;
+        self
+    }
+
     /// Override the metering smoothing parameters.
     #[must_use]
     pub fn metering_smoothing(mut self, smoothing: MeteringSmoothingConfig) -> Self {
@@ -297,6 +330,58 @@ impl StorageConfigBuilder {
     #[must_use]
     pub fn build(self) -> StorageConfig {
         self.inner
+    }
+}
+
+/// Config-backed local orderbook admission policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OrderbookAdmissionPolicy {
+    min_order_gib: u64,
+    price_tick_micro_xor: u64,
+}
+
+impl OrderbookAdmissionPolicy {
+    /// Construct a local orderbook admission policy, clamping zero values to one.
+    #[must_use]
+    pub fn new(min_order_gib: u64, price_tick_micro_xor: u64) -> Self {
+        Self {
+            min_order_gib: min_order_gib.max(1),
+            price_tick_micro_xor: price_tick_micro_xor.max(1),
+        }
+    }
+
+    /// Minimum accepted order quantity in GiB.
+    #[must_use]
+    pub fn min_order_gib(&self) -> u64 {
+        self.min_order_gib
+    }
+
+    /// Accepted price tick in micro-XOR per GiB.
+    #[must_use]
+    pub fn price_tick_micro_xor(&self) -> u64 {
+        self.price_tick_micro_xor
+    }
+}
+
+impl From<actual::SorafsOrderbook> for OrderbookAdmissionPolicy {
+    fn from(policy: actual::SorafsOrderbook) -> Self {
+        Self::new(policy.min_order_gib, policy.price_tick_micro_xor)
+    }
+}
+
+trait PrivacyAggregateScheduleConfigExt {
+    fn into_schedule_config(self) -> Option<PrivacyAggregateScheduleConfig>;
+}
+
+impl PrivacyAggregateScheduleConfigExt for actual::SorafsPrivacyAggregateSchedule {
+    fn into_schedule_config(self) -> Option<PrivacyAggregateScheduleConfig> {
+        if !self.enabled {
+            return None;
+        }
+        Some(PrivacyAggregateScheduleConfig {
+            cycle_seconds: self.cycle_seconds.max(1),
+            publish_delay_seconds: self.publish_delay_seconds,
+        })
     }
 }
 
@@ -784,6 +869,15 @@ mod tests {
                 "sorafs.sf1.backup:eu".into(),
             ],
         };
+        actual.orderbook = actual::SorafsOrderbook {
+            min_order_gib: 8,
+            price_tick_micro_xor: 25_000,
+        };
+        actual.privacy_aggregates = actual::SorafsPrivacyAggregateSchedule {
+            enabled: true,
+            cycle_seconds: 12,
+            publish_delay_seconds: 3,
+        };
 
         let cfg = StorageConfig::from(&actual);
         assert!(cfg.enabled());
@@ -807,6 +901,16 @@ mod tests {
                 "sorafs.sf1.backup:eu".to_string()
             ]
         );
+        let orderbook = cfg.orderbook_admission_policy();
+        assert_eq!(orderbook.min_order_gib(), 8);
+        assert_eq!(orderbook.price_tick_micro_xor(), 25_000);
+        assert_eq!(
+            cfg.privacy_aggregate_schedule(),
+            Some(PrivacyAggregateScheduleConfig {
+                cycle_seconds: 12,
+                publish_delay_seconds: 3,
+            })
+        );
         let penalty = cfg.penalty();
         let defaults = actual::SorafsPenaltyPolicy::default();
         assert_eq!(penalty.strike_threshold, defaults.strike_threshold);
@@ -815,6 +919,19 @@ mod tests {
             penalty.cooldown_secs,
             u64::from(defaults.cooldown_windows).saturating_mul(60 * 60)
         );
+    }
+
+    #[test]
+    fn privacy_aggregate_schedule_is_none_when_disabled() {
+        let mut actual = actual::SorafsStorage::default();
+        actual.privacy_aggregates = actual::SorafsPrivacyAggregateSchedule {
+            enabled: false,
+            cycle_seconds: 0,
+            publish_delay_seconds: 5,
+        };
+
+        let cfg = StorageConfig::from(&actual);
+        assert_eq!(cfg.privacy_aggregate_schedule(), None);
     }
 
     #[test]

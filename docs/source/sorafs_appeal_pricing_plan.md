@@ -1,6 +1,6 @@
 ---
 title: Moderation Appeal Pricing Engine
-summary: SFM-4b2 implementation status for appeal quote, native asset-lock deposit instruction/status/confirmation/settlement execution, settlement, and disbursement helpers plus the remaining ledger service gates.
+summary: SFM-4b2 implementation status for appeal quote, native asset-lock deposit instruction/status/confirmation/settlement execution, configured-signer and moderation-derived retry-aware settlement submission, settlement, and disbursement helpers plus the remaining ledger service gates.
 ---
 
 # Moderation Appeal Pricing Engine
@@ -13,7 +13,11 @@ operator commands. Torii now exposes read-only appeal finance config/status/
 quote REST APIs, an authenticated native asset-lock deposit instruction builder
 with status, confirmation, settlement-execution instruction checks, and
 post-submission settlement reconciliation against runtime asset-lock records
-with deterministic audit digests for peer/operator comparison,
+with deterministic audit digests for peer/operator comparison, plus a
+configured-signer settlement submitter that queues the next pending native
+`DrawdownAssetLock` or `CancelAssetLock` transaction and publishes a typed
+settlement submission receipt to the local Governance DAG when a publisher is
+configured,
 plus stateless settlement and disbursement plan APIs backed by the same baseline
 helpers, and `sorafs_node` can publish typed
 `SoraFsAppealFinanceReportV1` records into the local Governance DAG filesystem
@@ -24,25 +28,45 @@ aggregate validated finance reports into deterministic
 `SoraFsAppealFinanceWeeklyRollupV1` records for transparency dashboards and
 treasury review, and `sorafs_node` can publish those rollups through the same
 local Governance DAG filesystem and optional signed runtime DAG path. Torii
-exposes read-only local report and weekly rollup dashboard APIs backed by the
-Governance DAG publish-index plus canonical-auth report and weekly rollup
-publish APIs for the local Governance DAG pipeline. Torii also exposes
+exposes read-only local report, weekly rollup, and settlement receipt dashboard
+APIs backed by the Governance DAG publish-index plus canonical-auth report and
+weekly rollup publish APIs for the local Governance DAG pipeline. The local
+dashboard APIs report full aggregate totals while bounding returned source-entry
+arrays through `limit` with a default of 50 and max of 500. Torii also exposes
 authenticated deposit-status and deposit-confirmation lookups for native runtime
-asset-lock records returned to the lock opener, destination, or release authority.
+asset-lock records returned to the lock opener, destination, or release
+authority.
 The repository also ships a Grafana/Prometheus appeal-finance dashboard and
 alert pack over those Governance DAG publication metrics for rollout monitoring.
-The repo does not yet ship a standalone pricing daemon or signed server-side
-appeal settlement transaction submitter; deposit custody uses the returned
-native `OpenAssetLock` instruction, which the authenticated payer must sign and
-submit through the normal transaction path, then external moderation intake can
-call Torii's confirmation endpoint before advancing the case. Settlement
-custody mutation likewise uses the returned `DrawdownAssetLock` and
-`CancelAssetLock` instructions, which the required authorities must sign and
-submit, then operators can call Torii's reconciliation endpoint to verify the
-runtime ledger reached the expected final or in-progress state. Torii's local
-moderation ballot announcement API now performs the deposit confirmation gate
-before admitting a ballot. Treat this page as the production-readiness ledger
-for the implemented helpers and the remaining service gates.
+The repo still does not ship a standalone pricing daemon. Deposit custody uses
+the returned native `OpenAssetLock` instruction, which the authenticated payer
+must sign and submit through the normal transaction path, then external
+moderation intake can call Torii's confirmation endpoint before advancing the
+case. Settlement custody mutation can either use the returned
+`DrawdownAssetLock` and `CancelAssetLock` instructions for required-authority
+client signing or Torii's configured signer submitter at
+`POST /v1/sorafs/appeals/finance/deposits/submit-settlement`. The submitter
+requires `torii.sorafs.appeal_finance_settlement.submitter_private_keys` and
+only queues the next pending step whose required authority has a configured
+private key. If `sorafs_node` has a local Governance DAG publisher, each queued
+server-side step is also recorded as a typed settlement receipt for audit and
+dashboard ingestion. Torii's local moderation ballot announcement API now
+performs the deposit confirmation gate before admitting a ballot and stores the
+confirmed deposit fingerprint, including evidence hashes, with the local
+moderation record. When Torii starts with configured settlement submitter keys,
+its moderation settlement worker replays and subscribes to local tallied ballot
+events, reconstructs the confirmed deposit from that captured fingerprint, and
+queues pending native settlement steps through the same submitter and receipt
+path. The worker also periodically rescans tallied local ballots at
+`torii.sorafs.appeal_finance_settlement.worker_scan_interval_ms` so changed
+runtime reconciliation state can advance to the next pending settlement step.
+It persists each worker-submitted step with transaction hash, status, attempts,
+and last error under the SoraFS storage data directory, refreshes queued
+transaction status from Torii's local pipeline cache, and retries rejected or
+expired worker submissions up to
+`torii.sorafs.appeal_finance_settlement.worker_max_retry_attempts`.
+Treat this page as the production-readiness ledger for the
+implemented helpers and the remaining service gates.
 
 ## Shipped Foundations
 
@@ -76,16 +100,35 @@ for the implemented helpers and the remaining service gates.
   weekly rollups as canonical `.to` payloads, JSON mirrors, BLAKE3 sidecars,
   `publish-index.json` entries, local CAR queue segments, and optional signed
   runtime DAG blocks.
+- `SoraFsAppealFinanceSettlementReceiptV1` records server-submitted native
+  settlement steps with the queued transaction hash, required authority,
+  reconciliation digest, observed ledger state, and settlement amounts.
+- `NodeHandle::publish_appeal_finance_settlement_receipt` and
+  `FilesystemGovernancePublisher::publish_appeal_finance_settlement_receipt`
+  publish settlement receipts as canonical `.to` payloads, JSON mirrors, BLAKE3
+  sidecars, `publish-index.json` entries, local CAR queue segments, and optional
+  signed runtime DAG blocks under `appeal_finance_settlement_receipt`.
+- `GET /v1/sorafs/appeals/finance/settlement-receipts` summarizes locally
+  published settlement receipts from the Governance DAG publish-index for
+  operator dashboards, including submitted-step counts, reconciliation-status
+  counts, distinct case counts, and settlement totals. Aggregate totals are
+  computed over the full local index, and the returned `entries` array is
+  bounded by `limit` with a default of 50 and max of 500.
 - `GET /v1/sorafs/appeals/finance/weekly-rollups` summarizes locally published
   weekly rollups from the Governance DAG publish-index for operator dashboards.
+  Aggregate totals are computed over the full local index, and the returned
+  `entries` array is bounded by `limit` with a default of 50 and max of 500.
 - `GET /v1/sorafs/appeals/finance/reports` summarizes locally published
   appeal finance reports from the Governance DAG publish-index for operator
   dashboards, including outcome counts, distinct case counts, payout/no-show
-  counts, finance totals, and source entries.
+  counts, finance totals, and source entries. Aggregate totals are computed over
+  the full local index, and the returned `entries` array is bounded by `limit`
+  with a default of 50 and max of 500.
 - `dashboards/grafana/sorafs_appeal_finance.json` and
   `dashboards/alerts/sorafs_appeal_finance_rules.yml` track appeal-finance
-  report/weekly-rollup publication freshness, publication failures, payload
-  throughput, rollup lag, and Governance DAG backlog.
+  report/weekly-rollup/settlement-receipt publication freshness, publication
+  failures, payload throughput, rollup lag, receipt/report lag, and Governance
+  DAG backlog.
 - `POST /v1/sorafs/appeals/finance/reports` and
   `POST /v1/sorafs/appeals/finance/weekly-rollups` require canonical
   `X-Iroha-*` request authentication and publish validated report/rollup JSON
@@ -111,6 +154,31 @@ for the implemented helpers and the remaining service gates.
   computes the baseline settlement breakdown for the requested outcome, and
   returns ordered native `DrawdownAssetLock` and `CancelAssetLock` instructions
   with the required signer account for each client-submitted ledger mutation.
+- `POST /v1/sorafs/appeals/finance/deposits/submit-settlement` requires
+  canonical `X-Iroha-*` request authentication, recomputes the same settlement
+  expectation, selects the next pending native settlement step, signs it with a
+  configured submitter key whose canonical `AccountId` matches the step's
+  required authority, and queues the transaction through Torii. Without
+  configured signer coverage it returns `submitter_not_configured` or
+  `missing_required_signer` alongside reconciliation evidence. The internal
+  signing, queueing, reconciliation, and settlement-receipt publication path is
+  factored out of the HTTP handler and is also used by the always-on
+  moderation-derived worker.
+- The moderation-derived settlement worker starts with Torii when SoraFS storage
+  and `torii.sorafs.appeal_finance_settlement.submitter_private_keys` are
+  configured. It replays the local moderation event backlog, subscribes to live
+  `BallotTallied` events, reconstructs the deposit confirmation from the
+  moderation-captured native lock fingerprint including evidence hashes, checks
+  the runtime ledger for static deposit mismatches, maps the tally decision to
+  the appeal settlement outcome, and queues the same next pending native
+  settlement step plus settlement receipt as the authenticated submit endpoint.
+  It also rescans tallied local ballots on `worker_scan_interval_ms` and
+  persists already-queued worker submissions under the SoraFS storage data
+  directory with transaction hash, pipeline status, attempt count, and last
+  error. Follow-up scans and process restarts can submit a new step after ledger
+  state advances without resubmitting the unchanged state, and rejected or
+  expired worker transactions are retried until `worker_max_retry_attempts` is
+  reached.
 - `POST /v1/sorafs/appeals/finance/deposits/reconcile` requires canonical
   `X-Iroha-*` request authentication, recomputes the same baseline settlement
   expectation, reads the current native asset-lock ledger record, and reports
@@ -125,9 +193,9 @@ for the implemented helpers and the remaining service gates.
   before the local ballot is admitted.
 - Deposit-backed local moderation ballot tallies now derive a deterministic
   `SoraFsAppealFinanceReportV1` from the final decision, confirmed deposit
-  snapshot, panel roster, revealed jurors, and no-show jurors, then publish it
-  through the same local Governance DAG report pipeline used by operator
-  submissions.
+  snapshot, evidence-hash fingerprint, panel roster, revealed jurors, and
+  no-show jurors, then publish it through the same local Governance DAG report
+  pipeline used by operator submissions.
 - `SorafsReconciliationReportV1` can embed an appeal-finance reconciliation
   summary derived from local weekly rollup publish-index entries and JSON
   sidecars, including source report count, case count, treasury-bound XOR, and
@@ -162,11 +230,13 @@ The app API publishes the deterministic baseline through JSON endpoints:
   enabled, the authenticated native asset-lock deposit instruction/status/
   confirmation APIs, settlement-execution instruction builder, and
   post-submission settlement reconciliation API with deterministic audit digests
-  is enabled, stateless
+  plus configured-signer next-step settlement submission with local Governance
+  DAG settlement receipt publication, moderation-derived next-step settlement
+  retry-aware worker with configured follow-up scan interval and attempt cap, and
+  a local receipt dashboard API are enabled, stateless
   settlement/disbursement plan APIs are enabled, local Governance DAG
   report/weekly rollup publication plus the local report and weekly rollup
-  dashboard APIs and authenticated report/rollup publish APIs are enabled, and
-  daemonized settlement submission remains pending runtime signer integration.
+  dashboard APIs and authenticated report/rollup publish APIs are enabled.
 - `POST /v1/sorafs/appeals/pricing/quote` accepts `class`, `backlog`,
   `evidence_size_mb`, optional `urgency`, and optional `panel_size`, then returns
   the deposit and multiplier breakdown.
@@ -206,6 +276,20 @@ The app API publishes the deterministic baseline through JSON endpoints:
   lock destination; refundable custody is emitted as a `CancelAssetLock` back to
   the lock opener. Each step includes the required signer account and framed
   instruction payload for client-side transaction submission.
+- `POST /v1/sorafs/appeals/finance/deposits/submit-settlement` accepts the same
+  `deposit_confirmation`, `outcome`, and optional `panel_size`, then signs and
+  queues exactly one next pending settlement step when
+  `torii.sorafs.appeal_finance_settlement.submitter_private_keys` contains a key
+  for that step's required authority. It returns `queued` with `tx_hash_hex`, or
+  an explicit signer/configuration status with the same reconciliation evidence.
+  When a local Governance DAG publisher is configured, a queued submission also
+  publishes an `appeal_finance_settlement_receipt` artifact and returns its
+  publication status, receipt id, transaction hash, and reconciliation digest.
+- `GET /v1/sorafs/appeals/finance/settlement-receipts` returns the local
+  settlement receipt publication summary from `publish-index.json`, with totals
+  by submitted settlement step and reconciliation status plus source entries for
+  dashboard drill-downs. The response includes published/returned counts,
+  applied `limit`, and a truncation flag for the bounded `entries` array.
 - `POST /v1/sorafs/appeals/finance/deposits/reconcile` accepts the same
   `deposit_confirmation`, `outcome`, and optional `panel_size`, then compares
   the current runtime asset-lock ledger record with the expected settlement
@@ -220,10 +304,13 @@ The app API publishes the deterministic baseline through JSON endpoints:
 - `GET /v1/sorafs/appeals/finance/reports` returns the local published report
   count, outcome summaries, distinct case count, juror payout and no-show
   counts, finance totals, latest publication timestamp, and matching
-  publish-index entries.
+  publish-index entries. The response includes published/returned counts,
+  applied `limit`, and a truncation flag for the bounded `entries` array.
 - `GET /v1/sorafs/appeals/finance/weekly-rollups` returns the local published
   weekly rollup count, cycle summaries, source-report totals, latest publication
-  timestamp, and matching publish-index entries.
+  timestamp, and matching publish-index entries. The response includes
+  published/returned counts, applied `limit`, and a truncation flag for the
+  bounded `entries` array.
 - `POST /v1/sorafs/appeals/finance/weekly-rollups` accepts a
   `SoraFsAppealFinanceWeeklyRollupV1` JSON payload and publishes it through the
   same authenticated local Governance DAG pipeline.
@@ -312,12 +399,8 @@ replay the exact parameters used for the quote or payout.
 
 ## Remaining Production Gates
 
-- Finish the signed settlement transaction submitter that consumes
-  moderation-derived finance reports/native settlement instructions, submits the
-  required ledger transactions, and records runtime treasury settlement evidence
-  instead of relying on operator transaction submission plus reconciliation only.
-- Wire the checked-in appeal-finance dashboard and alert pack to hosted
-  live/public observability once the public Governance DAG and ledger
+- Wire the checked-in receipt-aware appeal-finance dashboard and alert pack to
+  hosted live/public observability once the public Governance DAG and ledger
   reconciliation paths exist.
 - Add end-to-end tests that cover quote creation, deposit posting, decision
   ingestion, settlement submission, disbursement, and treasury reconciliation
@@ -330,6 +413,7 @@ Focused Rust coverage lives with the helper implementations and the
 
 ```sh
 cargo test -p sorafs_orchestrator appeal
+CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-dashboard-limit cargo test -j 1 -p iroha_torii appeal_finance_dashboards_limit --lib --features app_api -- --nocapture
 ```
 
 Run broader SoraFS CLI tests when changing command arguments, manifest parsing,
