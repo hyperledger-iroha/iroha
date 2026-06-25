@@ -55389,11 +55389,14 @@ mod pasta_tiny {
         }
         for transition_configs in &config.window_base_doubles {
             for double_config in transition_configs {
-                enable_non_native_vesta_affine_complete_add_keygen_region(region, double_config)?;
+                enable_non_native_vesta_affine_double_or_identity_keygen_region(
+                    region,
+                    double_config,
+                )?;
             }
         }
         for sum_config in &config.sum_adds {
-            enable_non_native_vesta_affine_complete_add_keygen_region(region, sum_config)?;
+            enable_non_native_vesta_affine_accumulator_add_keygen_region(region, sum_config)?;
         }
         Ok(())
     }
@@ -63396,8 +63399,8 @@ mod pasta_tiny {
         scalar: NativePastaFpFixedWindowDecompositionConfig,
         tables: Vec<NonNativeVestaAffineFixedWindowTableConfig>,
         selections: Vec<NonNativeVestaAffineFixedWindowSelectFromTableConfig>,
-        window_base_doubles: Vec<Vec<NonNativeVestaAffineCompleteAddConfig>>,
-        sum_adds: Vec<NonNativeVestaAffineCompleteAddConfig>,
+        window_base_doubles: Vec<Vec<NonNativeVestaAffineDoubleOrIdentityConfig>>,
+        sum_adds: Vec<NonNativeVestaAffineAccumulatorAddConfig>,
         link: Selector,
     }
 
@@ -63571,31 +63574,39 @@ mod pasta_tiny {
     ) -> NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalarConfig {
         validate_windowed_vesta_scalar_mul_shape::<WINDOWS, WINDOW_BITS>()
             .expect("invalid Vesta shared-table windowed native-scalar mul shape");
+        let one_bit_direct_select = WINDOW_BITS == 1 && WINDOWS > 1;
         let scalar =
             configure_native_pasta_fp_fixed_window_decomposition::<WINDOWS, WINDOW_BITS>(meta);
-        let tables =
+        let tables = if one_bit_direct_select {
+            Vec::new()
+        } else {
             (0..WINDOWS)
                 .map(|_| {
                     configure_non_native_vesta_affine_fixed_window_table_with_public_base::<
                         WINDOW_BITS,
                     >(meta, false)
                 })
-                .collect::<Vec<_>>();
-        let selections = tables
-            .iter()
-            .map(|table| {
-                configure_non_native_vesta_affine_fixed_window_select_from_table::<WINDOW_BITS>(
-                    meta,
-                    table.table.clone(),
-                )
-            })
-            .collect::<Vec<_>>();
+                .collect::<Vec<_>>()
+        };
+        let selections = if one_bit_direct_select {
+            Vec::new()
+        } else {
+            tables
+                .iter()
+                .map(|table| {
+                    configure_non_native_vesta_affine_fixed_window_select_from_table::<WINDOW_BITS>(
+                        meta,
+                        table.table.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
         let window_base_doubles = (0..WINDOWS.saturating_sub(1))
             .map(|_| {
                 (0..WINDOW_BITS)
                     .map(|_| {
-                        configure_non_native_vesta_affine_complete_add_with_exposure(
-                            meta, false, false, false,
+                        configure_non_native_vesta_affine_double_or_identity_with_exposure(
+                            meta, false, false,
                         )
                     })
                     .collect::<Vec<_>>()
@@ -63603,7 +63614,7 @@ mod pasta_tiny {
             .collect::<Vec<_>>();
         let sum_adds = (0..WINDOWS)
             .map(|_| {
-                configure_non_native_vesta_affine_complete_add_with_exposure(
+                configure_non_native_vesta_affine_accumulator_add_with_exposure(
                     meta, false, false, false,
                 )
             })
@@ -63617,12 +63628,138 @@ mod pasta_tiny {
             "non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar_link",
             |meta| {
                 let s = meta.query_selector(link);
-                let mut constraints = Vec::with_capacity(
+                let mut constraints = Vec::with_capacity(if one_bit_direct_select {
+                    WINDOWS * (4 * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1) + 1)
+                } else {
                     WINDOWS
                         * (WINDOW_BITS
                             + 2 * WINDOW_BITS * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1)
-                            + 3 * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1)),
-                );
+                            + 3 * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1))
+                });
+
+                if one_bit_direct_select {
+                    if let Some(base_instances) = &base_instances {
+                        let base_public = query_non_native_vesta_affine_point_instances(
+                            meta,
+                            base_instances,
+                            Rotation::cur(),
+                        );
+                        let first_base = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &window_base_doubles[0][0].p,
+                            Rotation::cur(),
+                        );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &first_base,
+                            &base_public,
+                        );
+                    }
+
+                    let one = Expression::Constant(Scalar::from(1));
+                    for window_index in 0..WINDOWS {
+                        let scalar_bit =
+                            meta.query_advice(scalar.digit_bits[window_index][0], Rotation::cur());
+                        let current_base = if window_index == 0 {
+                            query_non_native_vesta_affine_maybe_identity_point(
+                                meta,
+                                &window_base_doubles[0][0].p,
+                                Rotation::cur(),
+                            )
+                        } else {
+                            query_non_native_vesta_affine_maybe_identity_point(
+                                meta,
+                                &window_base_doubles[window_index - 1][0].r,
+                                Rotation::cur(),
+                            )
+                        };
+                        let sum_q = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &sum_adds[window_index].q,
+                            Rotation::cur(),
+                        );
+                        constraints
+                            .push(s.clone() * (sum_q.2.clone() + scalar_bit.clone() - one.clone()));
+                        for limb_index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+                            constraints.push(
+                                s.clone()
+                                    * (sum_q.0[limb_index].clone()
+                                        - scalar_bit.clone() * current_base.0[limb_index].clone()),
+                            );
+                            constraints.push(
+                                s.clone()
+                                    * (sum_q.1[limb_index].clone()
+                                        - scalar_bit.clone() * current_base.1[limb_index].clone()),
+                            );
+                        }
+
+                        if window_index == 0 {
+                            let first_acc = query_non_native_vesta_affine_maybe_identity_point(
+                                meta,
+                                &sum_adds[0].p,
+                                Rotation::cur(),
+                            );
+                            push_non_native_vesta_identity_constraints(
+                                &mut constraints,
+                                &s,
+                                &first_acc,
+                            );
+                        } else {
+                            let previous = query_non_native_vesta_affine_maybe_identity_point(
+                                meta,
+                                &sum_adds[window_index - 1].r,
+                                Rotation::cur(),
+                            );
+                            let current = query_non_native_vesta_affine_maybe_identity_point(
+                                meta,
+                                &sum_adds[window_index].p,
+                                Rotation::cur(),
+                            );
+                            push_non_native_vesta_point_equality_constraints(
+                                &mut constraints,
+                                &s,
+                                &previous,
+                                &current,
+                            );
+                        }
+
+                        if window_index + 1 < WINDOWS {
+                            let double_p = query_non_native_vesta_affine_maybe_identity_point(
+                                meta,
+                                &window_base_doubles[window_index][0].p,
+                                Rotation::cur(),
+                            );
+                            push_non_native_vesta_point_equality_constraints(
+                                &mut constraints,
+                                &s,
+                                &current_base,
+                                &double_p,
+                            );
+                        }
+                    }
+
+                    if let Some(output_instances) = &output_instances {
+                        let output_public = query_non_native_vesta_affine_point_instances(
+                            meta,
+                            output_instances,
+                            Rotation::cur(),
+                        );
+                        let final_sum = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &sum_adds[WINDOWS - 1].r,
+                            Rotation::cur(),
+                        );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &final_sum,
+                            &output_public,
+                        );
+                    }
+
+                    return constraints;
+                }
 
                 if let Some(base_instances) = &base_instances {
                     let base_public = query_non_native_vesta_affine_point_instances(
@@ -63724,22 +63861,11 @@ mod pasta_tiny {
                             &double.p,
                             Rotation::cur(),
                         );
-                        let double_q = query_non_native_vesta_affine_maybe_identity_point(
-                            meta,
-                            &double.q,
-                            Rotation::cur(),
-                        );
                         push_non_native_vesta_point_equality_constraints(
                             &mut constraints,
                             &s,
                             &source,
                             &double_p,
-                        );
-                        push_non_native_vesta_point_equality_constraints(
-                            &mut constraints,
-                            &s,
-                            &source,
-                            &double_q,
                         );
                     }
                     let transition_output = query_non_native_vesta_affine_maybe_identity_point(
@@ -63826,11 +63952,15 @@ mod pasta_tiny {
             .zip(witness.window_base_doubles.iter())
         {
             for (double_config, double) in transition_configs.iter().zip(transition_witnesses) {
-                assign_non_native_vesta_affine_complete_add_region(region, double_config, double)?;
+                assign_non_native_vesta_affine_double_or_identity_region(
+                    region,
+                    double_config,
+                    double,
+                )?;
             }
         }
         for (sum_config, sum) in config.sum_adds.iter().zip(witness.sum_adds.iter()) {
-            assign_non_native_vesta_affine_complete_add_region(region, sum_config, sum)?;
+            assign_non_native_vesta_affine_accumulator_add_region(region, sum_config, sum)?;
         }
         Ok(())
     }
@@ -64007,11 +64137,19 @@ mod pasta_tiny {
                         &base_instances[term_index],
                         Rotation::cur(),
                     );
-                    let first_window_base = query_non_native_vesta_affine_maybe_identity_point(
-                        meta,
-                        &term_muls[term_index].tables[0].table[1],
-                        Rotation::cur(),
-                    );
+                    let first_window_base = if WINDOW_BITS == 1 && WINDOWS > 1 {
+                        query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &term_muls[term_index].window_base_doubles[0][0].p,
+                            Rotation::cur(),
+                        )
+                    } else {
+                        query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &term_muls[term_index].tables[0].table[1],
+                            Rotation::cur(),
+                        )
+                    };
                     push_non_native_vesta_point_equality_constraints(
                         &mut constraints,
                         &s,
@@ -65233,6 +65371,935 @@ mod pasta_tiny {
         enable_non_native_vesta_fq_add_keygen_region(
             region,
             &config.double_y3_plus_y1,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )
+    }
+
+    /// Config for a deterministic Vesta ladder doubling step.
+    ///
+    /// Fixed-window scalar multiplication only needs to prove `R = 2P` for the
+    /// shifted-base ladder, with an identity passthrough for the degenerate
+    /// identity base. This avoids instantiating the inverse and distinct-add
+    /// branches of the general complete-add gadget for every ladder step.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineDoubleOrIdentityConfig {
+        p: NonNativeVestaAffineMaybeIdentityConfig,
+        r: NonNativeVestaAffineMaybeIdentityConfig,
+        double_y_denominator: NonNativeVestaFqAddConfig,
+        double_x_squared: NonNativeVestaFqMulConfig,
+        double_two_x_squared: NonNativeVestaFqAddConfig,
+        double_three_x_squared: NonNativeVestaFqAddConfig,
+        double_lambda_times_denominator: NonNativeVestaFqMulConfig,
+        double_denominator_inverse: NonNativeVestaFqMulConfig,
+        double_lambda_squared: NonNativeVestaFqMulConfig,
+        double_x3_plus_x1: NonNativeVestaFqAddConfig,
+        double_x_sum_plus_x1: NonNativeVestaFqAddConfig,
+        double_x3_plus_x_diff: NonNativeVestaFqAddConfig,
+        double_lambda_times_x_diff: NonNativeVestaFqMulConfig,
+        double_y3_plus_y1: NonNativeVestaFqAddConfig,
+        case_identity: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        case_double: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        link: Selector,
+    }
+
+    fn configure_non_native_vesta_affine_double_or_identity_with_exposure(
+        meta: &mut ConstraintSystem<Scalar>,
+        p_public: bool,
+        r_public: bool,
+    ) -> NonNativeVestaAffineDoubleOrIdentityConfig {
+        let p = configure_non_native_vesta_affine_maybe_identity_with_exposure(
+            meta, p_public, p_public,
+        );
+        let r = configure_non_native_vesta_affine_maybe_identity_with_exposure(
+            meta, r_public, r_public,
+        );
+        let double_y_denominator = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_x_squared = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_two_x_squared = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_three_x_squared = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_lambda_times_denominator = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_denominator_inverse = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_lambda_squared = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_x3_plus_x1 = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_x_sum_plus_x1 = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_x3_plus_x_diff = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_lambda_times_x_diff = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_y3_plus_y1 = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let case_identity = meta.advice_column();
+        let case_double = meta.advice_column();
+        let link = meta.selector();
+
+        meta.create_gate("non_native_vesta_affine_double_or_identity_link", |meta| {
+            let s = meta.query_selector(link);
+            let case_identity = meta.query_advice(case_identity, Rotation::cur());
+            let case_double = meta.query_advice(case_double, Rotation::cur());
+            let p_identity = meta.query_advice(p.identity, Rotation::cur());
+            let r_identity = meta.query_advice(r.identity, Rotation::cur());
+            let one = Expression::Constant(Scalar::from(1));
+            let mut constraints = Vec::with_capacity(8 + 28 * NON_NATIVE_PASTA_FIELD_LIMBS);
+
+            constraints
+                .push(s.clone() * case_identity.clone() * (case_identity.clone() - one.clone()));
+            constraints.push(s.clone() * case_double.clone() * (case_double.clone() - one.clone()));
+            constraints
+                .push(s.clone() * (case_identity.clone() + case_double.clone() - one.clone()));
+            constraints
+                .push(s.clone() * case_identity.clone() * (p_identity.clone() - one.clone()));
+            constraints
+                .push(s.clone() * case_identity.clone() * (r_identity.clone() - one.clone()));
+            constraints.push(s.clone() * case_double.clone() * p_identity);
+            constraints.push(s.clone() * case_double.clone() * r_identity);
+
+            for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+                let x1 = meta.query_advice(p.x_squared.lhs.limbs[index].value, Rotation::cur());
+                let y1 = meta.query_advice(p.y_squared.lhs.limbs[index].value, Rotation::cur());
+                let x3 = meta.query_advice(r.x_squared.lhs.limbs[index].value, Rotation::cur());
+                let y3 = meta.query_advice(r.y_squared.lhs.limbs[index].value, Rotation::cur());
+
+                let d_den_lhs =
+                    meta.query_advice(double_y_denominator.lhs.limbs[index].value, Rotation::cur());
+                let d_den_rhs =
+                    meta.query_advice(double_y_denominator.rhs.limbs[index].value, Rotation::cur());
+                let d_den_out =
+                    meta.query_advice(double_y_denominator.out.limbs[index].value, Rotation::cur());
+                let d_x_sq_lhs =
+                    meta.query_advice(double_x_squared.lhs.limbs[index].value, Rotation::cur());
+                let d_x_sq_rhs =
+                    meta.query_advice(double_x_squared.rhs.limbs[index].value, Rotation::cur());
+                let d_x_sq_out =
+                    meta.query_advice(double_x_squared.out.limbs[index].value, Rotation::cur());
+                let d_two_x_sq_lhs =
+                    meta.query_advice(double_two_x_squared.lhs.limbs[index].value, Rotation::cur());
+                let d_two_x_sq_rhs =
+                    meta.query_advice(double_two_x_squared.rhs.limbs[index].value, Rotation::cur());
+                let d_two_x_sq_out =
+                    meta.query_advice(double_two_x_squared.out.limbs[index].value, Rotation::cur());
+                let d_three_x_sq_lhs = meta.query_advice(
+                    double_three_x_squared.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_three_x_sq_rhs = meta.query_advice(
+                    double_three_x_squared.rhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_three_x_sq_out = meta.query_advice(
+                    double_three_x_squared.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_lambda = meta.query_advice(
+                    double_lambda_times_denominator.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_lambda_den_rhs = meta.query_advice(
+                    double_lambda_times_denominator.rhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_lambda_den_out = meta.query_advice(
+                    double_lambda_times_denominator.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_inverse_lhs = meta.query_advice(
+                    double_denominator_inverse.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_inverse_out = meta.query_advice(
+                    double_denominator_inverse.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_lambda_sq_lhs = meta.query_advice(
+                    double_lambda_squared.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_lambda_sq_rhs = meta.query_advice(
+                    double_lambda_squared.rhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_lambda_sq_out = meta.query_advice(
+                    double_lambda_squared.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_x3_plus_x1_lhs =
+                    meta.query_advice(double_x3_plus_x1.lhs.limbs[index].value, Rotation::cur());
+                let d_x3_plus_x1_rhs =
+                    meta.query_advice(double_x3_plus_x1.rhs.limbs[index].value, Rotation::cur());
+                let d_x3_plus_x1_out =
+                    meta.query_advice(double_x3_plus_x1.out.limbs[index].value, Rotation::cur());
+                let d_x_sum_lhs =
+                    meta.query_advice(double_x_sum_plus_x1.lhs.limbs[index].value, Rotation::cur());
+                let d_x_sum_rhs =
+                    meta.query_advice(double_x_sum_plus_x1.rhs.limbs[index].value, Rotation::cur());
+                let d_x_sum_out =
+                    meta.query_advice(double_x_sum_plus_x1.out.limbs[index].value, Rotation::cur());
+                let d_x3_plus_x_diff_lhs = meta.query_advice(
+                    double_x3_plus_x_diff.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_x3_plus_x_diff_rhs = meta.query_advice(
+                    double_x3_plus_x_diff.rhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_x3_plus_x_diff_out = meta.query_advice(
+                    double_x3_plus_x_diff.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_lambda_x_diff_lhs = meta.query_advice(
+                    double_lambda_times_x_diff.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_lambda_x_diff_rhs = meta.query_advice(
+                    double_lambda_times_x_diff.rhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_lambda_x_diff_out = meta.query_advice(
+                    double_lambda_times_x_diff.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_y3_plus_y1_lhs =
+                    meta.query_advice(double_y3_plus_y1.lhs.limbs[index].value, Rotation::cur());
+                let d_y3_plus_y1_rhs =
+                    meta.query_advice(double_y3_plus_y1.rhs.limbs[index].value, Rotation::cur());
+                let d_y3_plus_y1_out =
+                    meta.query_advice(double_y3_plus_y1.out.limbs[index].value, Rotation::cur());
+
+                constraints.push(s.clone() * case_double.clone() * (d_den_lhs - y1.clone()));
+                constraints.push(s.clone() * case_double.clone() * (d_den_rhs - y1.clone()));
+                constraints.push(s.clone() * case_double.clone() * (d_x_sq_lhs - x1.clone()));
+                constraints.push(s.clone() * case_double.clone() * (d_x_sq_rhs - x1.clone()));
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_two_x_sq_lhs - d_x_sq_out.clone()));
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_two_x_sq_rhs - d_x_sq_out.clone()));
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_three_x_sq_lhs - d_two_x_sq_out));
+                constraints.push(s.clone() * case_double.clone() * (d_three_x_sq_rhs - d_x_sq_out));
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_lambda_den_rhs - d_den_out.clone()));
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_lambda_den_out - d_three_x_sq_out));
+                constraints.push(s.clone() * case_double.clone() * (d_inverse_lhs - d_den_out));
+                constraints.push(
+                    s.clone()
+                        * case_double.clone()
+                        * (d_inverse_out
+                            - Expression::Constant(Scalar::from(VESTA_FQ_ONE_LIMBS[index]))),
+                );
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_lambda_sq_lhs - d_lambda.clone()));
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_lambda_sq_rhs - d_lambda.clone()));
+                constraints.push(s.clone() * case_double.clone() * (d_x3_plus_x1_lhs - x3.clone()));
+                constraints.push(s.clone() * case_double.clone() * (d_x3_plus_x1_rhs - x1.clone()));
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_x_sum_lhs - d_x3_plus_x1_out));
+                constraints.push(s.clone() * case_double.clone() * (d_x_sum_rhs - x1.clone()));
+                constraints.push(s.clone() * case_double.clone() * (d_x_sum_out - d_lambda_sq_out));
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_x3_plus_x_diff_lhs - x3.clone()));
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_x3_plus_x_diff_out - x1.clone()));
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_lambda_x_diff_lhs - d_lambda));
+                constraints.push(
+                    s.clone() * case_double.clone() * (d_lambda_x_diff_rhs - d_x3_plus_x_diff_rhs),
+                );
+                constraints.push(s.clone() * case_double.clone() * (d_y3_plus_y1_lhs - y3));
+                constraints.push(s.clone() * case_double.clone() * (d_y3_plus_y1_rhs - y1));
+                constraints.push(
+                    s.clone() * case_double.clone() * (d_y3_plus_y1_out - d_lambda_x_diff_out),
+                );
+            }
+            constraints
+        });
+
+        NonNativeVestaAffineDoubleOrIdentityConfig {
+            p,
+            r,
+            double_y_denominator,
+            double_x_squared,
+            double_two_x_squared,
+            double_three_x_squared,
+            double_lambda_times_denominator,
+            double_denominator_inverse,
+            double_lambda_squared,
+            double_x3_plus_x1,
+            double_x_sum_plus_x1,
+            double_x3_plus_x_diff,
+            double_lambda_times_x_diff,
+            double_y3_plus_y1,
+            case_identity,
+            case_double,
+            link,
+        }
+    }
+
+    fn assign_non_native_vesta_affine_double_or_identity_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineDoubleOrIdentityConfig,
+        witness: &NonNativeVestaAffineCompleteAdd,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        assign_non_native_vesta_affine_maybe_identity_region(
+            region,
+            &config.p,
+            witness.p.as_ref(),
+        )?;
+        assign_non_native_vesta_affine_maybe_identity_region(
+            region,
+            &config.r,
+            witness.r.as_ref(),
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.double_y_denominator,
+            witness.double_y_denominator.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.double_x_squared,
+            witness.double_x_squared.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.double_two_x_squared,
+            witness.double_two_x_squared.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.double_three_x_squared,
+            witness.double_three_x_squared.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.double_lambda_times_denominator,
+            witness.double_lambda_times_denominator.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.double_denominator_inverse,
+            witness.double_denominator_inverse.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.double_lambda_squared,
+            witness.double_lambda_squared.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.double_x3_plus_x1,
+            witness.double_x3_plus_x1.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.double_x_sum_plus_x1,
+            witness.double_x_sum_plus_x1.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.double_x3_plus_x_diff,
+            witness.double_x3_plus_x_diff.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.double_lambda_times_x_diff,
+            witness.double_lambda_times_x_diff.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.double_y3_plus_y1,
+            witness.double_y3_plus_y1.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        crate::zk::assign_advice_compat(
+            region,
+            || "case_identity",
+            config.case_identity,
+            0,
+            || Value::known(witness.case_p_identity + witness.case_q_identity),
+        )?;
+        crate::zk::assign_advice_compat(
+            region,
+            || "case_double",
+            config.case_double,
+            0,
+            || Value::known(witness.case_double),
+        )?;
+        Ok(())
+    }
+
+    fn enable_non_native_vesta_affine_double_or_identity_keygen_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineDoubleOrIdentityConfig,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        enable_non_native_vesta_affine_maybe_identity_keygen_region(region, &config.p)?;
+        enable_non_native_vesta_affine_maybe_identity_keygen_region(region, &config.r)?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.double_y_denominator,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_mul_keygen_region(
+            region,
+            &config.double_x_squared,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.double_two_x_squared,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.double_three_x_squared,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_mul_keygen_region(
+            region,
+            &config.double_lambda_times_denominator,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_mul_keygen_region(
+            region,
+            &config.double_denominator_inverse,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_mul_keygen_region(
+            region,
+            &config.double_lambda_squared,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.double_x3_plus_x1,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.double_x_sum_plus_x1,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.double_x3_plus_x_diff,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_mul_keygen_region(
+            region,
+            &config.double_lambda_times_x_diff,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.double_y3_plus_y1,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )
+    }
+
+    /// Config for scalar-mul selected-point accumulation.
+    ///
+    /// In a fixed-window scalar multiplication the running accumulator can only
+    /// add identity or a distinct higher-order shifted base. The double and
+    /// inverse branches of complete addition are therefore dead weight here.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineAccumulatorAddConfig {
+        p: NonNativeVestaAffineMaybeIdentityConfig,
+        q: NonNativeVestaAffineMaybeIdentityConfig,
+        r: NonNativeVestaAffineMaybeIdentityConfig,
+        distinct_x_delta: NonNativeVestaFqAddConfig,
+        distinct_y_delta: NonNativeVestaFqAddConfig,
+        distinct_lambda_times_x_delta: NonNativeVestaFqMulConfig,
+        distinct_x_delta_inverse: NonNativeVestaFqMulConfig,
+        distinct_lambda_squared: NonNativeVestaFqMulConfig,
+        distinct_x3_plus_x1: NonNativeVestaFqAddConfig,
+        distinct_x_sum_plus_x2: NonNativeVestaFqAddConfig,
+        distinct_x3_plus_x_diff: NonNativeVestaFqAddConfig,
+        distinct_lambda_times_x_diff: NonNativeVestaFqMulConfig,
+        distinct_y3_plus_y1: NonNativeVestaFqAddConfig,
+        case_p_identity: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        case_q_identity: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        case_distinct: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        link: Selector,
+    }
+
+    fn configure_non_native_vesta_affine_accumulator_add_with_exposure(
+        meta: &mut ConstraintSystem<Scalar>,
+        p_public: bool,
+        q_public: bool,
+        r_public: bool,
+    ) -> NonNativeVestaAffineAccumulatorAddConfig {
+        let p = configure_non_native_vesta_affine_maybe_identity_with_exposure(
+            meta, p_public, p_public,
+        );
+        let q = configure_non_native_vesta_affine_maybe_identity_with_exposure(
+            meta, q_public, q_public,
+        );
+        let r = configure_non_native_vesta_affine_maybe_identity_with_exposure(
+            meta, r_public, r_public,
+        );
+        let distinct_x_delta = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let distinct_y_delta = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let distinct_lambda_times_x_delta = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let distinct_x_delta_inverse = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let distinct_lambda_squared = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let distinct_x3_plus_x1 = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let distinct_x_sum_plus_x2 = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let distinct_x3_plus_x_diff = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let distinct_lambda_times_x_diff = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let distinct_y3_plus_y1 = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let case_p_identity = meta.advice_column();
+        let case_q_identity = meta.advice_column();
+        let case_distinct = meta.advice_column();
+        let link = meta.selector();
+
+        meta.create_gate("non_native_vesta_affine_accumulator_add_link", |meta| {
+            let s = meta.query_selector(link);
+            let case_p_identity = meta.query_advice(case_p_identity, Rotation::cur());
+            let case_q_identity = meta.query_advice(case_q_identity, Rotation::cur());
+            let case_distinct = meta.query_advice(case_distinct, Rotation::cur());
+            let p_identity = meta.query_advice(p.identity, Rotation::cur());
+            let q_identity = meta.query_advice(q.identity, Rotation::cur());
+            let r_identity = meta.query_advice(r.identity, Rotation::cur());
+            let one = Expression::Constant(Scalar::from(1));
+            let mut constraints = Vec::with_capacity(14 + 26 * NON_NATIVE_PASTA_FIELD_LIMBS);
+
+            for case in [
+                case_p_identity.clone(),
+                case_q_identity.clone(),
+                case_distinct.clone(),
+            ] {
+                constraints.push(s.clone() * case.clone() * (case - one.clone()));
+            }
+            constraints.push(
+                s.clone()
+                    * (case_p_identity.clone() + case_q_identity.clone() + case_distinct.clone()
+                        - one.clone()),
+            );
+            constraints
+                .push(s.clone() * case_p_identity.clone() * (p_identity.clone() - one.clone()));
+            constraints.push(
+                s.clone() * case_p_identity.clone() * (r_identity.clone() - q_identity.clone()),
+            );
+            constraints
+                .push(s.clone() * case_q_identity.clone() * (q_identity.clone() - one.clone()));
+            constraints.push(
+                s.clone() * case_q_identity.clone() * (r_identity.clone() - p_identity.clone()),
+            );
+            constraints.push(s.clone() * case_distinct.clone() * p_identity.clone());
+            constraints.push(s.clone() * case_distinct.clone() * q_identity.clone());
+            constraints.push(s.clone() * case_distinct.clone() * r_identity.clone());
+
+            for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+                let x1 = meta.query_advice(p.x_squared.lhs.limbs[index].value, Rotation::cur());
+                let y1 = meta.query_advice(p.y_squared.lhs.limbs[index].value, Rotation::cur());
+                let x2 = meta.query_advice(q.x_squared.lhs.limbs[index].value, Rotation::cur());
+                let y2 = meta.query_advice(q.y_squared.lhs.limbs[index].value, Rotation::cur());
+                let x3 = meta.query_advice(r.x_squared.lhs.limbs[index].value, Rotation::cur());
+                let y3 = meta.query_advice(r.y_squared.lhs.limbs[index].value, Rotation::cur());
+
+                constraints.push(s.clone() * case_p_identity.clone() * (x3.clone() - x2.clone()));
+                constraints.push(s.clone() * case_p_identity.clone() * (y3.clone() - y2.clone()));
+                constraints.push(s.clone() * case_q_identity.clone() * (x3.clone() - x1.clone()));
+                constraints.push(s.clone() * case_q_identity.clone() * (y3.clone() - y1.clone()));
+
+                let a_x_delta_lhs =
+                    meta.query_advice(distinct_x_delta.lhs.limbs[index].value, Rotation::cur());
+                let a_x_delta_rhs =
+                    meta.query_advice(distinct_x_delta.rhs.limbs[index].value, Rotation::cur());
+                let a_x_delta_out =
+                    meta.query_advice(distinct_x_delta.out.limbs[index].value, Rotation::cur());
+                let a_y_delta_lhs =
+                    meta.query_advice(distinct_y_delta.lhs.limbs[index].value, Rotation::cur());
+                let a_y_delta_rhs =
+                    meta.query_advice(distinct_y_delta.rhs.limbs[index].value, Rotation::cur());
+                let a_y_delta_out =
+                    meta.query_advice(distinct_y_delta.out.limbs[index].value, Rotation::cur());
+                let a_lambda = meta.query_advice(
+                    distinct_lambda_times_x_delta.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_lambda_x_delta_rhs = meta.query_advice(
+                    distinct_lambda_times_x_delta.rhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_lambda_x_delta_out = meta.query_advice(
+                    distinct_lambda_times_x_delta.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_inverse_lhs = meta.query_advice(
+                    distinct_x_delta_inverse.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_inverse_out = meta.query_advice(
+                    distinct_x_delta_inverse.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_lambda_sq_lhs = meta.query_advice(
+                    distinct_lambda_squared.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_lambda_sq_rhs = meta.query_advice(
+                    distinct_lambda_squared.rhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_lambda_sq_out = meta.query_advice(
+                    distinct_lambda_squared.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_x3_plus_x1_lhs =
+                    meta.query_advice(distinct_x3_plus_x1.lhs.limbs[index].value, Rotation::cur());
+                let a_x3_plus_x1_rhs =
+                    meta.query_advice(distinct_x3_plus_x1.rhs.limbs[index].value, Rotation::cur());
+                let a_x3_plus_x1_out =
+                    meta.query_advice(distinct_x3_plus_x1.out.limbs[index].value, Rotation::cur());
+                let a_x_sum_lhs = meta.query_advice(
+                    distinct_x_sum_plus_x2.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_x_sum_rhs = meta.query_advice(
+                    distinct_x_sum_plus_x2.rhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_x_sum_out = meta.query_advice(
+                    distinct_x_sum_plus_x2.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_x3_plus_x_diff_lhs = meta.query_advice(
+                    distinct_x3_plus_x_diff.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_x3_plus_x_diff_rhs = meta.query_advice(
+                    distinct_x3_plus_x_diff.rhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_x3_plus_x_diff_out = meta.query_advice(
+                    distinct_x3_plus_x_diff.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_lambda_x_diff_lhs = meta.query_advice(
+                    distinct_lambda_times_x_diff.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_lambda_x_diff_rhs = meta.query_advice(
+                    distinct_lambda_times_x_diff.rhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_lambda_x_diff_out = meta.query_advice(
+                    distinct_lambda_times_x_diff.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_y3_plus_y1_lhs =
+                    meta.query_advice(distinct_y3_plus_y1.lhs.limbs[index].value, Rotation::cur());
+                let a_y3_plus_y1_rhs =
+                    meta.query_advice(distinct_y3_plus_y1.rhs.limbs[index].value, Rotation::cur());
+                let a_y3_plus_y1_out =
+                    meta.query_advice(distinct_y3_plus_y1.out.limbs[index].value, Rotation::cur());
+
+                constraints.push(s.clone() * case_distinct.clone() * (a_x_delta_lhs - x1.clone()));
+                constraints.push(s.clone() * case_distinct.clone() * (a_x_delta_out.clone() - x2));
+                constraints.push(s.clone() * case_distinct.clone() * (a_y_delta_lhs - y1.clone()));
+                constraints.push(s.clone() * case_distinct.clone() * (a_y_delta_out - y2));
+                constraints.push(
+                    s.clone()
+                        * case_distinct.clone()
+                        * (a_lambda_x_delta_rhs - a_x_delta_rhs.clone()),
+                );
+                constraints.push(
+                    s.clone() * case_distinct.clone() * (a_lambda_x_delta_out - a_y_delta_rhs),
+                );
+                constraints
+                    .push(s.clone() * case_distinct.clone() * (a_inverse_lhs - a_x_delta_rhs));
+                constraints.push(
+                    s.clone()
+                        * case_distinct.clone()
+                        * (a_inverse_out
+                            - Expression::Constant(Scalar::from(VESTA_FQ_ONE_LIMBS[index]))),
+                );
+                constraints
+                    .push(s.clone() * case_distinct.clone() * (a_lambda_sq_lhs - a_lambda.clone()));
+                constraints
+                    .push(s.clone() * case_distinct.clone() * (a_lambda_sq_rhs - a_lambda.clone()));
+                constraints
+                    .push(s.clone() * case_distinct.clone() * (a_x3_plus_x1_lhs.clone() - x3));
+                constraints
+                    .push(s.clone() * case_distinct.clone() * (a_x3_plus_x1_rhs - x1.clone()));
+                constraints
+                    .push(s.clone() * case_distinct.clone() * (a_x_sum_lhs - a_x3_plus_x1_out));
+                constraints.push(s.clone() * case_distinct.clone() * (a_x_sum_rhs - a_x_delta_out));
+                constraints
+                    .push(s.clone() * case_distinct.clone() * (a_x_sum_out - a_lambda_sq_out));
+                constraints.push(
+                    s.clone() * case_distinct.clone() * (a_x3_plus_x_diff_lhs - a_x3_plus_x1_lhs),
+                );
+                constraints.push(s.clone() * case_distinct.clone() * (a_x3_plus_x_diff_out - x1));
+                constraints
+                    .push(s.clone() * case_distinct.clone() * (a_lambda_x_diff_lhs - a_lambda));
+                constraints.push(
+                    s.clone()
+                        * case_distinct.clone()
+                        * (a_lambda_x_diff_rhs - a_x3_plus_x_diff_rhs),
+                );
+                constraints.push(s.clone() * case_distinct.clone() * (a_y3_plus_y1_lhs - y3));
+                constraints.push(s.clone() * case_distinct.clone() * (a_y3_plus_y1_rhs - y1));
+                constraints.push(
+                    s.clone() * case_distinct.clone() * (a_y3_plus_y1_out - a_lambda_x_diff_out),
+                );
+            }
+            constraints
+        });
+
+        NonNativeVestaAffineAccumulatorAddConfig {
+            p,
+            q,
+            r,
+            distinct_x_delta,
+            distinct_y_delta,
+            distinct_lambda_times_x_delta,
+            distinct_x_delta_inverse,
+            distinct_lambda_squared,
+            distinct_x3_plus_x1,
+            distinct_x_sum_plus_x2,
+            distinct_x3_plus_x_diff,
+            distinct_lambda_times_x_diff,
+            distinct_y3_plus_y1,
+            case_p_identity,
+            case_q_identity,
+            case_distinct,
+            link,
+        }
+    }
+
+    fn assign_non_native_vesta_affine_accumulator_add_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineAccumulatorAddConfig,
+        witness: &NonNativeVestaAffineCompleteAdd,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        assign_non_native_vesta_affine_maybe_identity_region(
+            region,
+            &config.p,
+            witness.p.as_ref(),
+        )?;
+        assign_non_native_vesta_affine_maybe_identity_region(
+            region,
+            &config.q,
+            witness.q.as_ref(),
+        )?;
+        assign_non_native_vesta_affine_maybe_identity_region(
+            region,
+            &config.r,
+            witness.r.as_ref(),
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.distinct_x_delta,
+            witness.distinct_x_delta.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.distinct_y_delta,
+            witness.distinct_y_delta.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.distinct_lambda_times_x_delta,
+            witness.distinct_lambda_times_x_delta.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.distinct_x_delta_inverse,
+            witness.distinct_x_delta_inverse.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.distinct_lambda_squared,
+            witness.distinct_lambda_squared.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.distinct_x3_plus_x1,
+            witness.distinct_x3_plus_x1.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.distinct_x_sum_plus_x2,
+            witness.distinct_x_sum_plus_x2.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.distinct_x3_plus_x_diff,
+            witness.distinct_x3_plus_x_diff.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.distinct_lambda_times_x_diff,
+            witness.distinct_lambda_times_x_diff.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.distinct_y3_plus_y1,
+            witness.distinct_y3_plus_y1.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        for (label, column, value) in [
+            (
+                "case_p_identity",
+                config.case_p_identity,
+                witness.case_p_identity,
+            ),
+            (
+                "case_q_identity",
+                config.case_q_identity,
+                witness.case_q_identity,
+            ),
+            ("case_distinct", config.case_distinct, witness.case_distinct),
+        ] {
+            crate::zk::assign_advice_compat(region, || label, column, 0, || Value::known(value))?;
+        }
+        Ok(())
+    }
+
+    fn enable_non_native_vesta_affine_accumulator_add_keygen_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineAccumulatorAddConfig,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        enable_non_native_vesta_affine_maybe_identity_keygen_region(region, &config.p)?;
+        enable_non_native_vesta_affine_maybe_identity_keygen_region(region, &config.q)?;
+        enable_non_native_vesta_affine_maybe_identity_keygen_region(region, &config.r)?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.distinct_x_delta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.distinct_y_delta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_mul_keygen_region(
+            region,
+            &config.distinct_lambda_times_x_delta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_mul_keygen_region(
+            region,
+            &config.distinct_x_delta_inverse,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_mul_keygen_region(
+            region,
+            &config.distinct_lambda_squared,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.distinct_x3_plus_x1,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.distinct_x_sum_plus_x2,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.distinct_x3_plus_x_diff,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_mul_keygen_region(
+            region,
+            &config.distinct_lambda_times_x_diff,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.distinct_y3_plus_y1,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
         )
     }

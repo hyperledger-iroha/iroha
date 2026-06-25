@@ -8008,6 +8008,13 @@ final class ToriiClientTests: XCTestCase {
             let sort = body["sort"] as? [[String: Any]]
             XCTAssertEqual(sort?.first?["key"] as? String, "id")
             XCTAssertEqual(sort?.first?["order"] as? String, "asc")
+            let select = body["select"] as? [Any]
+            XCTAssertEqual(select?.first as? String, "id")
+            let projection = select?.last as? [String: Any]
+            XCTAssertEqual(projection?["authority"] as? Bool, true)
+            XCTAssertEqual(body["query"] as? String, "recent-rwas")
+            XCTAssertEqual(body["fetch_size"] as? Int, 20)
+            XCTAssertEqual(body["count_mode"] as? String, "bounded")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -8019,14 +8026,41 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let envelope = ToriiQueryEnvelope(
+            query: " recent-rwas ",
             filter: .object(["id": .object(["eq": .string("lot-002$commodities.sora")])]),
+            selectEntries: [.fieldPath(" id "), .object(["authority": .bool(true)])],
             sort: [ToriiQuerySortKey(key: "id", order: .asc)],
             pagination: ToriiQueryPagination(limit: 10, offset: 5),
-            fetchSize: 20
+            fetchSize: 20,
+            countMode: " BOUNDED "
         )
         let page = try await makeClient().queryRwas(envelope)
         XCTAssertEqual(page.total, 1)
         XCTAssertEqual(page.items.first?.id, "lot-002$commodities.sora")
+    }
+
+    func testQueryEnvelopeRejectsBlankSelectFieldPaths() throws {
+        let envelope = ToriiQueryEnvelope(selectEntries: [.fieldPath(" ")])
+        XCTAssertThrowsError(try JSONEncoder().encode(envelope)) { error in
+            let description = String(describing: error)
+            XCTAssertTrue(description.contains("select field path must not be empty"))
+        }
+    }
+
+    func testQueryEnvelopeRejectsBlankQueryName() throws {
+        let envelope = ToriiQueryEnvelope(query: " ", select: Optional<[String]>.none)
+        XCTAssertThrowsError(try JSONEncoder().encode(envelope)) { error in
+            let description = String(describing: error)
+            XCTAssertTrue(description.contains("query must be a non-empty string"))
+        }
+    }
+
+    func testQueryEnvelopeRejectsInvalidCountMode() throws {
+        let envelope = ToriiQueryEnvelope(select: Optional<[String]>.none, countMode: "full")
+        XCTAssertThrowsError(try JSONEncoder().encode(envelope)) { error in
+            let description = String(describing: error)
+            XCTAssertTrue(description.contains("countMode must be bounded or exact"))
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)

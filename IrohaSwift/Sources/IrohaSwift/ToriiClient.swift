@@ -5194,13 +5194,55 @@ public struct ToriiQueryPagination: Codable, Sendable, Equatable {
     }
 }
 
+public enum ToriiQuerySelectEntry: Codable, Sendable, Equatable, ExpressibleByStringLiteral {
+    case fieldPath(String)
+    case object([String: ToriiJSONValue])
+
+    public init(stringLiteral value: String) {
+        self = .fieldPath(value)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let value = try? container.decode(String.self) {
+            self = .fieldPath(value)
+            return
+        }
+        if let value = try? container.decode([String: ToriiJSONValue].self) {
+            self = .object(value)
+            return
+        }
+        throw DecodingError.dataCorruptedError(in: container,
+                                               debugDescription: "select entry must be a field-path string or object")
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .fieldPath(let value):
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                throw EncodingError.invalidValue(
+                    value,
+                    EncodingError.Context(codingPath: encoder.codingPath,
+                                          debugDescription: "select field path must not be empty")
+                )
+            }
+            try container.encode(trimmed)
+        case .object(let value):
+            try container.encode(value)
+        }
+    }
+}
+
 public struct ToriiQueryEnvelope: Codable, Sendable, Equatable {
     public var query: String?
     public var filter: ToriiJSONValue?
-    public var select: [String]?
+    public var select: [ToriiQuerySelectEntry]?
     public var sort: [ToriiQuerySortKey]
     public var pagination: ToriiQueryPagination
     public var fetchSize: UInt64?
+    public var countMode: String?
 
     private enum CodingKeys: String, CodingKey {
         case query
@@ -5209,6 +5251,7 @@ public struct ToriiQueryEnvelope: Codable, Sendable, Equatable {
         case sort
         case pagination
         case fetchSize = "fetch_size"
+        case countMode = "count_mode"
     }
 
     public init(query: String? = nil,
@@ -5216,13 +5259,62 @@ public struct ToriiQueryEnvelope: Codable, Sendable, Equatable {
                 select: [String]? = nil,
                 sort: [ToriiQuerySortKey] = [],
                 pagination: ToriiQueryPagination = ToriiQueryPagination(),
-                fetchSize: UInt64? = nil) {
+                fetchSize: UInt64? = nil,
+                countMode: String? = nil) {
         self.query = query
         self.filter = filter
-        self.select = select
+        self.select = select?.map { ToriiQuerySelectEntry.fieldPath($0) }
         self.sort = sort
         self.pagination = pagination
         self.fetchSize = fetchSize
+        self.countMode = countMode
+    }
+
+    public init(query: String? = nil,
+                filter: ToriiJSONValue? = nil,
+                selectEntries: [ToriiQuerySelectEntry]? = nil,
+                sort: [ToriiQuerySortKey] = [],
+                pagination: ToriiQueryPagination = ToriiQueryPagination(),
+                fetchSize: UInt64? = nil,
+                countMode: String? = nil) {
+        self.query = query
+        self.filter = filter
+        self.select = selectEntries
+        self.sort = sort
+        self.pagination = pagination
+        self.fetchSize = fetchSize
+        self.countMode = countMode
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if let query {
+            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                throw EncodingError.invalidValue(
+                    query,
+                    EncodingError.Context(codingPath: encoder.codingPath,
+                                          debugDescription: "query must be a non-empty string")
+                )
+            }
+            try container.encode(trimmed, forKey: .query)
+        }
+        try container.encodeIfPresent(filter, forKey: .filter)
+        try container.encodeIfPresent(select, forKey: .select)
+        try container.encode(sort, forKey: .sort)
+        try container.encode(pagination, forKey: .pagination)
+        try container.encodeIfPresent(fetchSize, forKey: .fetchSize)
+        if let countMode {
+            let normalized = countMode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard normalized == "bounded" || normalized == "exact" else {
+                throw EncodingError.invalidValue(
+                    countMode,
+                    EncodingError.Context(codingPath: encoder.codingPath,
+                                          debugDescription: "countMode must be bounded or exact")
+                )
+            }
+            try container.encode(normalized, forKey: .countMode)
+        }
     }
 }
 

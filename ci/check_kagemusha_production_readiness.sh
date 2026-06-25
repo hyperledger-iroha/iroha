@@ -1604,6 +1604,11 @@ TEXT_REQUIREMENTS = {
         "if device_lab.SECRET_RE.search(path_text):",
         "path must not contain secret-looking material",
         "path must not contain control characters",
+        '    if (\n'
+        '        path_text != path_text.strip()\n'
+        '        or device_lab._path_has_surrounding_whitespace_component(path)\n'
+        '    ):\n'
+        '        return f"{label} path must not contain surrounding whitespace"\n',
         "_path_has_surrounding_whitespace_component(path)",
         "path must not contain surrounding whitespace",
         'return f"{label} path must not contain backslashes"',
@@ -1886,7 +1891,11 @@ TEXT_REQUIREMENTS = {
         'return 1, None, ["device-lab root path must not contain surrounding whitespace"]',
         'if "\\\\" in root_text:\n        return 1, None, ["device-lab root path must not contain backslashes"]',
         'if ".." in root.parts:\n        return 1, None, ["device-lab root path must be canonical"]',
-        "device_lab.classify_device_lab_root_path(root)",
+        "def _device_lab_root_list(root: Path | Iterable[Path]) -> list[Path]:",
+        "roots = _device_lab_root_list(root)",
+        "for root_index, candidate_root in enumerate(roots):",
+        "device_lab.classify_device_lab_root_path(",
+        "existing_roots.append((root_index, candidate_root))",
         "def _publish_stage_slot(",
         "_file_identity(root_stat) != expected_root_identity",
         "_file_identity(temp_parent_stat) != expected_temp_parent_identity",
@@ -2284,6 +2293,8 @@ TEXT_REQUIREMENTS = {
         "MAX_ADB_PREFLIGHT_OUTPUT_CHARS",
         "def _safe_adb_message_display",
         "def _safe_adb_devices_output_display",
+        "def _adb_visible_device_serials",
+        "ADB auto-serial resolution",
         "no_visible_devices",
         "rows={row_count}; states={state_summary}",
         "def _safe_adb_failure_detail",
@@ -2303,6 +2314,12 @@ TEXT_REQUIREMENTS = {
         "stdout=",
         "if len(rendered) > MAX_ADB_PREFLIGHT_OUTPUT_CHARS:",
         "def _run_adb_visibility_preflight",
+        "def _run_adb_auto_serial_once",
+        "def _resolve_auto_adb_serial",
+        "def _run_adb_visibility_preflight_with_wait",
+        "time.monotonic() + args.adb_visibility_wait_seconds",
+        "time.sleep(min(float(args.adb_visibility_poll_interval_seconds), remaining))",
+        "ADB device visibility wait expired after",
         "def _run_adb_devices_diagnostic",
         "def _run_expected_device_family_preflight",
         "ADB expected device family preflight",
@@ -2319,10 +2336,17 @@ TEXT_REQUIREMENTS = {
         "if state != \"device\":",
         "message = f\"{label} must report state device, got {state}\"",
         "diagnostic = _run_adb_devices_diagnostic(args, env=env, runner=runner)",
-        "errors = _run_adb_visibility_preflight(args, env=env, runner=runner)",
+        "include_serial=args.serial != \"auto\"",
+        "errors = _resolve_auto_adb_serial(args, env=env, runner=runner)",
+        "errors = _run_adb_visibility_preflight_with_wait(args, env=env, runner=runner)",
         "errors = _run_expected_device_family_preflight(args, env=env, runner=runner)",
         "--expected-device-family",
         "checked before build/install/instrumentation",
+        "--adb-visibility-wait-seconds",
+        "--adb-visibility-poll-interval-seconds",
+        "(args.adb_visibility_wait_seconds, \"--adb-visibility-wait-seconds\")",
+        "--adb-visibility-poll-interval-seconds must be positive",
+        "`adb devices -l` device row",
         "--physical-device-attestation is required for production capture",
         "def _validate_attestation_result_for_capture",
         "attestation result attestation_challenge_sha256 must match attestation/challenge.hex",
@@ -2983,9 +3007,19 @@ TEXT_REQUIREMENTS = {
         "lineage_proof_evidence_max_timestamp_invalid",
         "compact_key_evidence_max_timestamp_invalid",
         "localnet_lifecycle_evidence_max_timestamp_invalid",
+        "DEFAULT_ANDROID_DEVICE_LAB_ROOT_PATH = \"artifacts/android/device_lab\"",
+        "def _device_lab_root_arg_values(args: argparse.Namespace) -> list[str]:",
+        "action=\"append\"",
+        "aggregate separately captured device-family roots",
+        "device_lab_roots: list[Path] = []",
+        "for raw_device_lab_root in _device_lab_root_arg_values(args):",
+        "device_lab_root=device_lab_roots,",
         "check_android_device_lab",
-        "root_exists, root_errors = device_lab.classify_device_lab_root_path(root)",
-        "if not root_exists:",
+        "root_exists, root_errors = device_lab.classify_device_lab_root_path(",
+        "existing_roots: list[tuple[int, Path]] = []",
+        "for root_index, candidate_root in enumerate(roots):",
+        "if not existing_roots:",
+        "for root_index, candidate_root in existing_roots:",
         "_android_report_duplicate_matrix_values",
         "_check_android_matrix_unique_bindings",
         "_android_report_kagemusha",
@@ -3283,6 +3317,7 @@ TEXT_REQUIREMENTS = {
         "validate_output_corridor",
         'out_secret_error = _secret_path_error(str(out_path), "--out")',
         'artifact_dir_secret_error = _secret_path_error(str(artifact_dir), "--artifact-dir")',
+        '    proof_log_secret_error = _secret_path_error(str(proof_log), "--proof-log")\n    if proof_log_secret_error is not None:\n        return [proof_log_secret_error]\n',
         "path_errors.extend(validate_output_corridor(out_path, artifact_dir))",
         "validate_lineage_input_paths",
         '    if proof_log.name != expected_proof_log_name:\n        return [\n            "--proof-log must be written directly under --artifact-dir as "\n            f"{expected_proof_log_name}"\n        ]\n    errors = validate_artifact_dir_path(artifact_dir)\n',
@@ -4422,8 +4457,22 @@ TEXT_REQUIREMENTS = {
         "elif d2d_transports_valid and d2d_transcripts is None:",
         "d2d_transports is None\n                    and isinstance(d2d_transcripts, dict)",
         "d2d_transcript_paths: dict[str, str] = {}",
-        "previous_transport is not None\n                                    and previous_transport != transport",
+        "previous_transport = d2d_transcript_paths.get(\n"
+        "                                    safe_relative\n"
+        "                                )\n"
+        "                                if (\n"
+        "                                    previous_transport is not None\n"
+        "                                    and previous_transport != transport\n"
+        "                                ):",
+        "previous_transport = d2d_transcript_digests.get(\n"
+        "                                    digest\n"
+        "                                )\n"
+        "                                if (\n"
+        "                                    previous_transport is not None\n"
+        "                                    and previous_transport != transport\n"
+        "                                ):",
         "Android readiness summary Kagemusha slot D2D transcript bindings must not reuse paths across transports",
+        "Android readiness summary Kagemusha slot D2D transcript bindings must not reuse sha256 digests across transports",
         "Android readiness summary Kagemusha slot D2D transcript bindings must exactly match declared transports",
         "Android readiness summary Kagemusha slot D2D transcript bindings must be present when a transport list is declared",
         "Android readiness summary Kagemusha slot D2D transcript bindings must match the primary transport when no transport list is declared",
@@ -4454,9 +4503,14 @@ TEXT_REQUIREMENTS = {
         "package_aware_multi_hop_composed",
         "production_width_proof_passed",
         "compact_key_artifacts_validated",
-        "from collections.abc import Mapping",
+        "from collections.abc import Iterable, Mapping",
         "def build_release_bundle(",
         "def verify_release_bundle(",
+        "def _device_lab_root_arg_values(args: argparse.Namespace) -> list[str]:",
+        "def _device_lab_root_list(root: Path | Iterable[Path]) -> list[Path]:",
+        "action=\"append\"",
+        "package separately captured device-family roots",
+        "device_lab_roots = [",
         "def _safe_trusted_signer_public_key_sha256(",
         "device_lab._trusted_signer_public_key_sha256_set(",
         "def _blocked_release_bundle_manifest(",
@@ -4987,11 +5041,15 @@ TEXT_REQUIREMENTS = {
         "def _android_d2d_transcript_artifact_kind",
         "def _android_d2d_transcript_artifact_transport",
         "def _android_slot_artifact_root(",
+        "def _android_bundle_slot_relative_path(path: str, slot: str) -> str | None:",
         "def _check_android_slot_artifact_manifest_path_root(",
-        "prefix = f\"artifacts/android/device_lab/{slot}/\"",
-        "if not path.startswith(prefix):",
+        "relative = _android_bundle_slot_relative_path(path, slot)",
+        "if relative is None:",
         "kagemusha_release_bundle_manifest_android_slot_artifact_path",
         "_android_slot_artifact_entries",
+        "def _android_slot_root(",
+        "kagemusha_release_android_slot_root_missing",
+        "kagemusha_release_android_slot_root_ambiguous",
         "android_slot_artifacts",
         'evidence_entries["android_slot_artifacts"] = android_slot_entries',
         "offline_wallet_apk",
@@ -5324,8 +5382,14 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_android_raw_puller_rejects_extra_d2d_transport_mismatch",
         "test_android_capture_strict_json_load_redacts_nonfinite_constants",
         "test_android_capture_assembler_command_passes_adb_timeout",
+        "test_android_capture_rejects_nonpositive_adb_visibility_poll_before_adb",
         "test_android_capture_runs_full_command_sequence_and_binds_challenge",
         "test_android_capture_rejects_missing_adb_device_before_build",
+        "test_android_capture_waits_for_adb_visibility_before_helpers",
+        "test_android_capture_adb_visibility_wait_expiry_keeps_diagnostic_redacted",
+        "test_android_capture_auto_serial_resolves_single_device_before_preflight",
+        "test_android_capture_auto_serial_rejects_multiple_devices_without_leak",
+        "test_android_capture_auto_serial_waits_for_single_device",
         "test_android_capture_classifies_adb_devices_diagnostic_states",
         "test_android_capture_summarizes_adb_devices_without_serials",
         "test_android_capture_redacts_adb_serial_in_preflight_output",
@@ -5968,6 +6032,8 @@ TEXT_REQUIREMENTS = {
     ),
     "scripts/tests/kagemusha_production_readiness_test.py": (
         "test_complete_signed_android_matrix_passes_rollup",
+        "test_repeatable_android_roots_aggregate_signed_matrix",
+        "test_release_bundle_accepts_repeatable_android_roots",
         "test_staged_json_loaders_redact_nonfinite_constants",
         "test_staged_path_validators_reject_control_directory_paths_before_metadata",
         "test_staged_path_validators_reject_alias_directory_paths_before_metadata",
@@ -10640,7 +10706,7 @@ if mode == "--negative-control-android-device-lab-capture-adb-preflight-call":
         "Android capture wrapper ADB visibility preflight call",
         lambda: override_text(
             "scripts/kagemusha_android_device_lab_capture.py",
-            "errors = _run_adb_visibility_preflight(args, env=env, runner=runner)",
+            "errors = _run_adb_visibility_preflight_with_wait(args, env=env, runner=runner)",
             "errors = []",
         ),
     )
@@ -11626,8 +11692,8 @@ if mode == "--negative-control-android-device-lab-rollup-root-exists-preflight":
         "Android device-lab rollup root exists preflight gate",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            '    if not root_exists:\n        return {\n            "ok": False,\n',
-            '    if not root.exists():\n        return {\n            "ok": False,\n',
+            "        root_exists, root_errors = device_lab.classify_device_lab_root_path(\n            candidate_root\n        )\n",
+            "        root_exists = candidate_root.exists()\n        root_errors = []\n",
         ),
     )
     raise SystemExit(0)
@@ -15444,8 +15510,24 @@ if mode == "--negative-control-kagemusha-readiness-rollup":
         "Kagemusha production readiness evidence rollup",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            "android_device_lab_standard_matrix_missing",
-            "android_device_lab_matrix_optional",
+            '    if not trusted_signer_public_keys:\n'
+            '        blockers.append(\n'
+            '            blocker(\n'
+            '                "android_trusted_signer_missing",\n'
+            '                "trusted signer public key is required for Kagemusha production evidence",\n'
+            '            )\n'
+            '        )\n'
+            '        missing_device_families = list(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES)\n'
+            '        missing_d2d_payment_transports = list(ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS)\n',
+            '    if False and not trusted_signer_public_keys:\n'
+            '        blockers.append(\n'
+            '            blocker(\n'
+            '                "android_trusted_signer_missing",\n'
+            '                "trusted signer public key is required for Kagemusha production evidence",\n'
+            '            )\n'
+            '        )\n'
+            '        missing_device_families = list(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES)\n'
+            '        missing_d2d_payment_transports = list(ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS)\n',
         ),
     )
     raise SystemExit(0)
@@ -17377,8 +17459,11 @@ if mode == "--negative-control-release-bundle-android-signed-evidence-summary-bi
         "Kagemusha release bundle Android signed-evidence summary binding",
         lambda: override_text(
             "scripts/kagemusha_release_bundle.py",
-            "    if existing_signed != expected_signed:",
-            "    if False and existing_signed != expected_signed:",
+            "    if (\n"
+            "        existing_signed != expected_signed\n"
+            "        and not signed_evidence_binding_without_identity_ok\n"
+            "    ):",
+            "    if False:",
         ),
     )
     raise SystemExit(0)
@@ -20384,8 +20469,8 @@ if mode == "--negative-control-release-bundle-android-artifact-root-paths":
         )
         override_text(
             "scripts/kagemusha_release_bundle.py",
-            "if not path.startswith(prefix):",
-            "if False and not path.startswith(prefix):",
+            "if relative is None:",
+            "if False and relative is None:",
         )
 
     run_negative_control(

@@ -15,7 +15,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from typing import Any, Sequence
+from typing import Any, Iterable, Sequence
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -1668,6 +1668,33 @@ def parse_d2d_payment_transcript_extra_specs(
     return parsed
 
 
+def _device_lab_root_list(root: Path | Iterable[Path]) -> list[Path]:
+    """Normalize one or more Android device-lab roots."""
+
+    if isinstance(root, (str, os.PathLike)):
+        return [Path(root)]
+    return [Path(item) for item in root]
+
+
+def _device_lab_root_path_error(
+    root: Path,
+) -> tuple[int, Path | None, list[str]] | None:
+    root_text = str(root)
+    if device_lab.SECRET_RE.search(root_text):
+        return 1, None, ["device-lab root path must not contain secret-looking material"]
+    if device_lab._contains_control_character(root_text):
+        return 1, None, ["device-lab root path must not contain control characters"]
+    if root_text != root_text.strip() or device_lab._path_has_surrounding_whitespace_component(  # type: ignore[attr-defined]
+        root
+    ):
+        return 1, None, ["device-lab root path must not contain surrounding whitespace"]
+    if "\\" in root_text:
+        return 1, None, ["device-lab root path must not contain backslashes"]
+    if ".." in root.parts:
+        return 1, None, ["device-lab root path must be canonical"]
+    return None
+
+
 def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]]:
     """Assemble the requested slot and optionally sign it."""
 
@@ -1683,22 +1710,27 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
         return 1, None, ["slot id must be a single safe directory name"]
 
     root = args.slot_root
-    root_text = str(root)
-    if device_lab.SECRET_RE.search(root_text):
-        return 1, None, ["device-lab root path must not contain secret-looking material"]
-    if device_lab._contains_control_character(root_text):
-        return 1, None, ["device-lab root path must not contain control characters"]
-    if root_text != root_text.strip() or device_lab._path_has_surrounding_whitespace_component(  # type: ignore[attr-defined]
-        root
-    ):
-        return 1, None, ["device-lab root path must not contain surrounding whitespace"]
-    if "\\" in root_text:
-        return 1, None, ["device-lab root path must not contain backslashes"]
-    if ".." in root.parts:
-        return 1, None, ["device-lab root path must be canonical"]
-    root_exists, root_errors = device_lab.classify_device_lab_root_path(root)
-    if root_errors:
-        return 1, None, root_errors
+    roots = _device_lab_root_list(root)
+    if not roots:
+        return 1, None, ["device-lab root path is required"]
+    existing_roots: list[tuple[int, Path]] = []
+    for root_index, candidate_root in enumerate(roots):
+        root_path_error = _device_lab_root_path_error(candidate_root)
+        if root_path_error is not None:
+            return root_path_error
+        root_exists, root_errors = device_lab.classify_device_lab_root_path(candidate_root)
+        if root_errors:
+            return 1, None, root_errors
+        if root_exists:
+            existing_roots.append((root_index, candidate_root))
+    if len(existing_roots) > 1:
+        return 1, None, ["device-lab root path must resolve to exactly one existing root"]
+    if existing_roots:
+        _, root = existing_roots[0]
+        root_exists = True
+    else:
+        root = roots[0]
+        root_exists = False
     if not root_exists:
         root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         root.mkdir(mode=0o700)

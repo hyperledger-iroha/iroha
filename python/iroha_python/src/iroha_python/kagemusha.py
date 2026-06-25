@@ -111,6 +111,8 @@ KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN = (
 )
 _KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACT_VALIDATION_OPENING_LEN = 2
 _KAGEMUSHA_U64_MAX = (1 << 64) - 1
+_KAGEMUSHA_U128_MAX = (1 << 128) - 1
+_KAGEMUSHA_U128_MAX_DECIMAL_DIGITS = len(str(_KAGEMUSHA_U128_MAX))
 KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN = (
     "iroha:kagemusha:v1:recursive-spend-transition-profile"
 )
@@ -1762,6 +1764,7 @@ class KagemushaRecursiveSpendBundleSummary:
     current_note: KagemushaRecursiveSpendableNoteDescriptor
 
     def __post_init__(self) -> None:
+        _kagemusha_require_portable_id(self.chain_id, "chain_id")
         object.__setattr__(
             self,
             "initial_root",
@@ -2400,11 +2403,16 @@ def _kagemusha_read_chain_id_payload(payload: bytes, flags: int) -> str:
     )
     if cursor != len(payload):
         raise ValueError("bundle.accumulator.chain_id")
-    return _kagemusha_read_string_payload(
+    chain_id = _kagemusha_read_string_payload(
         chain_id_payload,
         flags,
         "bundle.accumulator.chain_id",
     )
+    _kagemusha_require_portable_id(
+        chain_id,
+        "bundle.accumulator.chain_id",
+    )
+    return chain_id
 
 
 def _kagemusha_read_accumulator_summary(
@@ -2478,7 +2486,10 @@ def _kagemusha_read_accumulator_summary(
         "bundle.accumulator.topup_anchor_nullifiers",
     )
     hop_payload, cursor = _kagemusha_read_norito_field(payload, cursor, flags, "accumulator")
-    hop_count = _kagemusha_read_u32(hop_payload, flags)
+    try:
+        hop_count = _kagemusha_read_u32(hop_payload, flags)
+    except ValueError as error:
+        raise ValueError("bundle.accumulator.hop_count") from error
     if not (1 <= hop_count <= KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1):
         raise ValueError("bundle.accumulator.hop_count")
     cursor = _kagemusha_require_recursive_spend_accumulator_corridor(
@@ -2705,6 +2716,10 @@ def _kagemusha_read_proof_box_backend(
         raise ValueError("Trailing bytes after proof")
     backend = _kagemusha_read_string_payload(backend_payload, flags, "proof.backend")
     _kagemusha_require_portable_id(backend, "proof.backend")
+    if backend != KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND:
+        raise ValueError(
+            f"{proof_backend_context} unsupported recursive proof backend: {backend}"
+        )
     proof_bytes = _kagemusha_read_bytes_vec_payload(proof_bytes_payload, "proof.bytes")
     if not proof_bytes:
         raise ValueError(proof_bytes_context)
@@ -2771,7 +2786,7 @@ def _kagemusha_read_numeric(payload: bytes, flags: int) -> str:
     if len(scale_payload) != 4 or int.from_bytes(scale_payload, "little") != 0:
         raise ValueError("numeric scale must be zero")
     integer = _kagemusha_bigint_from_little_twos_complement(mantissa_payload[4:])
-    if integer <= 0 or integer > (1 << 128) - 1:
+    if integer <= 0 or integer > _KAGEMUSHA_U128_MAX:
         raise ValueError("numeric amount must fit in u128")
     return str(integer)
 
@@ -3173,8 +3188,10 @@ def _kagemusha_read_required_metadata_option(payload: bytes, flags: int, field: 
     if not payload:
         raise ValueError(f"{field} option tag is truncated")
     tag = payload[0]
-    if tag != 1:
+    if tag == 0:
         raise ValueError(f"{field} is required")
+    if tag != 1:
+        raise ValueError(f"{field} option tag must be 0 or 1")
     length, start = _kagemusha_read_norito_length(payload, 1, flags, f"{field}.length")
     end = start + length
     if end != len(payload):
@@ -3332,10 +3349,12 @@ def _kagemusha_canonical_u128_decimal(value: str, field: str) -> str:
         raise ValueError(f"{field} must be a decimal integer")
     if len(value) > 1 and value.startswith("0"):
         raise ValueError(f"{field} must be canonical")
+    if len(value) > _KAGEMUSHA_U128_MAX_DECIMAL_DIGITS:
+        raise ValueError(f"{field} must fit in u128")
     integer = int(value)
     if integer <= 0:
         raise ValueError(f"{field} must be greater than zero")
-    if integer > (1 << 128) - 1:
+    if integer > _KAGEMUSHA_U128_MAX:
         raise ValueError(f"{field} must fit in u128")
     return str(integer)
 

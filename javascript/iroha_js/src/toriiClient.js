@@ -939,6 +939,8 @@ function sortJsonForErrorMessage(value) {
  * @property {number} [offset]
  * @property {string | Record<string, unknown>} [filter]
  * @property {string | ReadonlyArray<{key: string, order?: "asc" | "desc"}>} [sort]
+ * @property {"bounded" | "exact"} [countMode]
+ * @property {"bounded" | "exact"} [count_mode]
  * @property {AbortSignal} [signal]
  * @property {string} [assetId]
  * @property {number} [certificateExpiresBeforeMs]
@@ -951,8 +953,10 @@ function sortJsonForErrorMessage(value) {
  *
  * @typedef {IterableListOptions & {
  *   fetchSize?: number;
+ *   fetch_size?: number;
  *   queryName?: string;
- *   select?: ReadonlyArray<Record<string, unknown>>;
+ *   query_name?: string;
+ *   select?: ReadonlyArray<string | Record<string, unknown>>;
  * }} IterableQueryOptions
  *
  * @typedef {IterableListOptions & {
@@ -11105,16 +11109,37 @@ export class ToriiClient {
       if (!Array.isArray(options.select)) {
         throw createValidationError(
           ValidationErrorCode.INVALID_OBJECT,
-          "select must be an array of projection objects",
+          "select must be an array of projection field paths or objects",
           "select",
         );
       }
-      envelope.select = options.select.map((entry, index) => {
-        const plain = ToriiClient._requirePlainObject(entry, `select[${index}]`);
-        return plain;
-      });
+      envelope.select = options.select.map((entry, index) =>
+        ToriiClient._normalizeSelectEntry(entry, `select[${index}]`),
+      );
     }
     return envelope;
+  }
+
+  static _normalizeSelectEntry(entry, context) {
+    if (typeof entry === "string") {
+      const fieldPath = entry.trim();
+      if (!fieldPath) {
+        throw createValidationError(
+          ValidationErrorCode.INVALID_STRING,
+          `${context} must be a non-empty field path`,
+          context,
+        );
+      }
+      return fieldPath;
+    }
+    if (isPlainObject(entry)) {
+      return entry;
+    }
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} must be a field-path string or plain object`,
+      context,
+    );
   }
 
   static _normalizeCountModeOption(value, context = "countMode") {

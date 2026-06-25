@@ -286,6 +286,128 @@ def add_archive_receipt_verification(path, receipt_kind=None, *, verified_receip
 
 
 class IsoProductionReadinessTest(unittest.TestCase):
+    def test_known_pending_schema_source_metadata_matches_direct_verifier(self):
+        self.assertEqual(
+            READINESS.KNOWN_PENDING_SCHEMA_SOURCE_METADATA,
+            xsd_test.VERIFIER.KNOWN_PENDING_SCHEMA_SOURCE_METADATA,
+        )
+
+    def test_json_lists_are_count_bounded_without_echo(self):
+        items = [None] * (READINESS.MAX_JSON_LIST_ITEMS + 1)
+
+        with self.assertRaises(READINESS.ReadinessError) as caught:
+            READINESS._require_list(items, "readiness.receipts")
+
+        error = str(caught.exception)
+        self.assertIn(
+            f"readiness.receipts must contain at most {READINESS.MAX_JSON_LIST_ITEMS} items",
+            error,
+        )
+        self.assertNotIn(str(len(items)), error)
+
+    def test_recursive_json_list_scans_are_count_bounded_without_echo(self):
+        items = [None] * (READINESS.MAX_JSON_LIST_ITEMS + 1)
+        cases = (
+            (
+                "surrogates",
+                lambda: READINESS._reject_json_surrogates(items),
+                f"JSON array must contain at most {READINESS.MAX_JSON_LIST_ITEMS} items",
+            ),
+            (
+                "secret scan",
+                lambda: READINESS._check_no_secret_material(items, "readiness.extra"),
+                f"readiness.extra must contain at most {READINESS.MAX_JSON_LIST_ITEMS} items",
+            ),
+        )
+        for name, action, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(READINESS.ReadinessError) as caught:
+                    action()
+
+                error = str(caught.exception)
+                self.assertIn(expected, error)
+                self.assertNotIn(str(len(items)), error)
+                self.assertNotIn("[0]", error)
+
+    def test_recursive_json_object_scans_are_count_bounded_without_echo(self):
+        members = {
+            f"hidden_key_{offset}": None
+            for offset in range(READINESS.MAX_JSON_OBJECT_MEMBERS + 1)
+        }
+        pairs = list(members.items())
+        cases = (
+            (
+                "json hook",
+                lambda: READINESS._reject_duplicate_json_keys(pairs),
+                f"JSON object must contain at most {READINESS.MAX_JSON_OBJECT_MEMBERS} members",
+            ),
+            (
+                "surrogates",
+                lambda: READINESS._reject_json_surrogates(members),
+                f"JSON object must contain at most {READINESS.MAX_JSON_OBJECT_MEMBERS} members",
+            ),
+            (
+                "secret scan",
+                lambda: READINESS._check_no_secret_material(members, "readiness.extra"),
+                f"readiness.extra must contain at most {READINESS.MAX_JSON_OBJECT_MEMBERS} object members",
+            ),
+        )
+        for name, action, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(READINESS.ReadinessError) as caught:
+                    action()
+
+                error = str(caught.exception)
+                self.assertIn(expected, error)
+                self.assertNotIn(str(len(members)), error)
+                self.assertNotIn("hidden_key_0", error)
+
+    def test_recursive_json_depth_scans_are_bounded_without_echo(self):
+        nested = "hidden_leaf"
+        for _ in range(READINESS.MAX_JSON_NESTING_DEPTH + 1):
+            nested = [nested]
+        expected = (
+            f"JSON nesting depth must be at most {READINESS.MAX_JSON_NESTING_DEPTH} levels"
+        )
+        cases = (
+            ("surrogates", lambda: READINESS._reject_json_surrogates(nested)),
+            ("secret scan", lambda: READINESS._check_no_secret_material(nested, "readiness.extra")),
+        )
+        for name, action in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(READINESS.ReadinessError) as caught:
+                    action()
+
+                error = str(caught.exception)
+                self.assertIn(expected, error)
+                self.assertNotIn("hidden_leaf", error)
+                self.assertNotIn("[0]", error)
+
+    def test_json_parse_recursion_error_is_bounded_without_echo(self):
+        hidden = "hidden-readiness-recursion"
+        with tempfile.TemporaryDirectory() as raw_root:
+            path = Path(raw_root) / hidden
+            path.write_text("[]\n", encoding="utf-8")
+            original_loads = READINESS.json.loads
+
+            def raising_loads(*_args, **_kwargs):
+                raise RecursionError(hidden)
+
+            READINESS.json.loads = raising_loads
+            try:
+                with self.assertRaises(READINESS.ReadinessError) as caught:
+                    READINESS._load_json(path, display_label="readiness-summary")
+            finally:
+                READINESS.json.loads = original_loads
+
+        error = str(caught.exception)
+        self.assertIn(
+            f"JSON nesting depth must be at most {READINESS.MAX_JSON_NESTING_DEPTH} levels",
+            error,
+        )
+        self.assertNotIn(hidden, error)
+        self.assertNotIn(str(path), error)
+
     def test_text_output_symlink_ancestor_diagnostic_does_not_echo_path(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -2384,6 +2506,67 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertNotIn("does not exist", error)
                     self.assertNotIn(str(root), error)
 
+    def test_summary_input_path_lists_are_count_bounded_before_input_loading(self):
+        cases = (
+            ("direct xsd", "xsd_summary", "--xsd-summary", False),
+            ("direct evidence", "evidence_summary", "--evidence-summary", False),
+            ("cli xsd", "xsd_summary", "--xsd-summary", True),
+            ("cli evidence", "evidence_summary", "--evidence-summary", True),
+        )
+        for name, field, flag, via_cli in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    paths = [
+                        root / f"missing-{offset}.summary.json"
+                        for offset in range(READINESS.MAX_SUMMARY_INPUT_PATHS + 1)
+                    ]
+                    if via_cli:
+                        argv = []
+                        for path in paths:
+                            argv.extend([flag, str(path)])
+                        other_flag = (
+                            "--evidence-summary"
+                            if field == "xsd_summary"
+                            else "--xsd-summary"
+                        )
+                        argv.extend([other_flag, str(root / "other.summary.json")])
+
+                        rc, stdout, stderr = run_readiness(argv)
+
+                        self.assertEqual(rc, 2)
+                        self.assertEqual(stdout, "")
+                        error = stderr
+                    else:
+                        args = argparse.Namespace(
+                            xsd_summary=[root / "missing-xsd.summary.json"],
+                            evidence_summary=[root / "missing-evidence.summary.json"],
+                            provider="local-bank",
+                            environment="preprod",
+                            summary_out=None,
+                            max_xsd_age_days=36500,
+                            max_evidence_age_days=36500,
+                            max_canary_age_days=36500,
+                            max_trust_age_days=36500,
+                            max_trust_source_age_days=36500,
+                            allow_reviewed_xsd_gaps=False,
+                            allow_canary_stage_receipts_only=False,
+                        )
+                        setattr(args, field, paths)
+                        stdout = io.StringIO()
+                        with self.assertRaises(READINESS.ReadinessError) as caught:
+                            with contextlib.redirect_stdout(stdout):
+                                READINESS.run(args)
+                        self.assertEqual(stdout.getvalue(), "")
+                        error = str(caught.exception)
+
+                    self.assertIn(
+                        f"{flag} accepts at most {READINESS.MAX_SUMMARY_INPUT_PATHS} paths",
+                        error,
+                    )
+                    self.assertNotIn("does not exist", error)
+                    self.assertNotIn(str(root), error)
+
     def test_secret_looking_cli_paths_are_rejected_before_summary_output(self):
         cases = (
             (
@@ -3284,8 +3467,10 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertIn("evidence.archive_receipt_path_reused", codes)
             self.assertIn("evidence.archive_receipt_digest_reused", codes)
             self.assertIn("evidence.canary_receipt_source_path_reused", codes)
+            self.assertIn("evidence.canary_receipt_rail_message_id_reused", codes)
             self.assertIn("evidence.canary_receipt_anchor_path_reused", codes)
             self.assertIn("evidence.archive_receipt_source_path_reused", codes)
+            self.assertIn("evidence.archive_receipt_rail_message_id_reused", codes)
             self.assertIn("evidence.archive_receipt_anchor_path_reused", codes)
             self.assertIn("trust.profile_id_reused", codes)
             self.assertIn("trust.bundle_digest_reused", codes)
@@ -3315,7 +3500,11 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     "index_path",
                     "index_sha256",
                 ),
-                "iso-rail-gateway": ("source_path", "payload_sha256"),
+                "iso-rail-gateway": (
+                    "source_path",
+                    "payload_sha256",
+                    "rail_message_id",
+                ),
             }
             relabelled_receipts = {
                 "iso-audit-notary": (
@@ -3373,6 +3562,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             expected = {
                 "evidence.canary_receipt_source_path_reused",
                 "evidence.canary_receipt_payload_digest_reused",
+                "evidence.canary_receipt_rail_message_id_reused",
                 "evidence.canary_receipt_anchor_path_reused",
                 "evidence.canary_receipt_anchor_digest_reused",
                 "evidence.canary_receipt_store_dir_reused",
@@ -3380,6 +3570,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 "evidence.canary_receipt_index_digest_reused",
                 "evidence.archive_receipt_source_path_reused",
                 "evidence.archive_receipt_payload_digest_reused",
+                "evidence.archive_receipt_rail_message_id_reused",
                 "evidence.archive_receipt_anchor_path_reused",
                 "evidence.archive_receipt_anchor_digest_reused",
                 "evidence.archive_receipt_store_dir_reused",
@@ -3436,8 +3627,10 @@ class IsoProductionReadinessTest(unittest.TestCase):
             expected = {
                 "evidence.canary_receipt_source_path_reused",
                 "evidence.canary_receipt_payload_digest_reused",
+                "evidence.canary_receipt_rail_message_id_reused",
                 "evidence.archive_receipt_source_path_reused",
                 "evidence.archive_receipt_payload_digest_reused",
+                "evidence.archive_receipt_rail_message_id_reused",
             }
             self.assertTrue(expected <= codes)
             self.assertNotIn("evidence.canary_receipt_anchor_path_reused", codes)
@@ -6221,6 +6414,24 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 )
             )
 
+            overlong_catalogue_url = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            attach_pending_sources(
+                overlong_catalogue_url, [xsd_test.pending_schema_source()]
+            )
+            overlong_catalogue_url["pending_schema_sources"][0]["source"][
+                "catalogue_url"
+            ] = (
+                "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page="
+                + ("1" * READINESS.MAX_SOURCE_URL_CHARS)
+            )
+            malformed_cases.append(
+                (
+                    overlong_catalogue_url,
+                    "source.catalogue_url must be no longer than",
+                    None,
+                )
+            )
+
             bad_archive_url = json.loads(xsd_summary.read_text(encoding="utf-8"))
             attach_pending_sources(bad_archive_url, [xsd_test.pending_schema_source()])
             bad_archive_url["pending_schema_sources"][0]["source"][
@@ -6307,6 +6518,41 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 (
                     bad_download_url,
                     "source.download_url must be an official ISO 20022 XSD download URL",
+                    None,
+                )
+            )
+
+            known_download_drift = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            attach_pending_sources(
+                known_download_drift,
+                [xsd_test.known_pending_schema_source("colr.012.001.05")],
+            )
+            known_download_drift["pending_schema_sources"][0]["source"][
+                "download_url"
+            ] = "https://www.iso20022.org/message/22505/download"
+            malformed_cases.append(
+                (
+                    known_download_drift,
+                    "source.download_url must match known official ISO pending-source metadata",
+                    None,
+                )
+            )
+
+            overlong_download_url = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            attach_pending_sources(
+                overlong_download_url, [xsd_test.pending_schema_source()]
+            )
+            overlong_download_url["pending_schema_sources"][0]["source"][
+                "download_url"
+            ] = (
+                "https://www.iso20022.org/message/"
+                + ("1" * READINESS.MAX_SOURCE_URL_CHARS)
+                + "/download"
+            )
+            malformed_cases.append(
+                (
+                    overlong_download_url,
+                    "source.download_url must be no longer than",
                     None,
                 )
             )
@@ -13283,6 +13529,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             expected = {
                 "evidence.canary_receipt_source_path_reused",
                 "evidence.canary_receipt_payload_digest_reused",
+                "evidence.canary_receipt_rail_message_id_reused",
                 "evidence.canary_receipt_anchor_path_reused",
                 "evidence.canary_receipt_anchor_digest_reused",
                 "evidence.canary_receipt_store_dir_reused",
@@ -13710,6 +13957,90 @@ class IsoProductionReadinessTest(unittest.TestCase):
             codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
             self.assertIn("evidence.receipt_digest_role_reuse", codes)
             self.assertIn("evidence.archive_receipt_digest_role_reuse", codes)
+
+    def test_rail_receipt_source_material_fields_cannot_be_relabelled_within_summary(self):
+        def append_relabelled_rail_receipt(receipt_summary, name, mutate):
+            rail_receipt = next(
+                receipt
+                for receipt in receipt_summary["receipts"]
+                if receipt["receipt_kind"] == "iso-rail-gateway"
+            )
+            copied = json.loads(json.dumps(rail_receipt))
+            copied["path"] = f"/ops/iso/relabelled-within/{name}.receipt.json"
+            copied["receipt_sha256"] = "9" * 64
+            copied["response_body_sha256"] = "8" * 64
+            mutate(copied)
+            receipt_summary["receipts"].append(copied)
+            receipt_summary["verified_receipts"] = len(receipt_summary["receipts"])
+            refresh_digest(receipt_summary)
+
+        cases = (
+            (
+                "same-source-path",
+                lambda receipt: receipt.__setitem__("payload_sha256", "7" * 64),
+                "evidence.canary_receipt_source_path_reused",
+                "evidence.archive_receipt_source_path_reused",
+            ),
+            (
+                "same-payload",
+                lambda receipt: receipt.__setitem__(
+                    "source_path",
+                    "/ops/iso/rail-inbox/relabelled-rail-drop.xml",
+                ),
+                "evidence.canary_receipt_payload_digest_reused",
+                "evidence.archive_receipt_payload_digest_reused",
+            ),
+            (
+                "same-rail-message-id",
+                lambda receipt: (
+                    receipt.__setitem__(
+                        "source_path",
+                        "/ops/iso/rail-inbox/relabelled-rail-drop.xml",
+                    ),
+                    receipt.__setitem__("payload_sha256", "7" * 64),
+                ),
+                "evidence.canary_receipt_rail_message_id_reused",
+                "evidence.archive_receipt_rail_message_id_reused",
+            ),
+        )
+        for name, mutate, canary_code, archive_code in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    xsd_summary = write_strict_xsd_summary(root / "xsd")
+                    evidence_summary = add_archive_receipt_verification(
+                        write_evidence_summary(root / "evidence")
+                    )
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    append_relabelled_rail_receipt(
+                        evidence["canary_summaries"][0]["receipt_summary"],
+                        name,
+                        mutate,
+                    )
+                    append_relabelled_rail_receipt(
+                        evidence["receipt_verification"],
+                        name,
+                        mutate,
+                    )
+                    refresh_digest(evidence)
+                    mutated_path = write_json(
+                        root / f"rail-source-material-{name}.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(xsd_summary),
+                            "--evidence-summary",
+                            str(mutated_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    self.assertIn(canary_code, codes)
+                    self.assertIn(archive_code, codes)
 
     def test_compact_summary_digests_cannot_reuse_nested_material_roles(self):
         with tempfile.TemporaryDirectory() as raw_root:

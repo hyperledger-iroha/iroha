@@ -43,10 +43,14 @@ from typing import Any
 
 DEFAULT_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
 DEFAULT_RESPONSE_LIMIT_BYTES = 64 * 1024
+MAX_RESPONSE_LIMIT_BYTES = 4 * 1024 * 1024
 MAX_BEARER_TOKEN_BYTES = 8192
 MAX_HTTP_URL_CHARS = 2048
 MAX_LOCAL_PATH_CHARS = 4096
 MAX_SIDECAR_JSON_BYTES = 16 * 1024
+MAX_JSON_LIST_ITEMS = 8192
+MAX_JSON_OBJECT_MEMBERS = 8192
+MAX_JSON_NESTING_DEPTH = 128
 LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
 RESERVED_PLACEHOLDER_HOST_SUFFIXES = {
     "example",
@@ -136,6 +140,7 @@ CLI_OPTION_FLAGS = {
 }
 REDACTED_RESPONSE_PREVIEW = "[redacted: sensitive response body]"
 REDACTED_ERROR = "[redacted: sensitive error]"
+MAX_RECEIPT_ERROR_CHARS = 4096
 
 ENDPOINTS = {
     "pacs.008": "pacs008",
@@ -279,17 +284,27 @@ def _contains_secret_identifier_material(value: str) -> bool:
     )
 
 
-def _check_no_secret_material(value: Any, label: str = "$") -> None:
+def _check_no_secret_material(value: Any, label: str = "$", *, _depth: int = 0) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise AdapterError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
     if isinstance(value, dict):
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise AdapterError(
+                f"{label} must contain at most {MAX_JSON_OBJECT_MEMBERS} object members"
+            )
         for key, child in value.items():
             if _is_secret_looking_key(str(key)):
                 raise AdapterError(f"{label} contains forbidden secret-looking field")
             if _is_control_bearing_key(key):
                 raise AdapterError(f"{label} contains forbidden control-bearing field")
-            _check_no_secret_material(child, f"{label}.{key}")
+            _check_no_secret_material(child, f"{label}.{key}", _depth=_depth + 1)
     elif isinstance(value, list):
+        if len(value) > MAX_JSON_LIST_ITEMS:
+            raise AdapterError(f"{label} must contain at most {MAX_JSON_LIST_ITEMS} items")
         for offset, child in enumerate(value):
-            _check_no_secret_material(child, f"{label}[{offset}]")
+            _check_no_secret_material(child, f"{label}[{offset}]", _depth=_depth + 1)
     elif isinstance(value, str):
         if _contains_unsafe_json_control(value):
             raise AdapterError(f"{label} contains unsafe control characters")
@@ -354,6 +369,16 @@ def _require_positive_cli_int(value: int, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise AdapterError(f"{label} must be a positive integer")
     return value
+
+
+def _require_response_limit_bytes(value: int) -> int:
+    parsed = _require_positive_cli_int(value, "--response-limit-bytes")
+    if parsed > MAX_RESPONSE_LIMIT_BYTES:
+        raise AdapterError(
+            "--response-limit-bytes must be no more than "
+            f"{MAX_RESPONSE_LIMIT_BYTES}"
+        )
+    return parsed
 
 
 def _require_positive_finite_cli_number(value: float, label: str) -> float:
@@ -491,6 +516,10 @@ def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    if len(pairs) > MAX_JSON_OBJECT_MEMBERS:
+        raise AdapterError(
+            f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+        )
     seen: set[str] = set()
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -1045,6 +1074,10 @@ def _load_json(
         )
     except json.JSONDecodeError as error:
         raise AdapterError(f"{label} is not valid JSON: {error}") from error
+    except RecursionError as error:
+        raise AdapterError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        ) from error
     _reject_json_surrogates(value)
     return value
 
@@ -1053,17 +1086,29 @@ def _reject_json_constant(value: str) -> None:
     raise AdapterError("JSON contains non-finite numeric constant")
 
 
-def _reject_json_surrogates(value: Any) -> None:
+def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise AdapterError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
     if isinstance(value, str):
         if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
             raise AdapterError("JSON contains invalid Unicode surrogate")
     elif isinstance(value, list):
+        if len(value) > MAX_JSON_LIST_ITEMS:
+            raise AdapterError(
+                f"JSON array must contain at most {MAX_JSON_LIST_ITEMS} items"
+            )
         for item in value:
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(item, _depth=_depth + 1)
     elif isinstance(value, dict):
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise AdapterError(
+                f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+            )
         for key, item in value.items():
-            _reject_json_surrogates(key)
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(key, _depth=_depth + 1)
+            _reject_json_surrogates(item, _depth=_depth + 1)
 
 
 def _bounded_read(
@@ -1688,11 +1733,24 @@ def submit_message(
         method="POST",
     )
     try:
-        with NO_REDIRECT_OPENER.open(request, timeout=timeout_secs) as response:
-            status_code = int(response.status)
-            if not _is_http_status_code(status_code):
+        try:
+            response = NO_REDIRECT_OPENER.open(request, timeout=timeout_secs)
+        except (urllib.error.HTTPError, urllib.error.URLError):
+            raise
+        except Exception:
+            return _transport_open_failure_result()
+        try:
+            status_code = _response_status_code(response)
+            if status_code is None or not _is_http_status_code(status_code):
                 return _invalid_http_status_result(status_code)
-            body = response.read(response_limit_bytes + 1)
+            try:
+                body = response.read(response_limit_bytes + 1)
+            except Exception:
+                return _transport_read_failure_result("Torii response could not be read")
+            if not isinstance(body, bytes):
+                return _transport_read_failure_result(
+                    "Torii response body was not bytes"
+                )
             if len(body) > response_limit_bytes:
                 raise AdapterError(
                     f"Torii response exceeded {response_limit_bytes} byte limit"
@@ -1701,15 +1759,26 @@ def submit_message(
                 raise AdapterError("Torii response body contains secret-looking material")
             if 200 <= status_code <= 299 and _response_body_has_unsafe_control(body):
                 raise AdapterError("Torii response body contains unsafe control characters")
+        finally:
+            _close_response(response)
     except urllib.error.HTTPError as error:
-        status_code = int(error.code)
-        if not _is_http_status_code(status_code):
-            error.close()
+        status_code = _error_status_code(error)
+        if status_code is None or not _is_http_status_code(status_code):
+            _close_http_error(error)
             return _invalid_http_status_result(status_code)
         try:
-            body = error.read(response_limit_bytes + 1)
+            try:
+                body = error.read(response_limit_bytes + 1)
+            except Exception:
+                return _transport_read_failure_result(
+                    "Torii error response could not be read"
+                )
         finally:
-            error.close()
+            _close_http_error(error)
+        if not isinstance(body, bytes):
+            return _transport_read_failure_result(
+                "Torii error response body was not bytes"
+            )
         if len(body) > response_limit_bytes:
             raise AdapterError(f"Torii error response exceeded {response_limit_bytes} byte limit")
         return SubmitResult(
@@ -1725,8 +1794,10 @@ def submit_message(
             ok=False,
             response_body_sha256=None,
             response_body_preview=None,
-            error=_receipt_error(str(error.reason)),
+            error=_url_error_receipt_error(error),
         )
+    except OSError:
+        return _transport_open_failure_result()
 
     ok = 200 <= status_code <= 299
     return SubmitResult(
@@ -1742,14 +1813,78 @@ def _is_http_status_code(status_code: int) -> bool:
     return 100 <= status_code <= 599
 
 
-def _invalid_http_status_result(status_code: int) -> SubmitResult:
+def _response_status_code(response: Any) -> int | None:
+    try:
+        return _parse_http_status_code(response.status)
+    except Exception:
+        return None
+
+
+def _error_status_code(error: urllib.error.HTTPError) -> int | None:
+    try:
+        return _parse_http_status_code(error.code)
+    except Exception:
+        return None
+
+
+def _parse_http_status_code(value: Any) -> int | None:
+    try:
+        status_code = int(value)
+    except Exception:
+        return None
+    if 0 <= status_code <= 999:
+        return status_code
+    return None
+
+
+def _invalid_http_status_result(status_code: int | None) -> SubmitResult:
+    error = "invalid HTTP status"
+    if status_code is not None:
+        error = f"{error} {status_code}"
     return SubmitResult(
         status_code=None,
         ok=False,
         response_body_sha256=None,
         response_body_preview=None,
-        error=f"invalid HTTP status {status_code}",
+        error=error,
     )
+
+
+def _transport_read_failure_result(error: str) -> SubmitResult:
+    return SubmitResult(
+        status_code=None,
+        ok=False,
+        response_body_sha256=None,
+        response_body_preview=None,
+        error=error,
+    )
+
+
+def _transport_open_failure_result() -> SubmitResult:
+    return SubmitResult(
+        status_code=None,
+        ok=False,
+        response_body_sha256=None,
+        response_body_preview=None,
+        error="Torii transport could not be opened",
+    )
+
+
+def _close_http_error(error: urllib.error.HTTPError) -> None:
+    _close_response(error)
+
+
+def _close_response(response: Any) -> None:
+    try:
+        close = getattr(response, "close", None)
+    except Exception:
+        return
+    if close is None:
+        return
+    try:
+        close()
+    except Exception:
+        return
 
 
 def _response_preview(body: bytes) -> str:
@@ -1776,9 +1911,20 @@ def _response_preview_looks_secret(preview: str) -> bool:
     )
 
 
+def _url_error_receipt_error(error: urllib.error.URLError) -> str:
+    try:
+        message = str(error.reason)
+    except Exception:
+        return REDACTED_ERROR
+    return _receipt_error(message)
+
+
 def _receipt_error(message: str) -> str:
-    if _response_preview_looks_secret(message) or _contains_unsafe_preview_control(
-        message
+    if (
+        len(message) > MAX_RECEIPT_ERROR_CHARS
+        or not message.isascii()
+        or _response_preview_looks_secret(message)
+        or _contains_unsafe_preview_control(message)
     ):
         return REDACTED_ERROR
     return message
@@ -1929,8 +2075,8 @@ def run(args: argparse.Namespace) -> int:
     timeout_secs = _require_positive_finite_cli_number(
         getattr(args, "timeout_secs", None), "--timeout-secs"
     )
-    response_limit_bytes = _require_positive_cli_int(
-        getattr(args, "response_limit_bytes", None), "--response-limit-bytes"
+    response_limit_bytes = _require_response_limit_bytes(
+        getattr(args, "response_limit_bytes", None)
     )
     max_payload_bytes = _require_positive_cli_int(
         getattr(args, "max_payload_bytes", None), "--max-payload-bytes"
@@ -2067,7 +2213,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--response-limit-bytes",
         type=int,
         default=DEFAULT_RESPONSE_LIMIT_BYTES,
-        help="Maximum response body bytes retained in a receipt.",
+        help=(
+            "Maximum response body bytes retained in a receipt "
+            f"(max {MAX_RESPONSE_LIMIT_BYTES})."
+        ),
     )
     return parser
 

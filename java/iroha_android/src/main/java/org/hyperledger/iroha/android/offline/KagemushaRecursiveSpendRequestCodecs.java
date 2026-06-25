@@ -55,6 +55,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   private static final int REQUEST_FLAGS = NoritoHeader.COMPACT_LEN;
   private static final int KAGEMUSHA_FOLD_STEP_MAX_INPUTS = 2;
   private static final BigInteger MAX_U128 = BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE);
+  private static final int MAX_U128_DECIMAL_DIGITS = MAX_U128.toString().length();
   private static final BigInteger BYTE_MASK = BigInteger.valueOf(0xffL);
   private static final int MULTISIG_POLICY_VERSION = 1;
   private static final char[] HEX = "0123456789abcdef".toCharArray();
@@ -741,7 +742,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       this.asset = Objects.requireNonNull(asset, "asset");
       this.rootAfter = fixedBytes(rootAfter, 32, "rootAfter");
       require(this.proofOutputArchive.length > 0, "proofOutputArchive must not be empty");
-      requireNonBlankUnpadded(this.chainId, "chainId");
+      requirePortableId(this.chainId, "chainId");
       try {
         AssetDefinitionIdEncoder.parseAddressBytes(this.asset);
       } catch (final IllegalArgumentException ex) {
@@ -1192,6 +1193,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       this.proofCircuitId = Objects.requireNonNull(proofCircuitId, "proofCircuitId");
       this.asset = Objects.requireNonNull(asset, "asset");
       this.chainId = Objects.requireNonNull(chainId, "chainId");
+      requirePortableId(this.chainId, "chainId");
       this.initialRoot = fixedBytes(initialRoot, 32, "initialRoot");
       this.finalRoot = fixedBytes(finalRoot, 32, "finalRoot");
       final ArrayList<byte[]> copiedTopupAnchorNullifiers = new ArrayList<>();
@@ -1397,7 +1399,11 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     requireAccumulatorRoots(initialRoot, finalRoot);
     final List<byte[]> topupAnchorNullifiers =
         readField(decoder, child -> readFixed32Sequence(child, "bundle.accumulator.topup_anchor_nullifiers"));
-    final int hopCount = readField(decoder, child -> checkedInt(child.readUInt(32), "hop_count"));
+    final int hopCount =
+        readField(
+            decoder,
+            "bundle.accumulator.hop_count",
+            child -> checkedInt(child.readUInt(32), "hop_count"));
     require(
         hopCount >= 1
             && hopCount
@@ -1984,9 +1990,18 @@ public final class KagemushaRecursiveSpendRequestCodecs {
             + " transcript_label exceeds "
             + KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES
             + " bytes");
-    readField(decoder, child -> readRequiredMetadataOption(child, field + ".vk_commitment"));
-    readField(decoder, child -> readRequiredMetadataOption(child, field + ".public_inputs_schema_hash"));
-    readField(decoder, child -> readRequiredMetadataOption(child, field + ".domain_tag"));
+    readField(
+        decoder,
+        field + ".vk_commitment",
+        child -> readRequiredMetadataOption(child, field + ".vk_commitment"));
+    readField(
+        decoder,
+        field + ".public_inputs_schema_hash",
+        child -> readRequiredMetadataOption(child, field + ".public_inputs_schema_hash"));
+    readField(
+        decoder,
+        field + ".domain_tag",
+        child -> readRequiredMetadataOption(child, field + ".domain_tag"));
     require(decoder.remaining() == 0, "Trailing bytes after " + field);
   }
 
@@ -2055,7 +2070,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   }
 
   private static byte[] readRequiredMetadataOption(final NoritoDecoder decoder, final String field) {
-    final byte[] payload = readOptionRawPayload(decoder);
+    final byte[] payload = readOptionRawPayload(decoder, field);
     if (payload == null) {
       throw new IllegalArgumentException(field + " is required");
     }
@@ -2132,6 +2147,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       require(ch >= '0' && ch <= '9', field + " must be a decimal integer");
     }
     require(value.length() == 1 || value.charAt(0) != '0', field + " must be canonical");
+    require(value.length() <= MAX_U128_DECIMAL_DIGITS, field + " must fit in u128");
     final BigInteger integer = new BigInteger(value);
     require(integer.compareTo(BigInteger.ZERO) > 0, field + " must be greater than zero");
     require(integer.compareTo(MAX_U128) <= 0, field + " must fit in u128");
@@ -2240,7 +2256,10 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       requireNonzeroAccumulatorField(decoder, field);
     }
     final int verifierOpeningLen =
-        readField(decoder, child -> checkedInt(child.readUInt(32), "verifier_opening_len"));
+        readField(
+            decoder,
+            "bundle.accumulator.verifier_opening_len",
+            child -> checkedInt(child.readUInt(32), "verifier_opening_len"));
     require(
         verifierOpeningLen == 2
             || verifierOpeningLen == 4
@@ -2344,7 +2363,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   }
 
   private static void writeChainId(final NoritoEncoder encoder, final String value) {
-    requireNonBlankUnpadded(value, "chainId");
+    requirePortableId(value, "chainId");
     writeField(encoder, child -> writeString(child, value));
   }
 
@@ -2581,6 +2600,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     try {
       final String chainId = readChainId(decoder);
       require(decoder.remaining() == 0, "bundle.accumulator.chain_id has trailing bytes");
+      requirePortableId(chainId, "bundle.accumulator.chain_id");
       return chainId;
     } catch (final IllegalArgumentException error) {
       throw new IllegalArgumentException("bundle.accumulator.chain_id", error);
@@ -2704,10 +2724,15 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   }
 
   private static <T> T readField(final NoritoDecoder parent, final FieldReader<T> readPayload) {
+    return readField(parent, "Trailing bytes after field decode", readPayload);
+  }
+
+  private static <T> T readField(
+      final NoritoDecoder parent, final String trailingMessage, final FieldReader<T> readPayload) {
     final int length = checkedInt(parent.readLength(compact(parent)), "field length");
     final NoritoDecoder child = new NoritoDecoder(parent.readBytes(length), parent.flags(), parent.flagsHint());
     final T value = readPayload.read(child);
-    require(child.remaining() == 0, "Trailing bytes after field decode");
+    require(child.remaining() == 0, trailingMessage);
     return value;
   }
 
@@ -2722,12 +2747,17 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   }
 
   private static byte[] readOptionRawPayload(final NoritoDecoder decoder) {
+    return readOptionRawPayload(decoder, "option");
+  }
+
+  private static byte[] readOptionRawPayload(final NoritoDecoder decoder, final String field) {
     final int tag = decoder.readByte();
-    require(tag == 0 || tag == 1, "option tag must be 0 or 1");
+    require(tag == 0 || tag == 1, field + " option tag must be 0 or 1");
     if (tag == 0) {
       return null;
     }
-    final int length = checkedInt(decoder.readLength(compact(decoder)), "option payload length");
+    final int length = checkedInt(decoder.readLength(compact(decoder)), field + " option payload length");
+    require(decoder.remaining() >= length, field + " payload length mismatch");
     return decoder.readBytes(length);
   }
 

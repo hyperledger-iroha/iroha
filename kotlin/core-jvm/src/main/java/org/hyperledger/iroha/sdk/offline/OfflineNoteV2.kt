@@ -594,7 +594,7 @@ object OfflineNoteV2 {
         private val _publicKey = publicKey.copyOf()
         private val _assertionPublicKey = assertionPublicKey.copyOf()
         private val _attestationReport = attestationReport.copyOf()
-        private val _evidence = evidence.copyOf()
+        private val _evidence: ByteArray
         private val _recentBlockHash = recentBlockHash.copyOf()
         private val _challengeHash: ByteArray
         private val _attestationReportHash: ByteArray
@@ -645,13 +645,24 @@ object OfflineNoteV2 {
             }
             _attestationReportHash = resolvedReportHash
 
-            requireDeviceAttestationEvidenceEnvelope(_evidence, resolvedReportHash)
-            val expectedEvidenceHash = hash(_evidence)
+            val submittedEvidence = evidence.copyOf()
+            val resolvedEvidence = if (
+                _attestationReport.isEmpty() &&
+                submittedEvidence.isEmpty() &&
+                evidenceHash == null
+            ) {
+                deviceAttestationEvidenceEnvelope(resolvedReportHash)
+            } else {
+                submittedEvidence
+            }
+            requireDeviceAttestationEvidenceEnvelope(resolvedEvidence, resolvedReportHash)
+            val expectedEvidenceHash = hash(resolvedEvidence)
             val resolvedEvidenceHash = evidenceHash?.copyOf() ?: expectedEvidenceHash
             requireHash(resolvedEvidenceHash, "evidence_hash")
             require(resolvedEvidenceHash.contentEquals(expectedEvidenceHash)) {
                 "evidence_hash does not match evidence"
             }
+            _evidence = resolvedEvidence
             _evidenceHash = resolvedEvidenceHash
         }
 
@@ -2256,6 +2267,14 @@ object OfflineNoteV2 {
                 "device attestation evidence envelope must bind attestation_report_hash"
             }
         }
+    }
+
+    private fun deviceAttestationEvidenceEnvelope(reportHash: ByteArray): ByteArray {
+        val prefix = DEVICE_ATTESTATION_EVIDENCE_PREFIX_BYTES
+        val evidence = ByteArray(prefix.size + reportHash.size)
+        System.arraycopy(prefix, 0, evidence, 0, prefix.size)
+        System.arraycopy(reportHash, 0, evidence, prefix.size, reportHash.size)
+        return evidence
     }
 
     private fun requireNonBlank(value: String, field: String): String {

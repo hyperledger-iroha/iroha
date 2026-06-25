@@ -9973,11 +9973,15 @@ export interface PermissionedIterableOptions {
   canonicalAuth?: CanonicalRequestAuth;
 }
 
+export type ToriiCountMode = "bounded" | "exact";
+
 export interface IterableListOptions extends PermissionedIterableOptions {
   limit?: NumericLike;
   offset?: NumericLike;
   filter?: string | Record<string, unknown>;
   sort?: string | ReadonlyArray<{ key: string; order?: "asc" | "desc" }>;
+  countMode?: ToriiCountMode;
+  count_mode?: ToriiCountMode;
   signal?: AbortSignal;
 }
 
@@ -10019,8 +10023,10 @@ export interface AssetHolderListOptions extends IterableListOptions {
 
 export interface IterableQueryOptions extends IterableListOptions {
   fetchSize?: NumericLike;
+  fetch_size?: NumericLike;
   queryName?: string;
-  select?: ReadonlyArray<Record<string, unknown>>;
+  query_name?: string;
+  select?: ReadonlyArray<string | Record<string, unknown>>;
 }
 
 export interface TransactionQueryOptions extends IterableQueryOptions {

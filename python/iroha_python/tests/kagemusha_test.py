@@ -151,6 +151,9 @@ def _synthetic_pallas_open_envelopes_archive(
     vk_commitment_payload: bytes | None = None,
     public_inputs_schema_hash_payload: bytes | None = None,
     domain_tag_payload: bytes | None = None,
+    vk_commitment_option_payload: bytes | None = None,
+    public_inputs_schema_hash_option_payload: bytes | None = None,
+    domain_tag_option_payload: bytes | None = None,
 ) -> bytes:
     envelope = _synthetic_pallas_open_envelope_payload(
         include_vk_commitment=include_vk_commitment,
@@ -162,6 +165,9 @@ def _synthetic_pallas_open_envelopes_archive(
         vk_commitment_payload=vk_commitment_payload,
         public_inputs_schema_hash_payload=public_inputs_schema_hash_payload,
         domain_tag_payload=domain_tag_payload,
+        vk_commitment_option_payload=vk_commitment_option_payload,
+        public_inputs_schema_hash_option_payload=public_inputs_schema_hash_option_payload,
+        domain_tag_option_payload=domain_tag_option_payload,
     )
     payload = _u64_le(count) + b"".join(
         kagemusha._kagemusha_field(envelope) for _ in range(count)
@@ -184,6 +190,9 @@ def _synthetic_pallas_open_envelope_payload(
     vk_commitment_payload: bytes | None,
     public_inputs_schema_hash_payload: bytes | None,
     domain_tag_payload: bytes | None,
+    vk_commitment_option_payload: bytes | None,
+    public_inputs_schema_hash_option_payload: bytes | None,
+    domain_tag_option_payload: bytes | None,
 ) -> bytes:
     n = 4
     params = b"".join(
@@ -232,15 +241,30 @@ def _synthetic_pallas_open_envelope_payload(
         if not include_domain_tag
         else domain_tag_payload if domain_tag_payload is not None else _fixed32(0x72)
     )
+    vk_option_payload = (
+        vk_commitment_option_payload
+        if vk_commitment_option_payload is not None
+        else _option_raw(vk_payload)
+    )
+    public_inputs_schema_option_payload = (
+        public_inputs_schema_hash_option_payload
+        if public_inputs_schema_hash_option_payload is not None
+        else _option_raw(public_inputs_schema_payload)
+    )
+    domain_option_payload = (
+        domain_tag_option_payload
+        if domain_tag_option_payload is not None
+        else _option_raw(domain_payload)
+    )
     return b"".join(
         (
             kagemusha._kagemusha_field(params),
             kagemusha._kagemusha_field(public_value),
             kagemusha._kagemusha_field(proof),
             kagemusha._kagemusha_field(kagemusha._kagemusha_string(transcript_label)),
-            kagemusha._kagemusha_field(_option_raw(vk_payload)),
-            kagemusha._kagemusha_field(_option_raw(public_inputs_schema_payload)),
-            kagemusha._kagemusha_field(_option_raw(domain_payload)),
+            kagemusha._kagemusha_field(vk_option_payload),
+            kagemusha._kagemusha_field(public_inputs_schema_option_payload),
+            kagemusha._kagemusha_field(domain_option_payload),
         )
     )
 
@@ -270,6 +294,25 @@ def _option_raw(payload: bytes | None) -> bytes:
         b"\x01"
         + _kagemusha_norito_length(
             len(payload),
+            _TEST_NORITO_COMPACT_LEN_FLAG,
+        )
+        + payload
+    )
+
+
+def _option_raw_with_trailing_byte(payload: bytes) -> bytes:
+    return _option_raw(payload) + b"\x7f"
+
+
+def _option_raw_with_unknown_tag() -> bytes:
+    return b"\x02"
+
+
+def _option_raw_with_declared_length_too_long(payload: bytes) -> bytes:
+    return (
+        b"\x01"
+        + _kagemusha_norito_length(
+            len(payload) + 1,
             _TEST_NORITO_COMPACT_LEN_FLAG,
         )
         + payload
@@ -532,6 +575,32 @@ def _recursive_spend_lineage_witness_with_previous_proof_box_backend(
     )
 
 
+def _recursive_spend_lineage_witness_with_previous_proof_box_backend_and_empty_proof_bytes(
+    proof_backend: str,
+) -> bytes:
+    payload = _kagemusha_archive_payload(
+        _shared_recursive_spend_archive("lineage_witness_append_result"),
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
+    )
+    fields = _read_all_fields(payload)
+    previous_proofs = _read_sequence_fields(fields[3])
+    assert previous_proofs
+    previous_proof_fields = _read_all_fields(previous_proofs[0])
+    proof_box_fields = _read_all_fields(previous_proof_fields[3])
+    proof_box_fields[0] = kagemusha._kagemusha_string(proof_backend)
+    proof_box_fields[1] = (0).to_bytes(8, "little")
+    previous_proof_fields[3] = _encode_test_fields(proof_box_fields)
+    previous_proofs[0] = _encode_test_fields(previous_proof_fields)
+    fields[3] = _encode_sequence_fields(previous_proofs)
+    return _kagemusha_norito_frame_from_schema_hash(
+        kagemusha._norito_schema_hash(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME
+        ),
+        _encode_test_fields(fields),
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+
+
 def _recursive_spend_lineage_witness_with_empty_previous_proof_bytes() -> bytes:
     payload = _kagemusha_archive_payload(
         _shared_recursive_spend_archive("lineage_witness_append_result"),
@@ -624,6 +693,29 @@ def _recursive_spend_bundle_with_proof_box_backend(proof_backend: str) -> bytes:
     proof_fields = _read_all_fields(bundle_fields[1])
     proof_box_fields = _read_all_fields(proof_fields[3])
     proof_box_fields[0] = kagemusha._kagemusha_string(proof_backend)
+    proof_fields[3] = _encode_test_fields(proof_box_fields)
+    bundle_fields[1] = _encode_test_fields(proof_fields)
+    return _kagemusha_norito_frame_from_schema_hash(
+        kagemusha._norito_schema_hash(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME
+        ),
+        _encode_test_fields(bundle_fields),
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+
+
+def _recursive_spend_bundle_with_proof_box_backend_and_empty_proof_bytes(
+    proof_backend: str,
+) -> bytes:
+    payload = _kagemusha_archive_payload(
+        _shared_recursive_spend_archive("init_bundle"),
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+    )
+    bundle_fields = _read_all_fields(payload)
+    proof_fields = _read_all_fields(bundle_fields[1])
+    proof_box_fields = _read_all_fields(proof_fields[3])
+    proof_box_fields[0] = kagemusha._kagemusha_string(proof_backend)
+    proof_box_fields[1] = (0).to_bytes(8, "little")
     proof_fields[3] = _encode_test_fields(proof_box_fields)
     bundle_fields[1] = _encode_test_fields(proof_fields)
     return _kagemusha_norito_frame_from_schema_hash(
@@ -847,6 +939,24 @@ def _numeric_payload(mantissa: bytes, scale: int = 0) -> bytes:
         [
             len(mantissa).to_bytes(4, "little") + mantissa,
             scale.to_bytes(4, "little"),
+        ]
+    )
+
+
+def _numeric_payload_with_mantissa_payload(mantissa_payload: bytes) -> bytes:
+    return _encode_test_fields(
+        [
+            mantissa_payload,
+            (0).to_bytes(4, "little"),
+        ]
+    )
+
+
+def _numeric_payload_with_scale_payload(scale_payload: bytes) -> bytes:
+    return _encode_test_fields(
+        [
+            (1).to_bytes(4, "little") + b"\x01",
+            scale_payload,
         ]
     )
 
@@ -2957,6 +3067,12 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
                 UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND
             )
         )
+    with pytest.raises(ValueError, match=r"bundle\.proof_backend"):
+        kagemusha.decode_kagemusha_recursive_spend_bundle(
+            _recursive_spend_bundle_with_proof_box_backend_and_empty_proof_bytes(
+                UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND
+            )
+        )
     with pytest.raises(ValueError, match=r"Trailing bytes after recursive_proof"):
         kagemusha.decode_kagemusha_recursive_spend_bundle(
             _recursive_spend_bundle_with_trailing_recursive_proof_field()
@@ -3070,6 +3186,31 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
         (
             _recursive_spend_bundle_with_current_note_field(
                 2,
+                _numeric_payload_with_scale_payload(
+                    _count_prefixed_fixed_array_payload(0x16, 4)
+                ),
+            ),
+            "numeric scale",
+        ),
+        (
+            _recursive_spend_bundle_with_current_note_field(
+                2,
+                _numeric_payload_with_mantissa_payload(
+                    (2).to_bytes(4, "little") + b"\x01"
+                ),
+            ),
+            "numeric mantissa length",
+        ),
+        (
+            _recursive_spend_bundle_with_current_note_field(
+                2,
+                _numeric_payload(b"\xff"),
+            ),
+            "numeric amount",
+        ),
+        (
+            _recursive_spend_bundle_with_current_note_field(
+                2,
                 _numeric_payload(bytes(16) + b"\x01"),
             ),
             "amount",
@@ -3103,8 +3244,48 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
             r"bundle\.accumulator\.domain",
         ),
         (
+            0,
+            kagemusha._kagemusha_string(
+                " iroha:kagemusha:v1:recursive-spend-accumulator"
+            ),
+            r"bundle\.accumulator\.domain",
+        ),
+        (
+            0,
+            kagemusha._kagemusha_string(
+                "iroha:Kagemusha:v1:recursive-spend-accumulator"
+            ),
+            r"bundle\.accumulator\.domain",
+        ),
+        (
             1,
             kagemusha._kagemusha_string("kagemusha-recursive-spend-abi-chain"),
+            r"bundle\.accumulator\.chain_id",
+        ),
+        (
+            1,
+            kagemusha._kagemusha_field(kagemusha._kagemusha_string("")),
+            r"bundle\.accumulator\.chain_id",
+        ),
+        (
+            1,
+            kagemusha._kagemusha_field(
+                kagemusha._kagemusha_string(" kagemusha-recursive-spend-abi-chain")
+            ),
+            r"bundle\.accumulator\.chain_id",
+        ),
+        (
+            1,
+            kagemusha._kagemusha_field(
+                kagemusha._kagemusha_string("kagemusha-recursive-spend-abi-chain ")
+            ),
+            r"bundle\.accumulator\.chain_id",
+        ),
+        (
+            1,
+            kagemusha._kagemusha_field(
+                kagemusha._kagemusha_string("kagemusha recursive-spend-abi-chain")
+            ),
             r"bundle\.accumulator\.chain_id",
         ),
         (3, bytes(32), r"bundle\.accumulator\.initial_root"),
@@ -3128,6 +3309,11 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
         ),
         (4, _fixed_array_payload(0x03, 33), r"bundle\.accumulator\.final_root"),
         (6, (0).to_bytes(4, "little"), r"bundle\.accumulator\.hop_count"),
+        (
+            6,
+            _count_prefixed_fixed_array_payload(0x06, 4),
+            r"bundle\.accumulator\.hop_count",
+        ),
         (
             6,
             (
@@ -3205,6 +3391,11 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
             r"bundle\.accumulator\.verifier_witness_batch_digest",
         ),
         (21, (3).to_bytes(4, "little"), r"bundle\.accumulator\.verifier_opening_len"),
+        (
+            21,
+            _count_prefixed_fixed_array_payload(0x15, 4),
+            r"bundle\.accumulator\.verifier_opening_len",
+        ),
     )
     for field_index, replacement, expected in malformed_accumulator_fields:
         with pytest.raises(ValueError, match=expected):
@@ -3390,7 +3581,10 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
         "1e3",
         "7 ",
         " 7",
+        "\t7",
+        "7\n",
         str(1 << 128),
+        "9" * 40,
     )
     for amount in invalid_amounts:
         with pytest.raises(ValueError):
@@ -3472,7 +3666,10 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
         "1e3",
         "7 ",
         " 7",
+        "\t7",
+        "7\n",
         str(1 << 128),
+        "9" * 40,
     )
     for public_amount in invalid_public_amounts:
         with pytest.raises(ValueError, match="public_amount"):
@@ -3636,6 +3833,12 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
             r"lineage_witness\.previous_recursive_proofs\.proof_backend",
         ),
         (
+            _recursive_spend_lineage_witness_with_previous_proof_box_backend_and_empty_proof_bytes(
+                "halo2/kzg"
+            ),
+            r"lineage_witness\.previous_recursive_proofs\.proof_backend",
+        ),
+        (
             _recursive_spend_lineage_witness_with_empty_previous_proof_bytes(),
             r"lineage_witness\.previous_recursive_proofs\.proof_bytes",
         ),
@@ -3703,21 +3906,82 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
         (
             "vk_commitment",
             {"vk_commitment_payload": _fixed_array_payload(0x70, 32)},
+            r"pallas_open_envelopes\[0\]\.vk_commitment must be exactly 32 bytes",
+        ),
+        (
+            "vk_commitment",
+            {"vk_commitment_option_payload": _option_raw_with_trailing_byte(_fixed32(0x70))},
+            r"pallas_open_envelopes\[0\]\.vk_commitment payload length mismatch",
+        ),
+        (
+            "vk_commitment",
+            {"vk_commitment_option_payload": _option_raw_with_unknown_tag()},
+            r"pallas_open_envelopes\[0\]\.vk_commitment option tag must be 0 or 1",
+        ),
+        (
+            "vk_commitment",
+            {
+                "vk_commitment_option_payload": _option_raw_with_declared_length_too_long(
+                    _fixed32(0x70)
+                )
+            },
+            r"pallas_open_envelopes\[0\]\.vk_commitment payload length mismatch",
         ),
         (
             "public_inputs_schema_hash",
             {"public_inputs_schema_hash_payload": _fixed_array_payload(0x71, 32)},
+            r"pallas_open_envelopes\[0\]\.public_inputs_schema_hash must be exactly 32 bytes",
+        ),
+        (
+            "public_inputs_schema_hash",
+            {
+                "public_inputs_schema_hash_option_payload": _option_raw_with_trailing_byte(
+                    _fixed32(0x71)
+                )
+            },
+            r"pallas_open_envelopes\[0\]\.public_inputs_schema_hash payload length mismatch",
+        ),
+        (
+            "public_inputs_schema_hash",
+            {"public_inputs_schema_hash_option_payload": _option_raw_with_unknown_tag()},
+            r"pallas_open_envelopes\[0\]\.public_inputs_schema_hash option tag must be 0 or 1",
+        ),
+        (
+            "public_inputs_schema_hash",
+            {
+                "public_inputs_schema_hash_option_payload": _option_raw_with_declared_length_too_long(
+                    _fixed32(0x71)
+                )
+            },
+            r"pallas_open_envelopes\[0\]\.public_inputs_schema_hash payload length mismatch",
         ),
         (
             "domain_tag",
             {"domain_tag_payload": _fixed_array_payload(0x72, 32)},
+            r"pallas_open_envelopes\[0\]\.domain_tag must be exactly 32 bytes",
+        ),
+        (
+            "domain_tag",
+            {"domain_tag_option_payload": _option_raw_with_trailing_byte(_fixed32(0x72))},
+            r"pallas_open_envelopes\[0\]\.domain_tag payload length mismatch",
+        ),
+        (
+            "domain_tag",
+            {"domain_tag_option_payload": _option_raw_with_unknown_tag()},
+            r"pallas_open_envelopes\[0\]\.domain_tag option tag must be 0 or 1",
+        ),
+        (
+            "domain_tag",
+            {
+                "domain_tag_option_payload": _option_raw_with_declared_length_too_long(
+                    _fixed32(0x72)
+                )
+            },
+            r"pallas_open_envelopes\[0\]\.domain_tag payload length mismatch",
         ),
     )
-    for metadata_field, metadata_kwargs in malformed_pallas_metadata_payloads:
-        with pytest.raises(
-            ValueError,
-            match=rf"pallas_open_envelopes\[0\]\.{metadata_field} must be exactly 32 bytes",
-        ):
+    for _metadata_field, metadata_kwargs, expected in malformed_pallas_metadata_payloads:
+        with pytest.raises(ValueError, match=expected):
             kagemusha.KagemushaRecursiveSpendInitRequest(
                 record_bundle=record_bundle,
                 pallas_open_envelopes=_synthetic_pallas_open_envelopes_archive(
@@ -3885,10 +4149,10 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
                 ),
                 lineage_key_artifacts=append_artifacts,
             )
-    for metadata_field, metadata_kwargs in malformed_pallas_metadata_payloads:
+    for _metadata_field, metadata_kwargs, expected in malformed_pallas_metadata_payloads:
         with pytest.raises(
             ValueError,
-            match=rf"previous_proof_open_envelopes\[0\]\.{metadata_field} must be exactly 32 bytes",
+            match=expected.replace("pallas_open_envelopes", "previous_proof_open_envelopes"),
         ):
             kagemusha.KagemushaRecursiveSpendAppendRequest(
                 previous_bundle=_shared_recursive_spend_archive("init_bundle"),

@@ -4703,6 +4703,82 @@ async fn handler_account_transactions_get(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_account_history_get(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(account_id): AxPath<String>,
+    AxQuery(params): AxQuery<crate::routing::AccountHistoryGetParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let key_hint = account_id.clone();
+    let limits = crate::routing::app_query_limits();
+    let mut params = params;
+    let page_limit = limits.clamp_page_limit(params.limit)?;
+    params.limit = Some(page_limit);
+    let allowed_asset_definition_id = resolve_tx_history_allowed_asset_definition_id(&app)?;
+    if !trusted_internal {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        let cost = limits.rate_limit_cost(page_limit);
+        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &key_hint, enforce, cost)
+            .await?;
+    }
+    let telemetry = app.telemetry.clone();
+    let (parsed_account_id, canonical_account_id) =
+        match routing::parse_account_path_segment_with_state(
+            app.state.as_ref(),
+            &key_hint,
+            &telemetry,
+            routing::ENDPOINT_ACCOUNTS_HISTORY,
+        ) {
+            Ok(parsed) => parsed,
+            Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
+        };
+    let caller = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        routing::ENDPOINT_ACCOUNTS_HISTORY,
+    )?;
+    let use_target_account_routes = trusted_internal || caller.is_signed();
+    let route_scope = torii_account_read_route_scope(
+        &parsed_account_id,
+        caller.caller(),
+        use_target_account_routes,
+    );
+    let routes = match torii_account_read_routes(
+        app.as_ref(),
+        &parsed_account_id,
+        caller.caller(),
+        use_target_account_routes,
+    ) {
+        Ok(routes) => routes,
+        Err(response) => return Ok(response),
+    };
+    if routes.is_empty() {
+        return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
+    }
+    let query_string = encode_torii_proxy_query(&params)?;
+    let _ = allowed_asset_definition_id;
+    Ok(execute_torii_list_read_for_routes(
+        &app,
+        routes,
+        route_scope,
+        ToriiReadEndpointV1::AccountHistoryGet,
+        vec![canonical_account_id.to_string()],
+        query_string,
+        Vec::new(),
+    )
+    .await)
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_transactions_history_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -19635,6 +19711,10 @@ fn torii_external_read_path(request: &ToriiReadProxyRequestV1) -> Result<String,
             "/v1/accounts/{}/transactions",
             torii_read_path_arg_encoded(request, 0, "account_id")?
         ),
+        ToriiReadEndpointV1::AccountHistoryGet => format!(
+            "/v1/accounts/{}/history",
+            torii_read_path_arg_encoded(request, 0, "account_id")?
+        ),
         ToriiReadEndpointV1::AccountTransactionsQuery => format!(
             "/v1/accounts/{}/transactions/query",
             torii_read_path_arg_encoded(request, 0, "account_id")?
@@ -19967,6 +20047,34 @@ async fn execute_torii_read_request_locally(
                 };
             finish_torii_read_result(
                 routing::handle_v1_account_transactions_get_with_policy(
+                    app.state.clone(),
+                    AxPath(account_id),
+                    crate::NoritoQuery(params),
+                    app.telemetry.clone(),
+                    allowed_asset_definition_id,
+                )
+                .await,
+                routing_decision,
+                routed_by,
+            )
+        }
+        ToriiReadEndpointV1::AccountHistoryGet => {
+            let Ok(account_id) = torii_proxy_path_arg(&request, 0, "account_id") else {
+                return torii_proxy_path_arg(&request, 0, "account_id").unwrap_err();
+            };
+            let params = match decode_torii_proxy_query::<routing::AccountHistoryGetParams>(
+                request.query_string.as_deref(),
+            ) {
+                Ok(params) => params,
+                Err(response) => return response,
+            };
+            let allowed_asset_definition_id =
+                match resolve_tx_history_allowed_asset_definition_id(app) {
+                    Ok(value) => value,
+                    Err(error) => return error.into_response(),
+                };
+            finish_torii_read_result(
+                routing::handle_v1_account_history_get_with_policy(
                     app.state.clone(),
                     AxPath(account_id),
                     crate::NoritoQuery(params),
@@ -37450,6 +37558,10 @@ impl Torii {
                 .route(
                     "/v1/accounts/{account_id}/transactions",
                     get(handler_account_transactions_get),
+                )
+                .route(
+                    "/v1/accounts/{account_id}/history",
+                    get(handler_account_history_get),
                 );
             let router = router
                 .merge(aa_group)

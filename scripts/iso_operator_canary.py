@@ -47,6 +47,9 @@ DEFAULT_OUTPUT_LIMIT_BYTES = 64 * 1024
 DEFAULT_STAGE_TIMEOUT_SECS = 300.0
 CANARY_SUMMARY_VERSION = 1
 MAX_CONFIG_JSON_BYTES = 64 * 1024
+MAX_JSON_LIST_ITEMS = 8192
+MAX_JSON_OBJECT_MEMBERS = 8192
+MAX_JSON_NESTING_DEPTH = 128
 MAX_HTTP_URL_CHARS = 2048
 MAX_LOCAL_PATH_CHARS = 4096
 MAX_CLEAN_STRING_CHARS = 4096
@@ -619,11 +622,19 @@ def _load_json(path: Path, *, display_label: str | None = None) -> Any:
         )
     except json.JSONDecodeError as error:
         raise CanaryError(f"{label} is not valid JSON: {error}") from error
+    except RecursionError as error:
+        raise CanaryError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        ) from error
     _reject_json_surrogates(value)
     return value
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    if len(pairs) > MAX_JSON_OBJECT_MEMBERS:
+        raise CanaryError(
+            f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+        )
     seen: set[str] = set()
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -638,17 +649,29 @@ def _reject_json_constant(value: str) -> None:
     raise CanaryError("JSON contains non-finite numeric constant")
 
 
-def _reject_json_surrogates(value: Any) -> None:
+def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise CanaryError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
     if isinstance(value, str):
         if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
             raise CanaryError("JSON contains invalid Unicode surrogate")
     elif isinstance(value, list):
+        if len(value) > MAX_JSON_LIST_ITEMS:
+            raise CanaryError(
+                f"JSON array must contain at most {MAX_JSON_LIST_ITEMS} items"
+            )
         for item in value:
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(item, _depth=_depth + 1)
     elif isinstance(value, dict):
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise CanaryError(
+                f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+            )
         for key, item in value.items():
-            _reject_json_surrogates(key)
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(key, _depth=_depth + 1)
+            _reject_json_surrogates(item, _depth=_depth + 1)
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
@@ -877,6 +900,10 @@ def _string_list(
     raw = value[key]
     if not isinstance(raw, list):
         raise CanaryError(f"{label}.{key} must be an array of strings")
+    if len(raw) > MAX_JSON_LIST_ITEMS:
+        raise CanaryError(
+            f"{label}.{key} must contain at most {MAX_JSON_LIST_ITEMS} items"
+        )
     result: list[str] = []
     for offset, item in enumerate(raw):
         if not isinstance(item, str) or not item.strip():
@@ -1852,18 +1879,28 @@ def _run_command_bounded(
     ):
         raise CanaryError("output limit bytes must be positive")
     timeout_secs = _require_positive_finite_number(timeout_secs, "stage timeout seconds")
-    process = subprocess.Popen(
-        argv,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    try:
+        process = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError:
+        raise CanaryError("child stage could not be started") from None
     outputs: dict[str, tuple[bytes, bool]] = {}
+    read_failed = False
 
     def read_stream(name: str, pipe: Any) -> None:
+        nonlocal read_failed
         try:
             outputs[name] = _read_limited_pipe(pipe, output_limit_bytes)
+        except OSError:
+            read_failed = True
         finally:
-            pipe.close()
+            try:
+                pipe.close()
+            except OSError:
+                read_failed = True
 
     assert process.stdout is not None
     assert process.stderr is not None
@@ -1889,6 +1926,8 @@ def _run_command_bounded(
         returncode = 124
     stdout_thread.join()
     stderr_thread.join()
+    if read_failed:
+        raise CanaryError("child stage output could not be read") from None
     stdout_raw, stdout_truncated = outputs.get("stdout", (b"", False))
     stderr_raw, stderr_truncated = outputs.get("stderr", (b"", False))
     return (

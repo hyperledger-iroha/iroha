@@ -54,6 +54,9 @@ UNSUPPORTED_SCHEMA_COMPOSITION_CHILDREN = {
     "override",
 }
 MESSAGE_DEF_ID_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}\.[0-9]{3}\.[0-9]{2}$")
+MAX_JSON_ARRAY_ITEMS = 8192
+MAX_JSON_OBJECT_MEMBERS = 8192
+MAX_JSON_NESTING_DEPTH = 128
 ISO_SCHEMA_DOWNLOAD_PATH_RE = re.compile(r"^/message/[1-9][0-9]*/download$")
 ISO_SCHEMA_ARCHIVE_QUERY_RE = re.compile(r"^page=[1-9][0-9]*$")
 ISO_MESSAGE_NAME_RE = re.compile(r"^[A-Z][A-Za-z0-9]*V[0-9]{2}$")
@@ -121,6 +124,7 @@ REPOSITORY_XML_FIXTURE_PARTS = (
     "iso20022",
 )
 MAX_SOURCE_REPOSITORY_CHARS = 2048
+MAX_SOURCE_URL_CHARS = 2048
 MAX_SOURCE_PATH_CHARS = 2048
 MAX_REVIEWED_GAP_REASON_CHARS = 1024
 MAX_PENDING_SCHEMA_ORGANISATION_CHARS = 256
@@ -316,6 +320,64 @@ PENDING_SCHEMA_SOURCE_PROVENANCE_KEYS = {
     "submitting_organisation",
 }
 PENDING_SCHEMA_DOWNLOAD_TYPES = {"XSD"}
+KNOWN_PENDING_SCHEMA_SOURCE_METADATA = {
+    "colr.012.001.05": {
+        "catalogue_url": "https://www.iso20022.org/iso-20022-message-definitions",
+        "download_url": "https://www.iso20022.org/message/22504/download",
+        "download_type": "XSD",
+        "message_name": "CollateralSubstitutionConfirmationV05",
+        "submitting_organisation": "SWIFT, FPL, ISDA/FpML, ISITC",
+    },
+    "sese.023.001.09": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17196/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionInstructionV09",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.023.001.11": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/22545/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionInstructionV11",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.024.001.09": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17236/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionStatusAdviceV09",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.024.001.10": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17241/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionStatusAdviceV10",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.025.001.08": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17286/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionConfirmationV08",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.025.001.10": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/21776/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionConfirmationV10",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.025.001.11": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/22547/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionConfirmationV11",
+        "submitting_organisation": "SWIFT",
+    },
+}
 ISO_SCHEMA_CATALOGUE_PATHS = {
     "/iso-20022-message-definitions",
     "/catalogue-messages/iso-20022-messages-archive",
@@ -910,6 +972,10 @@ def _load_json_bytes(
         )
     except json.JSONDecodeError as error:
         raise FixtureManifestError(f"{label} is not valid JSON: {error}") from error
+    except RecursionError as error:
+        raise FixtureManifestError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        ) from error
     _reject_json_surrogates(value)
     return value
 
@@ -948,18 +1014,28 @@ def _run_command_bounded(
         timeout_secs,
         "xmllint timeout seconds",
     )
-    process = subprocess.Popen(
-        argv,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    try:
+        process = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError:
+        raise FixtureManifestError("xmllint could not be started") from None
     outputs: dict[str, tuple[bytes, bool]] = {}
+    read_failed = False
 
     def read_stream(name: str, pipe: Any) -> None:
+        nonlocal read_failed
         try:
             outputs[name] = _read_limited_pipe(pipe, output_limit_bytes)
+        except OSError:
+            read_failed = True
         finally:
-            pipe.close()
+            try:
+                pipe.close()
+            except OSError:
+                read_failed = True
 
     assert process.stdout is not None
     assert process.stderr is not None
@@ -985,6 +1061,8 @@ def _run_command_bounded(
         returncode = 124
     stdout_thread.join()
     stderr_thread.join()
+    if read_failed:
+        raise FixtureManifestError("xmllint output could not be read") from None
     stdout_raw, stdout_truncated = outputs.get("stdout", (b"", False))
     stderr_raw, stderr_truncated = outputs.get("stderr", (b"", False))
     return (
@@ -1016,6 +1094,10 @@ def _require_bounded_xmllint_timeout_secs(value: Any, label: str) -> float:
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    if len(pairs) > MAX_JSON_OBJECT_MEMBERS:
+        raise FixtureManifestError(
+            f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+        )
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
@@ -1028,17 +1110,29 @@ def _reject_json_constant(value: str) -> None:
     raise FixtureManifestError("JSON contains non-finite numeric constant")
 
 
-def _reject_json_surrogates(value: Any) -> None:
+def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise FixtureManifestError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
     if isinstance(value, str):
         if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
             raise FixtureManifestError("JSON contains invalid Unicode surrogate")
     elif isinstance(value, list):
+        if len(value) > MAX_JSON_ARRAY_ITEMS:
+            raise FixtureManifestError(
+                f"JSON array must contain at most {MAX_JSON_ARRAY_ITEMS} items"
+            )
         for item in value:
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(item, _depth=_depth + 1)
     elif isinstance(value, dict):
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise FixtureManifestError(
+                f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+            )
         for key, item in value.items():
-            _reject_json_surrogates(key)
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(key, _depth=_depth + 1)
+            _reject_json_surrogates(item, _depth=_depth + 1)
 
 
 def _rust_raw_string_end(text: str, start: int) -> int | None:
@@ -1159,6 +1253,10 @@ def _load_profile_catalog(
         raise FixtureManifestError(
             f"{label} DEFAULT_PROFILES_JSON is not valid JSON: {error}"
         ) from error
+    except RecursionError as error:
+        raise FixtureManifestError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        ) from error
     _reject_json_surrogates(catalog)
     return (
         _require_array(catalog, f"{label}.DEFAULT_PROFILES_JSON"),
@@ -1258,6 +1356,10 @@ def _require_object(value: Any, label: str) -> dict[str, Any]:
 def _require_array(value: Any, label: str) -> list[Any]:
     if not isinstance(value, list):
         raise FixtureManifestError(f"{label} must be a JSON array")
+    if len(value) > MAX_JSON_ARRAY_ITEMS:
+        raise FixtureManifestError(
+            f"{label} must contain at most {MAX_JSON_ARRAY_ITEMS} items"
+        )
     return value
 
 
@@ -1356,49 +1458,61 @@ def _reject_overlong_xml_identifier(value: str, label: str) -> None:
         )
 
 
-def _reject_non_ascii_xml_identifiers(element: ET.Element, path: Path, label: str) -> None:
+def _reject_non_ascii_xml_identifiers(element: ET.Element, display_label: str, label: str) -> None:
     if isinstance(element.tag, str):
         namespace, local = _split_xml_name(element.tag)
         if namespace is not None:
-            _reject_overlong_xml_identifier(namespace, f"{path} {label} namespace")
-            _reject_non_ascii_identifier(namespace, f"{path} {label} namespace")
-        _reject_overlong_xml_identifier(local, f"{path} {label} element")
-        _reject_non_ascii_identifier(local, f"{path} {label} element")
+            _reject_overlong_xml_identifier(namespace, f"{display_label} {label} namespace")
+            _reject_non_ascii_identifier(namespace, f"{display_label} {label} namespace")
+        _reject_overlong_xml_identifier(local, f"{display_label} {label} element")
+        _reject_non_ascii_identifier(local, f"{display_label} {label} element")
     for attr_name in element.attrib:
-        _reject_overlong_xml_identifier(attr_name, f"{path} {label} attribute")
-        _reject_non_ascii_identifier(attr_name, f"{path} {label} attribute")
+        _reject_overlong_xml_identifier(attr_name, f"{display_label} {label} attribute")
+        _reject_non_ascii_identifier(attr_name, f"{display_label} {label} attribute")
     for offset, child in enumerate(element):
-        _reject_non_ascii_xml_identifiers(child, path, f"{label}[{offset}]")
+        _reject_non_ascii_xml_identifiers(child, display_label, f"{label}[{offset}]")
 
 
-def _reject_secret_looking_xml_content(element: ET.Element, path: Path, label: str) -> None:
+def _reject_secret_looking_xml_content(element: ET.Element, display_label: str, label: str) -> None:
     if isinstance(element.tag, str):
         namespace, local = _split_xml_name(element.tag)
         if namespace is not None:
-            _reject_secret_looking_identifier(namespace, f"{path} {label} namespace")
-        _reject_secret_looking_identifier(local, f"{path} {label} element")
+            _reject_secret_looking_identifier(namespace, f"{display_label} {label} namespace")
+        _reject_secret_looking_identifier(local, f"{display_label} {label} element")
     for attr_name, attr_value in element.attrib.items():
-        _reject_secret_looking_identifier(attr_name, f"{path} {label} attribute")
-        _reject_secret_looking_material(attr_value, f"{path} {label} attribute value")
+        _reject_secret_looking_identifier(attr_name, f"{display_label} {label} attribute")
+        _reject_secret_looking_material(attr_value, f"{display_label} {label} attribute value")
     if element.text:
-        _reject_secret_looking_material(element.text, f"{path} {label} text")
+        _reject_secret_looking_material(element.text, f"{display_label} {label} text")
     if element.tail:
-        _reject_secret_looking_material(element.tail, f"{path} {label} tail")
+        _reject_secret_looking_material(element.tail, f"{display_label} {label} tail")
     for offset, child in enumerate(element):
-        _reject_secret_looking_xml_content(child, path, f"{label}[{offset}]")
+        _reject_secret_looking_xml_content(child, display_label, f"{label}[{offset}]")
 
 
-def _check_no_secret_material(value: Any, label: str = "$") -> None:
+def _check_no_secret_material(value: Any, label: str = "$", *, _depth: int = 0) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise FixtureManifestError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
     if isinstance(value, dict):
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise FixtureManifestError(
+                f"{label} must contain at most {MAX_JSON_OBJECT_MEMBERS} object members"
+            )
         for key, child in value.items():
             if _is_secret_looking_key(str(key)):
                 raise FixtureManifestError(f"{label} contains forbidden secret-looking field")
             if _is_control_bearing_key(key):
                 raise FixtureManifestError(f"{label} contains forbidden control-bearing field")
-            _check_no_secret_material(child, f"{label}.{key}")
+            _check_no_secret_material(child, f"{label}.{key}", _depth=_depth + 1)
     elif isinstance(value, list):
+        if len(value) > MAX_JSON_ARRAY_ITEMS:
+            raise FixtureManifestError(
+                f"{label} must contain at most {MAX_JSON_ARRAY_ITEMS} items"
+            )
         for offset, child in enumerate(value):
-            _check_no_secret_material(child, f"{label}[{offset}]")
+            _check_no_secret_material(child, f"{label}[{offset}]", _depth=_depth + 1)
     elif isinstance(value, str):
         if _contains_unsafe_json_control(value):
             raise FixtureManifestError(f"{label} contains unsafe control characters")
@@ -2128,6 +2242,10 @@ def _verify_blocked_schema_source(value: Any, label: str) -> dict[str, Any]:
 def _validate_iso_catalogue_url(raw: str, label: str) -> str:
     """Validate an official ISO catalogue URL used as pending-source evidence."""
 
+    if len(raw) > MAX_SOURCE_URL_CHARS:
+        raise FixtureManifestError(
+            f"{label} must be no longer than {MAX_SOURCE_URL_CHARS} characters"
+        )
     _reject_non_ascii_identifier(raw, label)
     _reject_secret_looking_identifier(raw, label)
     if "%" in raw:
@@ -2163,6 +2281,10 @@ def _validate_iso_catalogue_url(raw: str, label: str) -> str:
 def _validate_iso_download_url(raw: str, label: str) -> str:
     """Validate an official direct ISO schema download URL."""
 
+    if len(raw) > MAX_SOURCE_URL_CHARS:
+        raise FixtureManifestError(
+            f"{label} must be no longer than {MAX_SOURCE_URL_CHARS} characters"
+        )
     _reject_non_ascii_identifier(raw, label)
     _reject_secret_looking_identifier(raw, label)
     if any(ch.isspace() for ch in raw):
@@ -2272,6 +2394,23 @@ def _validate_iso_submitting_organisation(raw: str, label: str) -> str:
     return raw
 
 
+def _validate_known_pending_schema_source_metadata(
+    message_def_id: str,
+    source: dict[str, str],
+    label: str,
+) -> None:
+    """Validate exact official coordinates for known pending schema sources."""
+
+    expected = KNOWN_PENDING_SCHEMA_SOURCE_METADATA.get(message_def_id)
+    if expected is None:
+        return
+    for key, expected_value in expected.items():
+        if source[key] != expected_value:
+            raise FixtureManifestError(
+                f"{label}.source.{key} must match known official ISO pending-source metadata"
+            )
+
+
 def _verify_pending_schema_source(value: Any, label: str) -> dict[str, Any]:
     """Verify one official-but-not-yet-checked-in schema source record."""
 
@@ -2321,15 +2460,21 @@ def _verify_pending_schema_source(value: Any, label: str) -> dict[str, Any]:
         submitting_organisation,
         f"{label}.source.submitting_organisation",
     )
+    normalized_source = {
+        "catalogue_url": catalogue_url,
+        "download_url": download_url,
+        "download_type": download_type,
+        "message_name": message_name,
+        "submitting_organisation": submitting_organisation,
+    }
+    _validate_known_pending_schema_source_metadata(
+        message_def_id,
+        normalized_source,
+        label,
+    )
     return {
         "message_def_id": message_def_id,
-        "source": {
-            "catalogue_url": catalogue_url,
-            "download_url": download_url,
-            "download_type": download_type,
-            "message_name": message_name,
-            "submitting_organisation": submitting_organisation,
-        },
+        "source": normalized_source,
         "reason": reason,
     }
 
@@ -2373,35 +2518,35 @@ def _schema_children(parent: ET.Element, local_name: str, **attrs: str) -> list[
     return result
 
 
-def _schema_child_locals(parent: ET.Element, path: Path, label: str) -> list[str]:
+def _schema_child_locals(parent: ET.Element, display_label: str, label: str) -> list[str]:
     locals_: list[str] = []
     for child in parent:
         if not isinstance(child.tag, str):
             continue
         namespace, local = _split_xml_name(child.tag)
         if namespace != XML_SCHEMA_NS:
-            raise FixtureManifestError(f"{path} {label} contains unsupported child")
+            raise FixtureManifestError(f"{display_label} {label} contains unsupported child")
         locals_.append(local)
     return locals_
 
 
-def _reject_unsupported_schema_composition(root: ET.Element, path: Path) -> None:
+def _reject_unsupported_schema_composition(root: ET.Element, display_label: str) -> None:
     for child in root:
         if not isinstance(child.tag, str):
             continue
         namespace, local = _split_xml_name(child.tag)
         if namespace != XML_SCHEMA_NS:
             raise FixtureManifestError(
-                f"{path} xs:schema contains unsupported foreign child"
+                f"{display_label} xs:schema contains unsupported foreign child"
             )
         if local in UNSUPPORTED_SCHEMA_COMPOSITION_CHILDREN:
-            raise FixtureManifestError(f"{path} xs:schema must not contain xs:{local}")
+            raise FixtureManifestError(f"{display_label} xs:schema must not contain xs:{local}")
 
 
 def _require_schema_attributes(
     element: ET.Element,
     expected: set[str],
-    path: Path,
+    display_label: str,
     label: str,
 ) -> None:
     actual = set(element.attrib)
@@ -2424,100 +2569,100 @@ def _require_schema_attributes(
                 details.append("unexpected " + ", ".join(extra))
         suffix = ": " + "; ".join(details) if details else ""
         raise FixtureManifestError(
-            f"{path} {label} must declare exactly {', '.join(sorted(expected))}{suffix}"
+            f"{display_label} {label} must declare exactly {', '.join(sorted(expected))}{suffix}"
         )
 
 
-def _schema_payload_root(root: ET.Element, path: Path) -> str:
+def _schema_payload_root(root: ET.Element, display_label: str) -> str:
     document_elements = _schema_children(root, "element", name="Document")
     if not document_elements:
-        raise FixtureManifestError(f"{path} has no top-level xs:element name='Document'")
+        raise FixtureManifestError(f"{display_label} has no top-level xs:element name='Document'")
     if len(document_elements) != 1:
         raise FixtureManifestError(
-            f"{path} must contain exactly one top-level xs:element name='Document'"
+            f"{display_label} must contain exactly one top-level xs:element name='Document'"
         )
     document_element = document_elements[0]
     _require_schema_attributes(
         document_element,
         {"name", "type"},
-        path,
+        display_label,
         "Document element",
     )
     document_type = document_element.attrib.get("type")
     if not document_type:
-        raise FixtureManifestError(f"{path} Document element does not declare a type")
-    _reject_overlong_xml_identifier(document_type, f"{path} Document element type")
-    _reject_non_ascii_identifier(document_type, f"{path} Document element type")
-    _reject_secret_looking_identifier(document_type, f"{path} Document element type")
+        raise FixtureManifestError(f"{display_label} Document element does not declare a type")
+    _reject_overlong_xml_identifier(document_type, f"{display_label} Document element type")
+    _reject_non_ascii_identifier(document_type, f"{display_label} Document element type")
+    _reject_secret_looking_identifier(document_type, f"{display_label} Document element type")
     if document_type != "Document":
         raise FixtureManifestError(
-            f"{path} Document element type must be exactly 'Document'"
+            f"{display_label} Document element type must be exactly 'Document'"
         )
     document_complexes = _schema_children(root, "complexType", name=document_type)
     if not document_complexes:
-        raise FixtureManifestError(f"{path} has no document xs:complexType")
+        raise FixtureManifestError(f"{display_label} has no document xs:complexType")
     if len(document_complexes) != 1:
         raise FixtureManifestError(
-            f"{path} must contain exactly one document xs:complexType"
+            f"{display_label} must contain exactly one document xs:complexType"
         )
     document_complex = document_complexes[0]
-    if _schema_child_locals(document_complex, path, "Document complex type") != [
+    if _schema_child_locals(document_complex, display_label, "Document complex type") != [
         "sequence"
     ]:
         raise FixtureManifestError(
-            f"{path} Document complex type must contain only one direct xs:sequence"
+            f"{display_label} Document complex type must contain only one direct xs:sequence"
         )
     sequences = _schema_children(document_complex, "sequence")
     if not sequences:
-        raise FixtureManifestError(f"{path} Document complex type has no xs:sequence")
+        raise FixtureManifestError(f"{display_label} Document complex type has no xs:sequence")
     if len(sequences) != 1:
         raise FixtureManifestError(
-            f"{path} Document complex type must contain exactly one xs:sequence"
+            f"{display_label} Document complex type must contain exactly one xs:sequence"
         )
     sequence = sequences[0]
     payload_elements = _schema_children(sequence, "element")
     if len(payload_elements) != 1:
         raise FixtureManifestError(
-            f"{path} Document sequence must contain exactly one payload element"
+            f"{display_label} Document sequence must contain exactly one payload element"
         )
-    if _schema_child_locals(sequence, path, "Document sequence") != ["element"]:
+    if _schema_child_locals(sequence, display_label, "Document sequence") != ["element"]:
         raise FixtureManifestError(
-            f"{path} Document sequence must contain only one direct xs:element"
+            f"{display_label} Document sequence must contain only one direct xs:element"
         )
     payload_element = payload_elements[0]
     _require_schema_attributes(
         payload_element,
         {"name", "type"},
-        path,
+        display_label,
         "Document payload element",
     )
     payload = payload_element.attrib.get("name")
     if not payload:
-        raise FixtureManifestError(f"{path} Document payload element has no name")
-    _reject_overlong_xml_identifier(payload, f"{path} Document payload element name")
-    _reject_non_ascii_identifier(payload, f"{path} Document payload element name")
-    _reject_secret_looking_identifier(payload, f"{path} Document payload element name")
+        raise FixtureManifestError(f"{display_label} Document payload element has no name")
+    _reject_overlong_xml_identifier(payload, f"{display_label} Document payload element name")
+    _reject_non_ascii_identifier(payload, f"{display_label} Document payload element name")
+    _reject_secret_looking_identifier(payload, f"{display_label} Document payload element name")
     payload_type = payload_element.attrib.get("type")
     if not payload_type:
-        raise FixtureManifestError(f"{path} Document payload element does not declare a type")
-    _reject_overlong_xml_identifier(payload_type, f"{path} Document payload element type")
-    _reject_non_ascii_identifier(payload_type, f"{path} Document payload element type")
-    _reject_secret_looking_identifier(payload_type, f"{path} Document payload element type")
+        raise FixtureManifestError(f"{display_label} Document payload element does not declare a type")
+    _reject_overlong_xml_identifier(payload_type, f"{display_label} Document payload element type")
+    _reject_non_ascii_identifier(payload_type, f"{display_label} Document payload element type")
+    _reject_secret_looking_identifier(payload_type, f"{display_label} Document payload element type")
     if ":" in payload_type:
         raise FixtureManifestError(
-            f"{path} Document payload element type must be local and unprefixed"
+            f"{display_label} Document payload element type must be local and unprefixed"
         )
     payload_complexes = _schema_children(root, "complexType", name=payload_type)
     if not payload_complexes:
-        raise FixtureManifestError(f"{path} has no payload xs:complexType")
+        raise FixtureManifestError(f"{display_label} has no payload xs:complexType")
     if len(payload_complexes) != 1:
-        raise FixtureManifestError(f"{path} must contain exactly one payload xs:complexType")
+        raise FixtureManifestError(f"{display_label} must contain exactly one payload xs:complexType")
     payload_complex = payload_complexes[0]
-    if _schema_child_locals(payload_complex, path, "payload complex type") != [
+    if _schema_child_locals(payload_complex, display_label, "payload complex type") != [
         "sequence"
     ]:
         raise FixtureManifestError(
-            f"{path} payload complex type must contain only one direct xs:sequence"
+            f"{display_label} payload complex type must contain only one direct xs:sequence"
         )
     return payload
 
@@ -2631,27 +2776,27 @@ def verify_schema_entry(
     root = _parse_xml_bytes(schema_bytes, path, display_label=source_label)
     namespace, local = _split_xml_name(root.tag)
     if namespace != XML_SCHEMA_NS or local != "schema":
-        raise FixtureManifestError(f"{path} root must be xs:schema")
+        raise FixtureManifestError(f"{source_label} root must be xs:schema")
     _require_schema_attributes(
         root,
         {"elementFormDefault", "targetNamespace"},
-        path,
+        source_label,
         "xs:schema root",
     )
     target_namespace = root.attrib.get("targetNamespace")
     if isinstance(target_namespace, str):
-        _reject_overlong_xml_identifier(target_namespace, f"{path} targetNamespace")
-        _reject_non_ascii_identifier(target_namespace, f"{path} targetNamespace")
-        _reject_secret_looking_identifier(target_namespace, f"{path} targetNamespace")
+        _reject_overlong_xml_identifier(target_namespace, f"{source_label} targetNamespace")
+        _reject_non_ascii_identifier(target_namespace, f"{source_label} targetNamespace")
+        _reject_secret_looking_identifier(target_namespace, f"{source_label} targetNamespace")
     expected_namespace = _namespace_for(message_def_id)
     if target_namespace != expected_namespace:
-        raise FixtureManifestError(f"{path} targetNamespace does not match manifest message_def_id")
+        raise FixtureManifestError(f"{source_label} targetNamespace does not match manifest message_def_id")
     if root.attrib.get("elementFormDefault") != "qualified":
-        raise FixtureManifestError(f"{path} elementFormDefault must be qualified")
-    _reject_unsupported_schema_composition(root, path)
-    payload_root = _schema_payload_root(root, path)
+        raise FixtureManifestError(f"{source_label} elementFormDefault must be qualified")
+    _reject_unsupported_schema_composition(root, source_label)
+    payload_root = _schema_payload_root(root, source_label)
     if payload_root != expected_payload_root:
-        raise FixtureManifestError(f"{path} payload root does not match manifest payload_root")
+        raise FixtureManifestError(f"{source_label} payload root does not match manifest payload_root")
     return {
         "path": rel_path,
         "message_def_id": message_def_id,
@@ -2664,16 +2809,16 @@ def verify_schema_entry(
     }
 
 
-def _first_element_child(root: ET.Element, path: Path) -> ET.Element:
+def _first_element_child(root: ET.Element, display_label: str) -> ET.Element:
     children = [child for child in list(root) if isinstance(child.tag, str)]
     if len(children) != 1:
-        raise FixtureManifestError(f"{path} Document must contain exactly one payload element")
+        raise FixtureManifestError(f"{display_label} Document must contain exactly one payload element")
     return children[0]
 
 
-def _require_no_xml_attributes(element: ET.Element, path: Path, label: str) -> None:
+def _require_no_xml_attributes(element: ET.Element, display_label: str, label: str) -> None:
     if element.attrib:
-        raise FixtureManifestError(f"{path} {label} must not declare attributes")
+        raise FixtureManifestError(f"{display_label} {label} must not declare attributes")
 
 
 def _validate_fixture_xml_schema(
@@ -2711,8 +2856,14 @@ def _validate_fixture_xml_schema(
             f"{label} xmllint timed out after {xmllint_timeout_secs:g} seconds"
         )
     output_truncated = stdout_truncated or stderr_truncated
+    local_paths = (
+        str(schema_path),
+        str(schema_path.resolve()),
+        str(fixture_path),
+        str(fixture_path.resolve()),
+    )
     if returncode != 0:
-        detail = _xmllint_output_detail(stderr or stdout)
+        detail = _xmllint_output_detail(stderr or stdout, local_paths=local_paths)
         if detail:
             detail = ": " + detail
         if output_truncated:
@@ -2727,7 +2878,7 @@ def _validate_fixture_xml_schema(
         )
     unexpected_output = _unexpected_xmllint_success_output(stdout, stderr, fixture_path)
     if unexpected_output is not None:
-        detail = _xmllint_output_detail(unexpected_output)
+        detail = _xmllint_output_detail(unexpected_output, local_paths=local_paths)
         raise FixtureManifestError(
             f"{label} xmllint emitted unexpected output on successful XML schema "
             f"validation: {detail}"
@@ -2747,10 +2898,16 @@ def _unexpected_xmllint_success_output(
     return None
 
 
-def _xmllint_output_detail(output: str) -> str:
+def _xmllint_output_detail(
+    output: str,
+    *,
+    local_paths: tuple[str, ...] = (),
+) -> str:
     detail = output.strip()
     if not detail:
         return ""
+    if any(path and path in detail for path in local_paths):
+        return "[xmllint output redacted: local paths]"
     if _contains_secret_material(detail) or _contains_secret_identifier_material(detail):
         return "[xmllint output redacted: secret-looking material]"
     if _contains_unsafe_diagnostic_control(detail):
@@ -2818,27 +2975,27 @@ def verify_fixture_entry(
         display_label=source_label,
     )
     root = _parse_xml_bytes(fixture_bytes, path, display_label=source_label)
-    _reject_non_ascii_xml_identifiers(root, path, "XML fixture")
-    _reject_secret_looking_xml_content(root, path, "XML fixture")
+    _reject_non_ascii_xml_identifiers(root, source_label, "XML fixture")
+    _reject_secret_looking_xml_content(root, source_label, "XML fixture")
     namespace, local = _split_xml_name(root.tag)
     if local != "Document":
-        raise FixtureManifestError(f"{path} root element must be Document")
-    namespace_message_id = _message_id_from_namespace(namespace, str(path))
+        raise FixtureManifestError(f"{source_label} root element must be Document")
+    namespace_message_id = _message_id_from_namespace(namespace, source_label)
     if namespace_message_id != message_def_id:
         raise FixtureManifestError(
-            f"{path} namespace message id does not match manifest fixture"
+            f"{source_label} namespace message id does not match manifest fixture"
         )
-    _require_no_xml_attributes(root, path, "Document element")
-    payload = _first_element_child(root, path)
+    _require_no_xml_attributes(root, source_label, "Document element")
+    payload = _first_element_child(root, source_label)
     payload_namespace, payload_local = _split_xml_name(payload.tag)
     if payload_namespace != namespace:
-        raise FixtureManifestError(f"{path} payload namespace must match Document namespace")
-    _reject_overlong_xml_identifier(payload_local, f"{path} payload root")
-    _reject_non_ascii_identifier(payload_local, f"{path} payload root")
-    _reject_secret_looking_identifier(payload_local, f"{path} payload root")
+        raise FixtureManifestError(f"{source_label} payload namespace must match Document namespace")
+    _reject_overlong_xml_identifier(payload_local, f"{source_label} payload root")
+    _reject_non_ascii_identifier(payload_local, f"{source_label} payload root")
+    _reject_secret_looking_identifier(payload_local, f"{source_label} payload root")
     if payload_local != expected_payload_root:
-        raise FixtureManifestError(f"{path} payload root does not match manifest fixture")
-    _require_no_xml_attributes(payload, path, "payload element")
+        raise FixtureManifestError(f"{source_label} payload root does not match manifest fixture")
+    _require_no_xml_attributes(payload, source_label, "payload element")
 
     schema_backed = False
     schema_validated = False

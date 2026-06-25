@@ -965,6 +965,109 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             )
             self.assertNotIn(overlong, stderr)
 
+    def test_config_string_lists_are_count_bounded_before_entry_parsing(self):
+        items = [None] * (CANARY.MAX_JSON_LIST_ITEMS + 1)
+        cases = (
+            ("notary", "endpoints"),
+            ("verify", "receipt_dirs"),
+            ("verify", "receipts"),
+        )
+        for label, key in cases:
+            with self.subTest(label=label, key=key):
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    CANARY._string_list({key: items}, key, label)
+
+                message = str(caught.exception)
+                self.assertIn(
+                    f"{label}.{key} must contain at most {CANARY.MAX_JSON_LIST_ITEMS} items",
+                    message,
+                )
+                self.assertNotIn(str(len(items)), message)
+                self.assertNotIn("[0]", message)
+
+    def test_recursive_json_array_scans_are_count_bounded_without_echo(self):
+        items = [None] * (CANARY.MAX_JSON_LIST_ITEMS + 1)
+
+        with self.assertRaises(CANARY.CanaryError) as caught:
+            CANARY._reject_json_surrogates(items)
+
+        message = str(caught.exception)
+        self.assertIn(
+            f"JSON array must contain at most {CANARY.MAX_JSON_LIST_ITEMS} items",
+            message,
+        )
+        self.assertNotIn(str(len(items)), message)
+        self.assertNotIn("[0]", message)
+
+    def test_recursive_json_object_scans_are_count_bounded_without_echo(self):
+        members = {
+            f"hidden_key_{offset}": None
+            for offset in range(CANARY.MAX_JSON_OBJECT_MEMBERS + 1)
+        }
+        pairs = list(members.items())
+        cases = (
+            (
+                "json hook",
+                lambda: CANARY._reject_duplicate_json_keys(pairs),
+                f"JSON object must contain at most {CANARY.MAX_JSON_OBJECT_MEMBERS} members",
+            ),
+            (
+                "surrogates",
+                lambda: CANARY._reject_json_surrogates(members),
+                f"JSON object must contain at most {CANARY.MAX_JSON_OBJECT_MEMBERS} members",
+            ),
+        )
+        for name, action, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    action()
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(str(len(members)), message)
+                self.assertNotIn("hidden_key_0", message)
+
+    def test_recursive_json_depth_scans_are_bounded_without_echo(self):
+        nested = "hidden_leaf"
+        for _ in range(CANARY.MAX_JSON_NESTING_DEPTH + 1):
+            nested = [nested]
+
+        with self.assertRaises(CANARY.CanaryError) as caught:
+            CANARY._reject_json_surrogates(nested)
+
+        message = str(caught.exception)
+        self.assertIn(
+            f"JSON nesting depth must be at most {CANARY.MAX_JSON_NESTING_DEPTH} levels",
+            message,
+        )
+        self.assertNotIn("hidden_leaf", message)
+        self.assertNotIn("[0]", message)
+
+    def test_json_parse_recursion_error_is_bounded_without_echo(self):
+        hidden = "hidden-canary-recursion"
+        with tempfile.TemporaryDirectory() as raw_root:
+            path = Path(raw_root) / hidden
+            path.write_text("[]\n", encoding="utf-8")
+            original_loads = CANARY.json.loads
+
+            def raising_loads(*_args, **_kwargs):
+                raise RecursionError(hidden)
+
+            CANARY.json.loads = raising_loads
+            try:
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    CANARY._load_json(path, display_label="runbook")
+            finally:
+                CANARY.json.loads = original_loads
+
+        message = str(caught.exception)
+        self.assertIn(
+            f"JSON nesting depth must be at most {CANARY.MAX_JSON_NESTING_DEPTH} levels",
+            message,
+        )
+        self.assertNotIn(hidden, message)
+        self.assertNotIn(str(path), message)
+
     def test_boolean_and_non_integer_file_read_limits_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             path = Path(raw_root) / "canary.json"
@@ -1127,6 +1230,55 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     True,
                     1.0,
                 )
+
+    def test_child_stage_startup_failure_is_controlled_without_echo(self):
+        hidden = "token=canary-startup-secret"
+
+        def raising_popen(*_args, **_kwargs):
+            raise OSError(hidden)
+
+        original_popen = CANARY.subprocess.Popen
+        CANARY.subprocess.Popen = raising_popen
+        try:
+            with self.assertRaises(CANARY.CanaryError) as caught:
+                CANARY._run_command_bounded(
+                    [str(Path(tempfile.gettempdir()) / hidden / "child")],
+                    128,
+                    1.0,
+                )
+        finally:
+            CANARY.subprocess.Popen = original_popen
+
+        message = str(caught.exception)
+        self.assertIn("child stage could not be started", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn(tempfile.gettempdir(), message)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_child_stage_output_read_failure_is_controlled_without_echo(self):
+        hidden = "token=canary-pipe-secret"
+
+        def raising_read(*_args, **_kwargs):
+            raise OSError(hidden)
+
+        original_read = CANARY._read_limited_pipe
+        CANARY._read_limited_pipe = raising_read
+        try:
+            with self.assertRaises(CANARY.CanaryError) as caught:
+                CANARY._run_command_bounded(
+                    [sys.executable, "-c", "print('ok')"],
+                    128,
+                    1.0,
+                )
+        finally:
+            CANARY._read_limited_pipe = original_read
+
+        message = str(caught.exception)
+        self.assertIn("child stage output could not be read", message)
+        self.assertNotIn(hidden, message)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertTrue(caught.exception.__suppress_context__)
 
     def test_direct_run_numeric_limits_must_exist_before_execution(self):
         cases = (

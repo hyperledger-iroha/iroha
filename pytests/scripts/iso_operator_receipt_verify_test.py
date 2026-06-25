@@ -67,6 +67,138 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 require_source_files=True,
             )
 
+    def test_receipt_json_arrays_are_count_bounded_without_echo(self):
+        items = [None] * (VERIFIER.MAX_JSON_LIST_ITEMS + 1)
+        cases = (
+            (
+                "helper",
+                lambda: VERIFIER._require_json_array(items, "receipt.records"),
+                f"receipt.records must contain at most {VERIFIER.MAX_JSON_LIST_ITEMS} items",
+            ),
+            (
+                "record sources",
+                lambda: VERIFIER._verify_persisted_record_sources(
+                    {"records": items},
+                    None,
+                    "anchor",
+                    require_source_files=True,
+                ),
+                f"anchor.records must contain at most {VERIFIER.MAX_JSON_LIST_ITEMS} items",
+            ),
+        )
+        for name, action, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    action()
+
+                error = str(caught.exception)
+                self.assertIn(expected, error)
+                self.assertNotIn(str(len(items)), error)
+                self.assertNotIn("[0]", error)
+
+    def test_recursive_json_array_scans_are_count_bounded_without_echo(self):
+        items = [None] * (VERIFIER.MAX_JSON_LIST_ITEMS + 1)
+        cases = (
+            (
+                "surrogates",
+                lambda: VERIFIER._reject_json_surrogates(items),
+                f"JSON array must contain at most {VERIFIER.MAX_JSON_LIST_ITEMS} items",
+            ),
+            (
+                "secret scan",
+                lambda: VERIFIER._check_no_secret_material(items, Path("receipt.json")),
+                f"receipt.json must contain at most {VERIFIER.MAX_JSON_LIST_ITEMS} items",
+            ),
+        )
+        for name, action, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    action()
+
+                error = str(caught.exception)
+                self.assertIn(expected, error)
+                self.assertNotIn(str(len(items)), error)
+                self.assertNotIn("[0]", error)
+
+    def test_recursive_json_object_scans_are_count_bounded_without_echo(self):
+        members = {
+            f"hidden_key_{offset}": None
+            for offset in range(VERIFIER.MAX_JSON_OBJECT_MEMBERS + 1)
+        }
+        pairs = list(members.items())
+        cases = (
+            (
+                "json hook",
+                lambda: VERIFIER._reject_duplicate_json_keys(pairs),
+                f"JSON object must contain at most {VERIFIER.MAX_JSON_OBJECT_MEMBERS} members",
+            ),
+            (
+                "surrogates",
+                lambda: VERIFIER._reject_json_surrogates(members),
+                f"JSON object must contain at most {VERIFIER.MAX_JSON_OBJECT_MEMBERS} members",
+            ),
+            (
+                "secret scan",
+                lambda: VERIFIER._check_no_secret_material(members, Path("receipt.json")),
+                f"receipt.json must contain at most {VERIFIER.MAX_JSON_OBJECT_MEMBERS} object members",
+            ),
+        )
+        for name, action, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    action()
+
+                error = str(caught.exception)
+                self.assertIn(expected, error)
+                self.assertNotIn(str(len(members)), error)
+                self.assertNotIn("hidden_key_0", error)
+
+    def test_recursive_json_depth_scans_are_bounded_without_echo(self):
+        nested = "hidden_leaf"
+        for _ in range(VERIFIER.MAX_JSON_NESTING_DEPTH + 1):
+            nested = [nested]
+        expected = (
+            f"JSON nesting depth must be at most {VERIFIER.MAX_JSON_NESTING_DEPTH} levels"
+        )
+        cases = (
+            ("surrogates", lambda: VERIFIER._reject_json_surrogates(nested)),
+            ("secret scan", lambda: VERIFIER._check_no_secret_material(nested, Path("receipt.json"))),
+        )
+        for name, action in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    action()
+
+                error = str(caught.exception)
+                self.assertIn(expected, error)
+                self.assertNotIn("hidden_leaf", error)
+                self.assertNotIn("[0]", error)
+
+    def test_json_parse_recursion_error_is_bounded_without_echo(self):
+        hidden = "hidden-receipt-recursion"
+        with tempfile.TemporaryDirectory() as raw_root:
+            path = Path(raw_root) / hidden
+            path.write_text("[]\n", encoding="utf-8")
+            original_loads = VERIFIER.json.loads
+
+            def raising_loads(*_args, **_kwargs):
+                raise RecursionError(hidden)
+
+            VERIFIER.json.loads = raising_loads
+            try:
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    VERIFIER._load_json(path, display_label="receipt")
+            finally:
+                VERIFIER.json.loads = original_loads
+
+        error = str(caught.exception)
+        self.assertIn(
+            f"JSON nesting depth must be at most {VERIFIER.MAX_JSON_NESTING_DEPTH} levels",
+            error,
+        )
+        self.assertNotIn(hidden, error)
+        self.assertNotIn(str(path), error)
+
     def test_secret_looking_unknown_keys_are_rejected_without_echo(self):
         cases = (
             ("password_receipt_unknown_secret", "receipt_unknown_secret"),
@@ -1792,6 +1924,58 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                         self.assertIn(f"{label} must be a repeatable path list", error)
                     else:
                         self.assertIn(f"{label} must be a path", error)
+                    self.assertNotIn("does not exist", error)
+                    self.assertNotIn(str(root), error)
+
+    def test_receipt_selector_path_lists_are_count_bounded_before_loading(self):
+        cases = (
+            ("direct receipt", "receipt", "--receipt", False),
+            ("direct receipt-dir", "receipt_dir", "--receipt-dir", False),
+            ("cli receipt", "receipt", "--receipt", True),
+            ("cli receipt-dir", "receipt_dir", "--receipt-dir", True),
+        )
+        for name, field, flag, via_cli in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    paths = [
+                        root / f"missing-{offset}.receipt.json"
+                        for offset in range(VERIFIER.MAX_RECEIPT_INPUT_PATHS + 1)
+                    ]
+                    if via_cli:
+                        argv = []
+                        for path in paths:
+                            argv.extend([flag, str(path)])
+
+                        rc, stdout, stderr = run_verify(argv)
+
+                        self.assertEqual(rc, 2)
+                        self.assertEqual(stdout, "")
+                        error = stderr
+                    else:
+                        args = argparse.Namespace(
+                            receipt=[],
+                            receipt_dir=[],
+                            allow_failed=False,
+                            allow_insecure_http=True,
+                            allow_legacy_colr007=False,
+                            allow_default_profile=False,
+                            require_source_files=False,
+                        )
+                        setattr(args, field, paths)
+
+                        stdout = io.StringIO()
+                        with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                            with contextlib.redirect_stdout(stdout):
+                                VERIFIER.run(args)
+
+                        self.assertEqual(stdout.getvalue(), "")
+                        error = str(caught.exception)
+
+                    self.assertIn(
+                        f"{flag} accepts at most {VERIFIER.MAX_RECEIPT_INPUT_PATHS} paths",
+                        error,
+                    )
                     self.assertNotIn("does not exist", error)
                     self.assertNotIn(str(root), error)
 

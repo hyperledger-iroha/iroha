@@ -532,6 +532,122 @@ def run_evidence(argv, *, include_context=True, include_freshness=True):
 
 
 class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
+    def test_json_lists_are_count_bounded_without_echo(self):
+        items = [None] * (EVIDENCE.MAX_JSON_LIST_ITEMS + 1)
+
+        with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+            EVIDENCE._require_list(items, "evidence.receipts")
+
+        error = str(caught.exception)
+        self.assertIn(
+            f"evidence.receipts must contain at most {EVIDENCE.MAX_JSON_LIST_ITEMS} items",
+            error,
+        )
+        self.assertNotIn(str(len(items)), error)
+
+    def test_recursive_json_list_scans_are_count_bounded_without_echo(self):
+        items = [None] * (EVIDENCE.MAX_JSON_LIST_ITEMS + 1)
+        cases = (
+            (
+                "surrogates",
+                lambda: EVIDENCE._reject_json_surrogates(items),
+                f"JSON array must contain at most {EVIDENCE.MAX_JSON_LIST_ITEMS} items",
+            ),
+            (
+                "secret scan",
+                lambda: EVIDENCE._check_no_secret_material(items, "evidence.extra"),
+                f"evidence.extra must contain at most {EVIDENCE.MAX_JSON_LIST_ITEMS} items",
+            ),
+        )
+        for name, action, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                    action()
+
+                error = str(caught.exception)
+                self.assertIn(expected, error)
+                self.assertNotIn(str(len(items)), error)
+                self.assertNotIn("[0]", error)
+
+    def test_recursive_json_object_scans_are_count_bounded_without_echo(self):
+        members = {
+            f"hidden_key_{offset}": None
+            for offset in range(EVIDENCE.MAX_JSON_OBJECT_MEMBERS + 1)
+        }
+        pairs = list(members.items())
+        cases = (
+            (
+                "json hook",
+                lambda: EVIDENCE._reject_duplicate_json_keys(pairs),
+                f"JSON object must contain at most {EVIDENCE.MAX_JSON_OBJECT_MEMBERS} members",
+            ),
+            (
+                "surrogates",
+                lambda: EVIDENCE._reject_json_surrogates(members),
+                f"JSON object must contain at most {EVIDENCE.MAX_JSON_OBJECT_MEMBERS} members",
+            ),
+            (
+                "secret scan",
+                lambda: EVIDENCE._check_no_secret_material(members, "evidence.extra"),
+                f"evidence.extra must contain at most {EVIDENCE.MAX_JSON_OBJECT_MEMBERS} object members",
+            ),
+        )
+        for name, action, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                    action()
+
+                error = str(caught.exception)
+                self.assertIn(expected, error)
+                self.assertNotIn(str(len(members)), error)
+                self.assertNotIn("hidden_key_0", error)
+
+    def test_recursive_json_depth_scans_are_bounded_without_echo(self):
+        nested = "hidden_leaf"
+        for _ in range(EVIDENCE.MAX_JSON_NESTING_DEPTH + 1):
+            nested = [nested]
+        expected = (
+            f"JSON nesting depth must be at most {EVIDENCE.MAX_JSON_NESTING_DEPTH} levels"
+        )
+        cases = (
+            ("surrogates", lambda: EVIDENCE._reject_json_surrogates(nested)),
+            ("secret scan", lambda: EVIDENCE._check_no_secret_material(nested, "evidence.extra")),
+        )
+        for name, action in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                    action()
+
+                error = str(caught.exception)
+                self.assertIn(expected, error)
+                self.assertNotIn("hidden_leaf", error)
+                self.assertNotIn("[0]", error)
+
+    def test_json_parse_recursion_error_is_bounded_without_echo(self):
+        hidden = "hidden-evidence-recursion"
+        with tempfile.TemporaryDirectory() as raw_root:
+            path = Path(raw_root) / hidden
+            path.write_text("[]\n", encoding="utf-8")
+            original_loads = EVIDENCE.json.loads
+
+            def raising_loads(*_args, **_kwargs):
+                raise RecursionError(hidden)
+
+            EVIDENCE.json.loads = raising_loads
+            try:
+                with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                    EVIDENCE._load_json(path, display_label="evidence-summary")
+            finally:
+                EVIDENCE.json.loads = original_loads
+
+        error = str(caught.exception)
+        self.assertIn(
+            f"JSON nesting depth must be at most {EVIDENCE.MAX_JSON_NESTING_DEPTH} levels",
+            error,
+        )
+        self.assertNotIn(hidden, error)
+        self.assertNotIn(str(path), error)
+
     def test_text_output_symlink_ancestor_diagnostic_does_not_echo_path(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -1404,6 +1520,78 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                         self.assertIn(f"{label} must be a repeatable path list", error)
                     else:
                         self.assertIn(f"{label} must be a path", error)
+                    self.assertNotIn("does not exist", error)
+                    self.assertNotIn(str(root), error)
+
+    def test_repeatable_input_path_lists_are_count_bounded_before_input_loading(self):
+        cases = (
+            ("direct canary", "canary_summary", "--canary-summary", False),
+            ("direct trust", "trust_summary", "--trust-summary", False),
+            ("direct receipt", "receipt", "--receipt", False),
+            ("direct receipt-dir", "receipt_dir", "--receipt-dir", False),
+            ("cli canary", "canary_summary", "--canary-summary", True),
+            ("cli trust", "trust_summary", "--trust-summary", True),
+            ("cli receipt", "receipt", "--receipt", True),
+            ("cli receipt-dir", "receipt_dir", "--receipt-dir", True),
+        )
+        for name, field, flag, via_cli in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    paths = [
+                        root / f"missing-{offset}.json"
+                        for offset in range(EVIDENCE.MAX_EVIDENCE_INPUT_PATHS + 1)
+                    ]
+                    if via_cli:
+                        argv = []
+                        for path in paths:
+                            argv.extend([flag, str(path)])
+
+                        rc, stdout, stderr = run_evidence(argv)
+
+                        self.assertEqual(rc, 2)
+                        self.assertEqual(stdout, "")
+                        error = stderr
+                    else:
+                        args = argparse.Namespace(
+                            canary_summary=[root / "missing-canary.summary.json"],
+                            trust_summary=[root / "missing-trust.summary.json"],
+                            receipt=[],
+                            receipt_dir=[],
+                            provider="local-bank",
+                            environment="preprod",
+                            default_rail_profile=None,
+                            summary_out=None,
+                            max_canary_age_days=36500,
+                            max_trust_age_days=36500,
+                            max_trust_source_age_days=36500,
+                            receipt_verifier_timeout_secs=30.0,
+                            allow_plan_only=False,
+                            allow_dry_run=False,
+                            allow_insecure_http=False,
+                            allow_legacy_colr007=False,
+                            allow_default_profile=False,
+                            allow_failed_receipts=False,
+                            allow_partial_canary=False,
+                            allow_canary_stage_receipts_only=False,
+                            allow_receipt_source_missing=False,
+                            allow_record_only_trust=False,
+                            allow_synthetic_trust=False,
+                            allow_missing_trust_source=False,
+                            allow_profile_json_not_emitted=False,
+                        )
+                        setattr(args, field, paths)
+                        stdout = io.StringIO()
+                        with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                            with contextlib.redirect_stdout(stdout):
+                                EVIDENCE.run(args)
+                        self.assertEqual(stdout.getvalue(), "")
+                        error = str(caught.exception)
+
+                    self.assertIn(
+                        f"{flag} accepts at most {EVIDENCE.MAX_EVIDENCE_INPUT_PATHS} paths",
+                        error,
+                    )
                     self.assertNotIn("does not exist", error)
                     self.assertNotIn(str(root), error)
 
@@ -4363,6 +4551,55 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 1.0,
             )
 
+    def test_direct_receipt_verifier_startup_failure_is_controlled_without_echo(self):
+        hidden = "token=evidence-verifier-startup-secret"
+
+        def raising_popen(*_args, **_kwargs):
+            raise OSError(hidden)
+
+        original_popen = EVIDENCE.subprocess.Popen
+        EVIDENCE.subprocess.Popen = raising_popen
+        try:
+            with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                EVIDENCE._run_command_bounded(
+                    [str(Path(tempfile.gettempdir()) / hidden / "verifier")],
+                    128,
+                    1.0,
+                )
+        finally:
+            EVIDENCE.subprocess.Popen = original_popen
+
+        message = str(caught.exception)
+        self.assertIn("receipt verifier could not be started", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn(tempfile.gettempdir(), message)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_direct_receipt_verifier_output_read_failure_is_controlled_without_echo(self):
+        hidden = "token=evidence-verifier-pipe-secret"
+
+        def raising_read(*_args, **_kwargs):
+            raise OSError(hidden)
+
+        original_read = EVIDENCE._read_limited_pipe
+        EVIDENCE._read_limited_pipe = raising_read
+        try:
+            with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                EVIDENCE._run_command_bounded(
+                    [sys.executable, "-c", "print('ok')"],
+                    128,
+                    1.0,
+                )
+        finally:
+            EVIDENCE._read_limited_pipe = original_read
+
+        message = str(caught.exception)
+        self.assertIn("receipt verifier output could not be read", message)
+        self.assertNotIn(hidden, message)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertTrue(caught.exception.__suppress_context__)
+
     def test_direct_receipt_verifier_runtime_timeout_is_bounded(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -5506,10 +5743,69 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertNotIn("latest.notary.json", stderr)
             self.assertNotIn("rail-drop-1.xml", stderr)
 
+    def test_rail_receipt_source_material_fields_cannot_be_relabelled_within_summary(self):
+        args = argparse.Namespace(
+            allow_failed_receipts=False,
+            allow_insecure_http=False,
+            allow_legacy_colr007=False,
+            allow_default_profile=False,
+            allow_receipt_source_missing=False,
+        )
+        cases = (
+            (
+                "same-source-path",
+                lambda receipt: receipt.__setitem__("payload_sha256", "7" * 64),
+                r"receipts\[2\]\.source_path duplicates .*receipts\[1\]\.source_path",
+            ),
+            (
+                "same-payload",
+                lambda receipt: receipt.__setitem__(
+                    "source_path",
+                    "/ops/iso/rail-inbox/relabelled-rail-drop.xml",
+                ),
+                r"receipts\[2\]\.payload_sha256 duplicates .*receipts\[1\]\.payload_sha256",
+            ),
+            (
+                "same-rail-message-id",
+                lambda receipt: (
+                    receipt.__setitem__(
+                        "source_path",
+                        "/ops/iso/rail-inbox/relabelled-rail-drop.xml",
+                    ),
+                    receipt.__setitem__("payload_sha256", "7" * 64),
+                ),
+                r"receipts\[2\]\.rail_message_id duplicates .*receipts\[1\]\.rail_message_id",
+            ),
+        )
+        for name, mutate, expected in cases:
+            with self.subTest(name=name):
+                receipt_summary = json.loads(receipt_stdout())
+                rail_receipt = next(
+                    receipt
+                    for receipt in receipt_summary["receipts"]
+                    if receipt["receipt_kind"] == "iso-rail-gateway"
+                )
+                copied = dict(rail_receipt)
+                copied["path"] = f"/ops/iso/relabelled-within/{name}.receipt.json"
+                copied["receipt_sha256"] = "9" * 64
+                copied["response_body_sha256"] = "8" * 64
+                mutate(copied)
+                receipt_summary["receipts"].append(copied)
+                receipt_summary["verified_receipts"] = len(receipt_summary["receipts"])
+                digest_receipt_summary(receipt_summary)
+
+                with self.assertRaisesRegex(EVIDENCE.EvidenceError, expected):
+                    EVIDENCE._verify_receipt_verifier_summary(
+                        receipt_summary,
+                        "receipt verifier summary",
+                        args,
+                    )
+
     def test_cross_canary_source_material_replay_rejects_each_compact_field(self):
         source_fields = (
             "source_path",
             "payload_sha256",
+            "rail_message_id",
             "anchor_path",
             "anchor_sha256",
             "store_dir",

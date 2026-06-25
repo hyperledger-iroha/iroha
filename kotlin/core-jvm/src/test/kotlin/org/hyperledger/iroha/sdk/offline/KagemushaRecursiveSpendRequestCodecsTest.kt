@@ -171,6 +171,8 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 "lineageWitness.previousRecursiveProofs.proof_public_inputs_hash mismatch",
             recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg") to
                 "lineageWitness.previousRecursiveProofs.proof_backend unsupported recursive proof backend",
+            recursiveSpendLineageWitnessWithPreviousProofBoxBackendAndEmptyProofBytes("halo2/kzg") to
+                "lineageWitness.previousRecursiveProofs.proof_backend unsupported recursive proof backend",
             recursiveSpendLineageWitnessWithEmptyPreviousProofBytes() to
                 "lineageWitness.previousRecursiveProofs.proof_bytes empty recursive proof",
         )
@@ -268,6 +270,17 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             )
         }
         assertEquals("bundle.proof_backend unsupported recursive proof backend", malformedProofBoxBackend.message)
+        val malformedProofBoxBackendWithEmptyProofBytes = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                recursiveSpendBundleWithProofBoxBackendAndEmptyProofBytes(
+                    UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND,
+                ),
+            )
+        }
+        assertEquals(
+            "bundle.proof_backend unsupported recursive proof backend",
+            malformedProofBoxBackendWithEmptyProofBytes.message,
+        )
 
         val trailingRecursiveProofField = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.decodeBundle(
@@ -344,6 +357,10 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 "note_commitment must be exactly 32 bytes",
             ),
             Pair(
+                recursiveSpendBundleWithCurrentNoteField(0, countPrefixedFixedArrayPayload(0x04, 32)),
+                "note_commitment byte field length must be 1",
+            ),
+            Pair(
                 recursiveSpendBundleWithCurrentNoteField(1, fixedArrayPayload(0x05, 31)),
                 "spend_nullifier must be exactly 32 bytes",
             ),
@@ -352,11 +369,36 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 "spend_nullifier must be exactly 32 bytes",
             ),
             Pair(
+                recursiveSpendBundleWithCurrentNoteField(1, countPrefixedFixedArrayPayload(0x05, 32)),
+                "spend_nullifier byte field length must be 1",
+            ),
+            Pair(
                 recursiveSpendBundleWithCurrentNoteField(
                     2,
                     numericPayload(byteArrayOf(1), scale = 1),
                 ),
                 "numeric scale must be zero",
+            ),
+            Pair(
+                recursiveSpendBundleWithCurrentNoteField(
+                    2,
+                    numericPayloadWithScalePayload(countPrefixedFixedArrayPayload(0x16, 4)),
+                ),
+                "Trailing bytes after field decode",
+            ),
+            Pair(
+                recursiveSpendBundleWithCurrentNoteField(
+                    2,
+                    numericPayloadWithMantissaPayload(littleEndianU32(2) + byteArrayOf(1)),
+                ),
+                "Unexpected end of data",
+            ),
+            Pair(
+                recursiveSpendBundleWithCurrentNoteField(
+                    2,
+                    numericPayload(byteArrayOf(0xff.toByte())),
+                ),
+                "numeric amount must be greater than zero",
             ),
             Pair(
                 recursiveSpendBundleWithCurrentNoteField(
@@ -406,7 +448,23 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             malformedDomain.message,
         )
         val malformedAccumulatorFields = listOf(
+            Triple(
+                0,
+                testStringPayload(" iroha:kagemusha:v1:recursive-spend-accumulator"),
+                "bundle.accumulator.domain must be " +
+                    KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
+            ),
+            Triple(
+                0,
+                testStringPayload("iroha:Kagemusha:v1:recursive-spend-accumulator"),
+                "bundle.accumulator.domain must be " +
+                    KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
+            ),
             Triple(1, testStringPayload("kagemusha-recursive-spend-abi-chain"), "bundle.accumulator.chain_id"),
+            Triple(1, testChainIdPayload(""), "bundle.accumulator.chain_id"),
+            Triple(1, testChainIdPayload(" kagemusha-recursive-spend-abi-chain"), "bundle.accumulator.chain_id"),
+            Triple(1, testChainIdPayload("kagemusha-recursive-spend-abi-chain "), "bundle.accumulator.chain_id"),
+            Triple(1, testChainIdPayload("kagemusha recursive-spend-abi-chain"), "bundle.accumulator.chain_id"),
             Triple(3, ByteArray(32), "bundle.accumulator.initial_root"),
             Triple(4, ByteArray(32), "bundle.accumulator.final_root"),
             Triple(4, init.initialRoot, "bundle.accumulator.final_root"),
@@ -428,6 +486,11 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 byteArrayOf(0, 0, 0, 0),
                 "bundle.accumulator.hop_count must be in 1.." +
                     KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1,
+            ),
+            Triple(
+                6,
+                countPrefixedFixedArrayPayload(0x06, 4),
+                "bundle.accumulator.hop_count",
             ),
             Triple(
                 6,
@@ -489,6 +552,11 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 "verifier_witness_batch_digest must be exactly 32 bytes",
             ),
             Triple(21, byteArrayOf(3, 0, 0, 0), "bundle.accumulator.verifier_opening_len"),
+            Triple(
+                21,
+                countPrefixedFixedArrayPayload(0x15, 4),
+                "bundle.accumulator.verifier_opening_len",
+            ),
         )
         malformedAccumulatorFields.forEach { (fieldIndex, replacement, expectedMessage) ->
             val malformedField = assertFailsWith<IllegalArgumentException> {
@@ -784,6 +852,16 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             compactPayload(fixture.verifierRecordRef.recordBytes, KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD),
             recordFields[1],
         )
+        val nonPortableChainId = assertFailsWith<IllegalArgumentException> {
+            VerifiedFoldHopEvidence(
+                proofOutputArchive = fixture.proofOutputArchive,
+                verifierRecord = fixture.verifierRecordRef,
+                chainId = "kagemusha test-chain",
+                asset = asset,
+                rootAfter = rootAfter,
+            )
+        }
+        assertEquals("chainId must use portable registry syntax", nonPortableChainId.message)
     }
 
     @Test
@@ -1233,7 +1311,10 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             Triple("1e3", "amount must be a decimal integer", "publicAmount must be a decimal integer"),
             Triple("7 ", "amount must be a decimal integer", "publicAmount must be a decimal integer"),
             Triple(" 7", "amount must be a decimal integer", "publicAmount must be a decimal integer"),
+            Triple("\t7", "amount must be a decimal integer", "publicAmount must be a decimal integer"),
+            Triple("7\n", "amount must be a decimal integer", "publicAmount must be a decimal integer"),
             Triple(U128_MAX_PLUS_ONE, "amount must fit in u128", "publicAmount must fit in u128"),
+            Triple(U128_TOO_MANY_DIGITS, "amount must fit in u128", "publicAmount must fit in u128"),
         )) {
             val invalidAmount = assertFailsWith<IllegalArgumentException> {
                 SpendableNoteDescriptor(ByteArray(32) { 4 }, ByteArray(32) { 5 }, amount)
@@ -1589,10 +1670,37 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 "pallasOpenEnvelopes[0].domain_tag is required",
             pallasOpenEnvelopeVectorArchive { it.vkCommitmentPayload = fixedArrayPayload(0x70, 32) } to
                 "pallasOpenEnvelopes[0].vk_commitment must be exactly 32 bytes",
+            pallasOpenEnvelopeVectorArchive {
+                it.vkCommitmentOptionPayload = testOptionRawWithTrailingByte(fixedBytes(0x70))
+            } to "pallasOpenEnvelopes[0].vk_commitment",
+            pallasOpenEnvelopeVectorArchive {
+                it.vkCommitmentOptionPayload = testOptionRawWithUnknownTag()
+            } to "pallasOpenEnvelopes[0].vk_commitment option tag must be 0 or 1",
+            pallasOpenEnvelopeVectorArchive {
+                it.vkCommitmentOptionPayload = testOptionRawWithDeclaredLengthTooLong(fixedBytes(0x70))
+            } to "pallasOpenEnvelopes[0].vk_commitment payload length mismatch",
             pallasOpenEnvelopeVectorArchive { it.publicInputsSchemaHashPayload = fixedArrayPayload(0x71, 32) } to
                 "pallasOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes",
+            pallasOpenEnvelopeVectorArchive {
+                it.publicInputsSchemaHashOptionPayload = testOptionRawWithTrailingByte(fixedBytes(0x71))
+            } to "pallasOpenEnvelopes[0].public_inputs_schema_hash",
+            pallasOpenEnvelopeVectorArchive {
+                it.publicInputsSchemaHashOptionPayload = testOptionRawWithUnknownTag()
+            } to "pallasOpenEnvelopes[0].public_inputs_schema_hash option tag must be 0 or 1",
+            pallasOpenEnvelopeVectorArchive {
+                it.publicInputsSchemaHashOptionPayload = testOptionRawWithDeclaredLengthTooLong(fixedBytes(0x71))
+            } to "pallasOpenEnvelopes[0].public_inputs_schema_hash payload length mismatch",
             pallasOpenEnvelopeVectorArchive { it.domainTagPayload = fixedArrayPayload(0x72, 32) } to
                 "pallasOpenEnvelopes[0].domain_tag must be exactly 32 bytes",
+            pallasOpenEnvelopeVectorArchive {
+                it.domainTagOptionPayload = testOptionRawWithTrailingByte(fixedBytes(0x72))
+            } to "pallasOpenEnvelopes[0].domain_tag",
+            pallasOpenEnvelopeVectorArchive {
+                it.domainTagOptionPayload = testOptionRawWithUnknownTag()
+            } to "pallasOpenEnvelopes[0].domain_tag option tag must be 0 or 1",
+            pallasOpenEnvelopeVectorArchive {
+                it.domainTagOptionPayload = testOptionRawWithDeclaredLengthTooLong(fixedBytes(0x72))
+            } to "pallasOpenEnvelopes[0].domain_tag payload length mismatch",
             pallasOpenEnvelopeVectorArchive { it.trailingEnvelopeBytes = byteArrayOf(0x7f) } to
                 "Trailing bytes after pallasOpenEnvelopes[0]",
             pallasOpenEnvelopeVectorArchiveWithPayload(byteArrayOf(0x00)) to "Unexpected end of data",
@@ -1734,9 +1842,14 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         val tamperedError = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.decodeBundle(tampered)
         }
+        val tamperedMessage = tamperedError.message.orEmpty()
         assertTrue(
-            tamperedError.message?.contains("Checksum mismatch") == true,
-            "expected tampered bundle to fail checksum validation, actual: ${tamperedError.message}",
+            tamperedMessage.startsWith("Checksum mismatch: expected 0x"),
+            "expected tampered bundle to report expected checksum, actual: $tamperedMessage",
+        )
+        assertTrue(
+            tamperedMessage.contains(" got 0x"),
+            "expected tampered bundle to report actual checksum, actual: $tamperedMessage",
         )
 
         val error = assertFailsWith<IllegalArgumentException> {
@@ -1819,10 +1932,37 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 "previousProofOpenEnvelopes[0].vk_commitment is required",
             pallasOpenEnvelopeVectorArchive { it.vkCommitmentPayload = fixedArrayPayload(0x70, 32) } to
                 "previousProofOpenEnvelopes[0].vk_commitment must be exactly 32 bytes",
+            pallasOpenEnvelopeVectorArchive {
+                it.vkCommitmentOptionPayload = testOptionRawWithTrailingByte(fixedBytes(0x70))
+            } to "previousProofOpenEnvelopes[0].vk_commitment",
+            pallasOpenEnvelopeVectorArchive {
+                it.vkCommitmentOptionPayload = testOptionRawWithUnknownTag()
+            } to "previousProofOpenEnvelopes[0].vk_commitment option tag must be 0 or 1",
+            pallasOpenEnvelopeVectorArchive {
+                it.vkCommitmentOptionPayload = testOptionRawWithDeclaredLengthTooLong(fixedBytes(0x70))
+            } to "previousProofOpenEnvelopes[0].vk_commitment payload length mismatch",
             pallasOpenEnvelopeVectorArchive { it.publicInputsSchemaHashPayload = fixedArrayPayload(0x71, 32) } to
                 "previousProofOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes",
+            pallasOpenEnvelopeVectorArchive {
+                it.publicInputsSchemaHashOptionPayload = testOptionRawWithTrailingByte(fixedBytes(0x71))
+            } to "previousProofOpenEnvelopes[0].public_inputs_schema_hash",
+            pallasOpenEnvelopeVectorArchive {
+                it.publicInputsSchemaHashOptionPayload = testOptionRawWithUnknownTag()
+            } to "previousProofOpenEnvelopes[0].public_inputs_schema_hash option tag must be 0 or 1",
+            pallasOpenEnvelopeVectorArchive {
+                it.publicInputsSchemaHashOptionPayload = testOptionRawWithDeclaredLengthTooLong(fixedBytes(0x71))
+            } to "previousProofOpenEnvelopes[0].public_inputs_schema_hash payload length mismatch",
             pallasOpenEnvelopeVectorArchive { it.domainTagPayload = fixedArrayPayload(0x72, 32) } to
                 "previousProofOpenEnvelopes[0].domain_tag must be exactly 32 bytes",
+            pallasOpenEnvelopeVectorArchive {
+                it.domainTagOptionPayload = testOptionRawWithTrailingByte(fixedBytes(0x72))
+            } to "previousProofOpenEnvelopes[0].domain_tag",
+            pallasOpenEnvelopeVectorArchive {
+                it.domainTagOptionPayload = testOptionRawWithUnknownTag()
+            } to "previousProofOpenEnvelopes[0].domain_tag option tag must be 0 or 1",
+            pallasOpenEnvelopeVectorArchive {
+                it.domainTagOptionPayload = testOptionRawWithDeclaredLengthTooLong(fixedBytes(0x72))
+            } to "previousProofOpenEnvelopes[0].domain_tag payload length mismatch",
             pallasOpenEnvelopeVectorArchive { it.trailingEnvelopeBytes = byteArrayOf(0x7f) } to
                 "Trailing bytes after previousProofOpenEnvelopes[0]",
             pallasOpenEnvelopeVectorArchiveWithPayload(byteArrayOf(0x00)) to "Unexpected end of data",
@@ -2056,6 +2196,9 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         var vkCommitmentPayload: ByteArray? = null,
         var publicInputsSchemaHashPayload: ByteArray? = null,
         var domainTagPayload: ByteArray? = null,
+        var vkCommitmentOptionPayload: ByteArray? = null,
+        var publicInputsSchemaHashOptionPayload: ByteArray? = null,
+        var domainTagOptionPayload: ByteArray? = null,
         var trailingEnvelopeBytes: ByteArray = ByteArray(0),
     )
 
@@ -2126,25 +2269,27 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         }
         writeTestField(encoder) { writeTestString(it, spec.transcriptLabel) }
         writeTestField(encoder) {
-            writeTestOptionRaw(
-                it,
-                if (spec.includeVkCommitment) spec.vkCommitmentPayload ?: fixedBytes(0x70) else null,
+            it.writeBytes(
+                spec.vkCommitmentOptionPayload
+                    ?: testOptionRaw(if (spec.includeVkCommitment) spec.vkCommitmentPayload ?: fixedBytes(0x70) else null),
             )
         }
         writeTestField(encoder) {
-            writeTestOptionRaw(
-                it,
-                if (spec.includePublicInputsSchemaHash) {
-                    spec.publicInputsSchemaHashPayload ?: fixedBytes(0x71)
-                } else {
-                    null
-                },
+            it.writeBytes(
+                spec.publicInputsSchemaHashOptionPayload
+                    ?: testOptionRaw(
+                        if (spec.includePublicInputsSchemaHash) {
+                            spec.publicInputsSchemaHashPayload ?: fixedBytes(0x71)
+                        } else {
+                            null
+                        },
+                    ),
             )
         }
         writeTestField(encoder) {
-            writeTestOptionRaw(
-                it,
-                if (spec.includeDomainTag) spec.domainTagPayload ?: fixedBytes(0x72) else null,
+            it.writeBytes(
+                spec.domainTagOptionPayload
+                    ?: testOptionRaw(if (spec.includeDomainTag) spec.domainTagPayload ?: fixedBytes(0x72) else null),
             )
         }
     }
@@ -2225,6 +2370,21 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         encoder.writeLength(payload.size.toLong(), true)
         encoder.writeBytes(payload)
     }
+
+    private fun testOptionRaw(payload: ByteArray?): ByteArray =
+        testPayload { writeTestOptionRaw(this, payload) }
+
+    private fun testOptionRawWithTrailingByte(payload: ByteArray): ByteArray =
+        testOptionRaw(payload) + byteArrayOf(0x7f)
+
+    private fun testOptionRawWithUnknownTag(): ByteArray = byteArrayOf(0x02)
+
+    private fun testOptionRawWithDeclaredLengthTooLong(payload: ByteArray): ByteArray =
+        testPayload {
+            writeByte(1)
+            writeLength((payload.size + 1).toLong(), true)
+            writeBytes(payload)
+        }
 
     private fun verifyingKeyCommitment(backend: String, verifierKey: ByteArray): ByteArray {
         val digest = MessageDigest.getInstance("SHA-256")
@@ -2574,6 +2734,32 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         )
     }
 
+    private fun recursiveSpendLineageWitnessWithPreviousProofBoxBackendAndEmptyProofBytes(
+        proofBackend: String,
+    ): ByteArray {
+        val fields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+            ),
+        ).toMutableList()
+        val previousProofs = sequencePayloads(fields[3]).toMutableList()
+        assertTrue(previousProofs.isNotEmpty())
+        val previousProofFields = fieldPayloads(previousProofs[0]).toMutableList()
+        val proofBoxFields = fieldPayloads(previousProofFields[3]).toMutableList()
+        proofBoxFields[0] = testStringPayload(proofBackend)
+        proofBoxFields[1] = testPayload { writeUInt(0, 64) }
+        previousProofFields[3] = encodeFields(proofBoxFields)
+        previousProofs[0] = encodeFields(previousProofFields)
+        fields[3] = encodeSequence(previousProofs)
+        return NoritoCodec.encode(
+            encodeFields(fields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
     private fun recursiveSpendLineageWitnessWithEmptyPreviousProofBytes(): ByteArray {
         val fields = fieldPayloads(
             compactPayload(
@@ -2689,6 +2875,22 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             ),
         )
 
+    private fun numericPayloadWithMantissaPayload(mantissaPayload: ByteArray): ByteArray =
+        encodeFields(
+            listOf(
+                mantissaPayload,
+                littleEndianU32(0),
+            ),
+        )
+
+    private fun numericPayloadWithScalePayload(scalePayload: ByteArray): ByteArray =
+        encodeFields(
+            listOf(
+                littleEndianU32(1) + byteArrayOf(1),
+                scalePayload,
+            ),
+        )
+
     private fun numericPayloadWithTrailingField(): ByteArray =
         numericPayload(byteArrayOf(1)) + encodeFields(listOf(littleEndianU32(0x42)))
 
@@ -2750,6 +2952,27 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         val proofFields = fieldPayloads(bundleFields[1]).toMutableList()
         val proofBoxFields = fieldPayloads(proofFields[3]).toMutableList()
         proofBoxFields[0] = testStringPayload(proofBackend)
+        proofFields[3] = encodeFields(proofBoxFields)
+        bundleFields[1] = encodeFields(proofFields)
+        return NoritoCodec.encode(
+            encodeFields(bundleFields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun recursiveSpendBundleWithProofBoxBackendAndEmptyProofBytes(proofBackend: String): ByteArray {
+        val bundleFields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            ),
+        ).toMutableList()
+        val proofFields = fieldPayloads(bundleFields[1]).toMutableList()
+        val proofBoxFields = fieldPayloads(proofFields[3]).toMutableList()
+        proofBoxFields[0] = testStringPayload(proofBackend)
+        proofBoxFields[1] = testPayload { writeTestBytesVec(this, ByteArray(0)) }
         proofFields[3] = encodeFields(proofBoxFields)
         bundleFields[1] = encodeFields(proofFields)
         return NoritoCodec.encode(
@@ -2963,6 +3186,9 @@ class KagemushaRecursiveSpendRequestCodecsTest {
     private fun testStringPayload(value: String): ByteArray =
         testPayload { writeTestString(this, value) }
 
+    private fun testChainIdPayload(value: String): ByteArray =
+        testPayload { writeTestField(this) { writeTestString(it, value) } }
+
     private fun sequencePayloads(payload: ByteArray): List<ByteArray> {
         val decoder = NoritoDecoder(payload, NoritoHeader.COMPACT_LEN)
         val count = decoder.readUInt(64)
@@ -3075,6 +3301,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             "kagemusha-recursive-spend-lineage-badhop-v1"
         private const val UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND = "halo2/kzg"
         private const val U128_MAX_PLUS_ONE = "340282366920938463463374607431768211456"
+        private val U128_TOO_MANY_DIGITS = "9".repeat(40)
         private const val SAMPLE_LINEAGE_OPENING_LEN = 2
         private val PALLAS_OPEN_ENVELOPE_VECTOR_SCHEMA_HASH = byteArrayOf(
             0xfe.toByte(),

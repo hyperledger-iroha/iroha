@@ -93,6 +93,14 @@ def pending_schema_source(message_id="barr.001.001.01"):
     }
 
 
+def known_pending_schema_source(message_id="colr.012.001.05"):
+    return {
+        "message_def_id": message_id,
+        "source": dict(VERIFIER.KNOWN_PENDING_SCHEMA_SOURCE_METADATA[message_id]),
+        "reason": "Official ISO catalogue lists an XSD download.",
+    }
+
+
 def rewrite_schema(root, message_id, content, *, manifest_path=None):
     schema_path = root / "xsd" / "iso" / f"{message_id}.xsd"
     schema_path.write_text(content, encoding="utf-8")
@@ -191,6 +199,134 @@ def run_verify(argv):
 
 
 class IsoXsdFixtureVerifyTest(unittest.TestCase):
+    def test_checked_in_pending_schema_sources_are_exact_metadata_pinned(self):
+        manifest = json.loads(VERIFIER.DEFAULT_MANIFEST.read_text(encoding="utf-8"))
+        pending_entries = manifest["pending_schema_sources"]
+        pending_ids = {entry["message_def_id"] for entry in pending_entries}
+
+        self.assertEqual(
+            pending_ids,
+            set(VERIFIER.KNOWN_PENDING_SCHEMA_SOURCE_METADATA),
+        )
+        for entry in pending_entries:
+            message_def_id = entry["message_def_id"]
+            self.assertEqual(
+                entry["source"],
+                VERIFIER.KNOWN_PENDING_SCHEMA_SOURCE_METADATA[message_def_id],
+            )
+
+    def test_json_arrays_are_count_bounded_without_echo(self):
+        items = [None] * (VERIFIER.MAX_JSON_ARRAY_ITEMS + 1)
+
+        with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+            VERIFIER._require_array(items, "manifest.schemas")
+
+        error = str(caught.exception)
+        self.assertIn(
+            f"manifest.schemas must contain at most {VERIFIER.MAX_JSON_ARRAY_ITEMS} items",
+            error,
+        )
+        self.assertNotIn(str(len(items)), error)
+
+    def test_recursive_json_array_scans_are_count_bounded_without_echo(self):
+        items = [None] * (VERIFIER.MAX_JSON_ARRAY_ITEMS + 1)
+        cases = (
+            (
+                "surrogates",
+                lambda: VERIFIER._reject_json_surrogates(items),
+                f"JSON array must contain at most {VERIFIER.MAX_JSON_ARRAY_ITEMS} items",
+            ),
+            (
+                "secret scan",
+                lambda: VERIFIER._check_no_secret_material(items, "manifest.extra"),
+                f"manifest.extra must contain at most {VERIFIER.MAX_JSON_ARRAY_ITEMS} items",
+            ),
+        )
+        for name, action, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                    action()
+
+                error = str(caught.exception)
+                self.assertIn(expected, error)
+                self.assertNotIn(str(len(items)), error)
+                self.assertNotIn("[0]", error)
+
+    def test_recursive_json_object_scans_are_count_bounded_without_echo(self):
+        members = {
+            f"hidden_key_{offset}": None
+            for offset in range(VERIFIER.MAX_JSON_OBJECT_MEMBERS + 1)
+        }
+        pairs = list(members.items())
+        cases = (
+            (
+                "json hook",
+                lambda: VERIFIER._reject_duplicate_json_keys(pairs),
+                f"JSON object must contain at most {VERIFIER.MAX_JSON_OBJECT_MEMBERS} members",
+            ),
+            (
+                "surrogates",
+                lambda: VERIFIER._reject_json_surrogates(members),
+                f"JSON object must contain at most {VERIFIER.MAX_JSON_OBJECT_MEMBERS} members",
+            ),
+            (
+                "secret scan",
+                lambda: VERIFIER._check_no_secret_material(members, "manifest.extra"),
+                f"manifest.extra must contain at most {VERIFIER.MAX_JSON_OBJECT_MEMBERS} object members",
+            ),
+        )
+        for name, action, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                    action()
+
+                error = str(caught.exception)
+                self.assertIn(expected, error)
+                self.assertNotIn(str(len(members)), error)
+                self.assertNotIn("hidden_key_0", error)
+
+    def test_recursive_json_depth_scans_are_bounded_without_echo(self):
+        nested = "hidden_leaf"
+        for _ in range(VERIFIER.MAX_JSON_NESTING_DEPTH + 1):
+            nested = [nested]
+        expected = (
+            f"JSON nesting depth must be at most {VERIFIER.MAX_JSON_NESTING_DEPTH} levels"
+        )
+        cases = (
+            ("surrogates", lambda: VERIFIER._reject_json_surrogates(nested)),
+            ("secret scan", lambda: VERIFIER._check_no_secret_material(nested, "manifest.extra")),
+        )
+        for name, action in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                    action()
+
+                error = str(caught.exception)
+                self.assertIn(expected, error)
+                self.assertNotIn("hidden_leaf", error)
+                self.assertNotIn("[0]", error)
+
+    def test_json_parse_recursion_error_is_bounded_without_echo(self):
+        hidden = "hidden-xsd-recursion"
+        original_loads = VERIFIER.json.loads
+
+        def raising_loads(*_args, **_kwargs):
+            raise RecursionError(hidden)
+
+        VERIFIER.json.loads = raising_loads
+        try:
+            with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                VERIFIER._load_json_bytes(b"[]", Path(hidden), display_label="manifest")
+        finally:
+            VERIFIER.json.loads = original_loads
+
+        error = str(caught.exception)
+        self.assertIn(
+            f"JSON nesting depth must be at most {VERIFIER.MAX_JSON_NESTING_DEPTH} levels",
+            error,
+        )
+        self.assertNotIn(hidden, error)
+
     def test_direct_run_policy_flags_must_be_booleans_before_manifest_loading(self):
         cases = (
             (
@@ -1489,6 +1625,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     self.assertEqual(stdout, "")
                     self.assertIn(expected, stderr)
                     self.assertNotIn(hidden, stderr)
+                    self.assertNotIn(str(root), stderr)
 
     def test_schema_fixture_mismatch_diagnostics_do_not_echo_values(self):
         def set_manifest(manifest_path, mutate):
@@ -3640,6 +3777,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+                    self.assertNotIn(str(root), stderr)
                     if message == "already checked-in schema":
                         self.assertNotIn("fooo.001.001.01", stderr)
                     if message == "trust pin/revocation DER SHA-256 roles":
@@ -3879,6 +4017,43 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     self.assertNotIn("xmllint-secret", stderr)
                     self.assertNotIn("xmllint-identifier-secret", stderr)
 
+    def test_xmllint_failure_output_redacts_local_paths_without_echo(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            schema_path = manifest_path.resolve().parent / "iso/fooo.001.001.01.xsd"
+            fixture_path = manifest_path.resolve().parent / "../foo_fixture.xml"
+            cases = (
+                ("schema path", f"{schema_path}: schema validation warning"),
+                ("fixture path", f"{fixture_path}: fixture validation warning"),
+            )
+            for name, leaked_output in cases:
+                with self.subTest(name=name):
+                    original_which = VERIFIER.shutil.which
+                    original_run = VERIFIER._run_command_bounded
+                    VERIFIER.shutil.which = lambda command: "/usr/bin/xmllint"
+                    VERIFIER._run_command_bounded = lambda *_args, **_kwargs: (
+                        1,
+                        "",
+                        False,
+                        leaked_output,
+                        False,
+                        False,
+                    )
+                    try:
+                        rc, stdout, stderr = run_verify(
+                            ["--manifest", str(manifest_path), "--validate-xml-schema"]
+                        )
+                    finally:
+                        VERIFIER.shutil.which = original_which
+                        VERIFIER._run_command_bounded = original_run
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("failed XML schema validation", stderr)
+                    self.assertIn("xmllint output redacted: local paths", stderr)
+                    self.assertNotIn(str(root), stderr)
+
     def test_xmllint_diagnostics_redact_control_characters_without_echo(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -3929,12 +4104,27 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             root = Path(raw_root)
             manifest_path = write_minimal_tree(root, minimal_manifest())
             fixture_path = manifest_path.resolve().parent / "../foo_fixture.xml"
+            schema_path = manifest_path.resolve().parent / "iso/fooo.001.001.01.xsd"
             expected_success = f"{fixture_path} validates"
             cases = (
                 ("allowed stderr", "", expected_success, 0, ""),
                 ("allowed stdout", expected_success, "", 0, ""),
                 ("warning stderr", "", "schema validator warning", 2, "unexpected output"),
                 ("warning stdout", "schema validator warning", "", 2, "unexpected output"),
+                (
+                    "local fixture path stderr",
+                    "",
+                    f"{fixture_path}: validator warning",
+                    2,
+                    "xmllint output redacted: local paths",
+                ),
+                (
+                    "local schema path stdout",
+                    f"{schema_path}: validator warning",
+                    "",
+                    2,
+                    "xmllint output redacted: local paths",
+                ),
                 (
                     "secret stderr",
                     "",
@@ -3981,6 +4171,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                         self.assertNotIn("token=", stderr)
                         self.assertNotIn("xmllint-secret", stderr)
                         self.assertNotIn("xmllint-identifier-secret", stderr)
+                        self.assertNotIn(str(root), stderr)
 
     def test_boolean_xmllint_output_limit_is_rejected(self):
         with self.assertRaisesRegex(
@@ -3992,6 +4183,70 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 True,
                 1.0,
             )
+
+    def test_xmllint_startup_failure_is_controlled_without_echo(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            hidden = "token=xmllint-startup-secret"
+
+            def raising_popen(*_args, **_kwargs):
+                raise OSError(hidden)
+
+            original_which = VERIFIER.shutil.which
+            original_popen = VERIFIER.subprocess.Popen
+            VERIFIER.shutil.which = lambda command: str(root / hidden / "xmllint")
+            VERIFIER.subprocess.Popen = raising_popen
+            try:
+                with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                    VERIFIER._run_command_bounded(
+                        [str(root / hidden / "xmllint")],
+                        128,
+                        1.0,
+                    )
+                message = str(caught.exception)
+                self.assertIn("xmllint could not be started", message)
+                self.assertNotIn(str(root), message)
+                self.assertNotIn(hidden, message)
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertTrue(caught.exception.__suppress_context__)
+
+                rc, stdout, stderr = run_verify(
+                    ["--manifest", str(manifest_path), "--validate-xml-schema"]
+                )
+            finally:
+                VERIFIER.shutil.which = original_which
+                VERIFIER.subprocess.Popen = original_popen
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("xmllint could not be started", stderr)
+            self.assertNotIn(str(root), stderr)
+            self.assertNotIn(hidden, stderr)
+
+    def test_xmllint_output_read_failure_is_controlled_without_echo(self):
+        hidden = "token=xmllint-pipe-secret"
+
+        def raising_read(*_args, **_kwargs):
+            raise OSError(hidden)
+
+        original_read = VERIFIER._read_limited_pipe
+        VERIFIER._read_limited_pipe = raising_read
+        try:
+            with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                VERIFIER._run_command_bounded(
+                    [sys.executable, "-c", "print('ok')"],
+                    128,
+                    1.0,
+                )
+        finally:
+            VERIFIER._read_limited_pipe = original_read
+
+        message = str(caught.exception)
+        self.assertIn("xmllint output could not be read", message)
+        self.assertNotIn(hidden, message)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertTrue(caught.exception.__suppress_context__)
 
     def test_xml_schema_validation_bounds_xmllint_runtime(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -5032,6 +5287,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+                    self.assertNotIn(str(root), stderr)
 
     def test_secret_looking_schema_foreign_child_namespaces_are_rejected_without_echo(self):
         base_schema = xsd_text("fooo.001.001.01", "FooPayload").replace(
@@ -5864,6 +6120,18 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     manifest["pending_schema_sources"].append(pending_schema_source()),
                     manifest["pending_schema_sources"][0]["source"].__setitem__(
                         "download_url",
+                        "https://www.iso20022.org/message/"
+                        + ("1" * 2010)
+                        + "/download",
+                    ),
+                ),
+                "source.download_url must be no longer than",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"][0]["source"].__setitem__(
+                        "download_url",
                         "https://www.iso20022.org/message/%31345/download",
                     ),
                 ),
@@ -5878,6 +6146,30 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     ),
                 ),
                 "source.download_url must not contain secret-looking material",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(
+                        known_pending_schema_source("colr.012.001.05")
+                    ),
+                    manifest["pending_schema_sources"][0]["source"].__setitem__(
+                        "download_url",
+                        "https://www.iso20022.org/message/22505/download",
+                    ),
+                ),
+                "source.download_url must match known official ISO pending-source metadata",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(
+                        known_pending_schema_source("sese.023.001.11")
+                    ),
+                    manifest["pending_schema_sources"][0]["source"].__setitem__(
+                        "message_name",
+                        "SecuritiesSettlementTransactionStatusAdviceV11",
+                    ),
+                ),
+                "source.message_name must match known official ISO pending-source metadata",
             ),
             (
                 lambda manifest: (
@@ -5898,6 +6190,17 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     ),
                 ),
                 "source.catalogue_url must not contain percent escapes",
+            ),
+            (
+                lambda manifest: (
+                    manifest["pending_schema_sources"].append(pending_schema_source()),
+                    manifest["pending_schema_sources"][0]["source"].__setitem__(
+                        "catalogue_url",
+                        "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page="
+                        + ("1" * 1990),
+                    ),
+                ),
+                "source.catalogue_url must be no longer than",
             ),
             (
                 lambda manifest: (

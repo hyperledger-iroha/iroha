@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, Mapping, Optional
+from typing import Any, Dict, Iterable, Mapping, Optional, Union
 
 from .query_filter import FilterExpr, ensure_filter
+
+SelectEntry = Union[str, Mapping[str, Any]]
 
 
 def _normalize_count_mode(count_mode: Optional[str]) -> Optional[str]:
@@ -15,6 +17,38 @@ def _normalize_count_mode(count_mode: Optional[str]) -> Optional[str]:
     if value not in {"bounded", "exact"}:
         raise ValueError("count_mode must be 'bounded' or 'exact'")
     return value
+
+
+def _normalize_query_name(query_name: Optional[str]) -> Optional[str]:
+    if query_name is None:
+        return None
+    if not isinstance(query_name, str):
+        raise TypeError("query_name must be a string")
+    value = query_name.strip()
+    if not value:
+        raise ValueError("query_name must be a non-empty string")
+    return value
+
+
+def _normalize_select(
+    select: Optional[Iterable[SelectEntry]],
+) -> Optional[list[Union[str, Dict[str, Any]]]]:
+    if select is None:
+        return None
+    if isinstance(select, (str, bytes, bytearray)):
+        raise TypeError("select must be a sequence of field paths or objects")
+    normalized: list[Union[str, Dict[str, Any]]] = []
+    for index, entry in enumerate(select):
+        if isinstance(entry, str):
+            field_path = entry.strip()
+            if not field_path:
+                raise ValueError(f"select[{index}] must be a non-empty field path")
+            normalized.append(field_path)
+        elif isinstance(entry, Mapping):
+            normalized.append(dict(entry))
+        else:
+            raise TypeError(f"select[{index}] must be a field-path string or mapping")
+    return normalized
 
 
 @dataclass
@@ -41,7 +75,7 @@ class QueryEnvelope:
     fetch_size: Optional[int] = None
     count_mode: Optional[str] = None
     query_name: Optional[str] = None
-    select: Optional[Iterable[Mapping[str, Any]]] = None
+    select: Optional[Iterable[SelectEntry]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
@@ -55,10 +89,12 @@ class QueryEnvelope:
         count_mode = _normalize_count_mode(self.count_mode)
         if count_mode is not None:
             payload["count_mode"] = count_mode
-        if self.query_name is not None:
-            payload["query"] = self.query_name
-        if self.select is not None:
-            payload["select"] = list(self.select)
+        query_name = _normalize_query_name(self.query_name)
+        if query_name is not None:
+            payload["query"] = query_name
+        select = _normalize_select(self.select)
+        if select is not None:
+            payload["select"] = select
         return payload
 
 
@@ -71,6 +107,7 @@ def account_query_envelope(
     fetch_size: Optional[int] = None,
     count_mode: Optional[str] = None,
     query_name: Optional[str] = None,
+    select: Optional[Iterable[SelectEntry]] = None,
 ) -> Dict[str, Any]:
     """Build an envelope for POST `/v1/accounts/query`."""
 
@@ -81,6 +118,7 @@ def account_query_envelope(
         fetch_size=fetch_size,
         count_mode=count_mode,
         query_name=query_name,
+        select=select,
     )
     return envelope.to_dict()
 
@@ -93,6 +131,7 @@ def asset_definitions_query_envelope(
     fetch_size: Optional[int] = None,
     count_mode: Optional[str] = None,
     query_name: Optional[str] = None,
+    select: Optional[Iterable[SelectEntry]] = None,
 ) -> Dict[str, Any]:
     """Build an envelope for POST `/v1/assets/definitions/query`."""
 
@@ -103,6 +142,7 @@ def asset_definitions_query_envelope(
         fetch_size=fetch_size,
         count_mode=count_mode,
         query_name=query_name,
+        select=select,
     )
     return envelope.to_dict()
 
@@ -116,6 +156,7 @@ def domain_query_envelope(
     fetch_size: Optional[int] = None,
     count_mode: Optional[str] = None,
     query_name: Optional[str] = None,
+    select: Optional[Iterable[SelectEntry]] = None,
 ) -> Dict[str, Any]:
     """Build an envelope for POST `/v1/domains/query`."""
 
@@ -126,6 +167,7 @@ def domain_query_envelope(
         fetch_size=fetch_size,
         count_mode=count_mode,
         query_name=query_name,
+        select=select,
     )
     return envelope.to_dict()
 
@@ -139,6 +181,7 @@ def asset_holders_query_envelope(
     fetch_size: Optional[int] = None,
     count_mode: Optional[str] = None,
     query_name: Optional[str] = None,
+    select: Optional[Iterable[SelectEntry]] = None,
 ) -> Dict[str, Any]:
     """Build an envelope for POST `/v1/assets/{definition}/holders/query`."""
 
@@ -149,6 +192,7 @@ def asset_holders_query_envelope(
         fetch_size=fetch_size,
         count_mode=count_mode,
         query_name=query_name,
+        select=select,
     )
     return envelope.to_dict()
 
@@ -162,6 +206,7 @@ def rwa_query_envelope(
     fetch_size: Optional[int] = None,
     count_mode: Optional[str] = None,
     query_name: Optional[str] = None,
+    select: Optional[Iterable[SelectEntry]] = None,
 ) -> Dict[str, Any]:
     """Build an envelope for POST `/v1/rwas/query`."""
 
@@ -172,5 +217,6 @@ def rwa_query_envelope(
         fetch_size=fetch_size,
         count_mode=count_mode,
         query_name=query_name,
+        select=select,
     )
     return envelope.to_dict()

@@ -458,6 +458,109 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 self.assertNotIn("\u202e", message)
                 self.assertNotIn(hidden, message)
 
+    def test_recursive_json_array_scans_are_count_bounded_without_echo(self):
+        items = [None] * (ADAPTER.MAX_JSON_LIST_ITEMS + 1)
+        cases = (
+            (
+                "surrogates",
+                lambda: ADAPTER._reject_json_surrogates(items),
+                f"JSON array must contain at most {ADAPTER.MAX_JSON_LIST_ITEMS} items",
+            ),
+            (
+                "secret scan",
+                lambda: ADAPTER._check_no_secret_material(items, "sidecar.extra"),
+                f"sidecar.extra must contain at most {ADAPTER.MAX_JSON_LIST_ITEMS} items",
+            ),
+        )
+        for name, action, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    action()
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(str(len(items)), message)
+                self.assertNotIn("[0]", message)
+
+    def test_recursive_json_object_scans_are_count_bounded_without_echo(self):
+        members = {
+            f"hidden_key_{offset}": None
+            for offset in range(ADAPTER.MAX_JSON_OBJECT_MEMBERS + 1)
+        }
+        pairs = list(members.items())
+        cases = (
+            (
+                "json hook",
+                lambda: ADAPTER._reject_duplicate_json_keys(pairs),
+                f"JSON object must contain at most {ADAPTER.MAX_JSON_OBJECT_MEMBERS} members",
+            ),
+            (
+                "surrogates",
+                lambda: ADAPTER._reject_json_surrogates(members),
+                f"JSON object must contain at most {ADAPTER.MAX_JSON_OBJECT_MEMBERS} members",
+            ),
+            (
+                "secret scan",
+                lambda: ADAPTER._check_no_secret_material(members, "sidecar.extra"),
+                f"sidecar.extra must contain at most {ADAPTER.MAX_JSON_OBJECT_MEMBERS} object members",
+            ),
+        )
+        for name, action, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    action()
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(str(len(members)), message)
+                self.assertNotIn("hidden_key_0", message)
+
+    def test_recursive_json_depth_scans_are_bounded_without_echo(self):
+        nested = "hidden_leaf"
+        for _ in range(ADAPTER.MAX_JSON_NESTING_DEPTH + 1):
+            nested = [nested]
+        expected = (
+            f"JSON nesting depth must be at most {ADAPTER.MAX_JSON_NESTING_DEPTH} levels"
+        )
+        cases = (
+            ("surrogates", lambda: ADAPTER._reject_json_surrogates(nested)),
+            ("secret scan", lambda: ADAPTER._check_no_secret_material(nested, "sidecar.extra")),
+        )
+        for name, action in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    action()
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn("hidden_leaf", message)
+                self.assertNotIn("[0]", message)
+
+    def test_json_parse_recursion_error_is_bounded_without_echo(self):
+        hidden = "hidden-rail-recursion"
+        with tempfile.TemporaryDirectory() as raw_root:
+            path = Path(raw_root) / hidden
+            path.write_text("[]\n", encoding="utf-8")
+            original_loads = ADAPTER.json.loads
+
+            def raising_loads(*_args, **_kwargs):
+                raise RecursionError(hidden)
+
+            ADAPTER.json.loads = raising_loads
+            try:
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    ADAPTER._load_json(path, display_label="sidecar")
+            finally:
+                ADAPTER.json.loads = original_loads
+
+        message = str(caught.exception)
+        self.assertIn(
+            f"JSON nesting depth must be at most {ADAPTER.MAX_JSON_NESTING_DEPTH} levels",
+            message,
+        )
+        self.assertNotIn(hidden, message)
+        self.assertNotIn(str(path), message)
+
     def test_unicode_format_response_preview_is_redacted_without_echo(self):
         preview = "upstream rail \u202erail-bidi-leak"
 
@@ -1933,6 +2036,35 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                     self.assertNotIn("does not exist", message)
                     self.assertNotIn(str(root), message)
 
+    def test_direct_run_response_limit_is_capped_before_inbox_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            args = argparse.Namespace(
+                inbox_dir=root / "missing-inbox",
+                message=None,
+                torii_base_url="https://torii.example.invalid",
+                receipt_dir=root / "receipts",
+                bearer_token_file=None,
+                timeout_secs=1.0,
+                response_limit_bytes=ADAPTER.MAX_RESPONSE_LIMIT_BYTES + 1,
+                max_payload_bytes=1024,
+                allow_insecure_http=False,
+                allow_default_profile=False,
+                allow_legacy_colr007=False,
+                dry_run=True,
+            )
+
+            with self.assertRaises(ADAPTER.AdapterError) as caught:
+                ADAPTER.run(args)
+
+            message = str(caught.exception)
+            self.assertIn(
+                f"--response-limit-bytes must be no more than {ADAPTER.MAX_RESPONSE_LIMIT_BYTES}",
+                message,
+            )
+            self.assertNotIn("does not exist", message)
+            self.assertNotIn(str(root), message)
+
     def test_secret_looking_message_paths_are_rejected_before_receipt_output(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
             inbox = Path(raw_inbox)
@@ -1997,6 +2129,12 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             ("timeout zero", "--timeout-secs", "0", "positive finite number"),
             ("response zero", "--response-limit-bytes", "0", "positive integer"),
             ("response negative", "--response-limit-bytes", "-1", "positive integer"),
+            (
+                "response too large",
+                "--response-limit-bytes",
+                str(ADAPTER.MAX_RESPONSE_LIMIT_BYTES + 1),
+                f"no more than {ADAPTER.MAX_RESPONSE_LIMIT_BYTES}",
+            ),
             ("payload zero", "--max-payload-bytes", "0", "positive integer"),
             ("payload negative", "--max-payload-bytes", "-1", "positive integer"),
         )
@@ -3349,6 +3487,212 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertEqual(receipt["error"], "invalid HTTP status 700")
             self.assertTrue(receipt_digest_matches(receipt))
 
+    def test_malformed_torii_status_returns_failed_receipt_without_echo(self):
+        hidden = "token=rail-status-secret"
+        message = ADAPTER.GatewayMessage(
+            xml_path=Path("rail.xml"),
+            sidecar_path=Path("rail.xml.json"),
+            payload=SAMPLE_XML,
+            payload_sha256=ADAPTER.sha256_hex(SAMPLE_XML),
+            message_type="pacs.002",
+            profile=None,
+            rail_message_id=None,
+        )
+
+        class BrokenStatus:
+            def __int__(self):
+                raise RuntimeError(hidden)
+
+        class FailingResponse:
+            status = BrokenStatus()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit):
+                raise AssertionError("body must not be read after invalid status")
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                return FailingResponse()
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.submit_message(
+                "https://torii.example",
+                message,
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "invalid HTTP status")
+        self.assertNotIn(hidden, result.error)
+
+    def test_malformed_torii_error_status_returns_failed_receipt_without_echo(self):
+        hidden = "token=rail-error-status-secret"
+        message = ADAPTER.GatewayMessage(
+            xml_path=Path("rail.xml"),
+            sidecar_path=Path("rail.xml.json"),
+            payload=SAMPLE_XML,
+            payload_sha256=ADAPTER.sha256_hex(SAMPLE_XML),
+            message_type="pacs.002",
+            profile=None,
+            rail_message_id=None,
+        )
+
+        class BrokenStatus:
+            def __int__(self):
+                raise RuntimeError(hidden)
+
+        class Body:
+            def read(self, _limit):
+                raise AssertionError("body must not be read after invalid status")
+
+            def close(self):
+                return None
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                raise ADAPTER.urllib.error.HTTPError(
+                    "https://torii.example",
+                    BrokenStatus(),
+                    "failed",
+                    {},
+                    Body(),
+                )
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.submit_message(
+                "https://torii.example",
+                message,
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "invalid HTTP status")
+        self.assertNotIn(hidden, result.error)
+
+    def test_huge_torii_status_returns_failed_receipt_without_bloat(self):
+        message = ADAPTER.GatewayMessage(
+            xml_path=Path("rail.xml"),
+            sidecar_path=Path("rail.xml.json"),
+            payload=SAMPLE_XML,
+            payload_sha256=ADAPTER.sha256_hex(SAMPLE_XML),
+            message_type="pacs.002",
+            profile=None,
+            rail_message_id=None,
+        )
+
+        class HugeStatus:
+            def __int__(self):
+                return 10**1000
+
+        class FailingResponse:
+            status = HugeStatus()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit):
+                raise AssertionError("body must not be read after invalid status")
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                return FailingResponse()
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.submit_message(
+                "https://torii.example",
+                message,
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "invalid HTTP status")
+
+    def test_huge_torii_error_status_returns_failed_receipt_without_bloat(self):
+        message = ADAPTER.GatewayMessage(
+            xml_path=Path("rail.xml"),
+            sidecar_path=Path("rail.xml.json"),
+            payload=SAMPLE_XML,
+            payload_sha256=ADAPTER.sha256_hex(SAMPLE_XML),
+            message_type="pacs.002",
+            profile=None,
+            rail_message_id=None,
+        )
+
+        class HugeStatus:
+            def __int__(self):
+                return 10**1000
+
+        class Body:
+            def read(self, _limit):
+                raise AssertionError("body must not be read after invalid status")
+
+            def close(self):
+                return None
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                raise ADAPTER.urllib.error.HTTPError(
+                    "https://torii.example",
+                    HugeStatus(),
+                    "failed",
+                    {},
+                    Body(),
+                )
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.submit_message(
+                "https://torii.example",
+                message,
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "invalid HTTP status")
+
     def test_torii_redirect_response_is_not_followed(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
             inbox = Path(raw_inbox)
@@ -3552,7 +3896,675 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             ADAPTER._receipt_error("upstream \x1b[31mrail-warning"),
             ADAPTER.REDACTED_ERROR,
         )
+        self.assertEqual(
+            ADAPTER._receipt_error("x" * (ADAPTER.MAX_RECEIPT_ERROR_CHARS + 1)),
+            ADAPTER.REDACTED_ERROR,
+        )
+        self.assertEqual(
+            ADAPTER._receipt_error("upstream r\u00e9seau"),
+            ADAPTER.REDACTED_ERROR,
+        )
         self.assertEqual(ADAPTER._receipt_error("connection refused"), "connection refused")
+
+    def test_unstringifiable_url_error_is_redacted(self):
+        class BrokenReason:
+            def __str__(self):
+                raise RuntimeError("token=rail-url-error-secret")
+
+        error = ADAPTER.urllib.error.URLError(BrokenReason())
+
+        self.assertEqual(ADAPTER._url_error_receipt_error(error), ADAPTER.REDACTED_ERROR)
+
+    def test_torii_transport_open_failure_returns_failed_receipt(self):
+        hidden = "token=rail-open-secret"
+        message = ADAPTER.GatewayMessage(
+            xml_path=Path("rail.xml"),
+            sidecar_path=Path("rail.xml.json"),
+            payload=SAMPLE_XML,
+            payload_sha256=ADAPTER.sha256_hex(SAMPLE_XML),
+            message_type="pacs.002",
+            profile=None,
+            rail_message_id=None,
+        )
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                raise OSError(hidden)
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.submit_message(
+                "https://torii.example",
+                message,
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "Torii transport could not be opened")
+        self.assertNotIn(hidden, result.error)
+
+    def test_torii_transport_open_runtime_failure_returns_failed_receipt(self):
+        hidden = "token=rail-open-runtime-secret"
+        message = ADAPTER.GatewayMessage(
+            xml_path=Path("rail.xml"),
+            sidecar_path=Path("rail.xml.json"),
+            payload=SAMPLE_XML,
+            payload_sha256=ADAPTER.sha256_hex(SAMPLE_XML),
+            message_type="pacs.002",
+            profile=None,
+            rail_message_id=None,
+        )
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                raise RuntimeError(hidden)
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.submit_message(
+                "https://torii.example",
+                message,
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "Torii transport could not be opened")
+        self.assertNotIn(hidden, result.error)
+
+    def test_torii_response_body_read_failure_returns_failed_receipt(self):
+        hidden = "token=rail-read-secret"
+        message = ADAPTER.GatewayMessage(
+            xml_path=Path("rail.xml"),
+            sidecar_path=Path("rail.xml.json"),
+            payload=SAMPLE_XML,
+            payload_sha256=ADAPTER.sha256_hex(SAMPLE_XML),
+            message_type="pacs.002",
+            profile=None,
+            rail_message_id=None,
+        )
+
+        class FailingResponse:
+            status = 202
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit):
+                raise OSError(hidden)
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                return FailingResponse()
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.submit_message(
+                "https://torii.example",
+                message,
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "Torii response could not be read")
+        self.assertNotIn(hidden, result.error)
+
+    def test_torii_response_body_runtime_read_failure_returns_failed_receipt(self):
+        hidden = "token=rail-runtime-read-secret"
+        message = ADAPTER.GatewayMessage(
+            xml_path=Path("rail.xml"),
+            sidecar_path=Path("rail.xml.json"),
+            payload=SAMPLE_XML,
+            payload_sha256=ADAPTER.sha256_hex(SAMPLE_XML),
+            message_type="pacs.002",
+            profile=None,
+            rail_message_id=None,
+        )
+
+        class FailingResponse:
+            status = 202
+
+            def read(self, _limit):
+                raise RuntimeError(hidden)
+
+            def close(self):
+                return None
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                return FailingResponse()
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.submit_message(
+                "https://torii.example",
+                message,
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "Torii response could not be read")
+        self.assertNotIn(hidden, result.error)
+
+    def test_torii_response_body_non_bytes_returns_failed_receipt_without_echo(self):
+        hidden = "token=rail-body-secret"
+        message = ADAPTER.GatewayMessage(
+            xml_path=Path("rail.xml"),
+            sidecar_path=Path("rail.xml.json"),
+            payload=SAMPLE_XML,
+            payload_sha256=ADAPTER.sha256_hex(SAMPLE_XML),
+            message_type="pacs.002",
+            profile=None,
+            rail_message_id=None,
+        )
+
+        class MalformedResponse:
+            status = 202
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit):
+                return hidden
+
+        class MalformedOpener:
+            def open(self, *_args, **_kwargs):
+                return MalformedResponse()
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = MalformedOpener()
+        try:
+            result = ADAPTER.submit_message(
+                "https://torii.example",
+                message,
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "Torii response body was not bytes")
+        self.assertNotIn(hidden, result.error)
+
+    def test_torii_success_response_close_failure_preserves_receipt(self):
+        hidden = "token=rail-close-secret"
+        body = b"accepted"
+        message = ADAPTER.GatewayMessage(
+            xml_path=Path("rail.xml"),
+            sidecar_path=Path("rail.xml.json"),
+            payload=SAMPLE_XML,
+            payload_sha256=ADAPTER.sha256_hex(SAMPLE_XML),
+            message_type="pacs.002",
+            profile=None,
+            rail_message_id=None,
+        )
+
+        class ClosingResponse:
+            status = 202
+
+            def read(self, _limit):
+                return body
+
+            def close(self):
+                raise OSError(hidden)
+
+        class ClosingOpener:
+            def open(self, *_args, **_kwargs):
+                return ClosingResponse()
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = ClosingOpener()
+        try:
+            result = ADAPTER.submit_message(
+                "https://torii.example",
+                message,
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.status_code, 202)
+        self.assertEqual(result.response_body_sha256, ADAPTER.sha256_hex(body))
+        self.assertEqual(result.response_body_preview, body.decode("utf-8"))
+        self.assertIsNone(result.error)
+
+    def test_torii_failed_response_close_failure_preserves_receipt(self):
+        hidden = "token=rail-close-secret"
+        body = b"rejected"
+        message = ADAPTER.GatewayMessage(
+            xml_path=Path("rail.xml"),
+            sidecar_path=Path("rail.xml.json"),
+            payload=SAMPLE_XML,
+            payload_sha256=ADAPTER.sha256_hex(SAMPLE_XML),
+            message_type="pacs.002",
+            profile=None,
+            rail_message_id=None,
+        )
+
+        class ClosingResponse:
+            status = 503
+
+            def read(self, _limit):
+                return body
+
+            def close(self):
+                raise OSError(hidden)
+
+        class ClosingOpener:
+            def open(self, *_args, **_kwargs):
+                return ClosingResponse()
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = ClosingOpener()
+        try:
+            result = ADAPTER.submit_message(
+                "https://torii.example",
+                message,
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.status_code, 503)
+        self.assertEqual(result.response_body_sha256, ADAPTER.sha256_hex(body))
+        self.assertEqual(result.response_body_preview, body.decode("utf-8"))
+        self.assertEqual(result.error, "HTTP 503")
+        self.assertNotIn(hidden, result.error)
+        self.assertNotIn(hidden, result.response_body_preview)
+
+    def test_torii_response_close_lookup_failure_preserves_receipt(self):
+        hidden = "token=rail-close-lookup-secret"
+        body = b"accepted"
+        message = ADAPTER.GatewayMessage(
+            xml_path=Path("rail.xml"),
+            sidecar_path=Path("rail.xml.json"),
+            payload=SAMPLE_XML,
+            payload_sha256=ADAPTER.sha256_hex(SAMPLE_XML),
+            message_type="pacs.002",
+            profile=None,
+            rail_message_id=None,
+        )
+
+        class ClosingResponse:
+            status = 202
+
+            def read(self, _limit):
+                return body
+
+            @property
+            def close(self):
+                raise RuntimeError(hidden)
+
+        class ClosingOpener:
+            def open(self, *_args, **_kwargs):
+                return ClosingResponse()
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = ClosingOpener()
+        try:
+            result = ADAPTER.submit_message(
+                "https://torii.example",
+                message,
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.status_code, 202)
+        self.assertEqual(result.response_body_sha256, ADAPTER.sha256_hex(body))
+        self.assertEqual(result.response_body_preview, body.decode("utf-8"))
+        self.assertIsNone(result.error)
+
+    def test_torii_error_response_body_read_failure_returns_failed_receipt(self):
+        hidden = "token=rail-error-read-secret"
+        message = ADAPTER.GatewayMessage(
+            xml_path=Path("rail.xml"),
+            sidecar_path=Path("rail.xml.json"),
+            payload=SAMPLE_XML,
+            payload_sha256=ADAPTER.sha256_hex(SAMPLE_XML),
+            message_type="pacs.002",
+            profile=None,
+            rail_message_id=None,
+        )
+
+        class FailingBody:
+            def read(self, _limit):
+                raise OSError(hidden)
+
+            def close(self):
+                return None
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                raise ADAPTER.urllib.error.HTTPError(
+                    "https://torii.example",
+                    500,
+                    "failed",
+                    {},
+                    FailingBody(),
+                )
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.submit_message(
+                "https://torii.example",
+                message,
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "Torii error response could not be read")
+        self.assertNotIn(hidden, result.error)
+
+    def test_torii_error_response_body_runtime_read_failure_returns_failed_receipt(self):
+        hidden = "token=rail-error-runtime-read-secret"
+        message = ADAPTER.GatewayMessage(
+            xml_path=Path("rail.xml"),
+            sidecar_path=Path("rail.xml.json"),
+            payload=SAMPLE_XML,
+            payload_sha256=ADAPTER.sha256_hex(SAMPLE_XML),
+            message_type="pacs.002",
+            profile=None,
+            rail_message_id=None,
+        )
+
+        class FailingBody:
+            def read(self, _limit):
+                raise RuntimeError(hidden)
+
+            def close(self):
+                return None
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                raise ADAPTER.urllib.error.HTTPError(
+                    "https://torii.example",
+                    500,
+                    "failed",
+                    {},
+                    FailingBody(),
+                )
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.submit_message(
+                "https://torii.example",
+                message,
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "Torii error response could not be read")
+        self.assertNotIn(hidden, result.error)
+
+    def test_torii_error_response_body_non_bytes_returns_failed_receipt_without_echo(self):
+        hidden = "token=rail-error-body-secret"
+        message = ADAPTER.GatewayMessage(
+            xml_path=Path("rail.xml"),
+            sidecar_path=Path("rail.xml.json"),
+            payload=SAMPLE_XML,
+            payload_sha256=ADAPTER.sha256_hex(SAMPLE_XML),
+            message_type="pacs.002",
+            profile=None,
+            rail_message_id=None,
+        )
+
+        class MalformedBody:
+            def read(self, _limit):
+                return hidden
+
+            def close(self):
+                return None
+
+        class MalformedOpener:
+            def open(self, *_args, **_kwargs):
+                raise ADAPTER.urllib.error.HTTPError(
+                    "https://torii.example",
+                    500,
+                    "failed",
+                    {},
+                    MalformedBody(),
+                )
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = MalformedOpener()
+        try:
+            result = ADAPTER.submit_message(
+                "https://torii.example",
+                message,
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "Torii error response body was not bytes")
+        self.assertNotIn(hidden, result.error)
+
+    def test_torii_error_response_close_failure_preserves_failed_receipt(self):
+        hidden = "token=rail-error-close-secret"
+        body = b"upstream rejected"
+        message = ADAPTER.GatewayMessage(
+            xml_path=Path("rail.xml"),
+            sidecar_path=Path("rail.xml.json"),
+            payload=SAMPLE_XML,
+            payload_sha256=ADAPTER.sha256_hex(SAMPLE_XML),
+            message_type="pacs.002",
+            profile=None,
+            rail_message_id=None,
+        )
+
+        class FailingCloseBody:
+            def read(self, _limit):
+                return body
+
+            def close(self):
+                raise OSError(hidden)
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                raise ADAPTER.urllib.error.HTTPError(
+                    "https://torii.example",
+                    500,
+                    "failed",
+                    {},
+                    FailingCloseBody(),
+                )
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.submit_message(
+                "https://torii.example",
+                message,
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.status_code, 500)
+        self.assertEqual(result.response_body_sha256, ADAPTER.sha256_hex(body))
+        self.assertEqual(result.response_body_preview, body.decode("utf-8"))
+        self.assertEqual(result.error, "HTTP 500")
+        self.assertNotIn(hidden, result.error)
+        self.assertNotIn(hidden, result.response_body_preview)
+
+    def test_torii_error_response_close_runtime_error_preserves_failed_receipt(self):
+        hidden = "token=rail-error-close-secret"
+        body = b"upstream rejected"
+        message = ADAPTER.GatewayMessage(
+            xml_path=Path("rail.xml"),
+            sidecar_path=Path("rail.xml.json"),
+            payload=SAMPLE_XML,
+            payload_sha256=ADAPTER.sha256_hex(SAMPLE_XML),
+            message_type="pacs.002",
+            profile=None,
+            rail_message_id=None,
+        )
+
+        class FailingCloseBody:
+            def read(self, _limit):
+                return body
+
+            def close(self):
+                raise RuntimeError(hidden)
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                raise ADAPTER.urllib.error.HTTPError(
+                    "https://torii.example",
+                    500,
+                    "failed",
+                    {},
+                    FailingCloseBody(),
+                )
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.submit_message(
+                "https://torii.example",
+                message,
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.status_code, 500)
+        self.assertEqual(result.response_body_sha256, ADAPTER.sha256_hex(body))
+        self.assertEqual(result.response_body_preview, body.decode("utf-8"))
+        self.assertEqual(result.error, "HTTP 500")
+        self.assertNotIn(hidden, result.error)
+        self.assertNotIn(hidden, result.response_body_preview)
+
+    def test_torii_error_response_read_failure_ignores_close_failure(self):
+        read_hidden = "token=rail-error-read-secret"
+        close_hidden = "token=rail-error-close-secret"
+        message = ADAPTER.GatewayMessage(
+            xml_path=Path("rail.xml"),
+            sidecar_path=Path("rail.xml.json"),
+            payload=SAMPLE_XML,
+            payload_sha256=ADAPTER.sha256_hex(SAMPLE_XML),
+            message_type="pacs.002",
+            profile=None,
+            rail_message_id=None,
+        )
+
+        class FailingBody:
+            def read(self, _limit):
+                raise OSError(read_hidden)
+
+            def close(self):
+                raise OSError(close_hidden)
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                raise ADAPTER.urllib.error.HTTPError(
+                    "https://torii.example",
+                    500,
+                    "failed",
+                    {},
+                    FailingBody(),
+                )
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.submit_message(
+                "https://torii.example",
+                message,
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "Torii error response could not be read")
+        self.assertNotIn(read_hidden, result.error)
+        self.assertNotIn(close_hidden, result.error)
 
 
 if __name__ == "__main__":

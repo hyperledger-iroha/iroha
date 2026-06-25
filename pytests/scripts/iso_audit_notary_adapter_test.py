@@ -302,6 +302,118 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 allow_missing_record_sources=False,
             )
 
+    def test_audit_json_arrays_are_count_bounded_without_echo(self):
+        items = [None] * (ADAPTER.MAX_JSON_LIST_ITEMS + 1)
+        cases = (
+            (
+                "helper",
+                lambda: ADAPTER._require_json_array(items, "audit.records"),
+                f"audit.records must contain at most {ADAPTER.MAX_JSON_LIST_ITEMS} items",
+            ),
+            (
+                "record sources",
+                lambda: ADAPTER._verify_persisted_record_sources(
+                    {"records": items},
+                    None,
+                    "anchor",
+                    allow_missing_record_sources=False,
+                ),
+                f"anchor.records must contain at most {ADAPTER.MAX_JSON_LIST_ITEMS} items",
+            ),
+        )
+        for name, action, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    action()
+
+                error = str(caught.exception)
+                self.assertIn(expected, error)
+                self.assertNotIn(str(len(items)), error)
+                self.assertNotIn("[0]", error)
+
+    def test_recursive_json_array_scans_are_count_bounded_without_echo(self):
+        items = [None] * (ADAPTER.MAX_JSON_LIST_ITEMS + 1)
+
+        with self.assertRaises(ADAPTER.AdapterError) as caught:
+            ADAPTER._reject_json_surrogates(items)
+
+        error = str(caught.exception)
+        self.assertIn(
+            f"JSON array must contain at most {ADAPTER.MAX_JSON_LIST_ITEMS} items",
+            error,
+        )
+        self.assertNotIn(str(len(items)), error)
+        self.assertNotIn("[0]", error)
+
+    def test_recursive_json_object_scans_are_count_bounded_without_echo(self):
+        members = {
+            f"hidden_key_{offset}": None
+            for offset in range(ADAPTER.MAX_JSON_OBJECT_MEMBERS + 1)
+        }
+        pairs = list(members.items())
+        cases = (
+            (
+                "json hook",
+                lambda: ADAPTER._reject_duplicate_json_keys(pairs),
+                f"JSON object must contain at most {ADAPTER.MAX_JSON_OBJECT_MEMBERS} members",
+            ),
+            (
+                "surrogates",
+                lambda: ADAPTER._reject_json_surrogates(members),
+                f"JSON object must contain at most {ADAPTER.MAX_JSON_OBJECT_MEMBERS} members",
+            ),
+        )
+        for name, action, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    action()
+
+                error = str(caught.exception)
+                self.assertIn(expected, error)
+                self.assertNotIn(str(len(members)), error)
+                self.assertNotIn("hidden_key_0", error)
+
+    def test_recursive_json_depth_scans_are_bounded_without_echo(self):
+        nested = "hidden_leaf"
+        for _ in range(ADAPTER.MAX_JSON_NESTING_DEPTH + 1):
+            nested = [nested]
+
+        with self.assertRaises(ADAPTER.AdapterError) as caught:
+            ADAPTER._reject_json_surrogates(nested)
+
+        error = str(caught.exception)
+        self.assertIn(
+            f"JSON nesting depth must be at most {ADAPTER.MAX_JSON_NESTING_DEPTH} levels",
+            error,
+        )
+        self.assertNotIn("hidden_leaf", error)
+        self.assertNotIn("[0]", error)
+
+    def test_json_parse_recursion_error_is_bounded_without_echo(self):
+        hidden = "hidden-audit-recursion"
+        with tempfile.TemporaryDirectory() as raw_root:
+            path = Path(raw_root) / hidden
+            path.write_text("[]\n", encoding="utf-8")
+            original_loads = ADAPTER.json.loads
+
+            def raising_loads(*_args, **_kwargs):
+                raise RecursionError(hidden)
+
+            ADAPTER.json.loads = raising_loads
+            try:
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    ADAPTER._load_json(path, display_label="audit")
+            finally:
+                ADAPTER.json.loads = original_loads
+
+        error = str(caught.exception)
+        self.assertIn(
+            f"JSON nesting depth must be at most {ADAPTER.MAX_JSON_NESTING_DEPTH} levels",
+            error,
+        )
+        self.assertNotIn(hidden, error)
+        self.assertNotIn(str(path), error)
+
     def test_secret_looking_unknown_keys_are_rejected_without_echo(self):
         cases = (
             ("password_audit_unknown_secret", "audit_unknown_secret"),
@@ -2384,6 +2496,33 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                     self.assertNotIn("does not exist", message)
                     self.assertNotIn(str(root), message)
 
+    def test_direct_run_response_limit_is_capped_before_export_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            args = argparse.Namespace(
+                export_dir=root / "missing-export",
+                endpoint=[],
+                receipt_dir=root / "receipts",
+                bearer_token_file=None,
+                timeout_secs=1.0,
+                response_limit_bytes=ADAPTER.MAX_RESPONSE_LIMIT_BYTES + 1,
+                allow_insecure_http=False,
+                allow_missing_record_sources=False,
+                all=False,
+                dry_run=True,
+            )
+
+            with self.assertRaises(ADAPTER.AdapterError) as caught:
+                ADAPTER.run(args)
+
+            message = str(caught.exception)
+            self.assertIn(
+                f"--response-limit-bytes must be no more than {ADAPTER.MAX_RESPONSE_LIMIT_BYTES}",
+                message,
+            )
+            self.assertNotIn("does not exist", message)
+            self.assertNotIn(str(root), message)
+
     def test_direct_run_endpoints_must_be_repeatable_string_list_before_export_loading(self):
         cases = (
             ("bare string", "https://notary.example.invalid", "--endpoint"),
@@ -2420,6 +2559,55 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                     self.assertNotIn("does not exist", message)
                     self.assertNotIn(str(root), message)
 
+    def test_endpoint_lists_are_count_bounded_before_export_loading(self):
+        cases = (("direct", False), ("cli", True))
+        for name, via_cli in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    endpoints = [
+                        f"https://notary-{offset}.example.invalid"
+                        for offset in range(ADAPTER.MAX_ENDPOINT_INPUTS + 1)
+                    ]
+                    if via_cli:
+                        argv = [
+                            "--export-dir",
+                            str(root / "missing-export"),
+                            "--dry-run",
+                        ]
+                        for endpoint in endpoints:
+                            argv.extend(["--endpoint", endpoint])
+
+                        rc, stdout, stderr = run_main(argv)
+
+                        self.assertEqual(rc, 2)
+                        self.assertEqual(stdout, "")
+                        message = stderr
+                    else:
+                        args = argparse.Namespace(
+                            export_dir=root / "missing-export",
+                            endpoint=endpoints,
+                            receipt_dir=root / "receipts",
+                            bearer_token_file=None,
+                            timeout_secs=1.0,
+                            response_limit_bytes=1024,
+                            allow_insecure_http=False,
+                            allow_missing_record_sources=False,
+                            all=False,
+                            dry_run=True,
+                        )
+
+                        with self.assertRaises(ADAPTER.AdapterError) as caught:
+                            ADAPTER.run(args)
+                        message = str(caught.exception)
+
+                    self.assertIn(
+                        f"--endpoint accepts at most {ADAPTER.MAX_ENDPOINT_INPUTS} values",
+                        message,
+                    )
+                    self.assertNotIn("does not exist", message)
+                    self.assertNotIn(str(root), message)
+
     def test_numeric_cli_limits_reject_nonpositive_and_nonfinite_before_network_delivery(self):
         cases = (
             ("timeout nan", "--timeout-secs", "nan", "positive finite number"),
@@ -2427,6 +2615,12 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             ("timeout zero", "--timeout-secs", "0", "positive finite number"),
             ("response zero", "--response-limit-bytes", "0", "positive integer"),
             ("response negative", "--response-limit-bytes", "-1", "positive integer"),
+            (
+                "response too large",
+                "--response-limit-bytes",
+                str(ADAPTER.MAX_RESPONSE_LIMIT_BYTES + 1),
+                f"no more than {ADAPTER.MAX_RESPONSE_LIMIT_BYTES}",
+            ),
         )
         for name, flag, value, message in cases:
             with self.subTest(name=name):
@@ -3762,6 +3956,220 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 receipt[ADAPTER.RECEIPT_DIGEST_FIELD],
             )
 
+    def test_malformed_remote_status_returns_failed_receipt_without_echo(self):
+        hidden = "token=notary-status-secret"
+        index = sample_index()
+        anchor_payload = sample_anchor(index)
+        anchor = ADAPTER.VerifiedAnchor(
+            path=Path("latest.notary.json"),
+            payload=anchor_payload,
+            raw=json.dumps(anchor_payload).encode("utf-8"),
+            index_sha256=index[ADAPTER.INDEX_DIGEST_FIELD],
+            anchor_sha256=anchor_payload[ADAPTER.ANCHOR_DIGEST_FIELD],
+            record_count=anchor_payload["record_count"],
+            missing_record_sources=False,
+        )
+
+        class BrokenStatus:
+            def __int__(self):
+                raise RuntimeError(hidden)
+
+        class FailingResponse:
+            status = BrokenStatus()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit):
+                raise AssertionError("body must not be read after invalid status")
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                return FailingResponse()
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.publish_anchor(
+                anchor,
+                "https://notary.example/anchor",
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "invalid HTTP status")
+        self.assertNotIn(hidden, result.error)
+
+    def test_malformed_remote_error_status_returns_failed_receipt_without_echo(self):
+        hidden = "token=notary-error-status-secret"
+        index = sample_index()
+        anchor_payload = sample_anchor(index)
+        anchor = ADAPTER.VerifiedAnchor(
+            path=Path("latest.notary.json"),
+            payload=anchor_payload,
+            raw=json.dumps(anchor_payload).encode("utf-8"),
+            index_sha256=index[ADAPTER.INDEX_DIGEST_FIELD],
+            anchor_sha256=anchor_payload[ADAPTER.ANCHOR_DIGEST_FIELD],
+            record_count=anchor_payload["record_count"],
+            missing_record_sources=False,
+        )
+
+        class BrokenStatus:
+            def __int__(self):
+                raise RuntimeError(hidden)
+
+        class Body:
+            def read(self, _limit):
+                raise AssertionError("body must not be read after invalid status")
+
+            def close(self):
+                return None
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                raise ADAPTER.urllib.error.HTTPError(
+                    "https://notary.example/anchor",
+                    BrokenStatus(),
+                    "failed",
+                    {},
+                    Body(),
+                )
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.publish_anchor(
+                anchor,
+                "https://notary.example/anchor",
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "invalid HTTP status")
+        self.assertNotIn(hidden, result.error)
+
+    def test_huge_remote_status_returns_failed_receipt_without_bloat(self):
+        index = sample_index()
+        anchor_payload = sample_anchor(index)
+        anchor = ADAPTER.VerifiedAnchor(
+            path=Path("latest.notary.json"),
+            payload=anchor_payload,
+            raw=json.dumps(anchor_payload).encode("utf-8"),
+            index_sha256=index[ADAPTER.INDEX_DIGEST_FIELD],
+            anchor_sha256=anchor_payload[ADAPTER.ANCHOR_DIGEST_FIELD],
+            record_count=anchor_payload["record_count"],
+            missing_record_sources=False,
+        )
+
+        class HugeStatus:
+            def __int__(self):
+                return 10**1000
+
+        class FailingResponse:
+            status = HugeStatus()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit):
+                raise AssertionError("body must not be read after invalid status")
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                return FailingResponse()
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.publish_anchor(
+                anchor,
+                "https://notary.example/anchor",
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "invalid HTTP status")
+
+    def test_huge_remote_error_status_returns_failed_receipt_without_bloat(self):
+        index = sample_index()
+        anchor_payload = sample_anchor(index)
+        anchor = ADAPTER.VerifiedAnchor(
+            path=Path("latest.notary.json"),
+            payload=anchor_payload,
+            raw=json.dumps(anchor_payload).encode("utf-8"),
+            index_sha256=index[ADAPTER.INDEX_DIGEST_FIELD],
+            anchor_sha256=anchor_payload[ADAPTER.ANCHOR_DIGEST_FIELD],
+            record_count=anchor_payload["record_count"],
+            missing_record_sources=False,
+        )
+
+        class HugeStatus:
+            def __int__(self):
+                return 10**1000
+
+        class Body:
+            def read(self, _limit):
+                raise AssertionError("body must not be read after invalid status")
+
+            def close(self):
+                return None
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                raise ADAPTER.urllib.error.HTTPError(
+                    "https://notary.example/anchor",
+                    HugeStatus(),
+                    "failed",
+                    {},
+                    Body(),
+                )
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.publish_anchor(
+                anchor,
+                "https://notary.example/anchor",
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "invalid HTTP status")
+
     def test_remote_redirect_response_is_not_followed(self):
         with tempfile.TemporaryDirectory() as raw_export:
             export_dir = Path(raw_export)
@@ -3996,7 +4404,703 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             ADAPTER._receipt_error("upstream \x1b[31mnotary-warning"),
             ADAPTER.REDACTED_ERROR,
         )
+        self.assertEqual(
+            ADAPTER._receipt_error("x" * (ADAPTER.MAX_RECEIPT_ERROR_CHARS + 1)),
+            ADAPTER.REDACTED_ERROR,
+        )
+        self.assertEqual(
+            ADAPTER._receipt_error("upstream r\u00e9seau"),
+            ADAPTER.REDACTED_ERROR,
+        )
         self.assertEqual(ADAPTER._receipt_error("connection refused"), "connection refused")
+
+    def test_unstringifiable_url_error_is_redacted(self):
+        class BrokenReason:
+            def __str__(self):
+                raise RuntimeError("token=notary-url-error-secret")
+
+        error = ADAPTER.urllib.error.URLError(BrokenReason())
+
+        self.assertEqual(ADAPTER._url_error_receipt_error(error), ADAPTER.REDACTED_ERROR)
+
+    def test_endpoint_transport_open_failure_returns_failed_receipt(self):
+        hidden = "token=notary-open-secret"
+        index = sample_index()
+        anchor_payload = sample_anchor(index)
+        anchor = ADAPTER.VerifiedAnchor(
+            path=Path("latest.notary.json"),
+            payload=anchor_payload,
+            raw=json.dumps(anchor_payload).encode("utf-8"),
+            index_sha256=index[ADAPTER.INDEX_DIGEST_FIELD],
+            anchor_sha256=anchor_payload[ADAPTER.ANCHOR_DIGEST_FIELD],
+            record_count=anchor_payload["record_count"],
+            missing_record_sources=False,
+        )
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                raise OSError(hidden)
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.publish_anchor(
+                anchor,
+                "https://notary.example/anchor",
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "endpoint transport could not be opened")
+        self.assertNotIn(hidden, result.error)
+
+    def test_endpoint_transport_open_runtime_failure_returns_failed_receipt(self):
+        hidden = "token=notary-open-runtime-secret"
+        index = sample_index()
+        anchor_payload = sample_anchor(index)
+        anchor = ADAPTER.VerifiedAnchor(
+            path=Path("latest.notary.json"),
+            payload=anchor_payload,
+            raw=json.dumps(anchor_payload).encode("utf-8"),
+            index_sha256=index[ADAPTER.INDEX_DIGEST_FIELD],
+            anchor_sha256=anchor_payload[ADAPTER.ANCHOR_DIGEST_FIELD],
+            record_count=anchor_payload["record_count"],
+            missing_record_sources=False,
+        )
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                raise RuntimeError(hidden)
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.publish_anchor(
+                anchor,
+                "https://notary.example/anchor",
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "endpoint transport could not be opened")
+        self.assertNotIn(hidden, result.error)
+
+    def test_endpoint_response_body_read_failure_returns_failed_receipt(self):
+        hidden = "token=notary-read-secret"
+        index = sample_index()
+        anchor_payload = sample_anchor(index)
+        anchor = ADAPTER.VerifiedAnchor(
+            path=Path("latest.notary.json"),
+            payload=anchor_payload,
+            raw=json.dumps(anchor_payload).encode("utf-8"),
+            index_sha256=index[ADAPTER.INDEX_DIGEST_FIELD],
+            anchor_sha256=anchor_payload[ADAPTER.ANCHOR_DIGEST_FIELD],
+            record_count=anchor_payload["record_count"],
+            missing_record_sources=False,
+        )
+
+        class FailingResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit):
+                raise OSError(hidden)
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                return FailingResponse()
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.publish_anchor(
+                anchor,
+                "https://notary.example/anchor",
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "endpoint response could not be read")
+        self.assertNotIn(hidden, result.error)
+
+    def test_endpoint_response_body_runtime_read_failure_returns_failed_receipt(self):
+        hidden = "token=notary-runtime-read-secret"
+        index = sample_index()
+        anchor_payload = sample_anchor(index)
+        anchor = ADAPTER.VerifiedAnchor(
+            path=Path("latest.notary.json"),
+            payload=anchor_payload,
+            raw=json.dumps(anchor_payload).encode("utf-8"),
+            index_sha256=index[ADAPTER.INDEX_DIGEST_FIELD],
+            anchor_sha256=anchor_payload[ADAPTER.ANCHOR_DIGEST_FIELD],
+            record_count=anchor_payload["record_count"],
+            missing_record_sources=False,
+        )
+
+        class FailingResponse:
+            status = 200
+
+            def read(self, _limit):
+                raise RuntimeError(hidden)
+
+            def close(self):
+                return None
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                return FailingResponse()
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.publish_anchor(
+                anchor,
+                "https://notary.example/anchor",
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "endpoint response could not be read")
+        self.assertNotIn(hidden, result.error)
+
+    def test_endpoint_response_body_non_bytes_returns_failed_receipt_without_echo(self):
+        hidden = "token=notary-body-secret"
+        index = sample_index()
+        anchor_payload = sample_anchor(index)
+        anchor = ADAPTER.VerifiedAnchor(
+            path=Path("latest.notary.json"),
+            payload=anchor_payload,
+            raw=json.dumps(anchor_payload).encode("utf-8"),
+            index_sha256=index[ADAPTER.INDEX_DIGEST_FIELD],
+            anchor_sha256=anchor_payload[ADAPTER.ANCHOR_DIGEST_FIELD],
+            record_count=anchor_payload["record_count"],
+            missing_record_sources=False,
+        )
+
+        class MalformedResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit):
+                return hidden
+
+        class MalformedOpener:
+            def open(self, *_args, **_kwargs):
+                return MalformedResponse()
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = MalformedOpener()
+        try:
+            result = ADAPTER.publish_anchor(
+                anchor,
+                "https://notary.example/anchor",
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "endpoint response body was not bytes")
+        self.assertNotIn(hidden, result.error)
+
+    def test_endpoint_success_response_close_failure_preserves_receipt(self):
+        hidden = "token=notary-close-secret"
+        body = b"accepted"
+        index = sample_index()
+        anchor_payload = sample_anchor(index)
+        anchor = ADAPTER.VerifiedAnchor(
+            path=Path("latest.notary.json"),
+            payload=anchor_payload,
+            raw=json.dumps(anchor_payload).encode("utf-8"),
+            index_sha256=index[ADAPTER.INDEX_DIGEST_FIELD],
+            anchor_sha256=anchor_payload[ADAPTER.ANCHOR_DIGEST_FIELD],
+            record_count=anchor_payload["record_count"],
+            missing_record_sources=False,
+        )
+
+        class ClosingResponse:
+            status = 200
+
+            def read(self, _limit):
+                return body
+
+            def close(self):
+                raise OSError(hidden)
+
+        class ClosingOpener:
+            def open(self, *_args, **_kwargs):
+                return ClosingResponse()
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = ClosingOpener()
+        try:
+            result = ADAPTER.publish_anchor(
+                anchor,
+                "https://notary.example/anchor",
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.response_body_sha256, ADAPTER.sha256_hex(body))
+        self.assertEqual(result.response_body_preview, body.decode("utf-8"))
+        self.assertIsNone(result.error)
+
+    def test_endpoint_failed_response_close_failure_preserves_receipt(self):
+        hidden = "token=notary-close-secret"
+        body = b"rejected"
+        index = sample_index()
+        anchor_payload = sample_anchor(index)
+        anchor = ADAPTER.VerifiedAnchor(
+            path=Path("latest.notary.json"),
+            payload=anchor_payload,
+            raw=json.dumps(anchor_payload).encode("utf-8"),
+            index_sha256=index[ADAPTER.INDEX_DIGEST_FIELD],
+            anchor_sha256=anchor_payload[ADAPTER.ANCHOR_DIGEST_FIELD],
+            record_count=anchor_payload["record_count"],
+            missing_record_sources=False,
+        )
+
+        class ClosingResponse:
+            status = 503
+
+            def read(self, _limit):
+                return body
+
+            def close(self):
+                raise OSError(hidden)
+
+        class ClosingOpener:
+            def open(self, *_args, **_kwargs):
+                return ClosingResponse()
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = ClosingOpener()
+        try:
+            result = ADAPTER.publish_anchor(
+                anchor,
+                "https://notary.example/anchor",
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.status_code, 503)
+        self.assertEqual(result.response_body_sha256, ADAPTER.sha256_hex(body))
+        self.assertEqual(result.response_body_preview, body.decode("utf-8"))
+        self.assertEqual(result.error, "HTTP 503")
+        self.assertNotIn(hidden, result.error)
+        self.assertNotIn(hidden, result.response_body_preview)
+
+    def test_endpoint_response_close_lookup_failure_preserves_receipt(self):
+        hidden = "token=notary-close-lookup-secret"
+        body = b"accepted"
+        index = sample_index()
+        anchor_payload = sample_anchor(index)
+        anchor = ADAPTER.VerifiedAnchor(
+            path=Path("latest.notary.json"),
+            payload=anchor_payload,
+            raw=json.dumps(anchor_payload).encode("utf-8"),
+            index_sha256=index[ADAPTER.INDEX_DIGEST_FIELD],
+            anchor_sha256=anchor_payload[ADAPTER.ANCHOR_DIGEST_FIELD],
+            record_count=anchor_payload["record_count"],
+            missing_record_sources=False,
+        )
+
+        class ClosingResponse:
+            status = 200
+
+            def read(self, _limit):
+                return body
+
+            @property
+            def close(self):
+                raise RuntimeError(hidden)
+
+        class ClosingOpener:
+            def open(self, *_args, **_kwargs):
+                return ClosingResponse()
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = ClosingOpener()
+        try:
+            result = ADAPTER.publish_anchor(
+                anchor,
+                "https://notary.example/anchor",
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.response_body_sha256, ADAPTER.sha256_hex(body))
+        self.assertEqual(result.response_body_preview, body.decode("utf-8"))
+        self.assertIsNone(result.error)
+
+    def test_endpoint_error_response_body_read_failure_returns_failed_receipt(self):
+        hidden = "token=notary-error-read-secret"
+        index = sample_index()
+        anchor_payload = sample_anchor(index)
+        anchor = ADAPTER.VerifiedAnchor(
+            path=Path("latest.notary.json"),
+            payload=anchor_payload,
+            raw=json.dumps(anchor_payload).encode("utf-8"),
+            index_sha256=index[ADAPTER.INDEX_DIGEST_FIELD],
+            anchor_sha256=anchor_payload[ADAPTER.ANCHOR_DIGEST_FIELD],
+            record_count=anchor_payload["record_count"],
+            missing_record_sources=False,
+        )
+
+        class FailingBody:
+            def read(self, _limit):
+                raise OSError(hidden)
+
+            def close(self):
+                return None
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                raise ADAPTER.urllib.error.HTTPError(
+                    "https://notary.example/anchor",
+                    500,
+                    "failed",
+                    {},
+                    FailingBody(),
+                )
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.publish_anchor(
+                anchor,
+                "https://notary.example/anchor",
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "endpoint error response could not be read")
+        self.assertNotIn(hidden, result.error)
+
+    def test_endpoint_error_response_body_runtime_read_failure_returns_failed_receipt(self):
+        hidden = "token=notary-error-runtime-read-secret"
+        index = sample_index()
+        anchor_payload = sample_anchor(index)
+        anchor = ADAPTER.VerifiedAnchor(
+            path=Path("latest.notary.json"),
+            payload=anchor_payload,
+            raw=json.dumps(anchor_payload).encode("utf-8"),
+            index_sha256=index[ADAPTER.INDEX_DIGEST_FIELD],
+            anchor_sha256=anchor_payload[ADAPTER.ANCHOR_DIGEST_FIELD],
+            record_count=anchor_payload["record_count"],
+            missing_record_sources=False,
+        )
+
+        class FailingBody:
+            def read(self, _limit):
+                raise RuntimeError(hidden)
+
+            def close(self):
+                return None
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                raise ADAPTER.urllib.error.HTTPError(
+                    "https://notary.example/anchor",
+                    500,
+                    "failed",
+                    {},
+                    FailingBody(),
+                )
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.publish_anchor(
+                anchor,
+                "https://notary.example/anchor",
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "endpoint error response could not be read")
+        self.assertNotIn(hidden, result.error)
+
+    def test_endpoint_error_response_body_non_bytes_returns_failed_receipt_without_echo(self):
+        hidden = "token=notary-error-body-secret"
+        index = sample_index()
+        anchor_payload = sample_anchor(index)
+        anchor = ADAPTER.VerifiedAnchor(
+            path=Path("latest.notary.json"),
+            payload=anchor_payload,
+            raw=json.dumps(anchor_payload).encode("utf-8"),
+            index_sha256=index[ADAPTER.INDEX_DIGEST_FIELD],
+            anchor_sha256=anchor_payload[ADAPTER.ANCHOR_DIGEST_FIELD],
+            record_count=anchor_payload["record_count"],
+            missing_record_sources=False,
+        )
+
+        class MalformedBody:
+            def read(self, _limit):
+                return hidden
+
+            def close(self):
+                return None
+
+        class MalformedOpener:
+            def open(self, *_args, **_kwargs):
+                raise ADAPTER.urllib.error.HTTPError(
+                    "https://notary.example/anchor",
+                    500,
+                    "failed",
+                    {},
+                    MalformedBody(),
+                )
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = MalformedOpener()
+        try:
+            result = ADAPTER.publish_anchor(
+                anchor,
+                "https://notary.example/anchor",
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "endpoint error response body was not bytes")
+        self.assertNotIn(hidden, result.error)
+
+    def test_endpoint_error_response_close_failure_preserves_failed_receipt(self):
+        hidden = "token=notary-error-close-secret"
+        body = b"notary rejected"
+        index = sample_index()
+        anchor_payload = sample_anchor(index)
+        anchor = ADAPTER.VerifiedAnchor(
+            path=Path("latest.notary.json"),
+            payload=anchor_payload,
+            raw=json.dumps(anchor_payload).encode("utf-8"),
+            index_sha256=index[ADAPTER.INDEX_DIGEST_FIELD],
+            anchor_sha256=anchor_payload[ADAPTER.ANCHOR_DIGEST_FIELD],
+            record_count=anchor_payload["record_count"],
+            missing_record_sources=False,
+        )
+
+        class FailingCloseBody:
+            def read(self, _limit):
+                return body
+
+            def close(self):
+                raise OSError(hidden)
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                raise ADAPTER.urllib.error.HTTPError(
+                    "https://notary.example/anchor",
+                    500,
+                    "failed",
+                    {},
+                    FailingCloseBody(),
+                )
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.publish_anchor(
+                anchor,
+                "https://notary.example/anchor",
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.status_code, 500)
+        self.assertEqual(result.response_body_sha256, ADAPTER.sha256_hex(body))
+        self.assertEqual(result.response_body_preview, body.decode("utf-8"))
+        self.assertEqual(result.error, "HTTP 500")
+        self.assertNotIn(hidden, result.error)
+        self.assertNotIn(hidden, result.response_body_preview)
+
+    def test_endpoint_error_response_close_runtime_error_preserves_failed_receipt(self):
+        hidden = "token=notary-error-close-secret"
+        body = b"notary rejected"
+        index = sample_index()
+        anchor_payload = sample_anchor(index)
+        anchor = ADAPTER.VerifiedAnchor(
+            path=Path("latest.notary.json"),
+            payload=anchor_payload,
+            raw=json.dumps(anchor_payload).encode("utf-8"),
+            index_sha256=index[ADAPTER.INDEX_DIGEST_FIELD],
+            anchor_sha256=anchor_payload[ADAPTER.ANCHOR_DIGEST_FIELD],
+            record_count=anchor_payload["record_count"],
+            missing_record_sources=False,
+        )
+
+        class FailingCloseBody:
+            def read(self, _limit):
+                return body
+
+            def close(self):
+                raise RuntimeError(hidden)
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                raise ADAPTER.urllib.error.HTTPError(
+                    "https://notary.example/anchor",
+                    500,
+                    "failed",
+                    {},
+                    FailingCloseBody(),
+                )
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.publish_anchor(
+                anchor,
+                "https://notary.example/anchor",
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.status_code, 500)
+        self.assertEqual(result.response_body_sha256, ADAPTER.sha256_hex(body))
+        self.assertEqual(result.response_body_preview, body.decode("utf-8"))
+        self.assertEqual(result.error, "HTTP 500")
+        self.assertNotIn(hidden, result.error)
+        self.assertNotIn(hidden, result.response_body_preview)
+
+    def test_endpoint_error_response_read_failure_ignores_close_failure(self):
+        read_hidden = "token=notary-error-read-secret"
+        close_hidden = "token=notary-error-close-secret"
+        index = sample_index()
+        anchor_payload = sample_anchor(index)
+        anchor = ADAPTER.VerifiedAnchor(
+            path=Path("latest.notary.json"),
+            payload=anchor_payload,
+            raw=json.dumps(anchor_payload).encode("utf-8"),
+            index_sha256=index[ADAPTER.INDEX_DIGEST_FIELD],
+            anchor_sha256=anchor_payload[ADAPTER.ANCHOR_DIGEST_FIELD],
+            record_count=anchor_payload["record_count"],
+            missing_record_sources=False,
+        )
+
+        class FailingBody:
+            def read(self, _limit):
+                raise OSError(read_hidden)
+
+            def close(self):
+                raise OSError(close_hidden)
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                raise ADAPTER.urllib.error.HTTPError(
+                    "https://notary.example/anchor",
+                    500,
+                    "failed",
+                    {},
+                    FailingBody(),
+                )
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.publish_anchor(
+                anchor,
+                "https://notary.example/anchor",
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "endpoint error response could not be read")
+        self.assertNotIn(read_hidden, result.error)
+        self.assertNotIn(close_hidden, result.error)
 
 
 if __name__ == "__main__":

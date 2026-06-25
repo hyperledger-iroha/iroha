@@ -64,7 +64,7 @@ EXPECTED_CANARY_STAGE_ORDER = ("rail", "notary", "verify")
 REQUIRED_CANARY_STAGES = set(EXPECTED_CANARY_STAGE_ORDER)
 REQUIRED_RECEIPT_KINDS = {"iso-audit-notary", "iso-rail-gateway"}
 RECEIPT_SOURCE_MATERIAL_FIELDS_BY_KIND = {
-    "iso-rail-gateway": ("source_path", "payload_sha256"),
+    "iso-rail-gateway": ("source_path", "payload_sha256", "rail_message_id"),
 }
 STAGE_RECEIPT_KINDS = {
     "rail": "iso-rail-gateway",
@@ -131,6 +131,10 @@ MAX_RAIL_MESSAGE_ID_CHARS = 128
 MAX_TIMESTAMP_CHARS = 128
 MAX_SUMMARY_JSON_BYTES = 4 * 1024 * 1024
 MAX_RECEIPT_VERIFIER_OUTPUT_BYTES = 4 * 1024 * 1024
+MAX_EVIDENCE_INPUT_PATHS = 64
+MAX_JSON_LIST_ITEMS = 8192
+MAX_JSON_OBJECT_MEMBERS = 8192
+MAX_JSON_NESTING_DEPTH = 128
 MAX_HTTP_URL_CHARS = 2048
 MAX_LOCAL_PATH_CHARS = 4096
 MAX_CLEAN_STRING_CHARS = 4096
@@ -1198,6 +1202,10 @@ def _load_json(path: Path, *, display_label: str | None = None) -> Any:
         )
     except json.JSONDecodeError as error:
         raise EvidenceError(f"{label} is not valid JSON: {error}") from error
+    except RecursionError as error:
+        raise EvidenceError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        ) from error
     _reject_json_surrogates(value)
     return value
 
@@ -1236,18 +1244,28 @@ def _run_command_bounded(
         timeout_secs,
         "receipt verifier timeout seconds",
     )
-    process = subprocess.Popen(
-        argv,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    try:
+        process = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError:
+        raise EvidenceError("receipt verifier could not be started") from None
     outputs: dict[str, tuple[bytes, bool]] = {}
+    read_failed = False
 
     def read_stream(name: str, pipe: Any) -> None:
+        nonlocal read_failed
         try:
             outputs[name] = _read_limited_pipe(pipe, output_limit_bytes)
+        except OSError:
+            read_failed = True
         finally:
-            pipe.close()
+            try:
+                pipe.close()
+            except OSError:
+                read_failed = True
 
     assert process.stdout is not None
     assert process.stderr is not None
@@ -1273,6 +1291,8 @@ def _run_command_bounded(
         returncode = 124
     stdout_thread.join()
     stderr_thread.join()
+    if read_failed:
+        raise EvidenceError("receipt verifier output could not be read") from None
     stdout_raw, stdout_truncated = outputs.get("stdout", (b"", False))
     stderr_raw, stderr_truncated = outputs.get("stderr", (b"", False))
     return (
@@ -1286,6 +1306,10 @@ def _run_command_bounded(
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    if len(pairs) > MAX_JSON_OBJECT_MEMBERS:
+        raise EvidenceError(
+            f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+        )
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
@@ -1298,17 +1322,29 @@ def _reject_json_constant(value: str) -> None:
     raise EvidenceError("JSON contains non-finite numeric constant")
 
 
-def _reject_json_surrogates(value: Any) -> None:
+def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise EvidenceError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
     if isinstance(value, str):
         if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
             raise EvidenceError("JSON contains invalid Unicode surrogate")
     elif isinstance(value, list):
+        if len(value) > MAX_JSON_LIST_ITEMS:
+            raise EvidenceError(
+                f"JSON array must contain at most {MAX_JSON_LIST_ITEMS} items"
+            )
         for item in value:
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(item, _depth=_depth + 1)
     elif isinstance(value, dict):
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise EvidenceError(
+                f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+            )
         for key, item in value.items():
-            _reject_json_surrogates(key)
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(key, _depth=_depth + 1)
+            _reject_json_surrogates(item, _depth=_depth + 1)
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
@@ -1403,6 +1439,8 @@ def _reject_overlong_trust_source_text(value: str, label: str) -> None:
 def _require_list(value: Any, label: str) -> list[Any]:
     if not isinstance(value, list):
         raise EvidenceError(f"{label} must be a JSON array")
+    if len(value) > MAX_JSON_LIST_ITEMS:
+        raise EvidenceError(f"{label} must contain at most {MAX_JSON_LIST_ITEMS} items")
     return value
 
 
@@ -2471,6 +2509,7 @@ def _verify_receipt_verifier_summary(
     seen_receipt_paths: dict[str, int] = {}
     seen_receipt_digests: dict[str, int] = {}
     seen_source_material_signatures: dict[tuple[str, tuple[tuple[str, str], ...]], int] = {}
+    seen_source_material_fields: dict[tuple[str, str], dict[str, int]] = {}
     has_failed_receipt = False
     has_insecure_receipt_endpoint = False
     for offset, receipt_entry_raw in enumerate(receipt_entries_raw):
@@ -2587,6 +2626,18 @@ def _verify_receipt_verifier_summary(
                     f"{label}.receipts[{first_offset}].{field}"
                 )
             seen_source_material_signatures[source_material_signature] = offset
+            for field, value in source_material_values:
+                seen_for_field = seen_source_material_fields.setdefault(
+                    (entry_kind, field),
+                    {},
+                )
+                first_offset = seen_for_field.get(value)
+                if first_offset is not None:
+                    raise EvidenceError(
+                        f"{entry_label}.{field} duplicates "
+                        f"{label}.receipts[{first_offset}].{field}"
+                    )
+                seen_for_field[value] = offset
         receipt_entry_kinds.add(entry_kind)
         receipt_entries.append(dict(receipt_entry))
     if receipt_kind_set != receipt_entry_kinds:
@@ -2618,17 +2669,29 @@ def _reject_secret_string(value: str, label: str) -> None:
         raise EvidenceError(f"{label} contains secret-looking material")
 
 
-def _check_no_secret_material(value: Any, label: str = "$") -> None:
+def _check_no_secret_material(value: Any, label: str = "$", *, _depth: int = 0) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise EvidenceError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
     if isinstance(value, dict):
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise EvidenceError(
+                f"{label} must contain at most {MAX_JSON_OBJECT_MEMBERS} object members"
+            )
         for key, child in value.items():
             if _is_secret_looking_key(key):
                 raise EvidenceError(f"{label} contains forbidden secret-looking field")
             if _is_control_bearing_key(key):
                 raise EvidenceError(f"{label} contains forbidden control-bearing field")
-            _check_no_secret_material(child, f"{label}.{key}")
+            _check_no_secret_material(child, f"{label}.{key}", _depth=_depth + 1)
     elif isinstance(value, list):
+        if len(value) > MAX_JSON_LIST_ITEMS:
+            raise EvidenceError(
+                f"{label} must contain at most {MAX_JSON_LIST_ITEMS} items"
+            )
         for offset, child in enumerate(value):
-            _check_no_secret_material(child, f"{label}[{offset}]")
+            _check_no_secret_material(child, f"{label}[{offset}]", _depth=_depth + 1)
     elif isinstance(value, str):
         if _contains_unsafe_preview_control(value):
             raise EvidenceError(f"{label} contains unsafe control characters")
@@ -3057,6 +3120,10 @@ def _verify_receipt_stdout(
         )
     except json.JSONDecodeError as error:
         raise EvidenceError(f"{label}.stdout_preview is not valid receipt verifier JSON") from error
+    except RecursionError as error:
+        raise EvidenceError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        ) from error
     _reject_json_surrogates(receipt_summary)
     receipt_obj = _require_object(receipt_summary, f"{label}.stdout_preview")
     return _verify_receipt_verifier_summary(
@@ -4753,6 +4820,10 @@ def verify_receipts(args: argparse.Namespace) -> dict[str, Any] | None:
         )
     except json.JSONDecodeError as error:
         raise EvidenceError("receipt verifier emitted invalid JSON") from error
+    except RecursionError as error:
+        raise EvidenceError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        ) from error
     _reject_json_surrogates(receipt_summary)
     receipt_obj = _require_object(receipt_summary, "receipt verifier summary")
     return _verify_receipt_verifier_summary(
@@ -4879,6 +4950,7 @@ def _reject_cross_canary_receipt_reuse(canaries: list[dict[str, Any]]) -> None:
     source_material_checks: tuple[tuple[str, str], ...] = (
         ("source_path", "source_path"),
         ("payload_sha256", "payload_sha256"),
+        ("rail_message_id", "rail_message_id"),
         ("anchor_path", "anchor_path"),
         ("anchor_sha256", "anchor_sha256"),
         ("store_dir", "store_dir"),
@@ -5135,6 +5207,8 @@ def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
         return []
     if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
         raise EvidenceError(f"{label} must be a repeatable path list")
+    if len(value) > MAX_EVIDENCE_INPUT_PATHS:
+        raise EvidenceError(f"{label} accepts at most {MAX_EVIDENCE_INPUT_PATHS} paths")
     paths: list[Path] = []
     for offset, entry in enumerate(value):
         if isinstance(entry, bytes):

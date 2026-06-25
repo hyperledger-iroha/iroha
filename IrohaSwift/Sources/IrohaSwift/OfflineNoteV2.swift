@@ -222,13 +222,22 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
             throw OfflineNoteV2Error.deviceAttestationHashMismatch(field: "attestation_report_hash")
         }
 
+        let resolvedEvidence: Data
+        if attestationReport.isEmpty, evidence.isEmpty, evidenceHash == nil {
+            resolvedEvidence = OfflineNoteV2Validation.attestationEvidenceEnvelope(
+                attestationReportHash: resolvedAttestationReportHash
+            )
+        } else {
+            resolvedEvidence = evidence
+        }
         try OfflineNoteV2Validation.validateAttestationEvidenceEnvelope(
-            evidence,
+            resolvedEvidence,
             attestationReportHash: resolvedAttestationReportHash
         )
-        let resolvedEvidenceHash = evidenceHash ?? IrohaHash.hash(evidence)
+        let expectedEvidenceHash = IrohaHash.hash(resolvedEvidence)
+        let resolvedEvidenceHash = evidenceHash ?? expectedEvidenceHash
         try OfflineNoteV2Validation.validateHash(resolvedEvidenceHash, field: "evidence_hash")
-        guard resolvedEvidenceHash == IrohaHash.hash(evidence) else {
+        guard resolvedEvidenceHash == expectedEvidenceHash else {
             throw OfflineNoteV2Error.deviceAttestationHashMismatch(field: "evidence_hash")
         }
 
@@ -253,7 +262,7 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
         self.attestationReportHash = resolvedAttestationReportHash
         self.attestationReport = attestationReport
         self.evidenceHash = resolvedEvidenceHash
-        self.evidence = evidence
+        self.evidence = resolvedEvidence
         self.recentBlockHeight = recentBlockHeight
         self.recentBlockHash = recentBlockHash
         self.expiresAtMs = expiresAtMs
@@ -1225,6 +1234,10 @@ enum OfflineNoteV2Validation {
                 "evidence envelope must be deviceAttestationEvidencePrefix || attestation_report_hash"
             )
         }
+    }
+
+    static func attestationEvidenceEnvelope(attestationReportHash: Data) -> Data {
+        Data(OfflineNoteV2Constants.deviceAttestationEvidencePrefix.utf8) + attestationReportHash
     }
 
     static func validateCertificateCore(version: UInt16,

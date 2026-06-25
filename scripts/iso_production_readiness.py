@@ -52,6 +52,10 @@ MAX_PROFILE_ID_CHARS = 128
 MAX_TRUST_POLICY_CHARS = 128
 MAX_TRUST_SOURCE_TEXT_CHARS = 256
 MAX_SUMMARY_JSON_BYTES = 4 * 1024 * 1024
+MAX_SUMMARY_INPUT_PATHS = 64
+MAX_JSON_LIST_ITEMS = 8192
+MAX_JSON_OBJECT_MEMBERS = 8192
+MAX_JSON_NESTING_DEPTH = 128
 MAX_TIMESTAMP_CHARS = 128
 MAX_SOURCE_URL_CHARS = 2048
 MAX_LOCAL_PATH_CHARS = 4096
@@ -293,11 +297,12 @@ RECEIPT_MATERIAL_DIGEST_FIELDS = (
     "index_sha256",
 )
 RECEIPT_SOURCE_MATERIAL_FIELDS_BY_KIND = {
-    "iso-rail-gateway": ("source_path", "payload_sha256"),
+    "iso-rail-gateway": ("source_path", "payload_sha256", "rail_message_id"),
 }
 CANARY_RECEIPT_SOURCE_MATERIAL_REUSE_CODES = (
     ("source_path", "evidence.canary_receipt_source_path_reused"),
     ("payload_sha256", "evidence.canary_receipt_payload_digest_reused"),
+    ("rail_message_id", "evidence.canary_receipt_rail_message_id_reused"),
     ("anchor_path", "evidence.canary_receipt_anchor_path_reused"),
     ("anchor_sha256", "evidence.canary_receipt_anchor_digest_reused"),
     ("index_path", "evidence.canary_receipt_index_path_reused"),
@@ -306,6 +311,7 @@ CANARY_RECEIPT_SOURCE_MATERIAL_REUSE_CODES = (
 ARCHIVE_RECEIPT_SOURCE_MATERIAL_REUSE_CODES = (
     ("source_path", "evidence.archive_receipt_source_path_reused"),
     ("payload_sha256", "evidence.archive_receipt_payload_digest_reused"),
+    ("rail_message_id", "evidence.archive_receipt_rail_message_id_reused"),
     ("anchor_path", "evidence.archive_receipt_anchor_path_reused"),
     ("anchor_sha256", "evidence.archive_receipt_anchor_digest_reused"),
     ("index_path", "evidence.archive_receipt_index_path_reused"),
@@ -458,6 +464,64 @@ XSD_PENDING_SCHEMA_SOURCE_PROVENANCE_KEYS = {
     "submitting_organisation",
 }
 XSD_PENDING_SCHEMA_DOWNLOAD_TYPES = {"XSD"}
+KNOWN_PENDING_SCHEMA_SOURCE_METADATA = {
+    "colr.012.001.05": {
+        "catalogue_url": "https://www.iso20022.org/iso-20022-message-definitions",
+        "download_url": "https://www.iso20022.org/message/22504/download",
+        "download_type": "XSD",
+        "message_name": "CollateralSubstitutionConfirmationV05",
+        "submitting_organisation": "SWIFT, FPL, ISDA/FpML, ISITC",
+    },
+    "sese.023.001.09": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17196/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionInstructionV09",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.023.001.11": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/22545/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionInstructionV11",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.024.001.09": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17236/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionStatusAdviceV09",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.024.001.10": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17241/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionStatusAdviceV10",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.025.001.08": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17286/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionConfirmationV08",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.025.001.10": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/21776/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionConfirmationV10",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.025.001.11": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/22547/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionConfirmationV11",
+        "submitting_organisation": "SWIFT",
+    },
+}
 XSD_ISO_SCHEMA_CATALOGUE_PATHS = {
     "/iso-20022-message-definitions",
     "/catalogue-messages/iso-20022-messages-archive",
@@ -759,17 +823,29 @@ def _contains_control_character(value: str) -> bool:
     )
 
 
-def _check_no_secret_material(value: Any, label: str = "$") -> None:
+def _check_no_secret_material(value: Any, label: str = "$", *, _depth: int = 0) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise ReadinessError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
     if isinstance(value, dict):
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise ReadinessError(
+                f"{label} must contain at most {MAX_JSON_OBJECT_MEMBERS} object members"
+            )
         for key, child in value.items():
             if _is_secret_looking_key(key):
                 raise ReadinessError(f"{label} contains forbidden secret-looking field")
             if _is_control_bearing_key(key):
                 raise ReadinessError(f"{label} contains forbidden control-bearing field")
-            _check_no_secret_material(child, f"{label}.{key}")
+            _check_no_secret_material(child, f"{label}.{key}", _depth=_depth + 1)
     elif isinstance(value, list):
+        if len(value) > MAX_JSON_LIST_ITEMS:
+            raise ReadinessError(
+                f"{label} must contain at most {MAX_JSON_LIST_ITEMS} items"
+            )
         for offset, child in enumerate(value):
-            _check_no_secret_material(child, f"{label}[{offset}]")
+            _check_no_secret_material(child, f"{label}[{offset}]", _depth=_depth + 1)
     elif isinstance(value, str):
         if _contains_unsafe_json_control(value):
             raise ReadinessError(f"{label} contains unsafe control characters")
@@ -1242,11 +1318,19 @@ def _load_json(path: Path, *, display_label: str | None = None) -> Any:
         )
     except json.JSONDecodeError as error:
         raise ReadinessError(f"{label} is not valid JSON: {error}") from error
+    except RecursionError as error:
+        raise ReadinessError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        ) from error
     _reject_json_surrogates(value)
     return value
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    if len(pairs) > MAX_JSON_OBJECT_MEMBERS:
+        raise ReadinessError(
+            f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+        )
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
@@ -1259,17 +1343,29 @@ def _reject_json_constant(value: str) -> None:
     raise ReadinessError("JSON contains non-finite numeric constant")
 
 
-def _reject_json_surrogates(value: Any) -> None:
+def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise ReadinessError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
     if isinstance(value, str):
         if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
             raise ReadinessError("JSON contains invalid Unicode surrogate")
     elif isinstance(value, list):
+        if len(value) > MAX_JSON_LIST_ITEMS:
+            raise ReadinessError(
+                f"JSON array must contain at most {MAX_JSON_LIST_ITEMS} items"
+            )
         for item in value:
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(item, _depth=_depth + 1)
     elif isinstance(value, dict):
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise ReadinessError(
+                f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+            )
         for key, item in value.items():
-            _reject_json_surrogates(key)
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(key, _depth=_depth + 1)
+            _reject_json_surrogates(item, _depth=_depth + 1)
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
@@ -1350,6 +1446,8 @@ def _reject_non_ascii_context(value: str, label: str) -> None:
 def _require_list(value: Any, label: str) -> list[Any]:
     if not isinstance(value, list):
         raise ReadinessError(f"{label} must be a JSON array")
+    if len(value) > MAX_JSON_LIST_ITEMS:
+        raise ReadinessError(f"{label} must contain at most {MAX_JSON_LIST_ITEMS} items")
     return value
 
 
@@ -2689,6 +2787,21 @@ def _validate_iso_submitting_organisation(raw: Any, label: str) -> str:
     return value
 
 
+def _validate_known_pending_schema_source_metadata(
+    message_def_id: str,
+    source: dict[str, str],
+    label: str,
+) -> None:
+    expected = KNOWN_PENDING_SCHEMA_SOURCE_METADATA.get(message_def_id)
+    if expected is None:
+        return
+    for key, expected_value in expected.items():
+        if source[key] != expected_value:
+            raise ReadinessError(
+                f"{label}.source.{key} must match known official ISO pending-source metadata"
+            )
+
+
 def _verify_pending_schema_source_summary(
     entry_raw: Any,
     label: str,
@@ -2736,15 +2849,21 @@ def _verify_pending_schema_source_summary(
         source.get("submitting_organisation"),
         f"{label}.source.submitting_organisation",
     )
+    normalized_source = {
+        "catalogue_url": catalogue_url,
+        "download_url": download_url,
+        "download_type": download_type,
+        "message_name": message_name,
+        "submitting_organisation": submitting_organisation,
+    }
+    _validate_known_pending_schema_source_metadata(
+        message_def_id,
+        normalized_source,
+        label,
+    )
     return {
         "message_def_id": message_def_id,
-        "source": {
-            "catalogue_url": catalogue_url,
-            "download_url": download_url,
-            "download_type": download_type,
-            "message_name": message_name,
-            "submitting_organisation": submitting_organisation,
-        },
+        "source": normalized_source,
         "reason": reason,
     }
 
@@ -4409,6 +4528,7 @@ def _verify_receipt_summary(
     seen_receipt_digests: dict[str, int] = {}
     source_material_code_by_field = dict(source_material_reuse_codes)
     seen_source_material_signatures: dict[tuple[str, tuple[tuple[str, str], ...]], int] = {}
+    seen_source_material_fields: dict[tuple[str, str], dict[str, int]] = {}
     has_failed_receipt = False
     has_insecure_receipt_endpoint = False
     has_legacy_colr007_receipt = False
@@ -4607,6 +4727,27 @@ def _verify_receipt_summary(
                     )
             else:
                 seen_source_material_signatures[source_material_signature] = offset
+            for field, value in source_material_values:
+                seen_for_field = seen_source_material_fields.setdefault(
+                    (receipt_kind, field),
+                    {},
+                )
+                first_offset = seen_for_field.get(value)
+                if first_offset is None:
+                    seen_for_field[value] = offset
+                    continue
+                code = source_material_code_by_field.get(field)
+                if code is None:
+                    continue
+                _blocker(
+                    blockers,
+                    code,
+                    (
+                        f"{entry_label}.{field} duplicates "
+                        f"{label}.receipts[{first_offset}].{field}"
+                    ),
+                    path,
+                )
         if receipt_kind == "iso-rail-gateway":
             message_type = receipt.get("message_type")
             if isinstance(message_type, str) and message_type in LEGACY_RAIL_MESSAGE_TYPES:
@@ -5838,6 +5979,7 @@ def _block_cross_canary_receipt_reuse(
     source_material_checks: tuple[tuple[str, str], ...] = (
         ("source_path", "evidence.canary_receipt_source_path_reused"),
         ("payload_sha256", "evidence.canary_receipt_payload_digest_reused"),
+        ("rail_message_id", "evidence.canary_receipt_rail_message_id_reused"),
         ("anchor_path", "evidence.canary_receipt_anchor_path_reused"),
         ("anchor_sha256", "evidence.canary_receipt_anchor_digest_reused"),
         ("store_dir", "evidence.canary_receipt_store_dir_reused"),
@@ -6957,6 +7099,12 @@ def _block_cross_evidence_summary_reuse(
         ),
         (
             "canary",
+            "rail_message_id",
+            "canary_summaries",
+            "evidence.canary_receipt_rail_message_id_reused",
+        ),
+        (
+            "canary",
             "anchor_path",
             "canary_summaries",
             "evidence.canary_receipt_anchor_path_reused",
@@ -6996,6 +7144,12 @@ def _block_cross_evidence_summary_reuse(
             "payload_sha256",
             "receipt_verification",
             "evidence.archive_receipt_payload_digest_reused",
+        ),
+        (
+            "archive",
+            "rail_message_id",
+            "receipt_verification",
+            "evidence.archive_receipt_rail_message_id_reused",
         ),
         (
             "archive",
@@ -7894,6 +8048,8 @@ def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
         return []
     if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
         raise ReadinessError(f"{label} must be a repeatable path list")
+    if len(value) > MAX_SUMMARY_INPUT_PATHS:
+        raise ReadinessError(f"{label} accepts at most {MAX_SUMMARY_INPUT_PATHS} paths")
     paths: list[Path] = []
     for offset, entry in enumerate(value):
         if isinstance(entry, bytes):

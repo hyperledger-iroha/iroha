@@ -118,9 +118,14 @@ Android certificates that omit usage limit `1`. Structured JSON redemption
 payloads are field-strict: the `norito_base64` wrapper, the structured
 redemption object, nested sender key certificates, and nested recursive proof
 objects all reject unknown keys before interpretation. Compatibility aliases
-remain accepted (`key_certificate` for `sender_key_certificate`,
-`verifier_key_name` for `verifier_key_id`, and `public_inputs_hash` for
-`public_inputs_hash_hex`), but each alias pair is mutually exclusive in a
+remain accepted: `key_certificate` for `sender_key_certificate`,
+`verifier_key_name` for `verifier_key_id`, `public_inputs_hash` for
+`public_inputs_hash_hex`, and the SDK-emitted redemption identity fields
+`recipient_account_id` and `asset_definition_id`. When present, those nested
+identity fields must match the authenticated top-level request. Recursive proof
+backend aliases `verifier_key_backend` and `proof_backend` are accepted
+alongside `backend` only when all present backend fields carry the same exact
+value. Verifier-key and public-input alias pairs remain mutually exclusive in a
 single JSON object. The sender key certificate field set includes the Torii
 issue-response envelope metadata (`issued_at_ms`, `expires_at_ms`,
 `app_attest_public_key_base64`, iOS app metadata, and
@@ -228,6 +233,11 @@ expires_at_ms
 The challenge preimage excludes `attestation_report_hash`,
 `attestation_report`, `evidence_hash`, and `evidence`, because the platform must
 receive the challenge before it creates the attestation report.
+For pre-attestation drafts, the Swift, Kotlin/JVM, and Java Android SDK
+constructors therefore allow the default empty `attestation_report` plus empty
+`evidence` inputs and synthesize the deterministic empty-report evidence
+envelope so callers can read `challengeHash()`/`canonicalChallengeHash()` before
+platform evidence exists.
 
 The registration must also satisfy:
 

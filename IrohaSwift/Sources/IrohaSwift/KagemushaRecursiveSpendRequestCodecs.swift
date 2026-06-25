@@ -800,13 +800,13 @@ extension KagemushaRecursiveSpendRequestCodecs {
               transcriptLabel.utf8.count <= pallasOpenEnvelopeMaxTranscriptLabelBytes else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
-        try readField(&reader) { child in
+        try readField(&reader, field: "\(field).vk_commitment") { child in
             try readRequiredMetadataOption(&child, field: "\(field).vk_commitment")
         }
-        try readField(&reader) { child in
+        try readField(&reader, field: "\(field).public_inputs_schema_hash") { child in
             try readRequiredMetadataOption(&child, field: "\(field).public_inputs_schema_hash")
         }
-        try readField(&reader) { child in
+        try readField(&reader, field: "\(field).domain_tag") { child in
             try readRequiredMetadataOption(&child, field: "\(field).domain_tag")
         }
         guard reader.remaining == 0 else {
@@ -845,7 +845,7 @@ extension KagemushaRecursiveSpendRequestCodecs {
         guard hCount == intN else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
-        try readField(&reader) { child in
+        _ = try readField(&reader) { child in
             try child.readFixedBytes(32)
         }
         guard reader.remaining == 0 else {
@@ -867,9 +867,9 @@ extension KagemushaRecursiveSpendRequestCodecs {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
         let n = try readField(&reader) { try $0.readUInt32LE() }
-        try readField(&reader) { try $0.readFixedBytes(32) }
-        try readField(&reader) { try $0.readFixedBytes(32) }
-        try readField(&reader) { try $0.readFixedBytes(32) }
+        _ = try readField(&reader) { try $0.readFixedBytes(32) }
+        _ = try readField(&reader) { try $0.readFixedBytes(32) }
+        _ = try readField(&reader) { try $0.readFixedBytes(32) }
         guard reader.remaining == 0 else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
@@ -895,8 +895,8 @@ extension KagemushaRecursiveSpendRequestCodecs {
               lCount == n.trailingZeroBitCount else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
-        try readField(&reader) { try $0.readFixedBytes(32) }
-        try readField(&reader) { try $0.readFixedBytes(32) }
+        _ = try readField(&reader) { try $0.readFixedBytes(32) }
+        _ = try readField(&reader) { try $0.readFixedBytes(32) }
         guard reader.remaining == 0 else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
@@ -932,22 +932,28 @@ extension KagemushaRecursiveSpendRequestCodecs {
         _ reader: inout CompactReader,
         field: String
     ) throws {
-        guard let payload = try readOptionRawPayload(&reader),
+        guard let payload = try readOptionRawPayload(&reader, field: field),
               payload.count == 32,
               payload.contains(where: { $0 != 0 }) else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
     }
 
-    private static func readOptionRawPayload(_ reader: inout CompactReader) throws -> Data? {
+    private static func readOptionRawPayload(
+        _ reader: inout CompactReader,
+        field: String
+    ) throws -> Data? {
         switch try reader.readUInt8() {
         case 0:
             return nil
         case 1:
             let length = try reader.readLength()
+            guard reader.remaining >= length else {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
+            }
             return try reader.readBytes(length)
         default:
-            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("option")
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
     }
 
@@ -1113,7 +1119,10 @@ extension KagemushaRecursiveSpendRequestCodecs {
         ] {
             _ = try requireNonzero(field)
         }
-        let verifierOpeningLen = try Int(readField(&reader) { try $0.readUInt32LE() })
+        let verifierOpeningLen = try Int(readField(
+            &reader,
+            field: "bundle.accumulator.verifier_opening_len"
+        ) { try $0.readUInt32LE() })
         guard [2, 4, 8, 16, 32, 64, 128].contains(verifierOpeningLen) else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle.accumulator.verifier_opening_len")
         }
@@ -1281,7 +1290,10 @@ extension KagemushaRecursiveSpendRequestCodecs {
                 field: "bundle.accumulator.topup_anchor_nullifiers"
             )
         }
-        let hopCount = try Int(readField(&reader) { try $0.readUInt32LE() })
+        let hopCount = try Int(readField(
+            &reader,
+            field: "bundle.accumulator.hop_count"
+        ) { try $0.readUInt32LE() })
         guard hopCount >= 1,
               hopCount <= Int(KagemushaRecursiveSpendProver.recursiveSpendLineageWitnesslessMaxHopsV1)
         else {
@@ -1305,11 +1317,14 @@ extension KagemushaRecursiveSpendRequestCodecs {
     }
 
     private static func readChainIdPayload(_ reader: inout CompactReader) throws -> String {
+        let value: String
         do {
-            return try readField(&reader, readString)
+            value = try readField(&reader, readString)
         } catch {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle.accumulator.chain_id")
         }
+        try requirePortableId(value, field: "bundle.accumulator.chain_id")
+        return value
     }
 
     private struct RecursiveProofDecodeContext {
@@ -1500,10 +1515,30 @@ extension KagemushaRecursiveSpendRequestCodecs {
 
     private static func decimalString(fromLittleEndianTwosComplement bytes: Data) -> String {
         guard !bytes.isEmpty else { return "0" }
+        let negative = (bytes.last ?? 0) & 0x80 != 0
+        let magnitudeBytes: Data
+        if negative {
+            var magnitude = bytes.map { ~$0 }
+            var carry = UInt16(1)
+            for index in magnitude.indices {
+                let sum = UInt16(magnitude[index]) + carry
+                magnitude[index] = UInt8(sum & 0xff)
+                carry = sum >> 8
+                if carry == 0 {
+                    break
+                }
+            }
+            magnitudeBytes = Data(magnitude)
+        } else {
+            magnitudeBytes = bytes
+        }
         var digits = "0"
-        for byte in bytes.reversed() {
+        for byte in magnitudeBytes.reversed() {
             digits = multiplyDecimalString(digits, by: 256)
             digits = addDecimalString(digits, UInt16(byte))
+        }
+        if negative, digits != "0" {
+            return "-\(digits)"
         }
         return digits
     }
@@ -1547,12 +1582,13 @@ extension KagemushaRecursiveSpendRequestCodecs {
 
     private static func readField<T>(
         _ reader: inout CompactReader,
+        field: String = "field",
         _ decode: (inout CompactReader) throws -> T
     ) throws -> T {
         var child = CompactReader(data: try reader.readField())
         let value = try decode(&child)
         guard child.remaining == 0 else {
-            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("field")
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
         return value
     }

@@ -39638,6 +39638,49 @@ struct TxProjection {
 }
 
 #[cfg(feature = "app_api")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct AccountHistoryProjection {
+    id: String,
+    source: String,
+    history_type: String,
+    timestamp_ms: Option<u64>,
+    status: String,
+    result_ok: Option<bool>,
+    direction: String,
+    account_id: String,
+    counterparty_account_id: Option<String>,
+    asset_id: Option<String>,
+    asset_definition_id: Option<String>,
+    amount: Option<String>,
+    tx_hash: Option<String>,
+    operation_id: Option<String>,
+    expires_at_ms: Option<u64>,
+    finalized_at_ms: Option<u64>,
+    requesting_fi_id: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct AccountHistoryIndexCacheKey {
+    committed_height: usize,
+    tip_block_hash: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Default, Clone)]
+struct AccountHistoryIndex {
+    cache_key: AccountHistoryIndexCacheKey,
+    items: Vec<AccountHistoryProjection>,
+    by_account: std::collections::HashMap<String, Vec<usize>>,
+    by_asset_id: std::collections::HashMap<String, Vec<usize>>,
+    by_asset_definition: std::collections::HashMap<String, Vec<usize>>,
+}
+
+#[cfg(feature = "app_api")]
+static ACCOUNT_HISTORY_INDEX: LazyLock<RwLock<Option<Arc<AccountHistoryIndex>>>> =
+    LazyLock::new(|| RwLock::new(None));
+
+#[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Default)]
 struct ContractActivityProjection {
     authority: Option<String>,
@@ -39768,6 +39811,515 @@ fn contract_event_index_cache_key(state: &CoreState) -> ContractEventIndexCacheK
         committed_height,
         tip_block_hash,
     }
+}
+
+#[cfg(feature = "app_api")]
+fn account_history_index_cache_key(state: &CoreState) -> AccountHistoryIndexCacheKey {
+    let committed_height = state.committed_height();
+    let tip_block_hash = std::num::NonZeroUsize::new(committed_height)
+        .and_then(|height| state.block_by_height(height))
+        .map(|block| format!("{}", block.hash()));
+    AccountHistoryIndexCacheKey {
+        committed_height,
+        tip_block_hash,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn account_history_insert_index(
+    index: &mut std::collections::HashMap<String, Vec<usize>>,
+    key: &str,
+    position: usize,
+) {
+    if !key.trim().is_empty() {
+        index.entry(key.to_owned()).or_default().push(position);
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn append_account_history_projection(
+    index: &mut AccountHistoryIndex,
+    projection: AccountHistoryProjection,
+) {
+    let position = index.items.len();
+    account_history_insert_index(&mut index.by_account, &projection.account_id, position);
+    if let Some(asset_id) = projection.asset_id.as_deref() {
+        account_history_insert_index(&mut index.by_asset_id, asset_id, position);
+    }
+    if let Some(definition_id) = projection.asset_definition_id.as_deref() {
+        account_history_insert_index(&mut index.by_asset_definition, definition_id, position);
+    }
+    index.items.push(projection);
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone)]
+struct AccountHistoryTxBase {
+    timestamp_ms: Option<u64>,
+    tx_hash: String,
+    result_ok: bool,
+    status: String,
+}
+
+#[cfg(feature = "app_api")]
+fn account_history_tx_base(
+    tx: &iroha_data_model::query::CommittedTransaction,
+) -> AccountHistoryTxBase {
+    let result_ok = tx.result().as_ref().is_ok();
+    AccountHistoryTxBase {
+        timestamp_ms: tx_field_value(tx, "timestamp_ms").and_then(|value| value.parse().ok()),
+        tx_hash: format!("{}", tx.entrypoint_hash()),
+        result_ok,
+        status: if result_ok {
+            "SUCCESS".to_owned()
+        } else {
+            "FAILED".to_owned()
+        },
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn account_history_direction_label(
+    role: crate::account_activity::AccountActivityRole,
+) -> &'static str {
+    match role {
+        crate::account_activity::AccountActivityRole::Incoming => "incoming",
+        crate::account_activity::AccountActivityRole::Outgoing => "outgoing",
+        crate::account_activity::AccountActivityRole::SelfActivity => "self",
+        crate::account_activity::AccountActivityRole::Affected => "affected",
+    }
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone)]
+struct AccountHistoryMovement {
+    account: AccountId,
+    direction: &'static str,
+    counterparty: Option<AccountId>,
+    asset_id: Option<String>,
+    asset_definition_id: Option<String>,
+    amount: Option<String>,
+    history_type: &'static str,
+}
+
+#[cfg(feature = "app_api")]
+fn asset_definition_string_from_asset(
+    asset_id: &iroha_data_model::asset::AssetId,
+) -> Option<String> {
+    Some(asset_id.definition().to_string())
+}
+
+#[cfg(feature = "app_api")]
+fn account_history_push_directional(
+    out: &mut Vec<AccountHistoryMovement>,
+    from: &AccountId,
+    to: &AccountId,
+    from_asset_id: Option<String>,
+    to_asset_id: Option<String>,
+    asset_definition_id: Option<String>,
+    amount: Option<String>,
+    history_type: &'static str,
+) {
+    if from == to {
+        out.push(AccountHistoryMovement {
+            account: from.clone(),
+            direction: "self",
+            counterparty: None,
+            asset_id: from_asset_id.or(to_asset_id),
+            asset_definition_id,
+            amount,
+            history_type,
+        });
+        return;
+    }
+    out.push(AccountHistoryMovement {
+        account: from.clone(),
+        direction: "outgoing",
+        counterparty: Some(to.clone()),
+        asset_id: from_asset_id,
+        asset_definition_id: asset_definition_id.clone(),
+        amount: amount.clone(),
+        history_type,
+    });
+    out.push(AccountHistoryMovement {
+        account: to.clone(),
+        direction: "incoming",
+        counterparty: Some(from.clone()),
+        asset_id: to_asset_id,
+        asset_definition_id,
+        amount,
+        history_type,
+    });
+}
+
+#[cfg(feature = "app_api")]
+fn account_history_movements_from_instruction(
+    instr: &iroha_data_model::isi::InstructionBox,
+) -> Vec<AccountHistoryMovement> {
+    use iroha_data_model::isi::{
+        BurnBox, CustomInstruction, MintBox, TransferAssetBatch, TransferBox,
+    };
+    use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
+
+    let any = instr.as_any();
+    let mut out = Vec::new();
+    if let Some(transfer) = any.downcast_ref::<TransferBox>() {
+        match transfer {
+            TransferBox::Domain(inner) => {
+                account_history_push_directional(
+                    &mut out,
+                    inner.source(),
+                    inner.destination(),
+                    Some(inner.object().to_string()),
+                    Some(inner.object().to_string()),
+                    None,
+                    None,
+                    "TRANSFER",
+                );
+            }
+            TransferBox::AssetDefinition(inner) => {
+                let definition = inner.object().to_string();
+                account_history_push_directional(
+                    &mut out,
+                    inner.source(),
+                    inner.destination(),
+                    Some(definition.clone()),
+                    Some(definition.clone()),
+                    Some(definition),
+                    None,
+                    "TRANSFER",
+                );
+            }
+            TransferBox::Asset(inner) => {
+                let source_asset_id = inner.source().to_string();
+                let destination_asset_id = iroha_data_model::asset::AssetId::new(
+                    inner.source().definition().clone(),
+                    inner.destination().clone(),
+                )
+                .to_string();
+                let definition_id = asset_definition_string_from_asset(inner.source());
+                account_history_push_directional(
+                    &mut out,
+                    inner.source().account(),
+                    inner.destination(),
+                    Some(source_asset_id),
+                    Some(destination_asset_id),
+                    definition_id,
+                    Some(inner.object().to_string()),
+                    "TRANSFER",
+                );
+            }
+            TransferBox::Nft(inner) => {
+                account_history_push_directional(
+                    &mut out,
+                    inner.source(),
+                    inner.destination(),
+                    Some(inner.object().to_string()),
+                    Some(inner.object().to_string()),
+                    None,
+                    None,
+                    "TRANSFER",
+                );
+            }
+        }
+        return out;
+    }
+    if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
+        for entry in batch.entries() {
+            let definition = entry.asset_definition().to_string();
+            let source_asset_id = iroha_data_model::asset::AssetId::new(
+                entry.asset_definition().clone(),
+                entry.from().clone(),
+            )
+            .to_string();
+            let destination_asset_id = iroha_data_model::asset::AssetId::new(
+                entry.asset_definition().clone(),
+                entry.to().clone(),
+            )
+            .to_string();
+            account_history_push_directional(
+                &mut out,
+                entry.from(),
+                entry.to(),
+                Some(source_asset_id),
+                Some(destination_asset_id),
+                Some(definition),
+                Some(entry.amount().to_string()),
+                "TRANSFER",
+            );
+        }
+        return out;
+    }
+    if let Some(mint) = any.downcast_ref::<MintBox>() {
+        if let MintBox::Asset(asset_mint) = mint {
+            out.push(AccountHistoryMovement {
+                account: asset_mint.destination().account().clone(),
+                direction: "incoming",
+                counterparty: None,
+                asset_id: Some(asset_mint.destination().to_string()),
+                asset_definition_id: asset_definition_string_from_asset(asset_mint.destination()),
+                amount: Some(asset_mint.object().to_string()),
+                history_type: "RAW_ON_CHAIN",
+            });
+        }
+        return out;
+    }
+    if let Some(burn) = any.downcast_ref::<BurnBox>() {
+        if let BurnBox::Asset(asset_burn) = burn {
+            out.push(AccountHistoryMovement {
+                account: asset_burn.destination().account().clone(),
+                direction: "outgoing",
+                counterparty: None,
+                asset_id: Some(asset_burn.destination().to_string()),
+                asset_definition_id: asset_definition_string_from_asset(asset_burn.destination()),
+                amount: Some(asset_burn.object().to_string()),
+                history_type: "RAW_ON_CHAIN",
+            });
+        }
+        return out;
+    }
+    if let Some(custom) = any.downcast_ref::<CustomInstruction>() {
+        if let Ok(MultisigInstructionBox::Propose(propose)) =
+            MultisigInstructionBox::try_from(custom.payload())
+        {
+            for nested in &propose.instructions {
+                out.extend(account_history_movements_from_instruction(nested));
+            }
+            if !out.is_empty() {
+                return out;
+            }
+        }
+    }
+
+    crate::account_activity::instruction_account_activities(instr)
+        .into_iter()
+        .map(|activity| AccountHistoryMovement {
+            account: activity.account,
+            direction: account_history_direction_label(activity.role),
+            counterparty: None,
+            asset_id: None,
+            asset_definition_id: None,
+            amount: None,
+            history_type: "RAW_ON_CHAIN",
+        })
+        .collect()
+}
+
+#[cfg(feature = "app_api")]
+fn append_account_history_projections_for_tx(
+    index: &mut AccountHistoryIndex,
+    tx: &iroha_data_model::query::CommittedTransaction,
+) {
+    use iroha_data_model::transaction::{Executable, signed::TransactionEntrypoint};
+
+    let base = account_history_tx_base(tx);
+    let mut sequence = 0usize;
+    let mut append_for_instruction = |instruction: &iroha_data_model::isi::InstructionBox| {
+        for movement in account_history_movements_from_instruction(instruction) {
+            let id = format!("{}:{}:{}", base.tx_hash, movement.account, sequence);
+            sequence = sequence.saturating_add(1);
+            append_account_history_projection(
+                index,
+                AccountHistoryProjection {
+                    id,
+                    source: "transaction".to_owned(),
+                    history_type: movement.history_type.to_owned(),
+                    timestamp_ms: base.timestamp_ms,
+                    status: base.status.clone(),
+                    result_ok: Some(base.result_ok),
+                    direction: movement.direction.to_owned(),
+                    account_id: movement.account.to_string(),
+                    counterparty_account_id: movement
+                        .counterparty
+                        .map(|account| account.to_string()),
+                    asset_id: movement.asset_id,
+                    asset_definition_id: movement.asset_definition_id,
+                    amount: movement.amount,
+                    tx_hash: Some(base.tx_hash.clone()),
+                    operation_id: None,
+                    expires_at_ms: None,
+                    finalized_at_ms: None,
+                    requesting_fi_id: None,
+                },
+            );
+        }
+    };
+
+    match tx.entrypoint() {
+        TransactionEntrypoint::External(signed) => {
+            if let Executable::Instructions(instructions) = signed.instructions() {
+                for instruction in instructions.iter() {
+                    append_for_instruction(instruction);
+                }
+            }
+        }
+        TransactionEntrypoint::SealedReveal(reveal) => {
+            if let Executable::Instructions(instructions) =
+                reveal.signed_transaction().instructions()
+            {
+                for instruction in instructions.iter() {
+                    append_for_instruction(instruction);
+                }
+            }
+        }
+        TransactionEntrypoint::Time(entry) => {
+            for instruction in entry.instructions.iter() {
+                append_for_instruction(instruction);
+            }
+        }
+        TransactionEntrypoint::SealedCommitment(commitment) => {
+            let account = commitment.authority().to_string();
+            append_account_history_projection(
+                index,
+                AccountHistoryProjection {
+                    id: format!("{}:{}:0", base.tx_hash, account),
+                    source: "transaction".to_owned(),
+                    history_type: "RAW_ON_CHAIN".to_owned(),
+                    timestamp_ms: base.timestamp_ms,
+                    status: base.status,
+                    result_ok: Some(base.result_ok),
+                    direction: "affected".to_owned(),
+                    account_id: account,
+                    counterparty_account_id: None,
+                    asset_id: None,
+                    asset_definition_id: None,
+                    amount: None,
+                    tx_hash: Some(base.tx_hash),
+                    operation_id: None,
+                    expires_at_ms: None,
+                    finalized_at_ms: None,
+                    requesting_fi_id: None,
+                },
+            );
+        }
+        TransactionEntrypoint::PrivateKaigi(_) => {}
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn account_history_projections_for_height_range(
+    state: &CoreState,
+    start_height: usize,
+    end_height: usize,
+) -> Vec<AccountHistoryProjection> {
+    if start_height == 0 || start_height > end_height {
+        return Vec::new();
+    }
+
+    let mut index = AccountHistoryIndex::default();
+    for height in (start_height..=end_height).rev() {
+        let Some(height_nz) = std::num::NonZeroUsize::new(height) else {
+            continue;
+        };
+        let Some(block) = state.block_by_height(height_nz) else {
+            iroha_logger::warn!(
+                height,
+                "missing block in Kura while building account history index"
+            );
+            continue;
+        };
+        let block_hash = block.hash();
+
+        let entrypoint_hashes = block.entrypoint_hashes().rev();
+        let entrypoint_proofs = block.entrypoint_proofs().rev();
+        let entrypoints = block.entrypoints_cloned().rev();
+        let result_hashes = block.result_hashes().rev();
+        let result_proofs = block.result_proofs().rev();
+        let results = block.results().cloned().rev();
+
+        for (
+            ((((entrypoint_hash, entrypoint_proof), entrypoint), result_hash), result_proof),
+            result,
+        ) in entrypoint_hashes
+            .zip(entrypoint_proofs)
+            .zip(entrypoints)
+            .zip(result_hashes)
+            .zip(result_proofs)
+            .zip(results)
+        {
+            let tx = iroha_data_model::query::CommittedTransaction {
+                block_hash,
+                entrypoint_hash,
+                entrypoint_proof,
+                entrypoint,
+                result_hash,
+                result_proof,
+                result,
+            };
+            append_account_history_projections_for_tx(&mut index, &tx);
+        }
+    }
+    index.items
+}
+
+#[cfg(feature = "app_api")]
+fn build_account_history_index(
+    state: &CoreState,
+    cache_key: AccountHistoryIndexCacheKey,
+) -> AccountHistoryIndex {
+    let mut index = AccountHistoryIndex {
+        cache_key,
+        ..Default::default()
+    };
+    let committed_height = index.cache_key.committed_height;
+    for projection in account_history_projections_for_height_range(state, 1, committed_height) {
+        append_account_history_projection(&mut index, projection);
+    }
+    index
+}
+
+#[cfg(feature = "app_api")]
+fn extend_account_history_index(
+    state: &CoreState,
+    previous: &AccountHistoryIndex,
+    cache_key: AccountHistoryIndexCacheKey,
+) -> AccountHistoryIndex {
+    if previous.cache_key.committed_height >= cache_key.committed_height {
+        return build_account_history_index(state, cache_key);
+    }
+    let mut index = AccountHistoryIndex {
+        cache_key: cache_key.clone(),
+        ..Default::default()
+    };
+    for projection in account_history_projections_for_height_range(
+        state,
+        previous.cache_key.committed_height.saturating_add(1),
+        cache_key.committed_height,
+    ) {
+        append_account_history_projection(&mut index, projection);
+    }
+    for projection in previous.items.iter().cloned() {
+        append_account_history_projection(&mut index, projection);
+    }
+    index
+}
+
+#[cfg(feature = "app_api")]
+fn account_history_index_snapshot(state: &CoreState) -> Arc<AccountHistoryIndex> {
+    let cache_key = account_history_index_cache_key(state);
+    if let Some(existing) = ACCOUNT_HISTORY_INDEX
+        .read()
+        .expect("account history index read lock poisoned")
+        .as_ref()
+        .filter(|index| index.cache_key == cache_key)
+    {
+        return Arc::clone(existing);
+    }
+
+    let mut guard = ACCOUNT_HISTORY_INDEX
+        .write()
+        .expect("account history index write lock poisoned");
+    if let Some(existing) = guard.as_ref().filter(|index| index.cache_key == cache_key) {
+        return Arc::clone(existing);
+    }
+
+    let rebuilt = if let Some(previous) = guard.as_ref() {
+        Arc::new(extend_account_history_index(state, previous, cache_key))
+    } else {
+        Arc::new(build_account_history_index(state, cache_key))
+    };
+    *guard = Some(Arc::clone(&rebuilt));
+    rebuilt
 }
 
 #[cfg(feature = "app_api")]
@@ -41396,6 +41948,10 @@ fn append_asset_ids_from_instruction(
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
         if let TransferBox::Asset(asset_transfer) = transfer {
             push_asset(out, asset_transfer.source());
+            out.push(AssetId::new(
+                asset_transfer.source().definition().clone(),
+                asset_transfer.destination().clone(),
+            ));
         }
         return;
     }
@@ -41404,6 +41960,10 @@ fn append_asset_ids_from_instruction(
             out.push(AssetId::new(
                 entry.asset_definition().clone(),
                 entry.from().clone(),
+            ));
+            out.push(AssetId::new(
+                entry.asset_definition().clone(),
+                entry.to().clone(),
             ));
         }
         return;
@@ -41460,13 +42020,18 @@ fn instruction_matches_asset_id(
     let any = instr.as_any();
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
         if let TransferBox::Asset(asset_transfer) = transfer {
-            return asset_transfer.source() == expected;
+            return asset_transfer.source() == expected
+                || AssetId::new(
+                    asset_transfer.source().definition().clone(),
+                    asset_transfer.destination().clone(),
+                ) == *expected;
         }
         return false;
     }
     if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
         return batch.entries().iter().any(|entry| {
             AssetId::new(entry.asset_definition().clone(), entry.from().clone()) == *expected
+                || AssetId::new(entry.asset_definition().clone(), entry.to().clone()) == *expected
         });
     }
     if let Some(mint) = any.downcast_ref::<MintBox>() {
@@ -42501,15 +43066,21 @@ fn tx_matches_account_history_subject(
     match tx.entrypoint() {
         TransactionEntrypoint::External(signed) => {
             signed.authority().controller() == account_id.controller()
+                || executable_contains_account_id(signed.instructions(), account_id)
         }
         TransactionEntrypoint::SealedCommitment(commitment) => {
             commitment.authority().controller() == account_id.controller()
         }
         TransactionEntrypoint::SealedReveal(reveal) => {
-            reveal.signed_transaction().authority().controller() == account_id.controller()
+            let signed = reveal.signed_transaction();
+            signed.authority().controller() == account_id.controller()
+                || executable_contains_account_id(signed.instructions(), account_id)
         }
         TransactionEntrypoint::PrivateKaigi(_) => false,
-        TransactionEntrypoint::Time(_) => false,
+        TransactionEntrypoint::Time(entry) => entry
+            .instructions
+            .iter()
+            .any(|instruction| instruction_matches_account_id(instruction, account_id)),
     }
 }
 
@@ -43074,6 +43645,8 @@ pub const ENDPOINT_TRANSACTIONS_QUERY: &str = "/v1/transactions/query";
 pub const ENDPOINT_TRANSACTIONS_VISIBLE_QUERY: &str = "/v1/transactions/visible/query";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS: &str = "/v1/accounts/{account_id}/transactions";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_ACCOUNTS_HISTORY: &str = "/v1/accounts/{account_id}/history";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_ACTIVITY: &str = "/v1/contracts/activity";
 #[cfg(feature = "app_api")]
@@ -44881,6 +45454,159 @@ pub async fn handle_v1_account_transactions_get_with_policy(
     Ok(resp)
 }
 
+#[cfg(feature = "app_api")]
+fn account_history_projection_matches_asset_selector(
+    projection: &AccountHistoryProjection,
+    selector: &TxHistoryAssetSelector,
+) -> bool {
+    match selector {
+        TxHistoryAssetSelector::AssetId(asset_id) => projection
+            .asset_id
+            .as_deref()
+            .is_some_and(|candidate| candidate == asset_id.to_string()),
+        TxHistoryAssetSelector::DefinitionId(definition_id) => {
+            let definition = definition_id.to_string();
+            projection.asset_definition_id.as_deref() == Some(definition.as_str())
+                || projection.asset_id.as_deref() == Some(definition.as_str())
+        }
+    }
+}
+
+/// GET `/v1/accounts/{account_id}/history` — indexed account activity history.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_account_history_get_with_policy(
+    state: Arc<CoreState>,
+    axum::extract::Path(account_id): axum::extract::Path<String>,
+    crate::NoritoQuery(params): crate::NoritoQuery<AccountHistoryGetParams>,
+    telemetry: MaybeTelemetry,
+    allowed_asset_definition_id: Option<AssetDefinitionId>,
+) -> Result<impl IntoResponse> {
+    #[cfg(feature = "telemetry")]
+    use std::time::Instant;
+
+    #[cfg(feature = "telemetry")]
+    let start = Instant::now();
+    record_account_literal_selection(&telemetry, ENDPOINT_ACCOUNTS_HISTORY);
+    let (account_id, _) = parse_account_path_segment_with_state(
+        state.as_ref(),
+        &account_id,
+        &telemetry,
+        ENDPOINT_ACCOUNTS_HISTORY,
+    )?;
+    let cap = app_query_page_cap(&state);
+    let count_mode = app_count_mode(params.count_mode.as_deref(), ENDPOINT_ACCOUNTS_HISTORY);
+    let (page, snapshot) = {
+        let limits = app_query_limits();
+        let world = state.world_view();
+        let now_ms = asset_alias_observation_time_ms(&state);
+        let asset_filter = resolve_tx_history_asset_selector(
+            &world,
+            now_ms,
+            params.asset_id.as_deref(),
+            allowed_asset_definition_id.as_ref(),
+        )?;
+        let pagination =
+            enforce_app_pagination(params.limit, params.offset, cap, ENDPOINT_ACCOUNTS_HISTORY)?;
+        let fetch_cap = if count_mode == AppCountMode::Exact {
+            None
+        } else {
+            limits
+                .clamp_fetch_size(None)?
+                .map(|value| value.min(pagination.cap))
+        };
+        let snapshot = account_history_index_snapshot(state.as_ref());
+        let account_key = account_id.to_string();
+        let positions = snapshot
+            .by_account
+            .get(&account_key)
+            .cloned()
+            .unwrap_or_default();
+        let filtered = positions.into_iter().filter_map({
+            let index = Arc::clone(&snapshot);
+            let asset_filter = asset_filter.clone();
+            move |position| {
+                let projection = index.items.get(position)?;
+                if asset_filter.as_ref().is_some_and(|selector| {
+                    !account_history_projection_matches_asset_selector(projection, selector)
+                }) {
+                    return None;
+                }
+                Some(projection.clone())
+            }
+        });
+        (
+            collect_page_linear_for_mode(
+                filtered,
+                pagination.offset,
+                pagination.limit,
+                fetch_cap,
+                count_mode,
+            ),
+            snapshot,
+        )
+    };
+
+    #[cfg(feature = "telemetry")]
+    if telemetry.is_enabled() {
+        let metrics = telemetry.metrics().await;
+        metrics
+            .torii_filter_depth
+            .with_label_values(&[ENDPOINT_ACCOUNTS_HISTORY])
+            .observe(0.0);
+        metrics
+            .torii_filter_match_count
+            .with_label_values(&[ENDPOINT_ACCOUNTS_HISTORY])
+            .observe(page.total.unwrap_or(page.items.len()) as f64);
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        metrics
+            .torii_scan_ms
+            .with_label_values(&[ENDPOINT_ACCOUNTS_HISTORY])
+            .observe(elapsed_ms);
+        metrics
+            .torii_stream_rows
+            .with_label_values(&[ENDPOINT_ACCOUNTS_HISTORY])
+            .observe(page.items.len() as f64);
+    }
+
+    let mut top = norito::json::Map::new();
+    top.insert(
+        "items".into(),
+        norito::json::Value::Array(account_history_projections_to_json(&page.items)),
+    );
+    insert_page_metadata(&mut top, &page, count_mode);
+    top.insert(
+        "indexed_height".into(),
+        norito::json::Value::from(snapshot.cache_key.committed_height as u64),
+    );
+    match snapshot.cache_key.tip_block_hash.as_ref() {
+        Some(hash) => {
+            top.insert(
+                "indexed_block_hash".into(),
+                norito::json::Value::from(hash.clone()),
+            );
+        }
+        None => {
+            top.insert("indexed_block_hash".into(), norito::json::Value::Null);
+        }
+    }
+    top.insert(
+        "query_source".into(),
+        norito::json::Value::from("account_history_index"),
+    );
+    let body = norito::json::to_json_pretty(&top).map_err(|error| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            error.to_string(),
+        ))
+    })?;
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
 /// GET `/v1/transactions/history` — visible history feed for the authenticated viewer.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
@@ -45899,6 +46625,102 @@ mod tx_query_filter_tests {
     }
 
     #[test]
+    fn instruction_matches_asset_id_matches_transfer_source_and_recipient_buckets() {
+        let (sender, _) = account_with_key();
+        let (recipient, _) = account_with_key();
+        let (other, _) = account_with_key();
+        let def = test_asset_definition_id();
+        let source_asset_id = dm::AssetId::new(def.clone(), sender.clone());
+        let recipient_asset_id = dm::AssetId::new(def.clone(), recipient.clone());
+        let other_asset_id = dm::AssetId::new(def, other);
+        let transfer = dm::Transfer::asset_numeric(source_asset_id.clone(), 1_u32, recipient);
+        let instruction: dm::InstructionBox = transfer.into();
+
+        assert!(instruction_matches_asset_id(&instruction, &source_asset_id));
+        assert!(instruction_matches_asset_id(
+            &instruction,
+            &recipient_asset_id
+        ));
+        assert!(!instruction_matches_asset_id(&instruction, &other_asset_id));
+    }
+
+    #[test]
+    fn tx_asset_selector_matches_transfer_source_and_recipient_buckets() {
+        let (authority, keypair): (dm::AccountId, KeyPair) = account_with_key();
+        let (sender, _) = account_with_key();
+        let (recipient, _) = account_with_key();
+        let (other, _) = account_with_key();
+        let def = test_asset_definition_id();
+        let source_asset_id = dm::AssetId::new(def.clone(), sender.clone());
+        let recipient_asset_id = dm::AssetId::new(def.clone(), recipient.clone());
+        let other_asset_id = dm::AssetId::new(def, other);
+        let tx = make_external_tx_with_instructions(
+            &authority,
+            &keypair,
+            1_710_000_000_000,
+            vec![
+                dm::Transfer::asset_numeric(source_asset_id.clone(), 1_u32, recipient.clone())
+                    .into(),
+            ],
+        );
+
+        let collected = tx_collect_asset_ids(&tx);
+
+        assert!(collected.contains(&source_asset_id));
+        assert!(collected.contains(&recipient_asset_id));
+        assert!(!collected.contains(&other_asset_id));
+        assert!(tx_matches_asset_selector(
+            &tx,
+            &TxHistoryAssetSelector::AssetId(source_asset_id)
+        ));
+        assert!(tx_matches_asset_selector(
+            &tx,
+            &TxHistoryAssetSelector::AssetId(recipient_asset_id)
+        ));
+        assert!(!tx_matches_asset_selector(
+            &tx,
+            &TxHistoryAssetSelector::AssetId(other_asset_id)
+        ));
+    }
+
+    #[test]
+    fn instruction_matches_asset_id_matches_transfer_batch_recipients() {
+        let (alice, _) = account_with_key();
+        let (bob, _) = account_with_key();
+        let (carol, _) = account_with_key();
+        let (dave, _) = account_with_key();
+        let (eve, _) = account_with_key();
+        let def = test_asset_definition_id();
+        let entry_a =
+            dm::TransferAssetBatchEntry::new(alice.clone(), bob.clone(), def.clone(), 1_u32);
+        let entry_b =
+            dm::TransferAssetBatchEntry::new(carol.clone(), dave.clone(), def.clone(), 2_u32);
+        let instruction: dm::InstructionBox =
+            dm::TransferAssetBatch::new(vec![entry_a, entry_b]).into();
+
+        assert!(instruction_matches_asset_id(
+            &instruction,
+            &dm::AssetId::new(def.clone(), alice)
+        ));
+        assert!(instruction_matches_asset_id(
+            &instruction,
+            &dm::AssetId::new(def.clone(), bob)
+        ));
+        assert!(instruction_matches_asset_id(
+            &instruction,
+            &dm::AssetId::new(def.clone(), carol)
+        ));
+        assert!(instruction_matches_asset_id(
+            &instruction,
+            &dm::AssetId::new(def.clone(), dave)
+        ));
+        assert!(!instruction_matches_asset_id(
+            &instruction,
+            &dm::AssetId::new(def, eve)
+        ));
+    }
+
+    #[test]
     fn instruction_matches_asset_id_matches_multisig_custom_propose_nested_asset() {
         let (controller, _) = account_with_key();
         let (holder, _) = account_with_key();
@@ -46071,6 +46893,211 @@ mod tx_query_filter_tests {
     }
 
     #[test]
+    fn account_history_movements_project_transfer_direction_and_counterparty() {
+        let (alice, _) = account_with_key();
+        let (bob, _) = account_with_key();
+        let def = test_asset_definition_id();
+        let asset_id = dm::AssetId::new(def.clone(), alice.clone());
+        let asset_literal = asset_id.to_string();
+        let recipient_asset_id = dm::AssetId::new(def.clone(), bob.clone());
+        let recipient_asset_literal = recipient_asset_id.to_string();
+        let def_literal = def.to_string();
+        let instruction: dm::InstructionBox =
+            dm::Transfer::asset_numeric(asset_id, 10_u32, bob.clone()).into();
+
+        let movements = account_history_movements_from_instruction(&instruction);
+
+        assert_eq!(movements.len(), 2);
+        let outgoing = movements
+            .iter()
+            .find(|movement| movement.account == alice)
+            .expect("Alice outgoing movement");
+        assert_eq!(outgoing.direction, "outgoing");
+        assert_eq!(outgoing.counterparty.as_ref(), Some(&bob));
+        assert_eq!(outgoing.asset_id.as_deref(), Some(asset_literal.as_str()));
+        assert_eq!(
+            outgoing.asset_definition_id.as_deref(),
+            Some(def_literal.as_str())
+        );
+        assert_eq!(outgoing.amount.as_deref(), Some("10"));
+        assert_eq!(outgoing.history_type, "TRANSFER");
+
+        let incoming = movements
+            .iter()
+            .find(|movement| movement.account == bob)
+            .expect("Bob incoming movement");
+        assert_eq!(incoming.direction, "incoming");
+        assert_eq!(incoming.counterparty.as_ref(), Some(&alice));
+        assert_eq!(
+            incoming.asset_id.as_deref(),
+            Some(recipient_asset_literal.as_str())
+        );
+        assert_eq!(
+            incoming.asset_definition_id.as_deref(),
+            Some(def_literal.as_str())
+        );
+        assert_eq!(incoming.amount.as_deref(), Some("10"));
+        assert_eq!(incoming.history_type, "TRANSFER");
+    }
+
+    #[test]
+    fn account_history_index_filters_incoming_transfer_by_recipient_asset_id() {
+        let (authority, keypair): (dm::AccountId, KeyPair) = account_with_key();
+        let (sender, _) = account_with_key();
+        let (recipient, _) = account_with_key();
+        let def = test_asset_definition_id();
+        let source_asset_id = dm::AssetId::new(def.clone(), sender.clone());
+        let recipient_asset_id = dm::AssetId::new(def.clone(), recipient.clone());
+        let source_asset_literal = source_asset_id.to_string();
+        let recipient_asset_literal = recipient_asset_id.to_string();
+        let tx = make_external_tx_with_instructions(
+            &authority,
+            &keypair,
+            1_710_000_000_000,
+            vec![
+                dm::Transfer::asset_numeric(source_asset_id.clone(), 10_u32, recipient.clone())
+                    .into(),
+            ],
+        );
+        let mut index = AccountHistoryIndex::default();
+
+        append_account_history_projections_for_tx(&mut index, &tx);
+
+        let recipient_rows = index
+            .by_account
+            .get(&recipient.to_string())
+            .expect("recipient indexed by account");
+        assert_eq!(recipient_rows.len(), 1);
+        let projection = &index.items[recipient_rows[0]];
+        assert_eq!(projection.direction, "incoming");
+        assert_eq!(
+            projection.asset_id.as_deref(),
+            Some(recipient_asset_literal.as_str())
+        );
+        assert!(account_history_projection_matches_asset_selector(
+            projection,
+            &TxHistoryAssetSelector::AssetId(recipient_asset_id)
+        ));
+        assert!(!account_history_projection_matches_asset_selector(
+            projection,
+            &TxHistoryAssetSelector::AssetId(source_asset_id)
+        ));
+        assert_ne!(
+            projection.asset_id.as_deref(),
+            Some(source_asset_literal.as_str())
+        );
+    }
+
+    #[test]
+    fn account_history_movements_project_transfer_batch_recipient_asset_ids() {
+        let (alice, _) = account_with_key();
+        let (bob, _) = account_with_key();
+        let (carol, _) = account_with_key();
+        let (dave, _) = account_with_key();
+        let def = test_asset_definition_id();
+        let entry_a = dm::TransferAssetBatchEntry::new(alice, bob.clone(), def.clone(), 1_u32);
+        let entry_b = dm::TransferAssetBatchEntry::new(carol, dave.clone(), def.clone(), 2_u32);
+        let instruction: dm::InstructionBox =
+            dm::TransferAssetBatch::new(vec![entry_a, entry_b]).into();
+        let bob_asset_id = dm::AssetId::new(def.clone(), bob.clone()).to_string();
+        let dave_asset_id = dm::AssetId::new(def, dave.clone()).to_string();
+
+        let movements = account_history_movements_from_instruction(&instruction);
+
+        let bob_incoming = movements
+            .iter()
+            .find(|movement| movement.account == bob)
+            .expect("Bob incoming batch movement");
+        assert_eq!(bob_incoming.direction, "incoming");
+        assert_eq!(
+            bob_incoming.asset_id.as_deref(),
+            Some(bob_asset_id.as_str())
+        );
+        assert_eq!(bob_incoming.amount.as_deref(), Some("1"));
+
+        let dave_incoming = movements
+            .iter()
+            .find(|movement| movement.account == dave)
+            .expect("Dave incoming batch movement");
+        assert_eq!(dave_incoming.direction, "incoming");
+        assert_eq!(
+            dave_incoming.asset_id.as_deref(),
+            Some(dave_asset_id.as_str())
+        );
+        assert_eq!(dave_incoming.amount.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn account_transaction_subject_matches_authority_and_transfer_participants() {
+        let (authority, keypair): (dm::AccountId, KeyPair) = account_with_key();
+        let (sender, _) = account_with_key();
+        let (recipient, _) = account_with_key();
+        let (unrelated, _) = account_with_key();
+        let asset_id = dm::AssetId::new(test_asset_definition_id(), sender.clone());
+        let instruction: dm::InstructionBox =
+            dm::Transfer::asset_numeric(asset_id, 10_u32, recipient.clone()).into();
+        let tx = make_external_tx_with_instructions(
+            &authority,
+            &keypair,
+            1_710_000_000_000,
+            vec![instruction],
+        );
+
+        assert!(tx_matches_account_history_subject(&tx, &authority));
+        assert!(tx_matches_account_history_subject(&tx, &sender));
+        assert!(tx_matches_account_history_subject(&tx, &recipient));
+        assert!(!tx_matches_account_history_subject(&tx, &unrelated));
+    }
+
+    #[test]
+    fn account_history_index_records_mint_asset_for_holder_filters() {
+        let (authority, keypair): (dm::AccountId, KeyPair) = account_with_key();
+        let (holder, _) = account_with_key();
+        let def = test_asset_definition_id();
+        let asset_id = dm::AssetId::new(def.clone(), holder.clone());
+        let asset_literal = asset_id.to_string();
+        let def_literal = def.to_string();
+        let other_def = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400ab");
+        let tx = make_external_tx_with_instructions(
+            &authority,
+            &keypair,
+            1_710_000_000_000,
+            vec![dm::Mint::asset_numeric(12_u32, asset_id.clone()).into()],
+        );
+        let mut index = AccountHistoryIndex::default();
+
+        append_account_history_projections_for_tx(&mut index, &tx);
+
+        let account_rows = index
+            .by_account
+            .get(&holder.to_string())
+            .expect("holder indexed by account");
+        assert_eq!(account_rows.len(), 1);
+        let projection = &index.items[account_rows[0]];
+        assert_eq!(projection.account_id, holder.to_string());
+        assert_eq!(projection.direction, "incoming");
+        assert_eq!(projection.history_type, "RAW_ON_CHAIN");
+        assert_eq!(projection.amount.as_deref(), Some("12"));
+        assert_eq!(projection.asset_id.as_deref(), Some(asset_literal.as_str()));
+        assert_eq!(
+            projection.asset_definition_id.as_deref(),
+            Some(def_literal.as_str())
+        );
+        assert!(account_history_projection_matches_asset_selector(
+            projection,
+            &TxHistoryAssetSelector::AssetId(asset_id)
+        ));
+        assert!(account_history_projection_matches_asset_selector(
+            projection,
+            &TxHistoryAssetSelector::DefinitionId(def)
+        ));
+        assert!(!account_history_projection_matches_asset_selector(
+            projection,
+            &TxHistoryAssetSelector::DefinitionId(other_def)
+        ));
+    }
+
+    #[test]
     fn instruction_matches_account_id_matches_multisig_custom_cancel_account() {
         let (multisig, _) = account_with_key();
         let (other, _) = account_with_key();
@@ -46178,6 +47205,39 @@ mod tx_query_filter_tests {
             norito::json::Value::from(other_id.to_string()),
         );
         assert!(!filter_tx(&expr_miss, &tx));
+    }
+
+    #[test]
+    fn filter_asset_id_eq_matches_transfer_recipient_bucket() {
+        let (authority, keypair): (dm::AccountId, KeyPair) = account_with_key();
+        let (sender, _) = account_with_key();
+        let (recipient, _) = account_with_key();
+        let (other, _) = account_with_key();
+        let asset_def: dm::AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
+        let source_asset_id = dm::AssetId::new(asset_def.clone(), sender.clone());
+        let recipient_asset_id = dm::AssetId::new(asset_def.clone(), recipient.clone());
+        let other_asset_id = dm::AssetId::new(asset_def, other);
+        let tx = make_external_tx_with_instructions(
+            &authority,
+            &keypair,
+            1_710_000_000_000,
+            vec![
+                dm::Transfer::asset_numeric(source_asset_id.clone(), 1_u32, recipient.clone())
+                    .into(),
+            ],
+        );
+        let expr = crate::filter::FilterExpr::Eq(
+            crate::filter::FieldPath("asset_id".into()),
+            norito::json::Value::from(recipient_asset_id.to_string()),
+        );
+        let miss = crate::filter::FilterExpr::Eq(
+            crate::filter::FieldPath("asset_id".into()),
+            norito::json::Value::from(other_asset_id.to_string()),
+        );
+
+        assert!(filter_tx(&expr, &tx));
+        assert!(!filter_tx(&miss, &tx));
     }
 
     #[test]
@@ -47614,7 +48674,7 @@ mod tx_query_integration_smoke {
     }
 
     #[tokio::test]
-    async fn account_transactions_get_excludes_counterparty_transfer_for_recipient_account() {
+    async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
         use iroha_crypto::Algorithm;
 
         let kura = Kura::blank_kura_for_testing();
@@ -47695,12 +48755,14 @@ mod tx_query_integration_smoke {
         crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
 
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-        let transfer_asset_id = dm::AssetId::new(def_id.clone(), alice_id.account().clone());
+        let source_asset_id = dm::AssetId::new(def_id.clone(), alice_id.account().clone());
+        let recipient_asset_id = dm::AssetId::new(def_id.clone(), bob_id.account().clone());
+        let unrelated_asset_id = dm::AssetId::new(def_id.clone(), exec_id.account().clone());
         let mut tx_builder = dm::TransactionBuilder::new(chain_id, alice_id.account().clone());
         tx_builder.set_creation_time(core::time::Duration::from_millis(1_000));
         let signed_transfer = tx_builder
             .with_instructions::<dm::InstructionBox>([dm::Transfer::asset_numeric(
-                transfer_asset_id,
+                source_asset_id,
                 7_u32,
                 bob_id.account().clone(),
             )
@@ -47733,7 +48795,7 @@ mod tx_query_integration_smoke {
             .expect("recipient i105 literal");
         let resp = handle_v1_account_transactions_get(
             state.clone(),
-            axum::extract::Path(bob_literal),
+            axum::extract::Path(bob_literal.clone()),
             crate::NoritoQuery(AccountTransactionsGetParams {
                 limit: Some(10),
                 offset: 0,
@@ -47744,6 +48806,58 @@ mod tx_query_integration_smoke {
         )
         .await
         .expect("handler ok")
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let parsed: norito::json::Value = norito::json::from_slice(&body).unwrap();
+        let items = parsed["items"].as_array().unwrap();
+        assert_eq!(parsed["total"].as_u64(), Some(1));
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0]["entrypoint_hash"].as_str(),
+            Some(entry_hash.as_str())
+        );
+
+        let resp = handle_v1_account_transactions_get(
+            state.clone(),
+            axum::extract::Path(bob_literal.clone()),
+            crate::NoritoQuery(AccountTransactionsGetParams {
+                limit: Some(10),
+                offset: 0,
+                asset_id: Some(recipient_asset_id.to_string()),
+                count_mode: Some("exact".to_owned()),
+            }),
+            crate::routing::MaybeTelemetry::for_tests(),
+        )
+        .await
+        .expect("recipient bucket handler ok")
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let parsed: norito::json::Value = norito::json::from_slice(&body).unwrap();
+        let items = parsed["items"].as_array().unwrap();
+        assert_eq!(parsed["total"].as_u64(), Some(1));
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0]["entrypoint_hash"].as_str(),
+            Some(entry_hash.as_str())
+        );
+
+        let resp = handle_v1_account_transactions_get(
+            state.clone(),
+            axum::extract::Path(bob_literal),
+            crate::NoritoQuery(AccountTransactionsGetParams {
+                limit: Some(10),
+                offset: 0,
+                asset_id: Some(unrelated_asset_id.to_string()),
+                count_mode: Some("exact".to_owned()),
+            }),
+            crate::routing::MaybeTelemetry::for_tests(),
+        )
+        .await
+        .expect("unrelated bucket handler ok")
         .into_response();
 
         assert_eq!(resp.status(), StatusCode::OK);
@@ -62592,6 +63706,28 @@ pub struct AccountTransactionsGetParams {
     Debug,
     Clone,
 )]
+pub struct AccountHistoryGetParams {
+    /// Optional limit for pagination.
+    pub limit: Option<u64>,
+    /// Offset for pagination (default 0).
+    #[norito(default)]
+    pub offset: u64,
+    /// Filter history by asset balance-bucket or asset definition selector.
+    pub asset_id: Option<String>,
+    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
+    #[norito(default)]
+    pub count_mode: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    Default,
+    Debug,
+    Clone,
+)]
 /// Query parameters accepted by the committed contract-activity feed.
 pub struct ContractActivityGetParams {
     /// Optional limit for pagination.
@@ -63307,6 +64443,97 @@ fn record_explorer_endpoint_result<T>(
     telemetry.with_metrics(|metrics| {
         metrics.record_torii_explorer_request(endpoint, outcome, started.elapsed());
     });
+}
+
+#[cfg(feature = "app_api")]
+fn account_history_projections_to_json(
+    items: &[AccountHistoryProjection],
+) -> Vec<norito::json::Value> {
+    items
+        .iter()
+        .map(|item| {
+            let mut row = norito::json::Map::new();
+            row.insert("id".into(), norito::json::Value::from(item.id.clone()));
+            row.insert(
+                "source".into(),
+                norito::json::Value::from(item.source.clone()),
+            );
+            row.insert(
+                "type".into(),
+                norito::json::Value::from(item.history_type.clone()),
+            );
+            if let Some(timestamp_ms) = item.timestamp_ms {
+                row.insert(
+                    "timestamp_ms".into(),
+                    norito::json::Value::from(timestamp_ms),
+                );
+            }
+            row.insert(
+                "status".into(),
+                norito::json::Value::from(item.status.clone()),
+            );
+            if let Some(result_ok) = item.result_ok {
+                row.insert("result_ok".into(), norito::json::Value::from(result_ok));
+            }
+            row.insert(
+                "direction".into(),
+                norito::json::Value::from(item.direction.clone()),
+            );
+            row.insert(
+                "account_id".into(),
+                norito::json::Value::from(item.account_id.clone()),
+            );
+            if let Some(counterparty) = item.counterparty_account_id.as_ref() {
+                row.insert(
+                    "counterparty_account_id".into(),
+                    norito::json::Value::from(counterparty.clone()),
+                );
+            }
+            if let Some(asset_id) = item.asset_id.as_ref() {
+                row.insert(
+                    "asset_id".into(),
+                    norito::json::Value::from(asset_id.clone()),
+                );
+            }
+            if let Some(asset_definition_id) = item.asset_definition_id.as_ref() {
+                row.insert(
+                    "asset_definition_id".into(),
+                    norito::json::Value::from(asset_definition_id.clone()),
+                );
+            }
+            if let Some(amount) = item.amount.as_ref() {
+                row.insert("amount".into(), norito::json::Value::from(amount.clone()));
+            }
+            if let Some(tx_hash) = item.tx_hash.as_ref() {
+                row.insert("tx_hash".into(), norito::json::Value::from(tx_hash.clone()));
+            }
+            if let Some(operation_id) = item.operation_id.as_ref() {
+                row.insert(
+                    "operation_id".into(),
+                    norito::json::Value::from(operation_id.clone()),
+                );
+            }
+            if let Some(expires_at_ms) = item.expires_at_ms {
+                row.insert(
+                    "expires_at_ms".into(),
+                    norito::json::Value::from(expires_at_ms),
+                );
+            }
+            if let Some(finalized_at_ms) = item.finalized_at_ms {
+                row.insert(
+                    "finalized_at_ms".into(),
+                    norito::json::Value::from(finalized_at_ms),
+                );
+            }
+            if let Some(requesting_fi_id) = item.requesting_fi_id.as_ref() {
+                row.insert(
+                    "requesting_fi_id".into(),
+                    norito::json::Value::from(requesting_fi_id.clone()),
+                );
+            }
+            norito::json::Value::Object(row)
+        })
+        .collect()
 }
 
 #[cfg(feature = "app_api")]

@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-24
+Last updated: 2026-06-25
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -168,7 +168,16 @@ and completed history lives in [`status.md`](./status.md).
   `--repo-root`, `--device-lab-root`, `--trusted-signer-public-key`, and
   `--summary-out`; summary-output alias-shape failures now stop before
   readiness rollup construction or trusted signer key loading, not only before
-  output parent creation. The readiness rollup also rejects noncanonical
+  output parent creation. The same readiness CLI now accepts repeated
+  `--device-lab-root` values so operators can keep per-device or per-family
+  capture roots separate; each root is preflighted and scanned independently,
+  while the release-facing summary keeps the existing redacted
+  `<local-device-lab-root>` label and duplicate slot/binding checks. The
+  release-bundle packager accepts the same repeated roots and binds signed
+  evidence plus slot artifacts to the unique supplied root that contains each
+  slot, while preserving manifest slot/path validation under
+  `artifacts/android/<root>/<slot>/...`. The
+  readiness rollup also rejects noncanonical
   lineage proof, compact key, and localnet lifecycle evidence filenames before
   evidence-file ancestor validation, file metadata reads, or JSON loading, and
   localnet lifecycle evidence now has its own explicit JSON size cap instead of
@@ -205,7 +214,14 @@ and completed history lives in [`status.md`](./status.md).
   also treat `--*-timeout-seconds 0` as explicit no-timeout mode for
   operator-controlled captures where subprocess interruption is forbidden,
   while negative timeout values fail before any ADB, Gradle, instrumentation,
-  or helper command is invoked.
+  or helper command is invoked. The capture wrapper now also has an opt-in
+  `--adb-visibility-wait-seconds` mode that retries only the serial-scoped
+  `adb get-state` preflight and bounded `adb devices -l` diagnostic at a
+  positive `--adb-visibility-poll-interval-seconds`, so newly attached physical
+  devices can become visible without restarting ADB or managing other jobs.
+  `--serial auto` now uses that same non-disruptive `adb devices -l` surface
+  only when exactly one safe `device` row is visible before returning to the
+  serial-scoped preflight.
   The raw Android slot puller rejects padded components in output-root and
   summary-output paths before ADB queries, tar pulls, output-root creation, or
   summary writes.
@@ -362,19 +378,45 @@ and completed history lives in [`status.md`](./status.md).
   with Windows host execution still tracked below.
   JavaScript, Python, Swift, Kotlin/JVM, Android Java, and C# now also reject
   raw accumulator `chain_id` string payloads and require the ABI fixture's
-  nested Norito string shape.
+  nested Norito string shape. Editable non-C# bundle decoders and the JS
+  package-dist path also reject empty or surrounding-whitespace nested
+  accumulator `chain_id` values before returning bundle summaries. Editable
+  non-C# bundle decoders now require nested accumulator `chain_id` values to
+  use the same portable registry syntax as verifier and circuit identifiers,
+  and Kotlin/JVM plus Android Java apply that rule to SDK-built
+  `VerifiedFoldHopEvidence` chain ids before record-bundle serialization.
+  Editable non-C# bundle decoders and the JS package-dist path also pin padded
+  and mixed-case accumulator-domain strings,
+  so SDKs cannot trim or case-normalize
+  `iroha:kagemusha:v1:recursive-spend-accumulator` before trusting bundle
+  summaries.
   JavaScript, Python, Swift, Kotlin/JVM, Android Java, and C# also include
   proof-box-only backend vectors that mutate nested `ProofBox.backend` to
   `halo2/kzg` while leaving verifier metadata unchanged, so decoders prove the
-  proof bytes container is checked directly.
+  proof bytes container is checked directly. Editable non-C# decoders and the
+  JavaScript package-dist path now also keep a combined adversarial vector
+  where nested `ProofBox.backend = halo2/kzg` and `ProofBox.bytes` is empty;
+  that vector must report `bundle.proof_backend` before the empty-proof-bytes
+  diagnostic, so corridor violations cannot be masked by secondary proof-box
+  shape failures. The same editable non-C# suites and JavaScript package-dist
+  path now pin that precedence for lineage-witness previous recursive proofs,
+  requiring `lineageWitness.previousRecursiveProofs.proof_backend` before the
+  empty previous-proof diagnostic.
+  The non-C# SDK gates now also consume regenerated ABI-7 recursive-spend
+  archive fixtures after aligning data-model/core reserved recursive verifier
+  evidence to `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4`.
+  The Python native generator derives `verify_result` from the same typed
+  verify request context used by the committed fixture, and the policy guard
+  pins the regenerated archive hashes plus an ABI-7 archive-drift negative
+  control.
   Those same SDK decoders now also include trailing-field vectors that append a
   valid extra Norito field to the nested `verifierKeyId`, recursive-proof, and
   `ProofBox` objects, proving surplus proof metadata is rejected before native
   dispatch. Bundle-summary decoders also pin trailing-field vectors for the
   top-level bundle, accumulator summary, and nested current note. Kotlin/JVM
   and Android Java request-codec tests must keep tampered bundle archives
-  failing with the Norito `Checksum mismatch` diagnostic, not only a broad
-  decode failure.
+  failing with the structured Norito `Checksum mismatch: expected 0x... got
+  0x...` diagnostic, not only a broad decode or checksum substring failure.
   Kotlin/JVM and Android Java now also assert exact bundle-summary diagnostics
   for current-note zero/aliasing/fixed32/numeric/trailing-field failures and
   accumulator domain, chain-id shape, fixed-size asset/root, hop-count, and
@@ -478,11 +520,15 @@ and completed history lives in [`status.md`](./status.md).
   current-hop Pallas open-envelope vectors to contain exactly one valid envelope
   per hop, and require Reserved-lineage append `previous_proof_open_envelopes`
   to contain exactly one bounded Pallas envelope before native dispatch.
-  Those preflights also reject stale fixed-array encodings for Pallas
-  `vk_commitment`, `public_inputs_schema_hash`, and `domain_tag`
-  `Option<[u8; 32]>` bodies; the accepted shape is the raw 32-byte value inside
-  the option payload, with JavaScript source/package-dist, Python, Swift,
-  Kotlin/JVM, and Android Java vectors pinned by the SDK parity guard.
+  Those preflights also reject stale fixed-array encodings, trailing bytes,
+  declared option lengths that exceed the supplied payload, and unknown option
+  tags for Pallas `vk_commitment`,
+  `public_inputs_schema_hash`, and `domain_tag` `Option<[u8; 32]>` bodies; the
+  accepted shape is tag `1` plus the raw 32-byte value inside the option
+  payload, while tag `0` remains the required-field diagnostic. JavaScript
+  source/package-dist, Python, Swift, Kotlin/JVM, and Android Java vectors are
+  pinned by the SDK parity guard and the non-C# Pallas metadata option-shape
+  negative control.
   JavaScript source/dist, Python, Swift, Kotlin/JVM, and Android Java append
   constructors now also reject supplied previous-proof openings unless the
   selected output is the Reserved-lineage append circuit, and reject
@@ -500,9 +546,11 @@ and completed history lives in [`status.md`](./status.md).
   matching semantic lineage-witness summary negatives on a Windows host.
   TODO(C# Windows): add and certify the matching C# typed init/append Pallas
   open-envelope vector preflight on a Windows host, including wrong schema,
-  count mismatch, missing metadata, previous-proof count negatives, and
-  misplaced previous-proof opening and previous-lineage-record rejection on
-  aggregation append outputs.
+  count mismatch, missing metadata, stale fixed-array metadata, trailing
+  metadata-option bytes, declared metadata-option lengths that exceed the
+  supplied payload, unknown metadata-option tags, previous-proof count
+  negatives, and misplaced previous-proof opening and previous-lineage-record
+  rejection on aggregation append outputs.
   Kotlin/JVM and Android Java typed init/verifier request constructors now also
   assert exact diagnostics for missing init lineage verifier keys,
   wrong-schema record bundles, and wrong-schema verifier-record archives before
@@ -662,6 +710,13 @@ and completed history lives in [`status.md`](./status.md).
     redeem instruction hash
     `31cd92a5a2f8894634c531830621604937d4631f5f08b58cba01a45dc26e9eba`
     instead of the legacy hashes, then rerun the C# SDK gate on Windows.
+  - Update and certify the C# shared ABI-7 archive fixture assertions for the
+    regenerated `64x4` profile hashes:
+    `append_bundle=b1d6fe2498b66a98df3021be6e6614a75c6305f7d8f9e802799931c0dcfd2b6f`,
+    `verify_request=fceab0847a6dfd51049a512a3eab0baf9efb0ac21ae17669f85fb01d1dbdfccf`,
+    `verify_result=67eb9b1f7c89bd842dbfb769bb802c60464fba510b4db0ac4c83bcfbd5626d15`,
+    `redeem_request=5a6bbbb16a4559f1bd96aa8c47ddd1203c3b56cf5f763ff19b8ee764e1eb32c8`, and
+    `redeem_instruction=8fc0d6ae8cc2a763e9813bd5a73a0495596577163dd1bf82597c4ed9c44e2589`.
   - Confirm the pass includes `KagemushaRecursiveSpendNativeTests`,
     `PrivacyNativeTests`, `TransactionBuilderTests`, `CanonicalRequestTests`,
     `ToriiClientTests`, `SignedQueryBuilderTests`, and
@@ -980,6 +1035,14 @@ and completed history lives in [`status.md`](./status.md).
   `--localnet-lifecycle-evidence
   artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json` explicitly so
   the localnet lifecycle gate is not hidden behind tooling defaults.
+- Current Kagemusha live production readiness is narrowed to evidence
+  collection: the current best rollup accepts the 4-peer production-localnet
+  lifecycle evidence and the current-key Pixel 6 multid2d Android slot, while
+  final release remains blocked on a completed Reserved-lineage proof evidence
+  packet, completed ABI-7 recursive compact key evidence, and physical Android
+  matrix coverage for Pixel 7, Pixel 8, Pixel Fold/Tablet, Samsung Galaxy S23,
+  and Samsung Galaxy S24. Keep further lineage and compact retries deferred
+  while live cargo/rustc or compact keygen jobs are still consuming the host.
 - Kagemusha JavaScript SDK validation must keep the focused Node 20 runner
   aligned with the parity inventory by executing the Kagemusha recursive spend,
   account-address exactness, Offline Cash issuer-key configuration snapshot,
@@ -1310,7 +1373,9 @@ and completed history lives in [`status.md`](./status.md).
   Corrupted Pallas open-envelope archives in Kotlin/JVM and Android Java typed
   init requests must keep the structured checksum diagnostic
   `Checksum mismatch: expected 0x... got 0x...`, pinned by the verify-lineage
-  preflight negative control.
+  preflight negative control. Tampered recursive-spend bundle archives in those
+  SDKs must keep the same structured expected/got checksum shape, pinned by the
+  accumulator-domain guard and negative control.
   Kotlin/JVM and Android Java typed request malformed Pallas archive tables must
   also assert exact top-level diagnostics for init `pallasOpenEnvelopes` and
   append `previousProofOpenEnvelopes` wrong schema, envelope-count mismatch,
@@ -8221,12 +8286,15 @@ and completed history lives in [`status.md`](./status.md).
   including exact direct XSD download URLs, for the remaining
   securities/collateral profile-only gaps, so current repository summaries
   report zero unreviewed unique profile-message gaps while strict schema-backed
-  closure still fails; pending direct download URLs must be unique within each
-  summary and across archived summary replay, pending official ISO
-  catalogue/download URLs must not contain percent escapes, archive catalogue
-  URLs must use canonical raw `page=<nonzero decimal>` queries, and pending
-  source message names must be unique and use canonical ISO-style CamelCase plus
-  `VNN` suffixes that match the corresponding `message_def_id` version segment;
+  closure still fails; direct verification and readiness replay now pin those
+  known pending message definitions to their exact recorded ISO catalogue URLs,
+  direct download URLs, download type, message names, and submitting
+  organisations; pending direct download URLs must be unique within each summary
+  and across archived summary replay, pending official ISO catalogue/download
+  URLs must not contain percent escapes, archive catalogue URLs must use
+  canonical raw `page=<nonzero decimal>` queries, and pending source message
+  names must be unique and use canonical ISO-style CamelCase plus `VNN` suffixes
+  that match the corresponding `message_def_id` version segment;
   pending submitting-organisation labels must be bounded canonical ISO-style
   comma-space-separated names without URL/contact delimiters, semicolon path
   parameters, placeholders, or path-like slash smuggling;
@@ -8256,10 +8324,9 @@ and completed history lives in [`status.md`](./status.md).
   provenance or obfuscated restricted terms cannot satisfy missing-package
   blocker evidence. Pending official ISO source evidence is reviewed
   catalogue/download URL and message-name provenance only, with byte-stable
-  percent-free official URLs, canonical raw archive page queries, unique direct
-  download URLs, and unique canonical message-name version suffixes bound to the
-  `message_def_id`, and never
-  substitutes for checked-in XSD bytes. The legacy
+  percent-free bounded official URLs, canonical raw archive page queries, unique
+  direct download URLs, and unique canonical message-name version suffixes bound
+  to the `message_def_id`, and never substitutes for checked-in XSD bytes. The legacy
   `colr.007` collateral parser and
   route are now local-compatibility only; operator receipt/evidence/readiness
   gates reject the explicit `--allow-legacy-colr007` override for production. An
@@ -8310,10 +8377,13 @@ and completed history lives in [`status.md`](./status.md).
 			  ancestors rejected, 64 MiB caps for anchor/index JSON artifacts,
 			  1 MiB caps for persisted record-source JSON artifacts, and local
 			  receipts that do
-			  not persist token material, reject secret-looking or control-bearing
-			  successful remote response bodies before receipt persistence, redact
-			  failed remote response previews and secret-looking or control-bearing
-			  transport errors, and preflight receipt output
+				  not persist token material, reject secret-looking or control-bearing
+				  successful remote response bodies before receipt persistence, redact
+				  failed remote response previews and secret-looking, control-bearing,
+					  oversized, non-ASCII, or unstringifiable transport errors, normalize
+					  non-standard, malformed, or oversized remote HTTP statuses, convert transport-open
+					  exceptions/failures, normal/HTTP-error close failures, response-read exceptions/failures, and malformed non-byte
+					  remote response bodies into bounded failed receipts, and preflight receipt output
 			  directories/leaves before input loading, publication, or Torii submission, rejecting
 		  control characters, whitespace, leading-dash segments, backslashes,
 		  semicolon parameters, URI/drive prefixes, malformed or smuggled percent escapes, empty segments, dot/parent traversal, symlinked existing
@@ -8498,7 +8568,8 @@ and completed history lives in [`status.md`](./status.md).
 	  run-level preflight and again before parent creation or temporary output
 	  writes. Production-readiness direct `run(args)` calls now also preflight
 	  XSD summary, evidence summary, and summary-output path smuggling before
-	  input loading, and final summary outputs cannot exactly reuse or hardlink
+	  input loading, caps repeatable XSD/evidence summary path lists at 64 entries
+	  before loading any summary files, and final summary outputs cannot exactly reuse or hardlink
 	  XSD/evidence summary inputs before they are loaded, while keeping checked-in
 	  fixture summary inputs as structured release blockers; compact trust summaries with
 	  `allow_insecure_source_url=true` can replay `http://` or local/private
@@ -8553,8 +8624,9 @@ and completed history lives in [`status.md`](./status.md).
 			  path strings are capped at 4096 characters before secret scanning,
 			  filesystem expansion, summary emission, child command construction, or
 			  archive replay. Live rail/notary adapter timeouts also
-		  reject non-positive or non-finite CLI values, and byte caps reject
-		  non-positive values before local reads or network delivery. The receipt
+		  reject non-positive or non-finite CLI values, response-body retention
+		  caps above 4 MiB, and non-positive byte caps before local reads or
+		  network delivery. The receipt
 		  verifier caps raw receipt JSON at 4 MiB, notary anchor/index JSON at
 		  64 MiB, persisted notary record-source JSON at 1 MiB, rail source XML
 		  at 4 MiB, and rail source-sidecar JSON at 16 KiB before source replay,
@@ -8629,7 +8701,9 @@ and completed history lives in [`status.md`](./status.md).
 	  kind-specific compact notary anchor/index/count and rail
 	  message/profile/payload metadata,
 	  exact direct-archive receipt digest/kind/status/endpoint-policy/metadata binding to canary summaries, no copied
-	  receipt paths or digests reused across canary summaries,
+	  receipt paths or digests reused across canary summaries, no relabelled
+	  rail receipt `source_path`, `payload_sha256`, or `rail_message_id` reuse
+	  inside one compact receipt summary,
 	  and plan-only status booleans to be
 	  present explicitly so omissions cannot become production defaults. Archived
 	  profile overrides must also keep
@@ -8740,7 +8814,23 @@ and completed history lives in [`status.md`](./status.md).
 		  canary, rail-gateway, and audit-notary policy flags before config,
 		  inbox, or export loading, and rejects bare strings or non-path/non-string
 		  entries for direct repeatable path/endpoint arguments before trust,
-		  receipt, evidence, readiness, or notary loading, while scalar direct
+		  receipt, evidence, readiness, or notary loading, caps trust bundle and
+		  receipt selector path lists at 64 entries before trust/receipt loading,
+		  caps recursive ISO JSON surrogate/secret-material scanners at 8192
+		  array entries, 8192 object members, and 128 nesting levels before
+		  walking unknown or unsupported JSON shapes, and wraps parser recursion
+		  failures with the same label-only nesting diagnostic before local paths
+		  or attacker-controlled leaves can be echoed,
+		  caps operator-canary runbook notary endpoint and verifier
+		  receipt-selector string lists at 8192 entries before entry parsing,
+		  caps trust-bundle SHA-256, certificate-policy OID, and DER material
+		  lists at 8192 entries before per-entry parsing,
+		  caps evidence canary, trust, receipt, and receipt-directory input path
+		  lists at 64 entries before evidence loading, and caps notary endpoint
+		  lists at 64 values before export loading, caps untrusted XSD,
+		  evidence, and readiness JSON arrays at 8192 items before semantic
+		  replay, caps receipt/notary audit record, status-history, and
+		  change-reason arrays at 8192 items before replay, while scalar direct
 		  path arguments normalize string/path-like values and reject invalid
 		  path objects before XSD, trust, canary, rail, notary, evidence, or
 		  readiness loading, plus non-string direct rail Torii URLs before URL
@@ -8748,11 +8838,16 @@ and completed history lives in [`status.md`](./status.md).
 		  evidence/readiness provider, environment, and default-profile context
 		  values before summary loading, and now treats omitted direct
 		  `argparse.Namespace` attributes for required ISO config/inbox/export
-		  paths, policy booleans, evidence/readiness context strings,
-		  freshness budgets, canary output limits, rail payload limits, and
-		  notary response limits as controlled validation failures before file
-		  discovery, summary loading, network work, or child execution, while
-		  omitted optional trust source freshness budgets and rail message
+			  paths, policy booleans, evidence/readiness context strings,
+			  freshness budgets, canary output limits, rail payload limits, and
+			  notary response limits as controlled validation failures before file
+			  discovery, summary loading, network work, or child execution, cap live
+			  response-body retention at 4 MiB, and report XSD `xmllint`, canary
+			  child-stage, and direct receipt-verifier startup failures with stable
+			  labels instead of argv, local paths, or raw process-launch exception
+			  text or chained traceback causes, plus their stdout/stderr pipe read
+			  or close failures as label-only stage-output read errors, while
+			  omitted optional trust source freshness budgets and rail message
 		  selectors take the same defaults as their CLI forms,
 		  unused final-readiness `--allow-reviewed-xsd-gaps` and
 		  `--allow-canary-stage-receipts-only` overrides unless a reviewed XSD warning
@@ -8807,7 +8902,7 @@ and completed history lives in [`status.md`](./status.md).
 				  compact `stage_dry_run` booleans aligned with `stage_names`, and
 				  rejecting receipt kinds attached to dry-run-only rail/notary stages,
 		  requiring summary digests, rejecting duplicate receipt paths or receipt digests,
-	  rejecting rail/notary source path or source digest replay across canary summaries during evidence verification, rail source XML replay within canary/archive receipt summaries when relabelled entries reuse the same source-material signature, and rail/notary source-material replay across distinct evidence summaries during readiness replay,
+	  rejecting rail/notary source path or source digest replay across canary summaries during evidence verification, rail source XML path, payload digest, or rail message-id replay within canary/archive receipt summaries when relabelled entries reuse compact source material, and rail/notary source-material replay across distinct evidence summaries during readiness replay,
 	  rejecting non-canonical compact receipt paths and all-zero compact receipt
 	  digests, compact receipt paths
 	  under checked-in ISO fixture coordinates, rejecting duplicate compact
@@ -8836,7 +8931,8 @@ and completed history lives in [`status.md`](./status.md).
   the same checked bytes, capping manifest JSON and profile catalog source at
   4 MiB and schema/fixture XML inputs at 8 MiB before parsing,
 	  requiring XML schema-validation proof for every
-	  schema-backed fixture, rejecting unknown XSD summary fields, recomputing
+	  schema-backed fixture while redacting local schema/fixture paths from
+	  `xmllint` diagnostics, rejecting unknown XSD summary fields, recomputing
 	  schema-only flags/reasons and reviewed gap-list paths/reasons from the schema/fixture
 	  relationship while rejecting padded, control-bearing, non-ASCII,
 	  secret-looking, or overlong reviewed reason strings plus present

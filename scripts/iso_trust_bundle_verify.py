@@ -45,6 +45,10 @@ MAX_DER_BLOBS = 8
 MAX_DER_BYTES = 1024 * 1024
 MAX_DER_BASE64_CHARS = ((MAX_DER_BYTES + 2) // 3) * 4
 MAX_BUNDLE_JSON_BYTES = 64 * 1024 * 1024
+MAX_BUNDLE_INPUT_PATHS = 64
+MAX_JSON_LIST_ITEMS = 8192
+MAX_JSON_OBJECT_MEMBERS = 8192
+MAX_JSON_NESTING_DEPTH = 128
 MAX_SOURCE_URL_CHARS = 2048
 MAX_LOCAL_PATH_CHARS = 4096
 MAX_CLEAN_STRING_CHARS = 4096
@@ -705,11 +709,19 @@ def _load_json(path: Path, *, display_label: str | None = None) -> Any:
         )
     except json.JSONDecodeError as error:
         raise TrustBundleError(f"{label} is not valid JSON: {error}") from error
+    except RecursionError as error:
+        raise TrustBundleError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        ) from error
     _reject_json_surrogates(value)
     return value
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    if len(pairs) > MAX_JSON_OBJECT_MEMBERS:
+        raise TrustBundleError(
+            f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+        )
     seen: set[str] = set()
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -724,17 +736,29 @@ def _reject_json_constant(value: str) -> None:
     raise TrustBundleError("JSON contains non-finite numeric constant")
 
 
-def _reject_json_surrogates(value: Any) -> None:
+def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise TrustBundleError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
     if isinstance(value, str):
         if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
             raise TrustBundleError("JSON contains invalid Unicode surrogate")
     elif isinstance(value, list):
+        if len(value) > MAX_JSON_LIST_ITEMS:
+            raise TrustBundleError(
+                f"JSON array must contain at most {MAX_JSON_LIST_ITEMS} items"
+            )
         for item in value:
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(item, _depth=_depth + 1)
     elif isinstance(value, dict):
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise TrustBundleError(
+                f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+            )
         for key, item in value.items():
-            _reject_json_surrogates(key)
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(key, _depth=_depth + 1)
+            _reject_json_surrogates(item, _depth=_depth + 1)
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
@@ -842,17 +866,29 @@ def _required_context_string(bundle: dict[str, Any], key: str, label: str) -> st
     return raw
 
 
-def _check_no_secret_material(value: Any, path: str = "$") -> None:
+def _check_no_secret_material(value: Any, path: str = "$", *, _depth: int = 0) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise TrustBundleError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
     if isinstance(value, dict):
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise TrustBundleError(
+                f"{path} must contain at most {MAX_JSON_OBJECT_MEMBERS} object members"
+            )
         for key, child in value.items():
             if _is_secret_looking_key(key):
                 raise TrustBundleError(f"{path} contains forbidden secret-looking field")
             if _is_control_bearing_key(key):
                 raise TrustBundleError(f"{path} contains forbidden control-bearing field")
-            _check_no_secret_material(child, f"{path}.{key}")
+            _check_no_secret_material(child, f"{path}.{key}", _depth=_depth + 1)
     elif isinstance(value, list):
+        if len(value) > MAX_JSON_LIST_ITEMS:
+            raise TrustBundleError(
+                f"{path} must contain at most {MAX_JSON_LIST_ITEMS} items"
+            )
         for offset, child in enumerate(value):
-            _check_no_secret_material(child, f"{path}[{offset}]")
+            _check_no_secret_material(child, f"{path}[{offset}]", _depth=_depth + 1)
     elif isinstance(value, str):
         if _contains_unsafe_json_control(value):
             raise TrustBundleError(f"{path} contains unsafe control characters")
@@ -1022,6 +1058,8 @@ def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
         return []
     if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
         raise TrustBundleError(f"{label} must be a repeatable path list")
+    if len(value) > MAX_BUNDLE_INPUT_PATHS:
+        raise TrustBundleError(f"{label} accepts at most {MAX_BUNDLE_INPUT_PATHS} paths")
     paths: list[Path] = []
     for offset, entry in enumerate(value):
         if isinstance(entry, bytes):
@@ -1074,7 +1112,14 @@ def _required_list_field(
 ) -> Any:
     if key not in bundle:
         raise TrustBundleError(f"{label}.{key} must be recorded as an array of {description}")
-    return bundle[key]
+    value = bundle[key]
+    if not isinstance(value, list):
+        return value
+    if len(value) > MAX_JSON_LIST_ITEMS:
+        raise TrustBundleError(
+            f"{label}.{key} must contain at most {MAX_JSON_LIST_ITEMS} items"
+        )
+    return value
 
 
 def _sha256_list(bundle: dict[str, Any], key: str, label: str) -> list[str]:

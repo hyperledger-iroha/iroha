@@ -1884,6 +1884,188 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             expected_android_signed_evidence,
         )
 
+    def test_repeatable_android_roots_aggregate_signed_matrix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            first_root = temp_path / "pixel-roots"
+            second_root = temp_path / "samsung-roots"
+            summary_path = temp_path / "summary.json"
+            lineage_evidence = create_lineage_proof_evidence(temp_path / "lineage")
+            compact_key_evidence = create_compact_key_evidence(lineage_evidence.parent)
+            signer = slot_helpers.create_test_signer(temp_path / "keys")
+            transports = tuple(sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS))
+            for index, family in enumerate(
+                slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+            ):
+                root = first_root if index % 2 == 0 else second_root
+                slot_helpers.create_slot(
+                    root,
+                    f"slot-{index}",
+                    family,
+                    signer,
+                    d2d_payment_transport=transports[0],
+                    d2d_payment_transports=transports,
+                )
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = readiness.main(
+                    [
+                        "--repo-root",
+                        str(REPO_ROOT),
+                        "--device-lab-root",
+                        str(first_root),
+                        "--device-lab-root",
+                        str(second_root),
+                        "--lineage-proof-evidence",
+                        str(lineage_evidence),
+                        "--compact-key-evidence",
+                        str(compact_key_evidence),
+                        "--trusted-signer-public-key",
+                        str(signer["public_key"]),
+                        "--summary-out",
+                        str(summary_path),
+                    ]
+                )
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            rendered = json.dumps(summary, sort_keys=True)
+            android = summary["android_device_lab"]
+
+        self.assertEqual(status, 0)
+        self.assertTrue(summary["ready"], summary["blockers"])
+        self.assertEqual(
+            android["root"],
+            readiness.ANDROID_DEVICE_LAB_ROOT_SUMMARY_LABEL,
+        )
+        self.assertEqual(
+            android["covered_device_families"],
+            list(slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
+        )
+        self.assertEqual(android["missing_device_families"], [])
+        self.assertEqual(
+            android["covered_d2d_payment_transports"],
+            list(readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
+        )
+        self.assertEqual(android["missing_d2d_payment_transports"], [])
+        self.assertEqual(android["missing_d2d_payment_transport_pairs"], [])
+        self.assertEqual(
+            set(android["signed_evidence"]),
+            {
+                f"slot-{index}"
+                for index in range(
+                    len(slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES)
+                )
+            },
+        )
+        self.assertNotIn(str(first_root), rendered)
+        self.assertNotIn(str(second_root), rendered)
+
+    def test_release_bundle_accepts_repeatable_android_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            bundle_root = temp_path / "bundle"
+            first_root = bundle_root / "artifacts" / "android" / "device_lab_pixels"
+            second_root = bundle_root / "artifacts" / "android" / "device_lab_samsung"
+            lineage_evidence = create_lineage_proof_evidence(
+                bundle_root / "artifacts" / "kagemusha"
+            )
+            compact_key_evidence = (
+                lineage_evidence.parent / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+            )
+            localnet_lifecycle_evidence = (
+                lineage_evidence.parent
+                / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            )
+            signer = slot_helpers.create_test_signer(temp_path / "keys")
+            transports = tuple(sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS))
+            for index, family in enumerate(
+                slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+            ):
+                root = first_root if index % 2 == 0 else second_root
+                slot_helpers.create_slot(
+                    root,
+                    f"slot-{index}",
+                    family,
+                    signer,
+                    d2d_payment_transport=transports[0],
+                    d2d_payment_transports=transports,
+                )
+            trusted, signer_errors = (
+                slot_helpers.device_lab.load_trusted_signer_public_keys(
+                    [str(signer["public_key"])]
+                )
+            )
+            self.assertEqual(signer_errors, [])
+            summary = readiness.build_summary(
+                repo_root=REPO_ROOT,
+                device_lab_root=[first_root, second_root],
+                lineage_proof_evidence_path=lineage_evidence,
+                compact_key_evidence_path=compact_key_evidence,
+                localnet_lifecycle_evidence_path=localnet_lifecycle_evidence,
+                trusted_signer_public_keys=trusted,
+                min_signed_at=readiness.parse_utc_timestamp(
+                    readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                    "fixture min signed_at",
+                )[0],
+                min_lineage_proof_evidence_at=readiness.parse_utc_timestamp(
+                    readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                    "fixture min lineage evidence",
+                )[0],
+                min_compact_key_evidence_at=readiness.parse_utc_timestamp(
+                    readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                    "fixture min compact evidence",
+                )[0],
+                min_localnet_lifecycle_evidence_at=readiness.parse_utc_timestamp(
+                    readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                    "fixture min localnet evidence",
+                )[0],
+            )
+            self.assertTrue(summary["ready"], summary["blockers"])
+            summary_path = bundle_root / "dist" / "kagemusha-production-readiness.json"
+            write_json(summary_path, summary)
+            out_path = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(
+                    [
+                        "--repo-root",
+                        str(REPO_ROOT),
+                        "--bundle-root",
+                        str(bundle_root),
+                        "--readiness-summary",
+                        "dist/kagemusha-production-readiness.json",
+                        "--lineage-proof-evidence",
+                        (
+                            "artifacts/kagemusha/"
+                            f"{readiness.LINEAGE_PROOF_EVIDENCE_FILENAME}"
+                        ),
+                        "--compact-key-evidence",
+                        (
+                            "artifacts/kagemusha/"
+                            f"{readiness.COMPACT_KEY_EVIDENCE_FILENAME}"
+                        ),
+                        "--localnet-lifecycle-evidence",
+                        (
+                            "artifacts/kagemusha/"
+                            f"{readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME}"
+                        ),
+                        "--device-lab-root",
+                        "artifacts/android/device_lab_pixels",
+                        "--device-lab-root",
+                        "artifacts/android/device_lab_samsung",
+                        "--trusted-signer-public-key",
+                        str(signer["public_key"]),
+                        "--out",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+            manifest = json.loads(out_path.read_text(encoding="utf-8"))
+            manifest_text = json.dumps(manifest, sort_keys=True)
+
+        self.assertEqual(status, 0)
+        self.assertTrue(manifest["ready"], manifest["blockers"])
+        self.assertIn("artifacts/android/device_lab_pixels/slot-0/", manifest_text)
+        self.assertIn("artifacts/android/device_lab_samsung/slot-1/", manifest_text)
+
     def test_localnet_lifecycle_evidence_accepts_valid_four_peer_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             evidence_path = create_localnet_lifecycle_evidence(Path(temp))

@@ -230,7 +230,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   argparse parsing.
   Malformed `--timeout-secs` and `--response-limit-bytes` CLI values fail before
   argparse can echo raw operator input; parsed `--timeout-secs` values must be
-  positive and finite, and `--response-limit-bytes` must be a positive integer.
+  positive and finite, and `--response-limit-bytes` must be a positive integer
+  no larger than 4 MiB.
   Anchor/index JSON input is capped at 64 MiB, persisted record-source JSON
   is capped at 1 MiB, and diagnostic `--allow-missing-record-sources` is
   rejected unless at least one validated anchor actually lacks its local record
@@ -240,9 +241,14 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   output. The adapter writes each bounded receipt without
   persisting bearer-token material, rejecting secret-looking or
   control-bearing successful remote response bodies before receipt persistence,
-  normalizing non-standard remote HTTP statuses into transport-failed receipts
-  with `status_code=null`, and redacting failed remote response previews or
-  transport errors before persistence. Rejected
+  normalizing non-standard, malformed, or oversized remote HTTP statuses into
+  transport-failed receipts with `status_code=null`, and redacting failed remote
+  response previews or transport errors before persistence. Transport error strings are capped at
+  4096 printable ASCII characters and redacted when oversized, non-ASCII,
+  secret/control-bearing, or unstringifiable. Plain transport open exceptions/failures,
+  normal/HTTP-error response close failures, normal/HTTP-error response-body
+  read exceptions/failures, and malformed non-byte remote response bodies are
+  converted into bounded failed receipts with stable messages. Rejected
   endpoint URL validation errors, duplicate endpoint errors, and oversized
   response errors report the structural failure by field label without echoing
   raw URL strings that may contain query secrets or private topology.
@@ -455,14 +461,17 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   `sese.025.001.08`, `sese.025.001.10`, and `sese.025.001.11`; this removes
   the previous unreviewed unique securities profile-gap blocker without
   satisfying schema-backed strict mode. Direct verifier and readiness replay
-  reject reused pending direct download URLs, including cross-summary reuse,
-  reject percent escapes in official ISO catalogue/download coordinates, and
-  require archive catalogue URLs to use canonical raw `page=<nonzero decimal>`
-  queries. Each pending source `message_name` must be unique and use canonical
-  ISO-style CamelCase plus a `VNN` suffix matching the `message_def_id` version
-  segment, and each pending source `submitting_organisation` must be a canonical
-  comma-space-separated organisation label without URL/contact delimiters,
-  semicolon path parameters, placeholder names, or slash/path smuggling.
+  now pin those eight known pending message definitions to their exact recorded
+  ISO catalogue URLs, direct download URLs, download type, message names, and
+  submitting organisations. They also reject reused pending direct download
+  URLs, including cross-summary reuse, reject overlong or percent-escaped
+  official ISO catalogue/download coordinates, and require archive catalogue
+  URLs to use canonical raw `page=<nonzero decimal>` queries. Each pending
+  source `message_name` must be unique and use canonical ISO-style CamelCase
+  plus a `VNN` suffix matching the `message_def_id` version segment, and each pending source
+  `submitting_organisation` must be a canonical comma-space-separated
+  organisation label without URL/contact delimiters, semicolon path parameters,
+  placeholder names, or slash/path smuggling.
 - Updated OpenAPI and MCP submission surfaces to expose profile selection.
 - Added `scripts/iso_rail_gateway_adapter.py`, an operator-side file-drop
   adapter for live rail gateway ingress. Each inbound `*.xml` must have a
@@ -548,14 +557,20 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   receipt output, rejects missing, empty, or flag-looking `--torii-base-url`
   values before argparse parsing, rejects malformed numeric CLI values before
   argparse can echo raw operator input, requires positive finite
-  `--timeout-secs`, and requires positive integer `--max-payload-bytes` and `--response-limit-bytes`,
+  `--timeout-secs`, requires positive integer `--max-payload-bytes`, and caps
+  `--response-limit-bytes` at 4 MiB,
   does not follow remote redirects, and writes bounded local receipts for
   successful and failed submissions
   without persisting token material, rejecting secret-looking or control-bearing
   successful remote response bodies before receipt persistence, normalizing
-  non-standard remote HTTP statuses into transport-failed receipts with
-  `status_code=null`, and redacting failed remote response previews or
-  transport errors before persistence.
+  non-standard, malformed, or oversized remote HTTP statuses into transport-failed receipts
+  with `status_code=null`, and redacting failed remote response previews or
+  transport errors before persistence. Transport error strings are capped at
+  4096 printable ASCII characters and redacted when oversized, non-ASCII,
+  secret/control-bearing, or unstringifiable. Plain transport open exceptions/failures,
+  normal/HTTP-error response close failures, normal/HTTP-error response-body
+  read exceptions/failures, and malformed non-byte remote response bodies are
+  converted into bounded failed receipts with stable messages.
   Duplicate gateway payload and rail-message-id diagnostics report only field
   indexes, not the repeated digest or identifier value. Rejected Torii URL
   validation errors report the structural failure by field label without
@@ -657,7 +672,10 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   receipt `message_type` family IDs and Unicode digit confusables before
   allowlist checks, rejects archived
   rail receipt `message_type` values outside the same adapter endpoint map
-  before receipt-summary emission, caps receipt JSON at 4 MiB, notary
+  before receipt-summary emission, caps repeatable notary endpoint inputs at
+  64 values before export loading, caps receipt/notary audit record arrays,
+  status-history arrays, and change-reason arrays at 8192 items before replay,
+  caps receipt JSON at 4 MiB, notary
   anchor/index JSON at 64 MiB, persisted notary record-source JSON at 1 MiB,
   rail source XML at 4 MiB, and source-sidecar JSON at 16 KiB before parsing or
   hashing, replays digest-addressed notary-anchor and
@@ -693,6 +711,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   export/receipt-dir, and explicit verifier receipt paths under checked-in
   `fixtures/iso20022/` artifacts before child execution,
   rejects duplicate endpoint lists and duplicate receipt inputs,
+  caps notary endpoint, verifier receipt-directory, and verifier receipt string
+  lists at 8192 items before entry parsing,
   requires list-valued notary and verify receipt-selector fields to be
   explicitly recorded as arrays under `--require-explicit-policy`, and
   production-policy runbooks must explicitly record rail/notary receipt
@@ -728,9 +748,15 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   catalogs, evidence summaries, readiness summaries, receipt-verifier JSON
   embedded in canary stdout, and direct archive receipt-verifier stdout. This
   prevents shadowed keys, non-finite numeric values, or invalid Unicode strings
-  from changing the release-evidence meaning after digest or policy checks, and
-  duplicate-key and non-finite numeric constant diagnostics now avoid echoing
-  the repeated key name or `NaN`/`Infinity` spelling.
+  from changing the release-evidence meaning after digest or policy checks.
+  Recursive JSON surrogate and secret-material scanners also cap arrays at
+  8192 items, JSON objects at 8192 members, and nesting at 128 levels before
+  walking entries, so unsupported or unknown JSON shapes cannot force unbounded
+  pre-semantic traversal. JSON loaders also translate parser recursion failures
+  into the same label-only 128-level nesting diagnostic, so deeply nested input
+  cannot echo local paths or attacker-controlled leaf values. Duplicate-key and non-finite
+  numeric constant diagnostics now avoid echoing the repeated key name or
+  `NaN`/`Infinity` spelling.
   Unknown JSON field names now get label-only unknown-key diagnostics across
   the ISO validators, including ordinary unknown-field typos that previously
   listed field names for operator debugging.
@@ -960,9 +986,16 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   before planning or evidence replay, while production-readiness compact
   summary/config/receipt path strings keep the stricter 2048-character archive
   cap before release archival.
-  XSD `xmllint` diagnostics redact key/value secret material,
-  identifier-style secret-looking validator output, unsafe control characters,
-  and non-ASCII material before reporting schema-validation failures.
+  XSD `xmllint` diagnostics redact local schema/fixture paths, key/value secret
+  material, identifier-style secret-looking validator output, unsafe control
+  characters, and non-ASCII material before reporting schema-validation
+  failures or unexpected successful validator output.
+  XSD `xmllint`, canary child-stage, and direct evidence receipt-verifier
+  startup failures also report only stable stage labels instead of argv, local
+  paths, raw process-launch exception text, or chained traceback causes.
+  Their stdout/stderr pipe read or close failures use the same stage-output
+  label-only diagnostics, avoiding empty-output misclassification or raw thread
+  tracebacks.
   Direct evidence receipt-verifier failures also redact key/value and
   identifier-style secret-looking stderr plus unsafe control characters before
   reporting child verifier diagnostics. Receipt-verifier source-sidecar replay
@@ -1077,11 +1110,13 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   input role labels instead of local operator manifest/catalog paths, while
   accepted summaries retain the paths for audit evidence.
   Manifest-referenced XSD schema and XML fixture read, parse, DTD/entity,
-  restricted-terms, symlink-ancestor, and size-limit diagnostics now use
-  manifest entry labels instead of resolved local source paths, while accepted
-  summaries retain the manifest-relative paths for audit evidence.
+  restricted-terms, structural-validation, symlink-ancestor, and size-limit
+  diagnostics now use manifest entry labels instead of resolved local source
+  paths, while accepted summaries retain the manifest-relative paths for audit
+  evidence.
   Live rail/notary adapter timeouts must be
-  positive finite numbers, and their response/payload byte caps must be positive
+  positive finite numbers, response-body retention caps must be positive
+  integers no larger than 4 MiB, and rail payload byte caps must be positive
   integers rather than JSON/Python boolean aliases before any local read or
   network delivery. All ISO helper regular-file byte caps, plus the rail
   payload bounded reader, reject boolean and non-integer limit aliases before
@@ -1240,6 +1275,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   requires successful rail/notary/verify stages by default,
   requires the verify stage to carry digest-bound receipt-verifier JSON with
   rail and notary receipt kinds plus per-receipt digests, caps direct
+  receipt-verifier `--receipt` and `--receipt-dir` selectors at 64 paths before
+  discovery, caps direct
   receipt-verifier stdout/stderr at 4 MiB before JSON parsing, bounds direct
   receipt-verifier runtime with positive finite
   `--receipt-verifier-timeout-secs`, redacts secret-looking or control-bearing
@@ -1296,8 +1333,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   `example.invalid` before an archive is treated as production evidence.
   Direct evidence summary input/output CLI paths and compact archived path
   values reject secret-looking key/value material before an evidence summary is
-  emitted, so operator-local path strings cannot smuggle runtime tokens into
-  release archives. Direct operator evidence summary output also cannot reuse
+  emitted, and repeatable canary, trust, receipt, and receipt-directory inputs
+  are capped at 64 paths before loading, so operator-local path strings cannot
+  smuggle runtime tokens into release archives. Direct operator evidence summary output also cannot reuse
   or hardlink any canary, trust, or direct receipt summary input path before
   those source summaries are loaded, and it cannot be written under a supplied
   receipt archive directory, so aggregate evidence publication cannot overwrite
@@ -1321,6 +1359,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
 - Added `scripts/iso_production_readiness.py`, an offline release-readiness
   rollup for versioned digest-bound XSD and operator evidence summaries. It requires
   XSD/evidence summary JSON inputs to stay within a 4 MiB pre-parse cap, rejects
+  more than 64 repeatable XSD or evidence summary input paths before loading
+  any summary files, caps untrusted XSD/evidence/readiness JSON arrays at
+  8192 items before semantic replay, and rejects
   final `--summary-out` paths that reuse or hardlink XSD/evidence summary
   inputs before loading them, preflights final summary-output parents and leaves
   before summary loading, rejects
@@ -1366,7 +1407,10 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   suffix before it can be treated as live evidence.
 - Added `scripts/iso_trust_bundle_verify.py`, an offline XMLDSig/XAdES trust
   bundle preflight for operator rail PKI material. It caps bundle JSON at
-  64 MiB before parsing, verifies canonical nonzero pins,
+  64 MiB and repeatable bundle input path lists at 64 entries before parsing,
+  caps SHA-256, certificate-policy OID, and DER material lists at 8192 entries
+  before per-entry parsing,
+  verifies canonical nonzero pins,
   digest-bound base64 DER envelopes with at most eight entries per material
   list, a pre-decode 1 MiB DER-size cap, and lightweight semantic shape checks
   for X.509 certificates, X.509 CRLs, and OCSPResponse wrappers, duplicate and
@@ -1872,10 +1916,11 @@ receipt-verifier stdout before archiving compact evidence. Distinct canary summa
 must not reuse compact receipt paths or receipt digests. The evidence gate also
 rejects rail/notary source paths or source digests replayed across distinct
 canary summaries inside one aggregate evidence summary, and final readiness
-aggregation blocks relabelled rail source XML replay within canary/archive
-receipt summaries and rail/notary source-material replay across distinct
-evidence summaries even when the receipt paths and receipt digests have been
-relabelled.
+aggregation blocks relabelled rail source XML path, payload-digest, or
+`rail_message_id` replay within canary/archive receipt summaries while
+preserving legitimate notary multi-endpoint publication of one anchor, and blocks rail/notary
+source-material replay across distinct evidence summaries even when the receipt
+paths and receipt digests have been relabelled.
 That
 archive verification summary must carry its own
 `summary_sha256`, production policy flags, and a `receipts[]` list binding each

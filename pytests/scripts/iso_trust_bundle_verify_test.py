@@ -211,6 +211,176 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertNotIn("does not exist", error)
                     self.assertNotIn(str(root), error)
 
+    def test_bundle_path_lists_are_count_bounded_before_loading(self):
+        cases = (("direct", False), ("cli", True))
+        for name, via_cli in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    paths = [
+                        root / f"missing-{offset}.bundle.json"
+                        for offset in range(VERIFIER.MAX_BUNDLE_INPUT_PATHS + 1)
+                    ]
+                    if via_cli:
+                        argv = []
+                        for path in paths:
+                            argv.extend(["--bundle", str(path)])
+
+                        rc, stdout, stderr = run_verify(argv)
+
+                        self.assertEqual(rc, 2)
+                        self.assertEqual(stdout, "")
+                        error = stderr
+                    else:
+                        args = argparse.Namespace(
+                            bundle=paths,
+                            summary_out=None,
+                            emit_profile_json=None,
+                            allow_record_only=False,
+                            allow_insecure_source_url=False,
+                            allow_synthetic_der=False,
+                            max_source_age_days=None,
+                        )
+
+                        with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                            VERIFIER.run(args)
+                        error = str(caught.exception)
+
+                    self.assertIn(
+                        f"--bundle accepts at most {VERIFIER.MAX_BUNDLE_INPUT_PATHS} paths",
+                        error,
+                    )
+                    self.assertNotIn("does not exist", error)
+                    self.assertNotIn(str(root), error)
+
+    def test_bundle_json_lists_are_count_bounded_before_entry_parsing(self):
+        items = [None] * (VERIFIER.MAX_JSON_LIST_ITEMS + 1)
+        cases = (
+            "signature_public_key_sha256_pins",
+            "x509_required_certificate_policy_oids",
+            "x509_trust_anchors_der",
+        )
+        for key in cases:
+            with self.subTest(key=key):
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    VERIFIER._required_list_field(
+                        {key: items},
+                        key,
+                        "bundle",
+                        "test values",
+                    )
+
+                error = str(caught.exception)
+                self.assertIn(
+                    f"bundle.{key} must contain at most {VERIFIER.MAX_JSON_LIST_ITEMS} items",
+                    error,
+                )
+                self.assertNotIn(str(len(items)), error)
+                self.assertNotIn("[0]", error)
+
+    def test_recursive_json_list_scans_are_count_bounded_without_echo(self):
+        items = [None] * (VERIFIER.MAX_JSON_LIST_ITEMS + 1)
+        cases = (
+            (
+                "surrogates",
+                lambda: VERIFIER._reject_json_surrogates(items),
+                f"JSON array must contain at most {VERIFIER.MAX_JSON_LIST_ITEMS} items",
+            ),
+            (
+                "secret scan",
+                lambda: VERIFIER._check_no_secret_material(items, "bundle.extra"),
+                f"bundle.extra must contain at most {VERIFIER.MAX_JSON_LIST_ITEMS} items",
+            ),
+        )
+        for name, action, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    action()
+
+                error = str(caught.exception)
+                self.assertIn(expected, error)
+                self.assertNotIn(str(len(items)), error)
+                self.assertNotIn("[0]", error)
+
+    def test_recursive_json_object_scans_are_count_bounded_without_echo(self):
+        members = {
+            f"hidden_key_{offset}": None
+            for offset in range(VERIFIER.MAX_JSON_OBJECT_MEMBERS + 1)
+        }
+        pairs = list(members.items())
+        cases = (
+            (
+                "json hook",
+                lambda: VERIFIER._reject_duplicate_json_keys(pairs),
+                f"JSON object must contain at most {VERIFIER.MAX_JSON_OBJECT_MEMBERS} members",
+            ),
+            (
+                "surrogates",
+                lambda: VERIFIER._reject_json_surrogates(members),
+                f"JSON object must contain at most {VERIFIER.MAX_JSON_OBJECT_MEMBERS} members",
+            ),
+            (
+                "secret scan",
+                lambda: VERIFIER._check_no_secret_material(members, "bundle.extra"),
+                f"bundle.extra must contain at most {VERIFIER.MAX_JSON_OBJECT_MEMBERS} object members",
+            ),
+        )
+        for name, action, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    action()
+
+                error = str(caught.exception)
+                self.assertIn(expected, error)
+                self.assertNotIn(str(len(members)), error)
+                self.assertNotIn("hidden_key_0", error)
+
+    def test_recursive_json_depth_scans_are_bounded_without_echo(self):
+        nested = "hidden_leaf"
+        for _ in range(VERIFIER.MAX_JSON_NESTING_DEPTH + 1):
+            nested = [nested]
+        expected = (
+            f"JSON nesting depth must be at most {VERIFIER.MAX_JSON_NESTING_DEPTH} levels"
+        )
+        cases = (
+            ("surrogates", lambda: VERIFIER._reject_json_surrogates(nested)),
+            ("secret scan", lambda: VERIFIER._check_no_secret_material(nested, "bundle.extra")),
+        )
+        for name, action in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    action()
+
+                error = str(caught.exception)
+                self.assertIn(expected, error)
+                self.assertNotIn("hidden_leaf", error)
+                self.assertNotIn("[0]", error)
+
+    def test_json_parse_recursion_error_is_bounded_without_echo(self):
+        hidden = "hidden-trust-recursion"
+        with tempfile.TemporaryDirectory() as raw_root:
+            path = Path(raw_root) / hidden
+            path.write_text("[]\n", encoding="utf-8")
+            original_loads = VERIFIER.json.loads
+
+            def raising_loads(*_args, **_kwargs):
+                raise RecursionError(hidden)
+
+            VERIFIER.json.loads = raising_loads
+            try:
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    VERIFIER._load_json(path, display_label="bundle")
+            finally:
+                VERIFIER.json.loads = original_loads
+
+        error = str(caught.exception)
+        self.assertIn(
+            f"JSON nesting depth must be at most {VERIFIER.MAX_JSON_NESTING_DEPTH} levels",
+            error,
+        )
+        self.assertNotIn(hidden, error)
+        self.assertNotIn(str(path), error)
+
     def test_direct_run_scalar_paths_must_be_paths_before_bundle_loading(self):
         cases = (
             ("summary", "summary_out", object(), "summary_out"),

@@ -95,7 +95,7 @@ class VerifiedFoldHopEvidence(
 
     init {
         require(proofOutputArchiveBytes.isNotEmpty()) { "proofOutputArchive must not be empty" }
-        requireNonBlankUnpadded(chainId, "chainId")
+        requirePortableId(chainId, "chainId")
         try {
             AssetDefinitionIdEncoder.parseAddressBytes(asset)
         } catch (ex: IllegalArgumentException) {
@@ -500,6 +500,10 @@ class SpendBundleSummary(
     private val finalRootBytes = fixed32(finalRoot, "finalRoot")
     private val topupAnchorNullifierBytes = topupAnchorNullifiers.map {
         fixed32(it, "topupAnchorNullifier")
+    }
+
+    init {
+        requirePortableId(chainId, "chainId")
     }
 
     val initialRoot: ByteArray get() = initialRootBytes.copyOf()
@@ -1380,7 +1384,10 @@ object KagemushaRecursiveSpendRequestCodecs {
         val topupAnchorNullifiers = readField(decoder) {
             readFixed32Sequence(it, "bundle.accumulator.topup_anchor_nullifiers")
         }
-        val hopCount = readField(decoder) { checkedInt(it.readUInt(32), "hop_count") }
+        val hopCount = readField(
+            decoder,
+            trailingMessage = "bundle.accumulator.hop_count",
+        ) { checkedInt(it.readUInt(32), "hop_count") }
         require(hopCount in 1..KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1) {
             "bundle.accumulator.hop_count must be in 1..${KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1}"
         }
@@ -2029,9 +2036,15 @@ private fun validatePallasOpenEnvelopePayload(payload: ByteArray, flags: Int, fi
         "$field transcript_label exceeds " +
             "$KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES bytes"
     }
-    readField(decoder) { readRequiredMetadataOption(it, "$field.vk_commitment") }
-    readField(decoder) { readRequiredMetadataOption(it, "$field.public_inputs_schema_hash") }
-    readField(decoder) { readRequiredMetadataOption(it, "$field.domain_tag") }
+    readField(decoder, "$field.vk_commitment") {
+        readRequiredMetadataOption(it, "$field.vk_commitment")
+    }
+    readField(decoder, "$field.public_inputs_schema_hash") {
+        readRequiredMetadataOption(it, "$field.public_inputs_schema_hash")
+    }
+    readField(decoder, "$field.domain_tag") {
+        readRequiredMetadataOption(it, "$field.domain_tag")
+    }
     require(decoder.remaining() == 0) { "Trailing bytes after $field" }
 }
 
@@ -2098,7 +2111,7 @@ private fun readFixed32Sequence(decoder: NoritoDecoder, field: String): List<Byt
 }
 
 private fun readRequiredMetadataOption(decoder: NoritoDecoder, field: String): ByteArray {
-    val payload = readOptionRawPayload(decoder)
+    val payload = readOptionRawPayload(decoder, field)
         ?: throw IllegalArgumentException("$field is required")
     require(payload.size == 32) { "$field must be exactly 32 bytes" }
     val value = payload.copyOf()
@@ -2167,6 +2180,7 @@ private fun canonicalU128Decimal(value: String, field: String): String {
     require(value.isNotEmpty()) { "$field must be a decimal integer" }
     require(value.all { it in '0'..'9' }) { "$field must be a decimal integer" }
     require(value.length == 1 || value[0] != '0') { "$field must be canonical" }
+    require(value.length <= MAX_U128_DECIMAL_DIGITS) { "$field must fit in u128" }
     val integer = BigInteger(value)
     require(integer > BigInteger.ZERO) { "$field must be greater than zero" }
     require(integer <= MAX_U128) { "$field must fit in u128" }
@@ -2273,7 +2287,10 @@ private fun requireAccumulatorCorridor(decoder: NoritoDecoder, hopCount: Int) {
         "fixed_window_table_base_digest",
         "verifier_witness_batch_digest",
     ).forEach(::requireNonzero)
-    val verifierOpeningLen = readField(decoder) {
+    val verifierOpeningLen = readField(
+        decoder,
+        trailingMessage = "bundle.accumulator.verifier_opening_len",
+    ) {
         checkedInt(it.readUInt(32), "verifier_opening_len")
     }
     require(verifierOpeningLen in setOf(2, 4, 8, 16, 32, 64, 128)) {
@@ -2288,6 +2305,7 @@ private fun compareCanonicalDecimal(left: String, right: String): Int =
     }
 
 private val MAX_U128: BigInteger = BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE)
+private val MAX_U128_DECIMAL_DIGITS: Int = MAX_U128.toString().length
 
 private fun writeField(parent: NoritoEncoder, writePayload: (NoritoEncoder) -> Unit) {
     val child = parent.childEncoder()
@@ -2363,7 +2381,7 @@ private fun writeSpendableNote(encoder: NoritoEncoder, value: SpendableNoteDescr
 }
 
 private fun writeChainId(encoder: NoritoEncoder, value: String) {
-    requireNonBlankUnpadded(value, "chainId")
+    requirePortableId(value, "chainId")
     writeField(encoder) { writeString(it, value) }
 }
 
@@ -2543,6 +2561,7 @@ private fun readAccumulatorChainId(decoder: NoritoDecoder): String =
     try {
         val chainId = readChainId(decoder)
         require(decoder.remaining() == 0) { "bundle.accumulator.chain_id has trailing bytes" }
+        requirePortableId(chainId, "bundle.accumulator.chain_id")
         chainId
     } catch (error: IllegalArgumentException) {
         throw IllegalArgumentException("bundle.accumulator.chain_id", error)
@@ -2644,11 +2663,15 @@ private fun readProofBoxBackend(
     return backend
 }
 
-private fun <T> readField(parent: NoritoDecoder, readPayload: (NoritoDecoder) -> T): T {
+private fun <T> readField(
+    parent: NoritoDecoder,
+    trailingMessage: String = "Trailing bytes after field decode",
+    readPayload: (NoritoDecoder) -> T,
+): T {
     val length = checkedInt(parent.readLength(compact(parent)), "field length")
     val child = NoritoDecoder(parent.readBytes(length), parent.flags, parent.flagsHint)
     val value = readPayload(child)
-    require(child.remaining() == 0) { "Trailing bytes after field decode" }
+    require(child.remaining() == 0) { trailingMessage }
     return value
 }
 
@@ -2662,13 +2685,14 @@ private fun readBytesVec(decoder: NoritoDecoder): ByteArray {
     return decoder.readBytes(length)
 }
 
-private fun readOptionRawPayload(decoder: NoritoDecoder): ByteArray? {
+private fun readOptionRawPayload(decoder: NoritoDecoder, field: String = "option"): ByteArray? {
     val tag = decoder.readByte()
-    require(tag == 0 || tag == 1) { "option tag must be 0 or 1" }
+    require(tag == 0 || tag == 1) { "$field option tag must be 0 or 1" }
     if (tag == 0) {
         return null
     }
-    val length = checkedInt(decoder.readLength(compact(decoder)), "option payload length")
+    val length = checkedInt(decoder.readLength(compact(decoder)), "$field option payload length")
+    require(decoder.remaining() >= length) { "$field payload length mismatch" }
     return decoder.readBytes(length)
 }
 

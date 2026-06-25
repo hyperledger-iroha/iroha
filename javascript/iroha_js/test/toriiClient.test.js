@@ -217,6 +217,9 @@ function assertMultisigProposeInstructionWireId(body, expectedWireId, label) {
     "signature_b64",
     "creation_time_ms",
     "fee_sponsor",
+    "memo",
+    "validation_fee_policy_version",
+    "validation_fee_policy_hash",
   ]) {
     offset = readNoritoFieldPayload(
       payload,
@@ -16179,7 +16182,7 @@ test("queryDomains rejects non-object select entries", async () => {
       client.queryDomains({
         select: [{ id: true }, []],
       }),
-    /select\[1] must be a plain object/,
+    /select\[1] must be a field-path string or plain object/,
   );
   assert.equal(callCount, 0);
 });
@@ -17680,6 +17683,63 @@ test("queryVisibleTransactions builds convenience transaction filters", async ()
   ]);
   assert.equal(capturedBody.fetch_size, 25);
   assert.equal(capturedBody.query, "VisibleTransactions");
+});
+
+test("queryVisibleTransactions posts field-path select projections", async () => {
+  let capturedPath;
+  let capturedBody;
+  const fetchImpl = async (url, init) => {
+    const parsed = new URL(url);
+    capturedPath = parsed.pathname;
+    assert.equal(init.method, "POST");
+    capturedBody = JSON.parse(init.body);
+    return createResponse({
+      status: 200,
+      jsonData: { items: [], total: 0 },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await client.queryVisibleTransactions({
+    select: [" authority ", "metadata.amount", "metadata.from_account_id"],
+    queryName: "VisibleTransactionProjection",
+  });
+  assert.equal(capturedPath, "/v1/transactions/visible/query");
+  assert.deepEqual(capturedBody.select, [
+    "authority",
+    "metadata.amount",
+    "metadata.from_account_id",
+  ]);
+  assert.equal(capturedBody.query, "VisibleTransactionProjection");
+});
+
+test("queryVisibleTransactions rejects invalid select projection entries", async () => {
+  let callCount = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      callCount += 1;
+      return createResponse({
+        status: 200,
+        jsonData: { items: [], total: 0 },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.queryVisibleTransactions({
+        select: ["authority", 42],
+      }),
+    /select\[1] must be a field-path string or plain object/,
+  );
+  await assert.rejects(
+    () =>
+      client.queryVisibleTransactions({
+        select: ["authority", " "],
+      }),
+    /select\[1] must be a non-empty field path/,
+  );
+  assert.equal(callCount, 0);
 });
 
 test("queryAccountTransactions merges raw and convenience filters", async () => {

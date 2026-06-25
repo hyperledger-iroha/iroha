@@ -10903,15 +10903,24 @@ mod tests {
     fn shared_recursive_spend_abi7_archive_fixture_json() -> String {
         let (bundle, witness) = sample_verifying_semantic_recursive_spend_lineage_fixture();
         let append_bundle = norito::to_bytes(&bundle).expect("encode ABI-7 append bundle");
-        let verify_request = KagemushaRecursiveSpendVerifyRequestV1::new(bundle.clone())
+        let verify_request_value = KagemushaRecursiveSpendVerifyRequestV1::new(bundle.clone())
             .expect("build ABI-7 verify request");
         let verify_request =
-            norito::to_bytes(&verify_request).expect("encode ABI-7 verify request");
-        let verify_result =
-            iroha_core::zk::kagemusha_recursive_spend_verify_result_with_lineage_record(
-                &bundle, None,
-            )
-            .expect("build ABI-7 verify result");
+            norito::to_bytes(&verify_request_value).expect("encode ABI-7 verify request");
+        let verify_result = match verify_request_value.block_height {
+            Some(block_height) => {
+                iroha_core::zk::kagemusha_recursive_spend_verify_result_with_lineage_record_at_height(
+                    &bundle,
+                    verify_request_value.lineage_verifier_record.as_ref(),
+                    block_height,
+                )
+            }
+            None => iroha_core::zk::kagemusha_recursive_spend_verify_result_with_lineage_record(
+                &bundle,
+                verify_request_value.lineage_verifier_record.as_ref(),
+            ),
+        }
+        .expect("build ABI-7 verify result");
         let verify_result = norito::to_bytes(&verify_result).expect("encode ABI-7 verify result");
         let mut redeem_request = sample_recursive_spend_redeem_request(7);
         redeem_request.bundle = bundle;

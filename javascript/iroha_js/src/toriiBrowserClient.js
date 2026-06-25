@@ -34,6 +34,14 @@ function requireObject(value, context) {
   return value;
 }
 
+function isPlainObject(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 function requireNonEmptyString(value, context) {
   if (typeof value !== "string") {
     throw new TypeError(`${context} must be a string`);
@@ -153,6 +161,31 @@ function normalizeSortOrder(value, context) {
   return order;
 }
 
+function normalizeCountMode(value, context) {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const mode = requireNonEmptyString(String(value), context).toLowerCase();
+  if (mode !== "bounded" && mode !== "exact") {
+    throw new TypeError(`${context} must be bounded or exact`);
+  }
+  return mode;
+}
+
+function normalizeSelectEntry(entry, context) {
+  if (typeof entry === "string") {
+    const fieldPath = entry.trim();
+    if (!fieldPath) {
+      throw new TypeError(`${context} must be a non-empty field path`);
+    }
+    return fieldPath;
+  }
+  if (isPlainObject(entry)) {
+    return entry;
+  }
+  throw new TypeError(`${context} must be a field-path string or plain object`);
+}
+
 function transactionFilter(op, field, value) {
   return { op, args: [field, value] };
 }
@@ -191,6 +224,10 @@ function normalizeTransactionQueryEnvelope(options, context) {
   if (opts.fetchSize !== undefined && opts.fetchSize !== null) {
     envelope.fetch_size = normalizePositiveInteger(opts.fetchSize, "fetchSize", undefined);
   }
+  const countMode = normalizeCountMode(opts.countMode ?? opts.count_mode, "countMode");
+  if (countMode !== undefined) {
+    envelope.count_mode = countMode;
+  }
   const queryName = opts.queryName ?? opts.query_name;
   if (queryName !== undefined && queryName !== null) {
     envelope.query = requireNonEmptyString(queryName, "queryName");
@@ -199,7 +236,9 @@ function normalizeTransactionQueryEnvelope(options, context) {
     if (!Array.isArray(opts.select)) {
       throw new TypeError("select must be an array");
     }
-    envelope.select = opts.select;
+    envelope.select = opts.select.map((entry, index) =>
+      normalizeSelectEntry(entry, `select[${index}]`),
+    );
   }
   return envelope;
 }
@@ -458,7 +497,7 @@ export class ToriiBrowserClient {
         ...normalizeIterablePagination(opts, "listAccountAssets options"),
         asset: opts.asset ?? opts.assetId,
         scope: opts.scope,
-        count_mode: opts.countMode ?? opts.count_mode,
+        count_mode: normalizeCountMode(opts.countMode ?? opts.count_mode, "countMode"),
       },
       signal: signalFrom(opts),
     });
@@ -495,7 +534,7 @@ export class ToriiBrowserClient {
         ...normalizeIterablePagination(opts, "listAssetHolders options"),
         account_id: opts.accountId ?? opts.account_id,
         scope: opts.scope,
-        count_mode: opts.countMode ?? opts.count_mode,
+        count_mode: normalizeCountMode(opts.countMode ?? opts.count_mode, "countMode"),
       },
       signal: signalFrom(opts),
     });
@@ -506,7 +545,7 @@ export class ToriiBrowserClient {
     return this._json("GET", "/v1/assets/definitions", {
       params: {
         ...normalizeIterablePagination(opts, "listAssetDefinitions options"),
-        count_mode: opts.countMode ?? opts.count_mode,
+        count_mode: normalizeCountMode(opts.countMode ?? opts.count_mode, "countMode"),
       },
       signal: signalFrom(opts),
     });

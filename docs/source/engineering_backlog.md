@@ -325,12 +325,13 @@ manifest blockers or a truly unreviewed profile-catalog-only schema gap;
 advertised profile-version gaps remain blockers unless the exact message
 definition also has reviewed missing-schema, schema-only, blocked-source, or
 pending-source evidence. Cross-summary XSD material replay checks also include
-pending-source message IDs, official catalogue/source references, and direct
-download URLs, so one operator package cannot satisfy another by replaying the
-same pending-source record. Pending-source submitting-organisation labels are
-also replayed as canonical ISO-style organisation metadata: bounded printable
-ASCII, comma-space-separated names, no URL/contact delimiters, no semicolon path
-parameters, no placeholder names, and no path-like slash smuggling.
+pending-source message IDs, official catalogue/source references, and bounded
+direct download URLs, so one operator package cannot satisfy another by
+replaying the same pending-source record. Pending-source
+submitting-organisation labels are also replayed as canonical ISO-style
+organisation metadata: bounded printable ASCII, comma-space-separated names, no
+URL/contact delimiters, no semicolon path parameters, no placeholder names, and
+no path-like slash smuggling.
 Pending-source message names are unique within each XSD summary and across
 cross-summary replay, so one official message name cannot be relabelled under a
 different pending message definition or download URL.
@@ -558,9 +559,10 @@ symlink-ancestor, and size-limit failures now use input role labels instead of
 local operator manifest/catalog paths, while accepted summaries still preserve
 the paths for audit evidence.
 Manifest-referenced XSD schema and XML fixture read, parse, DTD/entity,
-restricted-terms, symlink-ancestor, and size-limit failures now use manifest
-entry labels instead of resolved local source paths, while accepted summaries
-still preserve the manifest-relative paths for audit evidence.
+restricted-terms, structural-validation, symlink-ancestor, and size-limit
+failures now use manifest entry labels instead of resolved local source paths,
+while accepted summaries still preserve the manifest-relative paths for audit
+evidence.
 Receipt verifier, evidence, and readiness `receipt_kind` values reject
 secret-looking identifier-style markers and non-ASCII confusable spellings before
 unsupported-kind diagnostics or blockers can preserve forged archive values.
@@ -600,7 +602,13 @@ secret-looking field names and values.
 Rail and notary adapters reject successful remote response bodies with token,
 password, private-key, cookie markers, or unsafe control characters before
 receipt persistence, redact failed remote response previews and receipt errors
-when upstreams return those markers or unsafe control characters, and the
+when upstreams return those markers or unsafe control characters, cap transport
+error strings at 4096 printable ASCII characters before receipt emission,
+normalize non-standard, malformed, or oversized remote HTTP statuses into failed
+receipts, and convert transport-open exceptions/failures, normal/HTTP-error response close
+failures, normal/HTTP-error response-body read exceptions/failures, and
+malformed non-byte remote response bodies into bounded failed receipts with
+stable messages. The
 receipt verifier rejects successful archived receipts carrying the redacted
 response marker plus archived previews/errors containing the same marker set or
 unsafe control characters.
@@ -3949,7 +3957,9 @@ redistributable schemas, and official trust/revocation bundles.
 	  cap and validator runtime is bounded by positive finite
 	  `--xmllint-timeout-secs` capped at 300 seconds; successful validator output must be empty or the
 	  normal `<fixture> validates` line, so warning-bearing success output fails
-	  closed before release evidence is emitted. Secret-looking and
+	  closed before release evidence is emitted. Validator output that mentions
+	  local schema/fixture paths is redacted before diagnostics are reported.
+	  Secret-looking and
 	  control-bearing validator diagnostics are redacted before error reporting.
 	  This prevents restricted-term, XML-parse, and emitted-digest evidence from
 	  drifting across separate reads.
@@ -4276,10 +4286,13 @@ redistributable schemas, and official trust/revocation bundles.
 			  positive integer `--response-limit-bytes`, and writes bounded
 			  per-endpoint receipts without persisting token material, rejecting
 			  secret-looking or control-bearing successful remote response bodies
-			  before receipt persistence, normalizing non-standard remote HTTP
-			  statuses into transport-failed receipts with `status_code=null`, and
-			  redacting failed remote response previews or transport errors before
-			  persistence. The notary adapter
+				  before receipt persistence, normalizing non-standard, malformed, or oversized
+					  remote HTTP statuses into transport-failed receipts with `status_code=null`, and
+				  redacting failed remote response previews or transport errors before
+				  persistence, with transport error strings capped at 4096 printable
+					  ASCII characters and transport-open/response-read exceptions or
+					  failures, normal/HTTP-error close failures, and malformed non-byte
+					  remote response bodies recorded as bounded failed receipts. The notary adapter
 				  rejects unused `--allow-insecure-http` unless at least one endpoint
 				  actually needs the local HTTP/private-host diagnostic policy, and
 				  rejects unused `--allow-missing-record-sources` unless at least one
@@ -4330,9 +4343,13 @@ redistributable schemas, and official trust/revocation bundles.
 		  without following them, preserves explicit
 		  `--message` leaves for regular-file checks, and writes bounded
 		  submission receipts without persisting token material, rejecting
-		  secret-looking or control-bearing successful remote response bodies
-		  before receipt persistence, and redacting failed remote response
-		  previews or transport errors before persistence. Receipt output
+			  secret-looking or control-bearing successful remote response bodies
+			  before receipt persistence, and redacting failed remote response
+			  previews or transport errors before persistence, with transport error
+				  strings capped at 4096 printable ASCII characters and
+				  transport-open/response-read exceptions or failures,
+				  normal/HTTP-error close failures, and malformed non-byte remote
+				  response bodies recorded as bounded failed receipts. Receipt output
 		  directories and receipt leaves are preflighted before Torii submission,
 		  reject control characters, whitespace, leading-dash segments,
 		  backslashes, semicolon parameters, empty segments, dot/parent
@@ -4648,7 +4665,10 @@ redistributable schemas, and official trust/revocation bundles.
   `--require-explicit-policy`, rejects duplicate compact receipt paths/digests,
   rejects rail/notary receipt source path or source digest replay across
   canary summaries at evidence-verification time and across distinct evidence
-  summaries at readiness time, duplicate archived trust profile IDs, copied
+  summaries at readiness time, rejects rail receipt `source_path`,
+  `payload_sha256`, or `rail_message_id` relabels within one compact receipt
+  summary while still allowing legitimate notary multi-endpoint publication of one anchor, duplicate
+  archived trust profile IDs, copied
   compact trust profile JSON digests, all-zero trust bundle/profile JSON/pin/DER
   digests, profile JSON or bundle digests reused as compact trust material, and
   bundle digests across summaries with
@@ -4674,15 +4694,41 @@ redistributable schemas, and official trust/revocation bundles.
 	  configs, trust bundles, XSD manifests/profile catalogs, receipt
 		  files/directories, canary/trust summaries, and XSD/evidence summaries
 		  before argparse `Path` normalization or file discovery, rejects
-		  non-positive or non-finite live rail/notary timeout values and
-		  non-positive live adapter byte caps before local reads or network
-		  delivery, caps archived
+  non-positive or non-finite live rail/notary timeout values,
+  non-positive live adapter byte caps, and live response-body retention caps
+  above 4 MiB before local reads or network delivery, caps archived
   canary/trust and XSD/evidence summary JSON inputs at 4 MiB before parsing,
+  caps recursive ISO JSON surrogate/secret-material scanners at 8192 array
+  entries, 8192 object members, and 128 nesting levels before walking unknown
+  or unsupported JSON shapes, and wraps parser recursion failures with the same
+  label-only nesting diagnostic before local paths or attacker-controlled
+  leaves can be echoed,
+  caps operator-canary runbook notary endpoint and verifier receipt-selector
+  string lists at 8192 entries before entry parsing,
+  caps repeatable audit-notary endpoint inputs at 64 values before export
+  loading,
+  caps receipt/notary audit record, status-history, and change-reason arrays at
+  8192 items before replay,
+  caps repeatable trust-bundle paths and receipt verifier selector paths at 64
+  entries before bundle parsing or receipt discovery,
+  caps trust-bundle SHA-256, certificate-policy OID, and DER material lists at
+  8192 entries before per-entry parsing,
+  caps repeatable evidence canary/trust/receipt/receipt-directory path lists
+  at 64 entries before loading evidence files,
+  caps repeatable readiness XSD/evidence summary input path lists at 64 entries
+  before loading any summary files,
+  caps untrusted XSD manifest/profile-catalog, evidence-summary, and
+  readiness-summary JSON arrays at 8192 items before semantic replay,
   caps direct receipt-verifier stdout/stderr at 4 MiB before JSON parsing,
   redacts key/value, identifier-style secret-looking, and control-bearing direct
   receipt-verifier stderr before reporting failed child verifier diagnostics,
-	  rejects receipt,
-	  summary, and emitted profile-override output paths when they contain
+  reports XSD `xmllint`, canary child-stage, and direct receipt-verifier startup
+  failures with stage labels instead of argv, local paths, or raw
+  process-launch exception text or chained traceback causes,
+  reports their stdout/stderr pipe read or close failures as label-only
+  stage-output read errors,
+		  rejects receipt,
+		  summary, and emitted profile-override output paths when they contain
 	  control characters, whitespace, leading-dash segments, backslashes,
 	  semicolon parameters, empty segments, dot/parent traversal, symlinked existing ancestors,
 	  or are hard-linked, symlink, or non-regular targets, then atomically replaces targets from owner-private
@@ -4749,8 +4795,11 @@ redistributable schemas, and official trust/revocation bundles.
   including exact direct XSD download URLs, for the remaining unreviewed
   securities/collateral profile message ids, so current compact readiness
   summaries report zero unreviewed unique profile schema gaps while strict
-  schema-backed closure still fails. Pending direct download URLs must be unique
-  within each summary and across archived summary replay, pending official ISO
+  schema-backed closure still fails. Direct XSD verification and final readiness
+  replay now pin those known pending message definitions to their exact recorded
+  ISO catalogue URLs, direct download URLs, download type, message names, and
+  submitting organisations. Pending direct download URLs must be unique within
+  each summary and across archived summary replay, pending official ISO
   catalogue/download URLs must not contain percent escapes, archive catalogue
   URLs must use canonical raw `page=<nonzero decimal>` queries, and pending
   source message names must be unique and use canonical ISO-style CamelCase plus

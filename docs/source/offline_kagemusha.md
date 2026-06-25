@@ -561,12 +561,17 @@ preflight command displays, optionally checks `--expected-device-family` by
 reading `ro.product.model` and `ro.product.device` through the same
 non-disruptive ADB runner before build/install/instrumentation, accepting a
 single ADB transport `\r\n` line ending while still rejecting embedded control
-characters, assembles signed evidence with
+characters, can optionally wait with `--adb-visibility-wait-seconds` by polling
+only the same serial-scoped `adb get-state` and bounded `adb devices -l`
+diagnostic without restarting or reconnecting ADB, accepts `--serial auto` only
+when `adb devices -l` reports exactly one safe `device` row before switching back
+to the serial-scoped preflight, assembles signed evidence with
 `nearby_offline`, `nfc_hce`, and `qr` D2D transcript bindings, and validates
 the signed slot. The capture wrapper, raw puller, and slot assembler accept
 `--*-timeout-seconds 0` as an explicit no-timeout mode for operator-controlled
 captures where subprocess interruption is forbidden, while negative timeout
-values still fail closed before ADB or Gradle is invoked.
+values, negative ADB visibility wait values, and non-positive visibility poll
+intervals still fail closed before ADB or Gradle is invoked.
 The wrapper requires an explicit `--physical-device-attestation` assertion and
 does not manage or stop
 other processes. It also preflights the local `--private-key` and `--public-key`
@@ -1245,6 +1250,14 @@ surrounding-whitespace
 `--localnet-lifecycle-evidence` paths before running the rollup, so unsafe
 evidence path strings and padded path components are not echoed in summaries or
 diagnostics.
+Operators may repeat `--device-lab-root` when Android matrix evidence is
+captured into separate per-device or per-family roots. The rollup validates each
+root with the same symlink/path-shape preflight, scans every valid root, keeps
+the summary root redacted as `<local-device-lab-root>`, and still rejects
+duplicate slot ids or copied physical-device/D2D bindings before readiness can
+pass. `scripts/kagemusha_release_bundle.py` accepts the same repeated
+`--device-lab-root` form when packaging the ready summary, and binds each
+Android evidence artifact to the supplied root that contains its slot.
 The ABI-7 compact-key evidence validator applies the same redaction to
 noncanonical `generator_log_path` claims before serializing blocker details, so
 forged secret-looking or control-character log-path values are never echoed
@@ -3027,8 +3040,15 @@ summary decoders reject raw accumulator `chain_id` string payloads,
 proof-box-only backend drift, and extra fields appended to the top-level
 bundle, accumulator summary, nested current note, current-note amount,
 recursive proof, verifier-key id, and proof box before summary metadata is
-trusted; the C# mirrors are part of the managed decoder parity guard and still
-need Windows host certification alongside the rest of the C# lane.
+trusted. Editable non-C# decoders and JavaScript package-dist coverage also
+pin a combined proof-box vector where `ProofBox.backend = halo2/kzg` and
+`ProofBox.bytes` is empty, requiring the `bundle.proof_backend` diagnostic
+before the empty-proof-bytes diagnostic. They also pin the same precedence for
+lineage-witness previous recursive proofs, requiring
+`lineageWitness.previousRecursiveProofs.proof_backend` before the empty
+previous-proof diagnostic. The C# mirrors are part of the managed
+decoder parity guard and still need Windows host certification alongside the
+rest of the C# lane.
 The same managed decoder guard now also covers ABI-7 verify-result archives and
 lineage-witness summaries, rejecting surplus fields on verify results, top-level
 lineage witnesses, previous-recursive-proof sequences, individual previous

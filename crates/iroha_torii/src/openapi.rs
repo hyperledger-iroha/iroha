@@ -875,6 +875,15 @@ fn account_transactions_list_query_parameters() -> Vec<Value> {
     params
 }
 
+fn account_history_list_query_parameters() -> Vec<Value> {
+    let mut params = pagination_query_parameters();
+    params.push(string_query_param(
+        "asset_id",
+        "Filter activity by canonical Base58 asset id, asset definition id, or active asset alias.",
+    ));
+    params
+}
+
 fn contract_activity_list_query_parameters() -> Vec<Value> {
     let mut params = pagination_query_parameters();
     params.push(string_query_param(
@@ -3322,6 +3331,23 @@ fn account_paths() -> Map {
                 "Accounts",
                 "List account transactions.",
                 "List transactions authored by an account (supports pagination and optional asset_id filtering). Results are merged across the caller-visible dataspaces only; private dataspace history the caller cannot read is silently omitted.",
+                "#/components/schemas/JsonValue",
+                params,
+            )
+        }),
+    );
+    paths.insert(
+        "/v1/accounts/{account_id}/history".to_owned(),
+        Value::Object({
+            let mut params = vec![string_path_param(
+                "account_id",
+                "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            )];
+            params.extend(account_history_list_query_parameters());
+            json_get_operation(
+                "Accounts",
+                "List indexed account history.",
+                "List indexed account activity for the selected account, including incoming and outgoing value movement plus raw affected transactions. Supports pagination and optional asset filtering.",
                 "#/components/schemas/JsonValue",
                 params,
             )

@@ -805,6 +805,7 @@ txs = client.list_account_transactions(
 query_txs = client.query_account_transactions(
     "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
     filter={"status": {"Eq": "Committed"}},
+    select=["authority", {"metadata": {"amount": True}}],
     sort={"timestamp": "DESC"},
     limit=3,
 )

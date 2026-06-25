@@ -38,7 +38,9 @@ const ZK_ACE_PRODUCTION_DISABLED_MESSAGE =
   `${ZK_ACE_PRODUCTION_VK_REF}: ` +
   "Iroha production allowlist is not enabled for this audited row";
 const U64_MAX = (1n << 64n) - 1n;
+const U64_MAX_DECIMAL_DIGITS = U64_MAX.toString(10).length;
 const U128_MAX = (1n << 128n) - 1n;
+const U128_MAX_DECIMAL_DIGITS = U128_MAX.toString(10).length;
 const PRIVACY_NORITO_HEADER_BYTES = 40;
 const PRIVACY_NORITO_MAX_HEADER_PADDING_BYTES = 64;
 const PRIVACY_NORITO_SUPPORTED_FLAGS_MASK = 0x27;
@@ -4054,8 +4056,11 @@ function kagemushaReadRequiredMetadataOption(payload, flags, field) {
     throw kagemushaArchiveCodecError(field, `${field} option tag is truncated`);
   }
   const tag = payload[0];
-  if (tag !== 1) {
+  if (tag === 0) {
     throw kagemushaArchiveCodecError(field, `${field} is required`);
+  }
+  if (tag !== 1) {
+    throw kagemushaArchiveCodecError(field, `${field} option tag must be 0 or 1`);
   }
   const length = kagemushaReadNoritoLength(payload, 1, flags, `${field}.length`);
   const end = length.offset + length.value;
@@ -4246,7 +4251,10 @@ function kagemushaReadAccumulatorSummary(payload, flags) {
   );
   offset = field.offset;
   field = kagemushaReadNoritoField(payload, offset, flags, "accumulator.hopCount");
-  const hopCount = kagemushaReadU32Payload(field.payload);
+  const hopCount = kagemushaReadU32Payload(
+    field.payload,
+    "bundle.accumulator.hop_count",
+  );
   if (
     hopCount < 1 ||
     hopCount > KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
@@ -4337,11 +4345,13 @@ function kagemushaReadChainIdPayload(payload, flags) {
       "bundle.accumulator.chain_id has trailing bytes",
     );
   }
-  return kagemushaReadStringPayload(
+  const chainId = kagemushaReadStringPayload(
     field.payload,
     flags,
     "bundle.accumulator.chain_id",
   );
+  kagemushaRequirePortableId(chainId, "bundle.accumulator.chain_id");
+  return chainId;
 }
 
 function kagemushaIrohaHash(data) {
@@ -4557,6 +4567,12 @@ function kagemushaReadProofBoxBackend(payload, flags, context = {
     throw kagemushaArchiveCodecError(context.trailingField, context.trailingMessage);
   }
   kagemushaRequirePortableId(backend, "proof.backend");
+  if (backend !== KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND) {
+    throw kagemushaArchiveCodecError(
+      context.proofBackendField,
+      `${context.proofBackendField} unsupported recursive proof backend: ${backend}`,
+    );
+  }
   if (proofBytes.length === 0) {
     throw kagemushaArchiveCodecError(
       context.proofBytesField,
@@ -4683,9 +4699,9 @@ function kagemushaReadBoolPayload(payload) {
   throw kagemushaFieldCodecError("bool");
 }
 
-function kagemushaReadU32Payload(payload) {
+function kagemushaReadU32Payload(payload, context = "u32") {
   if (payload.length !== 4) {
-    throw kagemushaArchiveCodecError("u32");
+    throw kagemushaArchiveCodecError(context);
   }
   return payload.readUInt32LE(0);
 }
@@ -4789,6 +4805,9 @@ function kagemushaCanonicalU128BigInt(value, field) {
     if (!/^\d+$/.test(value) || (value.length > 1 && value.startsWith("0"))) {
       throw kagemushaFieldCodecError(field, `${field} must be a canonical decimal u128`);
     }
+    if (value.length > U128_MAX_DECIMAL_DIGITS) {
+      throw kagemushaFieldCodecError(field, `${field} must fit in u128`);
+    }
     integer = BigInt(value);
   } else {
     throw kagemushaFieldCodecError(field, `${field} must be a canonical decimal u128`);
@@ -4820,6 +4839,9 @@ function kagemushaNormalizeBlockHeight(value, field) {
         field,
         `${field} must be a canonical unsigned decimal u64`,
       );
+    }
+    if (value.length > U64_MAX_DECIMAL_DIGITS) {
+      throw kagemushaFieldCodecError(field, `${field} must fit in u64`);
     }
     height = BigInt(value);
   } else {

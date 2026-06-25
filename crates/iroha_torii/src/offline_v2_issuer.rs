@@ -85,11 +85,15 @@ const REDEMPTION_FIELDS: &[&str] = &[
     "input_nullifiers",
     "sender_key_certificate",
     "key_certificate",
+    "recipient_account_id",
+    "asset_definition_id",
     "amount",
     "recursive_proof",
 ];
 const RECURSIVE_PROOF_FIELDS: &[&str] = &[
     "backend",
+    "verifier_key_backend",
+    "proof_backend",
     "verifier_key_id",
     "verifier_key_name",
     "public_inputs_hash_hex",
@@ -2131,6 +2135,8 @@ fn parse_redemption_object(
             )
         })?;
     let sender_key_certificate = parse_key_certificate(certificate)?;
+    let recipient = parse_redemption_recipient(value, request)?;
+    let asset = parse_redemption_asset(value, &recipient, request)?;
     let amount = parse_positive_amount(required_string(value, "amount")?, "redemption.amount")?;
     let recursive_proof =
         parse_recursive_proof(value.get("recursive_proof").ok_or_else(|| {
@@ -2143,14 +2149,63 @@ fn parse_redemption_object(
         source_note_commitment,
         input_nullifiers,
         sender_key_certificate,
-        recipient: request.account_id.clone(),
-        asset: AssetId::new(
-            request.asset_definition_id.clone(),
-            request.account_id.clone(),
-        ),
+        recipient,
+        asset,
         amount,
         recursive_proof,
     })
+}
+
+fn parse_redemption_recipient(
+    value: &Value,
+    request: &ParsedOfflineRequest,
+) -> Result<AccountId, Error> {
+    let Some(recipient_literal) = optional_exact_protocol_string(
+        value,
+        "recipient_account_id",
+        "OFFLINE_V2_REDEMPTION_INVALID",
+        "Offline Notes V2 redemption",
+    )?
+    else {
+        return Ok(request.account_id.clone());
+    };
+    if recipient_literal == request.account_literal {
+        return Ok(request.account_id.clone());
+    }
+    let parsed = AccountId::parse_encoded(recipient_literal).map_err(|err| {
+        validation_owned(
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            format!("Offline Notes V2 redemption recipient_account_id is invalid: {err}"),
+        )
+    })?;
+    Ok(parsed.account_id().clone())
+}
+
+fn parse_redemption_asset(
+    value: &Value,
+    recipient: &AccountId,
+    request: &ParsedOfflineRequest,
+) -> Result<AssetId, Error> {
+    let definition = if let Some(asset_literal) = optional_exact_protocol_string(
+        value,
+        "asset_definition_id",
+        "OFFLINE_V2_REDEMPTION_INVALID",
+        "Offline Notes V2 redemption",
+    )? {
+        if asset_literal == request.asset_definition_literal {
+            request.asset_definition_id.clone()
+        } else {
+            AssetDefinitionId::from_str(asset_literal).map_err(|err| {
+                validation_owned(
+                    "OFFLINE_V2_REDEMPTION_INVALID",
+                    format!("Offline Notes V2 redemption asset_definition_id is invalid: {err}"),
+                )
+            })?
+        }
+    } else {
+        request.asset_definition_id.clone()
+    };
+    Ok(AssetId::new(definition, recipient.clone()))
 }
 
 fn validate_redemption_matches_request(
@@ -2390,13 +2445,7 @@ fn parse_recursive_proof(value: &Value) -> Result<OfflineNoteRecursiveProof, Err
         "OFFLINE_V2_REDEMPTION_INVALID",
         "Offline Notes V2 recursive proof",
     )?;
-    let backend = optional_exact_protocol_string(
-        value,
-        "backend",
-        "OFFLINE_V2_REDEMPTION_INVALID",
-        "Offline Notes V2 recursive proof",
-    )?
-    .unwrap_or("halo2/ipa");
+    let backend = parse_recursive_proof_backend(value)?;
     let verifier_key_name = if value.get("verifier_key_id").is_some() {
         required_exact_protocol_string(
             value,
@@ -2439,6 +2488,31 @@ fn parse_recursive_proof(value: &Value) -> Result<OfflineNoteRecursiveProof, Err
         public_inputs_hash,
         proof: ProofBox::new(backend.to_string(), proof_bytes),
     })
+}
+
+fn parse_recursive_proof_backend(value: &Value) -> Result<&str, Error> {
+    let mut backend = None;
+    for field in ["backend", "verifier_key_backend", "proof_backend"] {
+        let Some(candidate) = optional_exact_protocol_string(
+            value,
+            field,
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 recursive proof",
+        )?
+        else {
+            continue;
+        };
+        if let Some(existing) = backend
+            && existing != candidate
+        {
+            return Err(validation(
+                "OFFLINE_V2_REDEMPTION_INVALID",
+                "Offline Notes V2 recursive proof backend aliases must match.",
+            ));
+        }
+        backend = Some(candidate);
+    }
+    Ok(backend.unwrap_or("halo2/ipa"))
 }
 
 fn parse_hash_field(value: &Value, field: &'static str) -> Result<Hash, Error> {
@@ -4150,6 +4224,28 @@ mod tests {
     }
 
     #[test]
+    fn redeem_route_accepts_structured_redemption_sdk_identity_fields() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let mut redemption = redemption_json(&model);
+        insert_field(
+            &mut redemption,
+            "recipient_account_id",
+            string_value(&request.account_literal),
+        );
+        insert_field(
+            &mut redemption,
+            "asset_definition_id",
+            string_value(&request.asset_definition_literal),
+        );
+        insert_field(&mut request.value, "redemption", redemption);
+
+        let parsed = parse_redemption(&request).expect("SDK structured redemption parses");
+
+        assert_eq!(parsed, model);
+    }
+
+    #[test]
     fn redeem_route_accepts_structured_redemption_legacy_aliases() {
         let mut request = fixture_redeem_request();
         let model = chain_admissible_fixture_redeem_model();
@@ -4163,6 +4259,25 @@ mod tests {
         insert_field(&mut request.value, "redemption", redemption);
 
         let parsed = parse_redemption(&request).expect("legacy structured redemption parses");
+
+        assert_eq!(parsed, model);
+    }
+
+    #[test]
+    fn redeem_route_accepts_structured_recursive_proof_sdk_backend_aliases() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let mut redemption = redemption_json(&model);
+        let proof = redemption
+            .get_mut("recursive_proof")
+            .expect("recursive proof");
+        let backend = proof.get("backend").expect("backend").clone();
+        remove_field(proof, "backend");
+        insert_field(proof, "verifier_key_backend", backend.clone());
+        insert_field(proof, "proof_backend", backend);
+        insert_field(&mut request.value, "redemption", redemption);
+
+        let parsed = parse_redemption(&request).expect("SDK recursive proof aliases parse");
 
         assert_eq!(parsed, model);
     }
@@ -4220,6 +4335,50 @@ mod tests {
         assert_eq!(
             validation_code(parse_redemption(&request)),
             "OFFLINE_V2_REDEMPTION_INVALID"
+        );
+    }
+
+    #[test]
+    fn redeem_route_rejects_structured_redemption_nested_recipient_mismatch() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let mut redemption = redemption_json(&model);
+        let other_account = AccountId::new(checked_seed_keypair(0x44).public_key().clone());
+        assert_ne!(other_account, request.account_id);
+        insert_field(
+            &mut redemption,
+            "recipient_account_id",
+            string_value(other_account.to_string()),
+        );
+        insert_field(&mut request.value, "redemption", redemption);
+
+        assert_eq!(
+            validation_code(parse_redemption(&request)),
+            "OFFLINE_V2_REDEMPTION_ACCOUNT_MISMATCH"
+        );
+    }
+
+    #[test]
+    fn redeem_route_rejects_structured_redemption_nested_asset_mismatch() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let mut redemption = redemption_json(&model);
+        let other_asset = AssetDefinitionId::from_uuid_bytes([
+            0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x46, 0x17, 0x88, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+            0x1e, 0x1f,
+        ])
+        .expect("valid other asset id");
+        assert_ne!(other_asset, request.asset_definition_id);
+        insert_field(
+            &mut redemption,
+            "asset_definition_id",
+            string_value(other_asset.to_string()),
+        );
+        insert_field(&mut request.value, "redemption", redemption);
+
+        assert_eq!(
+            validation_code(parse_redemption(&request)),
+            "OFFLINE_V2_REDEMPTION_ASSET_MISMATCH"
         );
     }
 
@@ -4388,6 +4547,25 @@ mod tests {
             .expect("verifier key id")
             .clone();
         insert_field(proof, "verifier_key_name", verifier_key_id);
+        insert_field(&mut request.value, "redemption", redemption);
+
+        assert_eq!(
+            validation_code(parse_redemption(&request)),
+            "OFFLINE_V2_REDEMPTION_INVALID"
+        );
+    }
+
+    #[test]
+    fn redeem_route_rejects_structured_recursive_proof_backend_alias_mismatch() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let mut redemption = redemption_json(&model);
+        let proof = redemption
+            .get_mut("recursive_proof")
+            .expect("recursive proof");
+        let backend = proof.get("backend").expect("backend").clone();
+        insert_field(proof, "verifier_key_backend", backend);
+        insert_field(proof, "proof_backend", string_value("halo2/kzg"));
         insert_field(&mut request.value, "redemption", redemption);
 
         assert_eq!(
