@@ -4788,13 +4788,13 @@ test("Solana source-state prover wraps linked AccountsLtHash proof bytes", async
         sourceDomain: String(request.sourceDomain),
         finalizedSlot: BigInt(request.finalizedSlot),
         sourceStateVerifierId: request.sourceStateVerifierId,
-        sourceStateVerifierHash: request.sourceStateVerifierHash.toUpperCase(),
+        sourceStateVerifierHash: request.sourceStateVerifierHash,
         accountsLtHashProofPublicInputsHash:
-          request.accountsLtHashProofPublicInputsHash.toUpperCase(),
+          request.accountsLtHashProofPublicInputsHash,
         openedAccountsLtHashContributionsHash:
-          request.openedAccountsLtHashContributionsHash.toUpperCase(),
+          request.openedAccountsLtHashContributionsHash,
         openedAccountsLtHashResidualChecksum:
-          request.openedAccountsLtHashResidualChecksum.toUpperCase(),
+          request.openedAccountsLtHashResidualChecksum,
         publicInputColumns: request.publicInputColumns,
         fastpqPublicInputs: request.fastpqPublicInputs,
         fastpqTransitions: request.fastpqTransitions,
@@ -4823,23 +4823,21 @@ test("Solana source-state prover wraps linked AccountsLtHash proof bytes", async
   assert.equal(proof.proofBase64, "AQID");
   const fastpqAliasProof = await new SolanaSccpSourceStateProver({
     prove(request) {
-      const upperHex = (value) =>
-        value === "0x" ? value : value.toUpperCase();
       return {
         proofBytes: [7, 8, 9],
         fastpqPublicInputs: {
-          dsid: request.fastpqPublicInputs.dsid.toUpperCase(),
+          dsid: request.fastpqPublicInputs.dsid,
           slot: BigInt(request.fastpqPublicInputs.slot),
-          old_root: request.fastpqPublicInputs.oldRoot.toUpperCase(),
-          new_root: request.fastpqPublicInputs.newRoot.toUpperCase(),
-          perm_root: request.fastpqPublicInputs.permRoot.toUpperCase(),
-          tx_set_hash: request.fastpqPublicInputs.txSetHash.toUpperCase(),
+          old_root: request.fastpqPublicInputs.oldRoot,
+          new_root: request.fastpqPublicInputs.newRoot,
+          perm_root: request.fastpqPublicInputs.permRoot,
+          tx_set_hash: request.fastpqPublicInputs.txSetHash,
         },
         fastpqTransitions: request.fastpqTransitions.map((transition) => ({
           key: transition.key,
           operation: transition.operation,
-          old_value: upperHex(transition.oldValue),
-          new_value: upperHex(transition.newValue),
+          old_value: transition.oldValue,
+          new_value: transition.newValue,
         })),
       };
     },
@@ -5063,18 +5061,16 @@ test("Solana source-state prover wraps all full-light audit role proofs", async 
         sourceDomain: String(request.sourceDomain),
         finalizedSlot: BigInt(request.finalizedSlot),
         verifierId: request.verifierId,
-        verifierHash: request.verifierHash.toUpperCase(),
+        verifierHash: request.verifierHash,
         sourceStateVerifierId: request.sourceStateVerifierId,
-        sourceStateVerifierHash: request.sourceStateVerifierHash.toUpperCase(),
-        sourceVerifierMaterialHash:
-          request.sourceVerifierMaterialHash.toUpperCase(),
-        sourceAdapterDeploymentHash:
-          request.sourceAdapterDeploymentHash.toUpperCase(),
-        fullLightClientGateHash: request.fullLightClientGateHash.toUpperCase(),
-        finalityContextHash: request.finalityContextHash.toUpperCase(),
-        voteMessageHash: request.voteMessageHash.toUpperCase(),
-        accountsLtHashProofHash: request.accountsLtHashProofHash.toUpperCase(),
-        auditStatementHash: request.auditStatementHash.toUpperCase(),
+        sourceStateVerifierHash: request.sourceStateVerifierHash,
+        sourceVerifierMaterialHash: request.sourceVerifierMaterialHash,
+        sourceAdapterDeploymentHash: request.sourceAdapterDeploymentHash,
+        fullLightClientGateHash: request.fullLightClientGateHash,
+        finalityContextHash: request.finalityContextHash,
+        voteMessageHash: request.voteMessageHash,
+        accountsLtHashProofHash: request.accountsLtHashProofHash,
+        auditStatementHash: request.auditStatementHash,
         publicInputColumns: request.publicInputColumns,
         fastpqPublicInputs: request.fastpqPublicInputs,
         fastpqTransitions: request.fastpqTransitions,
@@ -7280,6 +7276,68 @@ test("binds EVM-family Groth16 proof requests to public signals and relay contex
         backend: "debug-evm-backend",
       }),
     /backend must be evm-groth16-bn254-v1/,
+  );
+});
+
+test("rejects noncanonical-case hex in EVM-family proof requests", () => {
+  for (const payloadHash of [
+    `0X${"22".repeat(32)}`,
+    `0x${"AA".repeat(32)}`,
+    "AA".repeat(32),
+  ]) {
+    assert.throws(
+      () =>
+        buildEvmSccpProofRequest({
+          publicInputs: { ...sampleEvmPublicInputs, payloadHash },
+          bundleBytes: sampleEvmBundleBytes,
+          sourceProofBytes: [],
+          sourceDomain: SCCP_DOMAIN_SORA,
+          statementHash: HEX32_G,
+          destinationBindingHash: HEX32_H,
+        }),
+      /publicInputs\.payloadHash must be canonical hex/u,
+    );
+  }
+
+  assert.throws(
+    () =>
+      buildEvmSccpProofRequest({
+        publicInputs: sampleEvmPublicInputs,
+        bundleBytes: sampleEvmBundleBytes,
+        sourceProofBytes: [],
+        sourceDomain: SCCP_DOMAIN_SORA,
+        statementHash: `0X${"55".repeat(32)}`,
+        destinationBindingHash: HEX32_H,
+      }),
+    /statementHash must be canonical hex/u,
+  );
+  assert.throws(
+    () =>
+      buildEvmSccpProofRequest({
+        publicInputs: sampleEvmPublicInputs,
+        bundleBytes: sampleEvmBundleBytes,
+        sourceProofBytes: [],
+        sourceDomain: SCCP_DOMAIN_SORA,
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+        proofArtifactHash: `0x${"AA".repeat(32)}`,
+        provingKeyHash: HEX32_B,
+      }),
+    /proofArtifactHash must be canonical hex/u,
+  );
+  assert.throws(
+    () =>
+      buildEvmSccpProofRequest({
+        publicInputs: sampleEvmPublicInputs,
+        bundleBytes: sampleEvmBundleBytes,
+        sourceProofBytes: [],
+        sourceDomain: SCCP_DOMAIN_SORA,
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+        proofArtifactHash: HEX32_A,
+        provingKeyHash: `0X${"92".repeat(32)}`,
+      }),
+    /provingKeyHash must be canonical hex/u,
   );
 });
 
@@ -15467,7 +15525,7 @@ test("builds canonical TAIRA XOR BSC-destination transfer payloads and message i
   assert.deepEqual(
     tairaXorBscCanonicalTransferPayloadBytes({
       tairaSender: sender,
-      recipientAddress: recipient.toUpperCase(),
+      recipientAddress: recipient,
       amount: amount.toString(),
       nonce: nonce.toString(),
     }),
@@ -15491,6 +15549,25 @@ test("builds canonical TAIRA XOR BSC-destination transfer payloads and message i
       nonce,
     }),
     expectedMessageId,
+  );
+  const checksumRecipient = "0x52908400098527886E0F7030069857D2E4169EE7";
+  assert.equal(
+    buildTairaXorBscTransferPayload({
+      tairaAccountId: sender,
+      recipientAddress: checksumRecipient.toLowerCase(),
+      amount,
+      nonce,
+    }).recipient,
+    checksumRecipient,
+  );
+  assert.equal(
+    buildTairaXorBscTransferPayload({
+      tairaAccountId: sender,
+      recipientAddress: `0X${checksumRecipient.slice(2)}`,
+      amount,
+      nonce,
+    }).recipient,
+    checksumRecipient,
   );
   assert.throws(
     () =>
@@ -15531,7 +15608,7 @@ test("builds canonical TAIRA XOR BSC-source transfer payloads, message ids, and 
   const amount = 25_000_000_000_000_000n;
   const nonce = 42n;
   const payload = buildTairaXorBscToTairaTransferPayload({
-    bscSender: bscSender.toUpperCase(),
+    bscSender,
     tairaRecipient,
     amount,
     nonce,

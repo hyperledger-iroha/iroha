@@ -197,6 +197,24 @@ def test_ton_hex_parser_rejects_zero_and_wrong_width():
     else:
         raise AssertionError("padded TON verifier code hash was accepted")
 
+    for value, expected in (
+        ("33" * 32, "canonical lowercase 0x hex"),
+        ("0X" + "33" * 32, "lowercase 0x prefix"),
+        ("0x" + "AA" * 32, "lowercase hex"),
+    ):
+        try:
+            module.parse_hex_bytes(
+                value,
+                label="verifier code hash",
+                byte_length=32,
+            )
+        except module.argparse.ArgumentTypeError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError(
+                f"noncanonical TON verifier hash {value!r} was accepted"
+            )
+
     try:
         module.parse_hex_bytes(
             "0x" + "33" * 31,
@@ -212,11 +230,13 @@ def test_ton_hex_parser_rejects_zero_and_wrong_width():
 def test_ton_destination_direct_parsers_redact_parser_causes(tmp_path):
     module = load_evidence_module()
 
-    fixed_hex_payload = "secret-token-ton-destination-fixed-hex"
-    fixed_hex_payload += "g" * (64 - len(fixed_hex_payload))
-    code_hex_payload = "secret-token-ton-destination-code-hex"
-    if len(code_hex_payload) % 2:
-        code_hex_payload += "g"
+    fixed_hex_payload_body = "secret-token-ton-destination-fixed-hex"
+    fixed_hex_payload = "0x" + fixed_hex_payload_body
+    fixed_hex_payload += "g" * (66 - len(fixed_hex_payload))
+    code_hex_payload_body = "secret-token-ton-destination-code-hex"
+    if len(code_hex_payload_body) % 2:
+        code_hex_payload_body += "g"
+    code_hex_payload = "0x" + code_hex_payload_body
 
     cases = (
         (
@@ -349,7 +369,7 @@ def test_ton_destination_code_boc_base64_redacts_helper_exit_decoder_causes(
 def test_ton_code_boc_inline_parsers_reject_padded_values(tmp_path):
     module = load_evidence_module()
 
-    assert module.parse_code_boc_hex(TON_CODE_BOC_HEX, label="code BoC") == (
+    assert module.parse_code_boc_hex("0x" + TON_CODE_BOC_HEX, label="code BoC") == (
         bytes.fromhex(TON_CODE_BOC_HEX)
     )
     assert module.parse_code_boc_base64(TON_CODE_BOC_BASE64, label="code BoC") == (
@@ -376,6 +396,20 @@ def test_ton_code_boc_inline_parsers_reject_padded_values(tmp_path):
         assert "canonical base64" in str(exc)
     else:
         raise AssertionError("non-canonical TON code BoC base64 was accepted")
+
+    for value, expected in (
+        (TON_CODE_BOC_HEX, "canonical lowercase 0x hex"),
+        ("0X" + TON_CODE_BOC_HEX, "lowercase 0x prefix"),
+        ("0x" + TON_CODE_BOC_HEX.upper(), "lowercase hex"),
+    ):
+        try:
+            module.parse_code_boc_hex(value, label="code BoC")
+        except module.argparse.ArgumentTypeError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError(
+                f"noncanonical TON code BoC hex {value!r} was accepted"
+            )
 
     code_boc_file = tmp_path / "code.boc.txt"
     code_boc_file.write_text("0x" + TON_CODE_BOC_HEX + "\n", encoding="ascii")
@@ -864,7 +898,7 @@ def test_ton_cli_derives_verifier_code_hash_from_code_boc(capsys, tmp_path):
     assert output["verifier_code_hash"] == "0x" + TON_CODE_BOC_ROOT_HASH
     assert output["toml_ready"] is True
 
-    assert module.main([*common_args, "--verifier-code-boc-hex", TON_CODE_BOC_HEX]) == 0
+    assert module.main([*common_args, "--verifier-code-boc-hex", "0x" + TON_CODE_BOC_HEX]) == 0
     output = json.loads(capsys.readouterr().out)
     assert output["verifier_code_hash"] == "0x" + TON_CODE_BOC_ROOT_HASH
 
@@ -881,7 +915,7 @@ def test_ton_cli_derives_verifier_code_hash_from_code_boc(capsys, tmp_path):
             [
                 *common_args,
                 "--verifier-code-boc-hex",
-                TON_CODE_BOC_HEX,
+                "0x" + TON_CODE_BOC_HEX,
                 "--verifier-code-hash",
                 "0x" + "bb" * 32,
             ]
@@ -1259,7 +1293,7 @@ def test_ton_cli_json_summary_and_toml_output(capsys):
         "--verifier-code-hash",
         "0x" + TON_CODE_BOC_ROOT_HASH,
         "--verifier-code-boc-hex",
-        TON_CODE_BOC_HEX,
+        "0x" + TON_CODE_BOC_HEX,
         "--account-status",
         "active",
         "--account-state-hash",

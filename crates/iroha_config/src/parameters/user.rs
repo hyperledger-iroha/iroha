@@ -4422,6 +4422,8 @@ pub struct SccpRouteManifest {
     pub circuit_artifact_hash: Option<String>,
     /// Optional hex-encoded proving key digest.
     pub proving_key_hash: Option<String>,
+    /// Optional hash of the normalized deployment evidence used to build this route.
+    pub deployment_evidence_sha256: Option<String>,
     /// Canonical destination binding key.
     pub destination_binding_key: String,
     /// Hex-encoded canonical destination binding hash.
@@ -4494,16 +4496,34 @@ impl SccpRouteManifest {
     const BSC_TESTNET_CHAIN_ID_HEX: &'static str = "0x61";
 
     fn normalize_bsc_chain_id_hex(value: &str) -> String {
-        let value = value.trim().to_ascii_lowercase();
         assert!(
             value == Self::BSC_TESTNET_CHAIN_ID_HEX,
             "SCCP BSC route manifest chain_id_hex must be BSC testnet 0x61"
         );
-        value
+        value.to_owned()
     }
 
     fn normalize_tron_chain_id_hex(value: &str) -> String {
-        value.trim().to_ascii_lowercase()
+        let Some(body) = value.strip_prefix("0x") else {
+            panic!(
+                "SCCP TRON route manifest chain_id_hex must be a 0x-prefixed hex value using canonical lowercase spelling"
+            );
+        };
+        assert!(
+            !body.is_empty()
+                && body
+                    .as_bytes()
+                    .iter()
+                    .all(|byte| byte.is_ascii_digit() || matches!(*byte, b'a'..=b'f')),
+            "SCCP TRON route manifest chain_id_hex must be a 0x-prefixed hex value using canonical lowercase spelling"
+        );
+        value.to_owned()
+    }
+
+    fn is_canonical_lower_hex_body(bytes: &[u8]) -> bool {
+        bytes
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || matches!(*byte, b'a'..=b'f'))
     }
 
     fn tron_base58_digit(byte: u8) -> Option<u8> {
@@ -4603,26 +4623,24 @@ impl SccpRouteManifest {
     }
 
     fn normalize_hex32(field: &str, value: &str) -> String {
-        let value = value.trim().to_ascii_lowercase();
         assert!(
             value.len() == 66 && value.starts_with("0x"),
-            "SCCP route manifest {field} must be a 0x-prefixed 32-byte hex value"
+            "SCCP route manifest {field} must be a 0x-prefixed 32-byte hex value using canonical lowercase spelling"
         );
         assert!(
-            value.as_bytes()[2..].iter().all(u8::is_ascii_hexdigit),
-            "SCCP route manifest {field} must be a 0x-prefixed 32-byte hex value"
+            Self::is_canonical_lower_hex_body(&value.as_bytes()[2..]),
+            "SCCP route manifest {field} must be a 0x-prefixed 32-byte hex value using canonical lowercase spelling"
         );
         assert!(
             value.as_bytes()[2..].iter().any(|byte| *byte != b'0'),
             "SCCP route manifest {field} must be non-zero"
         );
-        value
+        value.to_owned()
     }
 
     fn normalize_optional_hex32(field: &str, value: Option<&str>) -> Option<String> {
         value.and_then(|value| {
-            let value = value.trim();
-            if value.is_empty() {
+            if value.trim().is_empty() {
                 None
             } else {
                 Some(Self::normalize_hex32(field, value))
@@ -4653,20 +4671,19 @@ impl SccpRouteManifest {
     }
 
     fn normalize_evm_address(field: &str, value: &str) -> String {
-        let value = value.trim().to_ascii_lowercase();
         assert!(
             value.len() == 42 && value.starts_with("0x"),
-            "SCCP BSC route manifest {field} must be a 0x-prefixed 20-byte EVM address"
+            "SCCP BSC route manifest {field} must be a 0x-prefixed 20-byte EVM address using canonical lowercase spelling"
         );
         assert!(
-            value.as_bytes()[2..].iter().all(u8::is_ascii_hexdigit),
-            "SCCP BSC route manifest {field} must be a 0x-prefixed 20-byte EVM address"
+            Self::is_canonical_lower_hex_body(&value.as_bytes()[2..]),
+            "SCCP BSC route manifest {field} must be a 0x-prefixed 20-byte EVM address using canonical lowercase spelling"
         );
         assert!(
             value.as_bytes()[2..].iter().any(|byte| *byte != b'0'),
             "SCCP BSC route manifest {field} must be non-zero"
         );
-        value
+        value.to_owned()
     }
 
     fn normalize_bsc_testnet_explorer_tx_url(
@@ -4674,7 +4691,7 @@ impl SccpRouteManifest {
         value: Option<&str>,
         expected_hash: Option<&str>,
     ) -> Option<String> {
-        let value = value?.trim();
+        let value = value?;
         if value.is_empty() {
             return None;
         }
@@ -5067,8 +5084,7 @@ impl SccpRouteManifest {
             let Some(value) = value else {
                 continue;
             };
-            let value = value.trim();
-            if value.is_empty() {
+            if value.trim().is_empty() {
                 continue;
             }
             if let Some((previous_name, previous_value)) = resolved.as_ref() {
@@ -5077,7 +5093,7 @@ impl SccpRouteManifest {
                     "SCCP route manifest {role} aliases disagree: `{previous_name}` = `{previous_value}` but `{name}` = `{value}`"
                 );
             } else {
-                resolved = Some((*name, value.to_owned()));
+                resolved = Some((*name, value.to_string()));
             }
         }
         resolved.map(|(_, value)| value)
@@ -5165,6 +5181,14 @@ impl SccpRouteManifest {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned)
+        };
+        let deployment_evidence_sha256 = if strict_route_hashes {
+            Self::normalize_optional_hex32(
+                "deployment_evidence_sha256",
+                self.deployment_evidence_sha256.as_deref(),
+            )
+        } else {
+            self.deployment_evidence_sha256.clone()
         };
         let post_deploy_source_bridge_config_hash = if strict_route_hashes {
             Self::normalize_optional_hex32(
@@ -5276,8 +5300,13 @@ impl SccpRouteManifest {
                 && (proof_artifact_hash.is_none() || proving_key_hash.is_none())),
             "SCCP BSC route manifest production_ready requires proof_artifact_hash and proving_key_hash"
         );
-        let source_bridge_address = self.source_bridge_address(!is_tron_route);
-        let destination_verifier_address = self.destination_verifier_address(!is_tron_route);
+        assert!(
+            !(self.production_ready && is_bsc_route && deployment_evidence_sha256.is_none()),
+            "SCCP BSC route manifest production_ready requires deployment_evidence_sha256"
+        );
+        let trim_address_aliases = !(is_bsc_route || is_tron_route);
+        let source_bridge_address = self.source_bridge_address(trim_address_aliases);
+        let destination_verifier_address = self.destination_verifier_address(trim_address_aliases);
         let source_bridge_address = if is_bsc_route {
             Self::normalize_evm_address("source bridge address", &source_bridge_address)
         } else if is_tron_route {
@@ -5425,6 +5454,7 @@ impl SccpRouteManifest {
             verifier_key_hash,
             proof_artifact_hash,
             proving_key_hash,
+            deployment_evidence_sha256,
             destination_binding_key: self.destination_binding_key,
             destination_binding_hash,
             taira_burn_record_settlement_asset_definition_id: self
@@ -5487,6 +5517,7 @@ mod sccp_route_manifest_user_config_tests {
             prover_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
             circuit_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
             proving_key_hash: Some(format!("0x{}", "4d".repeat(32))),
+            deployment_evidence_sha256: Some(format!("0x{}", "4f".repeat(32))),
             destination_binding_key: "evm:0:2:test-binding".to_owned(),
             destination_binding_hash: format!("0x{}", "47".repeat(32)),
             taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
@@ -5572,6 +5603,7 @@ mod sccp_route_manifest_user_config_tests {
             prover_artifact_hash: None,
             circuit_artifact_hash: None,
             proving_key_hash: None,
+            deployment_evidence_sha256: None,
             destination_binding_key,
             destination_binding_hash,
             taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
@@ -5624,7 +5656,7 @@ mod sccp_route_manifest_user_config_tests {
         let mut manifest = route_manifest();
         manifest.sccp_bsc_source_bridge_address = None;
         manifest.sccp_bsc_destination_verifier_address = None;
-        manifest.source_bridge_address = Some(format!(" {SOURCE_BRIDGE} "));
+        manifest.source_bridge_address = Some(SOURCE_BRIDGE.to_owned());
         manifest.destination_verifier_address = Some(VERIFIER.to_owned());
 
         let actual = manifest.parse();
@@ -5672,13 +5704,26 @@ mod sccp_route_manifest_user_config_tests {
     }
 
     #[test]
-    fn bsc_route_chain_id_hex_is_normalized_to_testnet() {
+    fn bsc_route_chain_id_hex_is_preserved_when_canonical() {
         let mut manifest = route_manifest();
-        manifest.chain_id_hex = " 0X61 ".to_owned();
+        manifest.chain_id_hex = "0x61".to_owned();
 
         let actual = manifest.parse();
 
         assert_eq!(actual.chain_id_hex, "0x61");
+        assert_eq!(
+            actual.deployment_evidence_sha256.as_deref(),
+            Some(format!("0x{}", "4f".repeat(32)).as_str())
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "chain_id_hex must be BSC testnet 0x61")]
+    fn bsc_route_rejects_noncanonical_chain_id_hex() {
+        let mut manifest = route_manifest();
+        manifest.chain_id_hex = "0X61".to_owned();
+
+        let _ = manifest.parse();
     }
 
     #[test]
@@ -5737,6 +5782,24 @@ mod sccp_route_manifest_user_config_tests {
         manifest.prover_artifact_hash = None;
         manifest.circuit_artifact_hash = None;
         manifest.proving_key_hash = None;
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "production_ready requires deployment_evidence_sha256")]
+    fn production_ready_bsc_route_requires_deployment_evidence_hash() {
+        let mut manifest = production_ready_route_manifest();
+        manifest.deployment_evidence_sha256 = None;
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "deployment_evidence_sha256 must be non-zero")]
+    fn bsc_route_rejects_zero_deployment_evidence_hash() {
+        let mut manifest = route_manifest();
+        manifest.deployment_evidence_sha256 = Some(format!("0x{}", "00".repeat(32)));
 
         let _ = manifest.parse();
     }
@@ -5837,20 +5900,20 @@ mod sccp_route_manifest_user_config_tests {
     #[test]
     fn production_ready_bsc_route_with_post_deploy_evidence_parses() {
         let mut manifest = production_ready_route_manifest();
-        manifest.network_id_hex = format!("0x{}", "AB".repeat(32));
-        manifest.taira_xor_token_address = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned();
+        manifest.network_id_hex = format!("0x{}", "ab".repeat(32));
+        manifest.taira_xor_token_address = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned();
         manifest.taira_xor_bridge_address = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned();
         manifest.sccp_bsc_source_bridge_address =
-            Some("0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC".to_owned());
+            Some("0xcccccccccccccccccccccccccccccccccccccccc".to_owned());
         manifest.sccp_bsc_destination_verifier_address =
-            Some("0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD".to_owned());
-        manifest.verifier_code_hash = format!("0x{}", "A1".repeat(32));
-        manifest.verifier_key_hash = format!("0x{}", "B2".repeat(32));
-        manifest.destination_binding_hash = format!("0x{}", "C3".repeat(32));
-        manifest.proof_artifact_hash = Some(format!("0x{}", "D4".repeat(32)));
-        manifest.prover_artifact_hash = Some(format!("0x{}", "D4".repeat(32)));
-        manifest.circuit_artifact_hash = Some(format!("0x{}", "D4".repeat(32)));
-        manifest.proving_key_hash = Some(format!("0x{}", "E5".repeat(32)));
+            Some("0xdddddddddddddddddddddddddddddddddddddddd".to_owned());
+        manifest.verifier_code_hash = format!("0x{}", "a1".repeat(32));
+        manifest.verifier_key_hash = format!("0x{}", "b2".repeat(32));
+        manifest.destination_binding_hash = format!("0x{}", "c3".repeat(32));
+        manifest.proof_artifact_hash = Some(format!("0x{}", "d4".repeat(32)));
+        manifest.prover_artifact_hash = Some(format!("0x{}", "d4".repeat(32)));
+        manifest.circuit_artifact_hash = Some(format!("0x{}", "d4".repeat(32)));
+        manifest.proving_key_hash = Some(format!("0x{}", "e5".repeat(32)));
 
         let actual = manifest.parse();
 
@@ -5874,14 +5937,14 @@ mod sccp_route_manifest_user_config_tests {
     #[test]
     fn production_ready_tron_route_with_post_deploy_evidence_parses() {
         let mut manifest = production_ready_tron_route_manifest();
-        manifest.chain_id_hex = " 0X2B6653DC ".to_owned();
+        manifest.chain_id_hex = "0x2b6653dc".to_owned();
         manifest.network_id_hex =
-            " 0X000000000000000000000000000000000000000000000000000000002B6653DC ".to_owned();
-        manifest.verifier_code_hash = format!("0X{}", "AB".repeat(32));
-        manifest.verifier_key_hash = format!("0X{}", "AC".repeat(32));
+            "0x000000000000000000000000000000000000000000000000000000002b6653dc".to_owned();
+        manifest.verifier_code_hash = format!("0x{}", "ab".repeat(32));
+        manifest.verifier_key_hash = format!("0x{}", "ac".repeat(32));
         manifest.destination_binding_hash =
-            " 0X4C5B208D148CEE784D611F77434A7DFAC6B22A37B86FAF82063D371BA7D3A1BC ".to_owned();
-        manifest.post_deploy_source_bridge_config_hash = Some(format!(" 0X{} ", "B1".repeat(32)));
+            "0x4c5b208d148cee784d611f77434a7dfac6b22a37b86faf82063d371ba7d3a1bc".to_owned();
+        manifest.post_deploy_source_bridge_config_hash = Some(format!("0x{}", "b1".repeat(32)));
 
         let actual = manifest.parse();
 
@@ -5905,6 +5968,97 @@ mod sccp_route_manifest_user_config_tests {
         assert_eq!(actual.post_deploy_source_event_explorer_url, None);
         assert_eq!(actual.proof_artifact_hash, None);
         assert_eq!(actual.proving_key_hash, None);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "network_id_hex must be a 0x-prefixed 32-byte hex value using canonical lowercase spelling"
+    )]
+    fn bsc_route_rejects_uppercase_manifest_hashes() {
+        let mut manifest = route_manifest();
+        manifest.network_id_hex = format!("0x{}", "AB".repeat(32));
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "taira_xor_token_address must be a 0x-prefixed 20-byte EVM address using canonical lowercase spelling"
+    )]
+    fn bsc_route_rejects_uppercase_evm_addresses() {
+        let mut manifest = route_manifest();
+        manifest.taira_xor_token_address = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "source bridge address must be a 0x-prefixed 20-byte EVM address using canonical lowercase spelling"
+    )]
+    fn bsc_route_rejects_whitespace_wrapped_evm_address_aliases() {
+        let mut manifest = route_manifest();
+        manifest.sccp_bsc_source_bridge_address = Some(format!(" {SOURCE_BRIDGE} "));
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "proof_artifact_hash must be a 0x-prefixed 32-byte hex value using canonical lowercase spelling"
+    )]
+    fn bsc_route_rejects_whitespace_wrapped_proof_hashes() {
+        let mut manifest = route_manifest();
+        let proof_hash = format!(" 0x{} ", "5c".repeat(32));
+        manifest.proof_artifact_hash = Some(proof_hash.clone());
+        manifest.prover_artifact_hash = Some(proof_hash.clone());
+        manifest.circuit_artifact_hash = Some(proof_hash);
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "deployment_evidence_sha256 must be a 0x-prefixed 32-byte hex value using canonical lowercase spelling"
+    )]
+    fn bsc_route_rejects_repeated_hash_prefix() {
+        let mut manifest = route_manifest();
+        manifest.deployment_evidence_sha256 = Some(format!("0x0x{}", "4f".repeat(31)));
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "chain_id_hex must be a 0x-prefixed hex value using canonical lowercase spelling"
+    )]
+    fn tron_route_rejects_uppercase_chain_id_hex() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.chain_id_hex = "0X2B6653DC".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "verifier_code_hash must be a 0x-prefixed 32-byte hex value using canonical lowercase spelling"
+    )]
+    fn tron_route_rejects_uppercase_manifest_hashes() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.verifier_code_hash = format!("0x{}", "AB".repeat(32));
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "post_deploy_source_bridge_config_hash must be a 0x-prefixed 32-byte hex value using canonical lowercase spelling"
+    )]
+    fn tron_route_rejects_whitespace_wrapped_post_deploy_hashes() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.post_deploy_source_bridge_config_hash = Some(format!(" 0x{} ", "b1".repeat(32)));
+
+        let _ = manifest.parse();
     }
 
     #[test]
@@ -21629,11 +21783,13 @@ mod sorafs_repair_gc_tests {
 
         let default_repair = SorafsRepair::default().parse();
         assert_eq!(
-            default_repair.auditor_rate_per_sec.map(|value| value.get()),
+            default_repair
+                .auditor_rate_per_sec
+                .map(std::num::NonZeroU32::get),
             defaults::sorafs::repair::AUDITOR_RATE_PER_SEC
         );
         assert_eq!(
-            default_repair.auditor_burst.map(|value| value.get()),
+            default_repair.auditor_burst.map(std::num::NonZeroU32::get),
             defaults::sorafs::repair::AUDITOR_BURST
         );
 

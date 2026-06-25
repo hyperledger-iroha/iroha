@@ -632,7 +632,7 @@ const normalizeHexInput = (value, label, byteLength = null) => {
   if (value.trim() !== value) {
     throw new TypeError(`${label} must be canonical hex`);
   }
-  const trimmed = value.replace(/^0x/i, "").toLowerCase();
+  const trimmed = value.startsWith("0x") ? value.slice(2) : value;
   if (!trimmed || /[^0-9a-f]/.test(trimmed) || trimmed.length % 2 !== 0) {
     throw new TypeError(`${label} must be canonical hex`);
   }
@@ -647,6 +647,28 @@ const hexToBytes = (value, label, byteLength = null) => {
   const out = new Uint8Array(normalized.length / 2);
   for (let index = 0; index < normalized.length; index += 2) {
     out[index / 2] = Number.parseInt(normalized.slice(index, index + 2), 16);
+  }
+  return out;
+};
+
+const hexToBytesAllowingCase = (value, label, byteLength = null) => {
+  if (typeof value !== "string") {
+    throw new TypeError(`${label} must be a hex string`);
+  }
+  if (value.trim() !== value) {
+    throw new TypeError(`${label} must be canonical hex`);
+  }
+  const trimmed =
+    value.startsWith("0x") || value.startsWith("0X") ? value.slice(2) : value;
+  if (!trimmed || /[^0-9a-fA-F]/u.test(trimmed) || trimmed.length % 2 !== 0) {
+    throw new TypeError(`${label} must be canonical hex`);
+  }
+  if (byteLength !== null && trimmed.length !== byteLength * 2) {
+    throw new TypeError(`${label} must be ${byteLength} bytes`);
+  }
+  const out = new Uint8Array(trimmed.length / 2);
+  for (let index = 0; index < trimmed.length; index += 2) {
+    out[index / 2] = Number.parseInt(trimmed.slice(index, index + 2), 16);
   }
   return out;
 };
@@ -1540,7 +1562,16 @@ const normalizeNonZeroHex32 = (value, label) =>
   bytesToHex(nonZeroHex32Bytes(value, label));
 
 const normalizeCanonicalNativeEvmProverBundleHex32 = (value, label) => {
-  const normalized = normalizeNonZeroHex32(value, label);
+  let bytes;
+  try {
+    bytes = hexToBytesAllowingCase(value, label, 32);
+  } catch {
+    return normalizeNonZeroHex32(value, label);
+  }
+  if (bytes.every((byte) => byte === 0)) {
+    throw new TypeError(`${label} must not be zero`);
+  }
+  const normalized = bytesToHex(bytes);
   if (value !== normalized) {
     throw new TypeError(
       `${label} must be canonical lowercase 0x-prefixed 32-byte hex`,
@@ -2361,8 +2392,19 @@ const validateCanonicalEvmHexAddress = (text, label) => {
   }
 };
 
+const normalizeEvmTransactionAddress = (value, label) => {
+  const bytes = hexToBytesAllowingCase(value, label, 20);
+  if (bytes.every((byte) => byte === 0)) {
+    throw new TypeError(`${label} must not be zero`);
+  }
+  return bytesToHex(bytes);
+};
+
 const canonicalEip55HexAddress = (value, label) => {
-  const bytes = nonZeroHexBytes(value, label, 20);
+  const bytes = hexToBytesAllowingCase(value, label, 20);
+  if (bytes.every((byte) => byte === 0)) {
+    throw new TypeError(`${label} must not be zero`);
+  }
   const lowercasePayload = bytesToHex(bytes, false);
   const checksum = keccak_256(textEncoder.encode(lowercasePayload));
   let output = "0x";
@@ -19839,7 +19881,10 @@ export class EthereumMainnetSccp {
     const to =
       explicitTo === undefined || explicitTo === SCCP_OPTIONAL_FIELD_MISSING
         ? boundBridgeAddress
-        : nonZeroHex(explicitTo, "Ethereum mainnet SCCP outbound to", 20);
+        : normalizeEvmTransactionAddress(
+            explicitTo,
+            "Ethereum mainnet SCCP outbound to",
+          );
     if (typeof to !== "string" || !/^0x[0-9a-f]{40}$/iu.test(to)) {
       throw new TypeError(
         "Ethereum mainnet SCCP outbound submission requires a bridge address",
@@ -19854,7 +19899,10 @@ export class EthereumMainnetSccp {
     const from =
       fromInput == null || fromInput === SCCP_OPTIONAL_FIELD_MISSING
         ? undefined
-        : nonZeroHex(fromInput, "Ethereum mainnet SCCP outbound from", 20);
+        : normalizeEvmTransactionAddress(
+            fromInput,
+            "Ethereum mainnet SCCP outbound from",
+          );
     const tx = {
       to,
       data: submission.callDataHex,
@@ -20491,7 +20539,10 @@ export class BscMainnetSccp {
     const to =
       explicitTo === undefined || explicitTo === SCCP_OPTIONAL_FIELD_MISSING
         ? boundBridgeAddress
-        : nonZeroHex(explicitTo, "BSC mainnet SCCP outbound to", 20);
+        : normalizeEvmTransactionAddress(
+            explicitTo,
+            "BSC mainnet SCCP outbound to",
+          );
     if (typeof to !== "string" || !/^0x[0-9a-f]{40}$/iu.test(to)) {
       throw new TypeError(
         "BSC mainnet SCCP outbound submission requires a bridge address",
@@ -20502,13 +20553,18 @@ export class BscMainnetSccp {
         "BSC mainnet SCCP outbound to address must match proofResult.destinationBinding.bridgeAddress",
       );
     }
-    const from = options.from ?? input.from ?? this.defaultFrom;
+    const fromInput = options.from ?? input.from ?? this.defaultFrom;
     const tx = {
       to,
       data: submission.callDataHex,
-      ...(from === undefined || from === SCCP_OPTIONAL_FIELD_MISSING
+      ...(fromInput == null || fromInput === SCCP_OPTIONAL_FIELD_MISSING
         ? {}
-        : { from }),
+        : {
+            from: normalizeEvmTransactionAddress(
+              fromInput,
+              "BSC mainnet SCCP outbound from",
+            ),
+          }),
     };
     return bscJsonRpcRequest(provider, "eth_sendTransaction", [tx]);
   }
@@ -21140,7 +21196,10 @@ export class BscTestnetSccp {
     const to =
       explicitTo === undefined || explicitTo === SCCP_OPTIONAL_FIELD_MISSING
         ? boundBridgeAddress
-        : nonZeroHex(explicitTo, "BSC testnet SCCP outbound to", 20);
+        : normalizeEvmTransactionAddress(
+            explicitTo,
+            "BSC testnet SCCP outbound to",
+          );
     if (typeof to !== "string" || !/^0x[0-9a-f]{40}$/iu.test(to)) {
       throw new TypeError(
         "BSC testnet SCCP outbound submission requires a bridge address",
@@ -21151,14 +21210,19 @@ export class BscTestnetSccp {
         "BSC testnet SCCP outbound to address must match proofResult.destinationBinding.bridgeAddress",
       );
     }
-    const from = options.from ?? input.from ?? this.defaultFrom;
+    const fromInput = options.from ?? input.from ?? this.defaultFrom;
     const tx = {
       to,
       data: submission.callDataHex,
       chainId: "0x61",
-      ...(from === undefined || from === SCCP_OPTIONAL_FIELD_MISSING
+      ...(fromInput == null || fromInput === SCCP_OPTIONAL_FIELD_MISSING
         ? {}
-        : { from }),
+        : {
+            from: normalizeEvmTransactionAddress(
+              fromInput,
+              "BSC testnet SCCP outbound from",
+            ),
+          }),
     };
     requireBscTestnetChainId(tx.chainId);
     return bscTestnetJsonRpcRequest(provider, "eth_sendTransaction", [tx]);

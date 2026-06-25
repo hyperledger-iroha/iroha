@@ -19308,11 +19308,12 @@ async fn block_sync_update_known_block_prunes_commit_votes_without_roster_hint()
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn cache_block_sync_qc_records_commit_qc_history() {
+async fn cache_block_sync_qc_requests_certified_fetch_without_commit_history() {
     use crate::sumeragi::status;
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
 
     let _history_guard = status::commit_history_test_guard();
     status::reset_commit_certs_for_tests();
@@ -19364,10 +19365,22 @@ async fn cache_block_sync_qc_records_commit_qc_history() {
 
     let history = status::commit_qc_history();
     assert!(
-        history
-            .iter()
-            .any(|cert| cert.subject_block_hash == block_hash && cert.height == block_height),
-        "commit certificate should be recorded when caching block sync QC"
+        history.is_empty(),
+        "cached QC-only block sync evidence must not publish a commit frontier before the block body is ready"
+    );
+    assert!(
+        actor
+            .cached_commit_qc_for_block(block_hash, block_height, view)
+            .is_some(),
+        "commit certificate should still be cached for a later certified body"
+    );
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries.iter().any(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Post
+                && entry.msg_kind == Some("CertifiedBlockFetchRequest")
+        }),
+        "cached QC-only block sync evidence should request a certified block body"
     );
 
     harness.shutdown.send();
@@ -176988,7 +177001,8 @@ async fn block_sync_update_future_window_drops_unrequested() {
         parent_hash,
         height,
         view,
-        requested_missing_block
+        requested_missing_block,
+        false
     ));
     harness.shutdown.send();
 }
@@ -177030,7 +177044,8 @@ async fn block_sync_update_future_window_allows_requested() {
         parent_hash,
         height,
         view,
-        requested_missing_block
+        requested_missing_block,
+        false
     ));
     harness.shutdown.send();
 }
@@ -177074,7 +177089,8 @@ async fn block_sync_update_future_window_drops_requested_when_height_exceeds_sta
         parent_hash,
         height,
         view,
-        requested_missing_block
+        requested_missing_block,
+        false
     ));
     harness.shutdown.send();
 }
@@ -177131,7 +177147,8 @@ async fn block_sync_update_future_window_drops_requested_even_with_known_parent_
         Some(parent_hash),
         height,
         view,
-        requested_missing_block
+        requested_missing_block,
+        false
     ));
     harness.shutdown.send();
 }
@@ -177195,7 +177212,8 @@ async fn block_sync_update_future_window_drops_unrequested_when_lower_missing_he
         Some(parent_hash),
         far_height,
         view,
-        requested_missing_block
+        requested_missing_block,
+        false
     ));
     harness.shutdown.send();
 }
@@ -177235,7 +177253,8 @@ async fn block_sync_update_future_window_allows_known_block() {
         parent_hash,
         height,
         view,
-        requested_missing_block
+        requested_missing_block,
+        false
     ));
     harness.shutdown.send();
 }
@@ -177280,8 +177299,177 @@ async fn block_sync_update_future_window_allows_known_parent() {
         Some(parent_hash),
         height,
         view,
-        requested_missing_block
+        requested_missing_block,
+        false
     ));
+    harness.shutdown.send();
+}
+
+#[tokio::test]
+async fn block_sync_update_future_window_allows_commit_evidence_during_frontier_range_pull() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.gating.future_height_window = 1;
+    consensus_cfg.gating.future_view_window = 0;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
+    let actor = &mut harness.actor;
+    actor.config.recovery.missing_request_stale_height_margin = 1;
+
+    let local_height = actor.last_committed_height;
+    let view = 0;
+    let frontier_height = local_height.saturating_add(1);
+    let missing_hash = sample_block(frontier_height, view, None).hash();
+    let inserted = super::touch_missing_block_request(
+        &mut actor.pending.missing_block_requests,
+        missing_hash,
+        frontier_height,
+        view,
+        crate::sumeragi::consensus::Phase::Commit,
+        super::MissingBlockPriority::Background,
+        Instant::now(),
+        Duration::from_secs(1),
+        None,
+    );
+    assert!(inserted, "frontier missing dependency should be tracked");
+
+    let pull_requested = actor.request_range_pull_from_anchor_with_tier(
+        frontier_height,
+        "rbc_far_future_missing_block",
+        Instant::now(),
+        Some(super::RangePullCandidateTier::CommitTopology),
+    );
+    assert!(pull_requested, "frontier range pull should be emitted");
+
+    let parent_height = local_height.saturating_add(3);
+    let parent_block = sample_block(parent_height, view, None);
+    let parent_hash = parent_block.hash();
+    actor.pending.pending_blocks.insert(
+        parent_hash,
+        PendingBlock::new(
+            parent_block,
+            Hash::prehashed([0xAD; Hash::LENGTH]),
+            parent_height,
+            view,
+        ),
+    );
+    let far_height = parent_height.saturating_add(1);
+    let far_block = sample_block(far_height, view, Some(parent_hash));
+    let far_hash = far_block.hash();
+    let requested_missing_block = actor.pending.missing_block_requests.contains_key(&far_hash);
+
+    assert!(
+        actor.should_drop_future_block_sync_update(
+            &far_hash,
+            Some(parent_hash),
+            far_height,
+            view,
+            requested_missing_block,
+            false
+        ),
+        "non-certified far updates should remain blocked by the lower unresolved frontier"
+    );
+    assert!(
+        !actor.should_drop_future_block_sync_update(
+            &far_hash,
+            Some(parent_hash),
+            far_height,
+            view,
+            requested_missing_block,
+            true
+        ),
+        "commit-certified range responses should pass while the frontier range pull is active"
+    );
+    harness.shutdown.send();
+}
+
+#[tokio::test]
+async fn certified_block_sync_update_with_missing_parent_defers_without_static_validation() {
+    let mut harness =
+        test_actor_harness_with_config_and_height(4, test_sumeragi_config(), None, 5).await;
+    let actor = &mut harness.actor;
+
+    let local_height = actor.committed_height_snapshot();
+    let view = 0;
+    let frontier_height = local_height.saturating_add(1);
+    let frontier_hash = sample_block(frontier_height, view, None).hash();
+    let inserted = super::touch_missing_block_request(
+        &mut actor.pending.missing_block_requests,
+        frontier_hash,
+        frontier_height,
+        view,
+        crate::sumeragi::consensus::Phase::Commit,
+        super::MissingBlockPriority::Background,
+        Instant::now(),
+        Duration::from_secs(1),
+        None,
+    );
+    assert!(inserted, "frontier missing dependency should be tracked");
+    assert!(
+        actor.request_range_pull_from_anchor_with_tier(
+            frontier_height,
+            "rbc_far_future_missing_block",
+            Instant::now(),
+            Some(super::RangePullCandidateTier::CommitTopology),
+        ),
+        "frontier range pull should be active for certified far-ahead responses"
+    );
+    let parent_height = local_height.saturating_add(2);
+    let parent_hash = sample_block(parent_height, view, None).hash();
+    let height = parent_height.saturating_add(1);
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+
+    assert!(
+        !actor.block_known_locally(parent_hash),
+        "test requires the certified update's parent to be missing locally"
+    );
+    assert!(
+        !actor.block_known_locally(block_hash),
+        "test requires an unknown far-ahead block"
+    );
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = topology.min_votes_for_commit().max(1);
+    let signers: BTreeSet<ValidatorIndex> = (0..required)
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let qc = qc_with_bitmap_for_actor(
+        actor,
+        block_hash,
+        height,
+        view,
+        actor.epoch_for_height(height),
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint = certified_fetch_checkpoint_for_qc(&qc);
+
+    let mut update = super::message::BlockSyncUpdate::from(&block);
+    update.commit_qc = Some(qc);
+    update.validator_checkpoint = Some(checkpoint);
+    update.commit_votes.clear();
+
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("certified parent-gap block sync update should defer");
+
+    let deferred = actor
+        .deferred_block_sync_updates
+        .get(&(height, view, block_hash))
+        .expect("far-ahead certified payload should wait in the deferred block-sync queue");
+    assert!(
+        deferred.update.commit_qc.is_some(),
+        "deferred far-ahead payload should preserve its commit proof"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "far-ahead payload must not enter normal validation before its parent is local"
+    );
+
     harness.shutdown.send();
 }
 
@@ -209016,6 +209204,255 @@ async fn pending_rbc_slot_eviction_releases_block_payload_dedup() {
     assert!(!guard.contains(&ready_key));
     assert!(!guard.contains(&deliver_key));
     assert!(!guard.contains(&chunk_key));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pending_rbc_ttl_sweep_evicts_quiet_stale_stash_without_new_rbc_traffic() {
+    let _rbc_guard = super::status::rbc_status_test_guard();
+    super::status::reset_pending_rbc_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.rbc.pending_ttl = Duration::from_millis(1);
+
+    let key = pending_session_key(1);
+    let dedup_keys = insert_pending_rbc_stash_with_dedup(actor, key, 0x60);
+    let stale_seen = Instant::now()
+        .checked_sub(Duration::from_millis(50))
+        .unwrap_or_else(Instant::now);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .pending
+        .get_mut(&key)
+        .expect("pending RBC stash inserted")
+        .touch(stale_seen);
+    actor.publish_rbc_backlog_snapshot();
+
+    assert!(
+        actor.has_unresolved_rbc_backlog(),
+        "quiet pending RBC stash should be visible as unresolved backlog before TTL sweep"
+    );
+    assert!(
+        actor.prune_expired_pending_rbc(),
+        "periodic sweep should evict stale pending RBC without waiting for another RBC message"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "stale pending RBC stash should be removed"
+    );
+    assert_block_payload_dedup_keys_absent(
+        actor,
+        &dedup_keys,
+        "periodic pending RBC TTL sweep should release dedup state",
+    );
+    assert!(
+        !actor.has_unresolved_rbc_backlog(),
+        "expired quiet pending RBC stash must not keep backlog pressure active"
+    );
+    assert_eq!(
+        super::status::pending_rbc_snapshot().sessions,
+        0,
+        "operator pending-RBC snapshot should reflect TTL eviction"
+    );
+
+    super::status::reset_pending_rbc_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pending_rbc_ttl_sweep_is_disabled_when_ttl_is_zero() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.rbc.pending_ttl = Duration::ZERO;
+
+    let key = pending_session_key(2);
+    let dedup_keys = insert_pending_rbc_stash_with_dedup(actor, key, 0x62);
+    let stale_seen = Instant::now()
+        .checked_sub(Duration::from_secs(300))
+        .unwrap_or_else(Instant::now);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .pending
+        .get_mut(&key)
+        .expect("pending RBC stash inserted")
+        .touch(stale_seen);
+
+    assert!(
+        !actor.prune_expired_pending_rbc(),
+        "zero pending TTL should disable periodic pending-RBC eviction"
+    );
+    assert!(
+        actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "pending RBC stash should remain when TTL eviction is disabled"
+    );
+    assert_block_payload_dedup_keys_present(
+        actor,
+        &dedup_keys,
+        "disabled pending-RBC TTL sweep should retain dedup state",
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pending_rbc_ttl_sweep_evicts_all_expired_quiet_stashes_in_one_pass() {
+    let _rbc_guard = super::status::rbc_status_test_guard();
+    super::status::reset_pending_rbc_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.rbc.pending_ttl = Duration::from_secs(60);
+
+    let stale_a = pending_session_key(3);
+    let stale_b = pending_session_key(4);
+    let fresh = pending_session_key(5);
+    let stale_a_dedup = insert_pending_rbc_stash_with_dedup(actor, stale_a, 0x63);
+    let stale_b_dedup = insert_pending_rbc_stash_with_dedup(actor, stale_b, 0x64);
+    let fresh_dedup = insert_pending_rbc_stash_with_dedup(actor, fresh, 0x65);
+    let stale_seen = Instant::now()
+        .checked_sub(Duration::from_secs(120))
+        .unwrap_or_else(Instant::now);
+    for key in [stale_a, stale_b] {
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .pending
+            .get_mut(&key)
+            .expect("pending RBC stash inserted")
+            .touch(stale_seen);
+    }
+
+    assert!(
+        actor.prune_expired_pending_rbc(),
+        "periodic sweep should evict every expired pending RBC stash"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.rbc.pending.contains_key(&stale_a),
+        "first expired pending RBC stash should be removed"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.rbc.pending.contains_key(&stale_b),
+        "second expired pending RBC stash should be removed"
+    );
+    assert!(
+        actor.subsystems.da_rbc.rbc.pending.contains_key(&fresh),
+        "fresh pending RBC stash should be retained"
+    );
+    assert_block_payload_dedup_keys_absent(
+        actor,
+        &stale_a_dedup,
+        "periodic pending-RBC TTL sweep should release first expired stash dedup",
+    );
+    assert_block_payload_dedup_keys_absent(
+        actor,
+        &stale_b_dedup,
+        "periodic pending-RBC TTL sweep should release second expired stash dedup",
+    );
+    assert_block_payload_dedup_keys_present(
+        actor,
+        &fresh_dedup,
+        "periodic pending-RBC TTL sweep should keep fresh stash dedup",
+    );
+    assert_eq!(
+        super::status::pending_rbc_snapshot().sessions,
+        1,
+        "operator pending-RBC snapshot should retain only the fresh stash"
+    );
+
+    super::status::reset_pending_rbc_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn tick_prunes_quiet_expired_pending_rbc_without_new_rbc_traffic() {
+    let _rbc_guard = super::status::rbc_status_test_guard();
+    super::status::reset_pending_rbc_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.rbc.pending_ttl = Duration::from_secs(60);
+
+    let key = pending_session_key(6);
+    let dedup_keys = insert_pending_rbc_stash_with_dedup(actor, key, 0x66);
+    let stale_seen = Instant::now()
+        .checked_sub(Duration::from_secs(120))
+        .unwrap_or_else(Instant::now);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .pending
+        .get_mut(&key)
+        .expect("pending RBC stash inserted")
+        .touch(stale_seen);
+    actor.publish_rbc_backlog_snapshot();
+
+    assert!(
+        actor.tick(),
+        "actor tick should report progress when it prunes expired pending RBC"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "periodic actor tick should remove expired quiet pending RBC stash"
+    );
+    assert_block_payload_dedup_keys_absent(
+        actor,
+        &dedup_keys,
+        "tick-driven pending-RBC TTL sweep should release dedup state",
+    );
+    assert!(
+        !actor.has_unresolved_rbc_backlog(),
+        "tick-driven pending-RBC TTL sweep must clear stale backlog pressure"
+    );
+
+    super::status::reset_pending_rbc_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pending_rbc_ttl_sweep_retains_stash_with_active_session() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.rbc.pending_ttl = Duration::from_millis(1);
+
+    let key = pending_session_key(1);
+    let dedup_keys = insert_pending_rbc_stash_with_dedup(actor, key, 0x61);
+    let stale_seen = Instant::now()
+        .checked_sub(Duration::from_millis(50))
+        .unwrap_or_else(Instant::now);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .pending
+        .get_mut(&key)
+        .expect("pending RBC stash inserted")
+        .touch(stale_seen);
+    actor.subsystems.da_rbc.rbc.sessions.insert(
+        key,
+        RbcSession::test_new(1, None, None, actor.epoch_for_height(key.1)),
+    );
+
+    assert!(
+        !actor.prune_expired_pending_rbc(),
+        "active RBC sessions should retain their pending stash past pending TTL"
+    );
+    assert!(
+        actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "active-session pending RBC stash should be retained"
+    );
+    assert_block_payload_dedup_keys_present(
+        actor,
+        &dedup_keys,
+        "retained active-session pending RBC stash should keep dedup state",
+    );
 
     harness.shutdown.send();
 }

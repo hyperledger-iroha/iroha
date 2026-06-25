@@ -3837,16 +3837,16 @@ def test_solana_source_state_prover_wraps_linked_accounts_lt_hash_proofs() -> No
             "source_state_verifier_id": request["source_state_verifier_id"],
             "source_state_verifier_hash": request[
                 "source_state_verifier_hash"
-            ].upper(),
+            ],
             "accounts_lt_hash_proof_public_inputs_hash": request[
                 "accounts_lt_hash_proof_public_inputs_hash"
-            ].upper(),
+            ],
             "opened_accounts_lt_hash_contributions_hash": request[
                 "opened_accounts_lt_hash_contributions_hash"
-            ].upper(),
+            ],
             "opened_accounts_lt_hash_residual_checksum": request[
                 "opened_accounts_lt_hash_residual_checksum"
-            ].upper(),
+            ],
             "public_input_columns": request["public_input_columns"],
             "fastpq_public_inputs": request["fastpq_public_inputs"],
             "fastpq_transitions": request["fastpq_transitions"],
@@ -3872,26 +3872,23 @@ def test_solana_source_state_prover_wraps_linked_accounts_lt_hash_proofs() -> No
     def prove_fastpq_aliases(
         request: Mapping[str, Any], _options: Mapping[str, Any]
     ) -> Mapping[str, Any]:
-        def upper_hex(value: str) -> str:
-            return value if value == "0x" else value.upper()
-
         fastpq = request["fastpq_public_inputs"]
         return {
             "proof_bytes": b"\x07\x08\x09",
             "fastpqPublicInputs": {
-                "dsid": fastpq["dsid"].upper(),
+                "dsid": fastpq["dsid"],
                 "slot": int(fastpq["slot"]),
-                "oldRoot": fastpq["old_root"].upper(),
-                "newRoot": fastpq["new_root"].upper(),
-                "permRoot": fastpq["perm_root"].upper(),
-                "txSetHash": fastpq["tx_set_hash"].upper(),
+                "oldRoot": fastpq["old_root"],
+                "newRoot": fastpq["new_root"],
+                "permRoot": fastpq["perm_root"],
+                "txSetHash": fastpq["tx_set_hash"],
             },
             "fastpqTransitions": [
                 {
                     "key": transition["key"],
                     "operation": transition["operation"],
-                    "oldValue": upper_hex(transition["old_value"]),
-                    "newValue": upper_hex(transition["new_value"]),
+                    "oldValue": transition["old_value"],
+                    "newValue": transition["new_value"],
                 }
                 for transition in request["fastpq_transitions"]
             ],
@@ -4097,22 +4094,22 @@ def test_solana_source_state_prover_wraps_full_light_audit_role_proofs() -> None
             "source_domain": str(request["source_domain"]),
             "finalized_slot": int(request["finalized_slot"]),
             "verifier_id": request["verifier_id"],
-            "verifier_hash": request["verifier_hash"].upper(),
+            "verifier_hash": request["verifier_hash"],
             "source_state_verifier_id": request["source_state_verifier_id"],
             "source_state_verifier_hash": request[
                 "source_state_verifier_hash"
-            ].upper(),
+            ],
             "source_verifier_material_hash": request[
                 "source_verifier_material_hash"
-            ].upper(),
+            ],
             "source_adapter_deployment_hash": request[
                 "source_adapter_deployment_hash"
-            ].upper(),
-            "full_light_client_gate_hash": request["full_light_client_gate_hash"].upper(),
-            "finality_context_hash": request["finality_context_hash"].upper(),
-            "vote_message_hash": request["vote_message_hash"].upper(),
-            "accounts_lt_hash_proof_hash": request["accounts_lt_hash_proof_hash"].upper(),
-            "audit_statement_hash": request["audit_statement_hash"].upper(),
+            ],
+            "full_light_client_gate_hash": request["full_light_client_gate_hash"],
+            "finality_context_hash": request["finality_context_hash"],
+            "vote_message_hash": request["vote_message_hash"],
+            "accounts_lt_hash_proof_hash": request["accounts_lt_hash_proof_hash"],
+            "audit_statement_hash": request["audit_statement_hash"],
             "public_input_columns": request["public_input_columns"],
             "fastpq_public_inputs": request["fastpq_public_inputs"],
             "fastpq_transitions": request["fastpq_transitions"],
@@ -10820,6 +10817,48 @@ def test_builds_evm_family_sccp_groth16_proof_request_with_public_signals() -> N
             build_evm_sccp_proof_request(
                 sample_evm_request_input(proof_context=bad_context)
             )
+
+
+def test_sccp_proof_request_hex_inputs_reject_noncanonical_case() -> None:
+    for payload_hash in (
+        "0X" + "22" * 32,
+        "0x" + "AA" * 32,
+        "AA" * 32,
+    ):
+        with pytest.raises(
+            TypeError,
+            match=r"publicInputs\.payloadHash must be canonical hex",
+        ):
+            build_evm_sccp_proof_request(
+                sample_evm_request_input(
+                    public_inputs=sample_evm_public_inputs(payload_hash=payload_hash)
+                )
+            )
+
+    with pytest.raises(TypeError, match="statementHash must be canonical hex"):
+        build_evm_sccp_proof_request(
+            sample_evm_request_input(statement_hash="0X" + "55" * 32)
+        )
+    with pytest.raises(
+        TypeError,
+        match=r"proof request\.proofArtifactHash must be canonical hex",
+    ):
+        build_evm_sccp_proof_request(
+            sample_evm_request_input(
+                proofArtifactHash="0x" + "AA" * 32,
+                provingKeyHash="0x" + "92" * 32,
+            )
+        )
+    with pytest.raises(
+        TypeError,
+        match=r"proof request\.provingKeyHash must be canonical hex",
+    ):
+        build_evm_sccp_proof_request(
+            sample_evm_request_input(
+                proofArtifactHash="91" * 32,
+                provingKeyHash="0X" + "92" * 32,
+            )
+        )
 
 
 def test_sccp_proof_requests_reject_all_zero_source_proof_bytes() -> None:

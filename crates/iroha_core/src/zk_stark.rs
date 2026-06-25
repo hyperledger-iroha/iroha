@@ -2295,6 +2295,64 @@ mod tests {
         bfv_full_bootstrap_stark_test_prover_input_material_for_slot(0)
     }
 
+    fn bfv_full_bootstrap_stark_test_release_audit_package_and_digest(
+        params: &iroha_crypto::BfvParameters,
+        material: &iroha_crypto::BfvFullBootstrapCircuitMaterialV1,
+        artifacts: &iroha_crypto::BfvFullBootstrapCircuitArtifactBundleV1,
+        reviewer_key_pair: &iroha_crypto::KeyPair,
+    ) -> (
+        iroha_crypto::BfvFullBootstrapReleaseAuditPackageV1,
+        iroha_crypto::Hash,
+    ) {
+        let (generated_report_bytes, generated_archive_bytes) =
+            iroha_crypto::bfv_full_bootstrap_release_audit_report_and_archive_bytes_for_artifacts_v1(
+                params, material, artifacts,
+            )
+            .expect("sample full-bootstrap release audit generated report/archive bytes");
+        let generated_report_body = generated_report_bytes
+            .strip_prefix(iroha_crypto::BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1)
+            .expect("generated report bytes carry canonical header");
+        let generated_archive_body = generated_archive_bytes
+            .strip_prefix(iroha_crypto::BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1)
+            .expect("generated archive bytes carry canonical header");
+        let report_suffix = generated_report_body
+            .strip_prefix(b"machine-generated BFV full-bootstrap release audit report inventory v1")
+            .expect("generated report body carries deterministic inventory prefix");
+        let archive_suffix = generated_archive_body
+            .strip_prefix(
+                b"machine-generated BFV full-bootstrap release evidence archive inventory v1",
+            )
+            .expect("generated archive body carries deterministic inventory prefix");
+        let report_body = [
+            b"external-review-approved: reviewer-id=sora-zk-audit-wg-2026 independent BFV full-bootstrap release audit report v1"
+                .as_slice(),
+            report_suffix,
+        ]
+        .concat();
+        let archive_body = [
+            b"external-review-evidence-archive: reviewer-id=sora-zk-audit-wg-2026 independent BFV full-bootstrap prover verifier evidence v1"
+                .as_slice(),
+            archive_suffix,
+        ]
+        .concat();
+        let report_bytes =
+            iroha_crypto::bfv_full_bootstrap_release_audit_report_bytes_v1(&report_body)
+                .expect("sample external-review report bytes");
+        let archive_bytes =
+            iroha_crypto::bfv_full_bootstrap_release_audit_archive_bytes_v1(&archive_body)
+                .expect("sample external-review archive bytes");
+        iroha_crypto::bfv_full_bootstrap_release_audit_external_review_package_and_digest_v1(
+            params,
+            material,
+            artifacts,
+            &report_bytes,
+            &archive_bytes,
+            "sora-zk-audit-wg-2026",
+            reviewer_key_pair.private_key(),
+        )
+        .expect("sample external-review full-bootstrap release audit package and digest")
+    }
+
     fn bfv_full_bootstrap_stark_test_prover_input_material_for_slot(
         slot_index: u32,
     ) -> iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1 {
@@ -2316,7 +2374,7 @@ mod tests {
         let bootstrap_key = iroha_crypto::full_bootstrap_key_from_material_v1(
             &params,
             &public_key,
-            "zk-stark-bfv-full-bootstrap-key",
+            "zk-stark-bfv-full-bootstrap-refresh-key",
             material.clone(),
         )
         .expect("full-bootstrap key");
@@ -2350,20 +2408,13 @@ mod tests {
         let reviewer_key_pair =
             iroha_crypto::KeyPair::try_from_seed(vec![0xC3; 32], iroha_crypto::Algorithm::Ed25519)
                 .expect("fixture seed derives release reviewer keypair");
-        let release_audit_package =
-            iroha_crypto::bfv_full_bootstrap_release_audit_package_for_artifacts_v1(
+        let (release_audit_package, release_audit_package_digest) =
+            bfv_full_bootstrap_stark_test_release_audit_package_and_digest(
                 &params,
                 &material,
                 &artifacts,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.private_key(),
-            )
-            .expect("build canonical full-bootstrap release audit package from governed artifacts");
-        let release_audit_package_digest =
-            iroha_crypto::bfv_full_bootstrap_release_audit_package_digest_v1(
-                &release_audit_package,
-            )
-            .expect("digest full-bootstrap release audit package");
+                &reviewer_key_pair,
+            );
         let output =
             iroha_crypto::full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1(
                 &params,
@@ -2442,27 +2493,23 @@ mod tests {
     }
 
     #[test]
-    fn bfv_full_bootstrap_air_transcript_labels_are_canonical_retry_labels() {
+    fn bfv_full_bootstrap_air_transcript_label_is_canonical_base_label() {
         let base = iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1;
         assert!(bfv_full_bootstrap_stark_air_transcript_label_allowed_v1(
             base
         ));
-        assert!(bfv_full_bootstrap_stark_air_transcript_label_allowed_v1(
-            &format!("{base}:1")
-        ));
-        assert!(bfv_full_bootstrap_stark_air_transcript_label_allowed_v1(
-            &format!(
-                "{}:{}",
-                base,
-                BFV_FULL_BOOTSTRAP_STARK_AIR_TRANSCRIPT_LABEL_ATTEMPTS - 1
-            )
-        ));
 
         for label in [
             format!("{base}:0"),
+            format!("{base}:1"),
             format!("{base}:00"),
             format!("{base}:01"),
             format!("{base}:0001"),
+            format!(
+                "{}:{}",
+                base,
+                BFV_FULL_BOOTSTRAP_STARK_AIR_TRANSCRIPT_LABEL_ATTEMPTS - 1
+            ),
             format!(
                 "{}:{}",
                 base, BFV_FULL_BOOTSTRAP_STARK_AIR_TRANSCRIPT_LABEL_ATTEMPTS
@@ -2509,6 +2556,58 @@ mod tests {
                 witness.bound_mode,
             ),
             "public-padding BFV verifier must accept a generated native AIR envelope without private trace rows"
+        );
+        let expected_base_indices = bfv_full_bootstrap_expected_base_indices_v1(
+            material.proof_input_material.statement_hash,
+            material.arithmetic_trace_material_digest,
+            usize::from(iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1),
+            material.arithmetic_trace_material.rows.len(),
+        )
+        .expect("derive BFV explicit public-padding base indices");
+        let suffixed_label_bytes =
+            prove_stark_fri_air_envelope_from_rows_and_composition_values_with_base_indices_bytes(
+                expected_params.clone(),
+                format!(
+                    "{}:1",
+                    iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1
+                ),
+                iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
+                public_digest,
+                material.arithmetic_trace_material.rows.clone(),
+                material
+                    .arithmetic_air_evaluation_material
+                    .composition_values
+                    .clone(),
+                &expected_base_indices,
+            )
+            .expect("build structurally valid suffixed-label explicit BFV AIR envelope");
+        assert!(
+            verify_stark_fri_air_envelope_from_rows_and_composition_values_with_base_indices_with_limits(
+                &suffixed_label_bytes,
+                &StarkVerifierLimits::default(),
+                iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+                &public_digest,
+                &material.arithmetic_trace_material.rows,
+                &material
+                    .arithmetic_air_evaluation_material
+                    .composition_values,
+                &expected_base_indices,
+            ),
+            "suffixed-label envelope must remain a valid explicit-schedule AIR proof"
+        );
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
+                &suffixed_label_bytes,
+                material.proof_input_material.statement_hash,
+                material.arithmetic_trace_material_digest,
+                witness.slot_index,
+                witness.bound_mode,
+            ),
+            "public-padding BFV verifier must reject suffixed-label alternate proof encodings"
+        );
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_envelope(&suffixed_label_bytes, &material),
+            "artifact-bound BFV verifier must reject suffixed-label alternate proof encodings"
         );
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
@@ -5736,24 +5835,7 @@ fn bfv_full_bootstrap_stark_air_transcript_label_v1(attempt: u32) -> String {
 }
 
 fn bfv_full_bootstrap_stark_air_transcript_label_allowed_v1(label: &str) -> bool {
-    let base = iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1;
-    if label == base {
-        return true;
-    }
-    let Some(suffix) = label
-        .strip_prefix(base)
-        .and_then(|value| value.strip_prefix(':'))
-    else {
-        return false;
-    };
-    if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
-        return false;
-    }
-    suffix.parse::<u32>().is_ok_and(|attempt| {
-        attempt > 0
-            && attempt < BFV_FULL_BOOTSTRAP_STARK_AIR_TRANSCRIPT_LABEL_ATTEMPTS
-            && suffix == attempt.to_string()
-    })
+    label == iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1
 }
 
 fn validate_stark_prover_params(
@@ -6394,10 +6476,13 @@ pub fn prove_stark_fri_zero_composition_air_envelope_bytes(
 /// The proof is synthesized from validated
 /// [`iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1`]. The
 /// wrapper binds the native STARK domain tag to the BFV execution statement
-/// hash and retries deterministic transcript labels until all sampled openings
-/// are public padding rows. Public production proof generation must use the
-/// Soracloud release/audit-aware entry points, which validate caller-owned
-/// governed artifacts before reaching this crate-scoped helper.
+/// hash and uses the crypto-derived explicit public-padding opening schedule.
+/// BFV execution AIR proofs are emitted under the canonical base transcript
+/// label only, so equivalent suffixed-label proof bytes cannot become
+/// alternate encodings of the same governed statement. Public production proof
+/// generation must use the Soracloud release/audit-aware entry points, which
+/// validate caller-owned governed artifacts before reaching this crate-scoped
+/// helper.
 ///
 /// # Errors
 ///

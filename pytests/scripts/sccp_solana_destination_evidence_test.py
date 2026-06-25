@@ -387,6 +387,24 @@ def test_solana_hex_parser_rejects_zero_and_wrong_width():
     else:
         raise AssertionError("padded Solana verifier code hash was accepted")
 
+    for value, expected in (
+        ("33" * 32, "canonical lowercase 0x hex"),
+        ("0X" + "33" * 32, "lowercase 0x prefix"),
+        ("0x" + "AA" * 32, "lowercase hex"),
+    ):
+        try:
+            module.parse_hex_bytes(
+                value,
+                label="verifier code hash",
+                byte_length=32,
+            )
+        except module.argparse.ArgumentTypeError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError(
+                f"noncanonical Solana verifier hash {value!r} was accepted"
+            )
+
     try:
         module.parse_hex_bytes(
             "0x" + "33" * 31,
@@ -424,6 +442,19 @@ def test_solana_program_bytes_parsers_reject_empty_zero_malformed_and_non_elf(tm
         "0x" + b"\x7fELFsol".hex(),
         label="verifier program bytes",
     ) == b"\x7fELFsol"
+    for value, expected in (
+        (b"\x7fELFsol".hex(), "canonical lowercase 0x hex"),
+        ("0X" + b"\x7fELFsol".hex(), "lowercase 0x prefix"),
+        ("0x" + b"\x7fELFsol".hex().upper(), "lowercase hex"),
+    ):
+        try:
+            module.parse_program_bytes_hex(value, label="verifier program bytes")
+        except module.argparse.ArgumentTypeError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError(
+                f"noncanonical Solana verifier program hex {value!r} was accepted"
+            )
     program_file = tmp_path / "verifier.so"
     program_file.write_bytes(b"\x7fELFsol")
     assert module.parse_program_bytes_file(

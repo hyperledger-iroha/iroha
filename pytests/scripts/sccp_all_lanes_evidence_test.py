@@ -938,7 +938,7 @@ def source_material(module, profile, seed):
             )
             record["_comment_evm_source_deployment_transaction_input_sha256"] = hex32(
                 seed + 30
-            )[2:]
+            )
             record["_comment_evm_source_deployment_receipt_status"] = "0x1"
             record["_comment_evm_source_deployment_contract_address"] = record[
                 "source_bridge_emitter_address"
@@ -2480,6 +2480,39 @@ def test_all_lanes_evidence_bundle_is_ready():
         assert route["route_canary"]["evidence_bound"] is True
 
 
+def test_all_lanes_evidence_rejects_bare_fixed_hex_aliases():
+    module = load_evidence_module()
+    source_records = complete_bundle(module)
+    eth_material = source_records["sccp_source_verifier_materials"][0]
+    eth_material["source_trust_anchor_hash"] = eth_material[
+        "source_trust_anchor_hash"
+    ][2:]
+
+    source_summary = module.validate_evidence_bundle(source_records)
+
+    source_blockers = "\n".join(source_summary["blockers"])
+    assert source_summary["production_ready"] is False
+    assert (
+        "domain 1 (eth): source_trust_anchor_hash must be a non-zero "
+        "32-byte hex value"
+    ) in source_blockers
+
+    route_records = complete_bundle(module)
+    eth_route = route_records["sccp_route_allowlists"][0]
+    eth_route["_comment_route_canary_evidence_hash"] = eth_route[
+        "_comment_route_canary_evidence_hash"
+    ][2:]
+
+    route_summary = module.validate_evidence_bundle(route_records)
+
+    route_blockers = "\n".join(route_summary["blockers"])
+    assert route_summary["production_ready"] is False
+    assert (
+        "domain 1 (eth): route canary evidence hash metadata must be a "
+        "non-zero bytes32"
+    ) in route_blockers
+
+
 def test_all_lanes_evidence_accepts_config_route_canary_fields():
     module = load_evidence_module()
     records = complete_bundle(module)
@@ -3831,7 +3864,7 @@ def test_all_lanes_accepts_verified_evm_source_live_toml(tmp_path):
         in source_toml
     )
     assert (
-        '# sccp_evm_source_deployment_transaction_input_sha256 = "'
+        '# sccp_evm_source_deployment_transaction_input_sha256 = "0x'
         + hashlib.sha256(fake.deployment_input).hexdigest()
         + '"'
         in source_toml
@@ -3968,7 +4001,7 @@ def test_all_lanes_accepts_direct_evm_source_toml_with_audited_metadata(tmp_path
         material["_comment_evm_source_deployment_transaction_block_number"]
     )
     args.deployment_transaction_input_sha256 = raw_hex(
-        "0x" + material["_comment_evm_source_deployment_transaction_input_sha256"]
+        material["_comment_evm_source_deployment_transaction_input_sha256"]
     )
     args.deployment_receipt_contract_address = raw_hex(
         material["_comment_evm_source_deployment_contract_address"]
@@ -7424,6 +7457,46 @@ def test_all_lanes_release_checklist_reports_ready_bundle():
     assert all(item["ready"] for item in items.values())
 
 
+def test_all_lanes_public_summary_accepts_active_ready_with_future_lane_blockers():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    active_domain = module.SCCP_DOMAIN_ETH
+    for section, domain_key in {
+        "sccp_source_verifier_materials": "source_domain",
+        "sccp_destination_rollouts": "domain",
+        "sccp_route_allowlists": "domain",
+    }.items():
+        records[section] = [
+            record
+            for record in records[section]
+            if record.get(domain_key) == active_domain
+        ]
+
+    summary = module.validate_evidence_bundle(records)
+    public_summary = module._public_summary_payload(copy.deepcopy(summary))
+
+    assert public_summary == summary
+    assert summary["production_ready"] is False
+    active_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == active_domain
+    )
+    assert active_lane["production_ready"] is True
+    blocked_future_lanes = [
+        lane
+        for lane in summary["lanes"]
+        if lane["domain"] != active_domain and not lane["production_ready"]
+    ]
+    assert blocked_future_lanes
+    assert all(
+        blocker.startswith("domain ") and "missing " in blocker
+        for blocker in summary["blockers"]
+    )
+    assert not any(
+        "all-lanes summary lanes[" in blocker
+        for blocker in public_summary["blockers"]
+    )
+
+
 def test_all_lanes_release_checklist_rejects_malformed_record_flags():
     module = load_evidence_module()
     summary = module.validate_evidence_bundle(complete_bundle(module))
@@ -8497,13 +8570,17 @@ def test_all_lanes_cli_rejects_copied_ready_lane_hash_shape_drift(capsys):
     bsc_lane = next(
         lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_BSC
     )
+    bare_source_hash = eth_lane["source_record_hashes"][
+        "source_verifier_material_hash"
+    ][2:]
+    bare_route_hash = bsc_lane["route_allowlist"]["route_allowlist_hash"][2:]
     eth_lane["source_record_hashes"][
         "source_verifier_material_hash"
-    ] = "not-a-source-hash"
+    ] = bare_source_hash
     eth_lane["destination_binding"][
         "expected_destination_binding_hash"
     ] = "not-a-destination-hash"
-    bsc_lane["route_allowlist"]["route_allowlist_hash"] = "not-a-route-hash"
+    bsc_lane["route_allowlist"]["route_allowlist_hash"] = bare_route_hash
     bsc_lane["route_allowlist"]["route_canary"]["evidence_hash"] = (
         "not-a-canary-hash"
     )
@@ -8546,9 +8623,9 @@ def test_all_lanes_cli_rejects_copied_ready_lane_hash_shape_drift(capsys):
     assert f"all-lanes summary lanes[1].{expected_route_hash_blocker}" in blockers
     assert f"all-lanes summary lanes[1].{expected_canary_hash_blocker}" in blockers
     assert f"all-lanes summary lanes[1].{expected_canary_message_blocker}" in blockers
-    assert "not-a-source-hash" not in captured.out
+    assert bare_source_hash not in captured.out
     assert "not-a-destination-hash" not in captured.out
-    assert "not-a-route-hash" not in captured.out
+    assert bare_route_hash not in captured.out
     assert "not-a-canary-hash" not in captured.out
     assert "Traceback" not in captured.err
 
@@ -10808,6 +10885,81 @@ def test_all_lanes_cli_rejects_copied_not_ready_nested_missing_fields(capsys):
             "destination_binding missing field expected_destination_binding_hash",
         ),
         (tron_index, "route_allowlist missing field route_canary"),
+    )
+    for lane_index, expected in expected_blockers:
+        assert f"all-lanes summary lanes[{lane_index}].{expected}" in blockers
+    assert "operator pending lane certification" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_false_record_structural_drift(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    bsc_index, bsc_lane = lanes[module.SCCP_DOMAIN_BSC]
+    sol_index, sol_lane = lanes[module.SCCP_DOMAIN_SOL]
+    ton_index, ton_lane = lanes[module.SCCP_DOMAIN_TON]
+    tron_index, tron_lane = lanes[module.SCCP_DOMAIN_TRON]
+    for lane in (bsc_lane, sol_lane, ton_lane, tron_lane):
+        lane["production_ready"] = False
+        lane["blockers"] = ["operator pending lane certification"]
+        lane["records"] = {
+            field: False for field in module.PUBLIC_LANE_RECORD_FIELDS
+        }
+
+    bsc_gate_field, _bsc_audit_fields = module._source_adapter_gate_requirements(
+        module.SCCP_DOMAIN_BSC
+    )
+    bsc_lane["source_record_hashes"].pop("source_verifier_material_hash", None)
+    bsc_lane["source_adapter_gate"].pop("gate_hash", None)
+    bsc_lane["source_adapter_gate"]["audit_hashes"].pop(bsc_gate_field, None)
+    sol_lane["destination_binding"].pop("expected_destination_binding_hash", None)
+    ton_lane["route_allowlist"].pop("route_canary", None)
+    tron_lane["route_allowlist"]["route_canary"]["destination_binding_hash"] = ""
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        (
+            bsc_index,
+            "source_record_hashes missing field source_verifier_material_hash",
+        ),
+        (bsc_index, "source_adapter_gate missing field gate_hash"),
+        (
+            bsc_index,
+            f"source_adapter_gate.audit_hashes missing field {bsc_gate_field}",
+        ),
+        (
+            sol_index,
+            "destination_binding missing field expected_destination_binding_hash",
+        ),
+        (ton_index, "route_allowlist missing field route_canary"),
+        (
+            tron_index,
+            "route_allowlist.route_canary.destination_binding_hash must be a canonical non-zero bytes32",
+        ),
     )
     for lane_index, expected in expected_blockers:
         assert f"all-lanes summary lanes[{lane_index}].{expected}" in blockers

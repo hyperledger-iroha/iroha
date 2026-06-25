@@ -10855,6 +10855,15 @@ Temporal properties:
   closure, post-finality stability, timeout/view-change recovery, certified
   finality installation, pre-commit and commit-vote handoffs, finalized
   certificate/evidence retention, and the full RBC lifecycle envelope.
+- The aggregate `SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope`
+  theorem composes the full fast/deep state-invariant surface under `[]` with
+  the end-to-end temporal safety envelope, giving one checkable consensus-core
+  safety theorem for both state facts and handoff/transition obligations.
+- The aggregate `SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope` theorem
+  composes the state+temporal safety theorem with `EventuallyCommit`, giving one
+  checkable consensus-core correctness theorem for the fairness-backed bounded
+  model: every post-GST run eventually commits while retaining the certified
+  safety, evidence, and RBC handoff envelopes.
 
 Frontier recovery invariants:
 - `TypeInvariant`

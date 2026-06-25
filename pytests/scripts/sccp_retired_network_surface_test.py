@@ -113,12 +113,18 @@ SCAN_ROOTS = (
     Path("status.md"),
 )
 
+SCCP_TRANSLATED_UNSUPPORTED_SCOPE_NOTE_FILES = {
+    Path("docs/source/bridge_proofs.ja.md"),
+    Path("docs/source/bridge_proofs.ru.md"),
+    Path("docs/source/bridge_proofs.ur.md"),
+}
+
 SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES = {
     Path("docs/source/bridge_proofs.md"),
     Path("docs/source/engineering_backlog.md"),
     Path("roadmap.md"),
     Path("status.md"),
-}
+} | SCCP_TRANSLATED_UNSUPPORTED_SCOPE_NOTE_FILES
 
 SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE = re.compile(
     r"retired\s+runtime-network families\b.{0,96}\b("
@@ -127,14 +133,7 @@ SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
-SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_FILES = (
-    SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES
-    | {
-        Path("docs/source/bridge_proofs.ja.md"),
-        Path("docs/source/bridge_proofs.ru.md"),
-        Path("docs/source/bridge_proofs.ur.md"),
-    }
-)
+SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_FILES = SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES
 
 SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE = (
     "SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now."
@@ -250,9 +249,7 @@ def test_retired_network_surface_scan_covers_expected_files() -> None:
     scanned = {path.relative_to(REPO_ROOT) for path in _scanned_files()}
 
     assert Path("docs/source/bridge_proofs.md") in scanned
-    assert Path("docs/source/bridge_proofs.ja.md") in scanned
-    assert Path("docs/source/bridge_proofs.ru.md") in scanned
-    assert Path("docs/source/bridge_proofs.ur.md") in scanned
+    assert SCCP_TRANSLATED_UNSUPPORTED_SCOPE_NOTE_FILES <= scanned
     assert Path("docs/source/engineering_backlog.md") in scanned
     assert Path("docs/source/new_pipeline.md") in scanned
     assert Path("roadmap.md") in scanned
@@ -296,6 +293,22 @@ def test_not_remaining_work_note_stays_in_launch_scope_files() -> None:
         assert SCCP_NOT_REMAINING_WORK_NOTE.search(text), (
             f"missing not-remaining-work launch-scope note in {relative}"
         )
+
+
+def test_translated_no_support_scope_notes_stay_complete() -> None:
+    assert SCCP_TRANSLATED_UNSUPPORTED_SCOPE_NOTE_FILES
+    assert (
+        SCCP_TRANSLATED_UNSUPPORTED_SCOPE_NOTE_FILES
+        <= SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES
+    )
+    assert (
+        SCCP_TRANSLATED_UNSUPPORTED_SCOPE_NOTE_FILES
+        <= SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_FILES
+    )
+    assert (
+        SCCP_TRANSLATED_UNSUPPORTED_SCOPE_NOTE_FILES
+        <= SCCP_NOT_REMAINING_WORK_NOTE_FILES
+    )
 
 
 def test_active_tree_excludes_retired_network_surface_tokens() -> None:

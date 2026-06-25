@@ -913,7 +913,7 @@ def test_evm_source_live_evidence_collects_source_records_and_toml():
     assert source["deployment_transaction_block_hash"] == "0x" + "99" * 32
     assert source["deployment_transaction_block_number"] == 0x1234
     assert source["deployment_transaction_contract_creation"] is True
-    assert source["deployment_transaction_input_sha256"] == hashlib.sha256(
+    assert source["deployment_transaction_input_sha256"] == "0x" + hashlib.sha256(
         fake.bridge_runtime
     ).hexdigest()
     assert source["deployment_transaction_block_matches"] is True
@@ -959,7 +959,12 @@ def test_evm_source_live_evidence_collects_source_records_and_toml():
         in rendered
     )
     assert '# sccp_evm_source_deployment_transaction_block_number = "4660"' in rendered
-    assert "# sccp_evm_source_deployment_transaction_input_sha256" in rendered
+    assert (
+        '# sccp_evm_source_deployment_transaction_input_sha256 = "0x'
+        + hashlib.sha256(fake.bridge_runtime).hexdigest()
+        + '"'
+        in rendered
+    )
     assert '# sccp_evm_source_deployment_block_number = "4660"' in rendered
     assert (
         '# sccp_evm_source_deployment_block_receipts_root = "0x'

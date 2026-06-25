@@ -8235,6 +8235,8 @@ pub struct SccpRouteManifest {
     pub proof_artifact_hash: Option<String>,
     /// Optional hex-encoded proving key digest.
     pub proving_key_hash: Option<String>,
+    /// Optional hash of the normalized deployment evidence used to build this route.
+    pub deployment_evidence_sha256: Option<String>,
     /// Canonical destination binding key.
     pub destination_binding_key: String,
     /// Hex-encoded canonical destination binding hash.

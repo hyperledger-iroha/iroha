@@ -6172,15 +6172,20 @@ private func sourceProofBytesFromHex(_ value: String, field: String, byteLength:
     guard value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
         throw SccpSourceProofHashError.invalidValidatorSet(field)
     }
-    var hex = value
-    if hex.lowercased().hasPrefix("0x") {
-        hex.removeFirst(2)
-    }
-    hex = hex.lowercased()
-    guard hex.count == byteLength * 2, let bytes = Data(hexString: hex), bytes.count == byteLength else {
+    let hex = value.hasPrefix("0x") ? String(value.dropFirst(2)) : value
+    guard hex.count == byteLength * 2,
+          sourceProofIsLowercaseHexBody(hex),
+          let bytes = Data(hexString: hex),
+          bytes.count == byteLength else {
         throw SccpSourceProofHashError.invalidValidatorSet(field)
     }
     return bytes
+}
+
+private func sourceProofIsLowercaseHexBody(_ value: String) -> Bool {
+    value.utf8.allSatisfy { byte in
+        (byte >= 0x30 && byte <= 0x39) || (byte >= 0x61 && byte <= 0x66)
+    }
 }
 
 private func sourceProofNormalizeHex32(_ value: String, field: String) throws -> String {

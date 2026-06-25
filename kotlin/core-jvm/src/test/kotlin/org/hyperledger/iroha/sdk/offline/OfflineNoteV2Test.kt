@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.offline
 import java.io.ByteArrayOutputStream
 import java.nio.file.Files
 import java.nio.file.Paths
+import java.security.MessageDigest
 import java.util.Base64
 import java.util.Locale
 import kotlin.test.Test
@@ -201,13 +202,52 @@ class OfflineNoteV2Test {
         assertEquals(string(vector, "key_certificate_payload_hash"), hex(registration.keyCertificatePayloadHash()))
         assertEquals(string(vector, "norito_base64"), base64(registration.noritoEncoded()))
 
+        val changedReport = "other-report".toByteArray(Charsets.UTF_8)
         val changed = registration.replacingAttestationEvidence(
-            attestationReport = "other-report".toByteArray(),
-            evidence = "other-evidence".toByteArray(),
+            attestationReport = changedReport,
+            evidence = attestationEvidence(OfflineNoteV2.hash(changedReport)),
         )
         assertEquals(registration.canonicalChallengeHash().toList(), changed.canonicalChallengeHash().toList())
         assertTrue(!registration.attestationReportHash().contentEquals(changed.attestationReportHash()))
         assertTrue(!registration.evidenceHash().contentEquals(changed.evidenceHash()))
+    }
+
+    @Test
+    fun offlineDeviceAttestationRegistrationDraftBuildsChallengeBeforeEvidence() {
+        val fixture = loadFixture()
+        val vector = obj(obj(fixture, "chain_vectors"), "attestation_registration")
+        val draft = OfflineNoteV2.DeviceAttestationRegistrationV2(
+            version = int(vector, "version"),
+            platform = string(vector, "platform"),
+            keyId = string(vector, "key_id"),
+            deviceId = string(vector, "device_id"),
+            accountId = string(vector, "account_id"),
+            assetDefinitionId = nullableString(vector, "asset_definition_id"),
+            iosTeamId = nullableString(vector, "ios_team_id"),
+            iosBundleId = nullableString(vector, "ios_bundle_id"),
+            iosEnvironment = nullableString(vector, "ios_environment"),
+            androidPackageName = nullableString(vector, "android_package_name"),
+            androidSigningCertificateSha256 =
+                nullableString(vector, "android_signing_certificate_sha256")?.let(::hexBytes),
+            publicKey = base64Bytes(string(vector, "public_key")),
+            assertionScheme = string(vector, "assertion_scheme"),
+            assertionKeyAlgorithm = string(vector, "assertion_key_algorithm"),
+            assertionPublicKey = base64Bytes(string(vector, "assertion_public_key")),
+            assertionUsageCountLimit = nullableInt(vector, "assertion_usage_count_limit"),
+            oneUse = bool(vector, "one_use"),
+            recentBlockHeight = long(vector, "recent_block_height"),
+            recentBlockHash = hexBytes(string(vector, "recent_block_hash")),
+            expiresAtMs = long(vector, "expires_at_ms"),
+        )
+        val emptyReportHash = OfflineNoteV2.hash(ByteArray(0))
+        val expectedEvidence = attestationEvidence(emptyReportHash)
+
+        assertEquals(string(vector, "challenge_hash"), hex(draft.canonicalChallengeHash()))
+        assertEquals(string(vector, "challenge_hash"), hex(draft.challengeHash()))
+        assertEquals(emptyReportHash.toList(), draft.attestationReportHash().toList())
+        assertEquals(ByteArray(0).toList(), draft.attestationReport().toList())
+        assertEquals(expectedEvidence.toList(), draft.evidence().toList())
+        assertEquals(OfflineNoteV2.hash(expectedEvidence).toList(), draft.evidenceHash().toList())
     }
 
     @Test
@@ -582,6 +622,36 @@ class OfflineNoteV2Test {
         assertFailsWith<IllegalArgumentException> {
             OfflineNoteV2.KeyCertificateV2(
                 platform = string(certJson, "platform"),
+                keyId = "\u00A0\u2003",
+                deviceId = string(certJson, "device_id"),
+                accountId = string(certJson, "account_id"),
+                publicKey = publicKey,
+                assertionScheme = string(certJson, "assertion_scheme"),
+                assertionKeyAlgorithm = string(certJson, "assertion_key_algorithm"),
+                assertionPublicKey = assertionPublicKey,
+                assertionUsageCountLimit = nullableInt(certJson, "assertion_usage_count_limit"),
+                oneUse = true,
+                issuerSignature = issuerSignature,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.KeyCertificatePayloadV2(
+                version = OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+                platform = string(certJson, "platform"),
+                keyId = string(certJson, "key_id"),
+                deviceId = "\u00A0\u2003",
+                accountId = string(certJson, "account_id"),
+                publicKey = publicKey,
+                assertionScheme = string(certJson, "assertion_scheme"),
+                assertionKeyAlgorithm = string(certJson, "assertion_key_algorithm"),
+                assertionPublicKey = assertionPublicKey,
+                assertionUsageCountLimit = nullableInt(certJson, "assertion_usage_count_limit"),
+                oneUse = true,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.KeyCertificateV2(
+                platform = string(certJson, "platform"),
                 keyId = string(certJson, "key_id"),
                 deviceId = string(certJson, "device_id"),
                 accountId = string(certJson, "account_id"),
@@ -624,6 +694,51 @@ class OfflineNoteV2Test {
                 issuerSignature = issuerSignature.copyOfRange(0, 63),
             )
         }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.KeyCertificateV2(
+                platform = string(certJson, "platform"),
+                keyId = string(certJson, "key_id"),
+                deviceId = string(certJson, "device_id"),
+                accountId = string(certJson, "account_id"),
+                publicKey = publicKey,
+                assertionScheme = string(certJson, "assertion_scheme"),
+                assertionKeyAlgorithm = string(certJson, "assertion_key_algorithm"),
+                assertionPublicKey = offCurveP256AssertionPublicKey(),
+                assertionUsageCountLimit = nullableInt(certJson, "assertion_usage_count_limit"),
+                oneUse = true,
+                issuerSignature = issuerSignature,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.KeyCertificateV2(
+                platform = string(certJson, "platform"),
+                keyId = string(certJson, "key_id"),
+                deviceId = string(certJson, "device_id"),
+                accountId = string(certJson, "account_id"),
+                publicKey = publicKey,
+                assertionScheme = "apple-app-attest-v1",
+                assertionKeyAlgorithm = string(certJson, "assertion_key_algorithm"),
+                assertionPublicKey = assertionPublicKey,
+                assertionUsageCountLimit = nullableInt(certJson, "assertion_usage_count_limit"),
+                oneUse = true,
+                issuerSignature = issuerSignature,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.KeyCertificatePayloadV2(
+                version = OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+                platform = string(certJson, "platform"),
+                keyId = string(certJson, "key_id"),
+                deviceId = string(certJson, "device_id"),
+                accountId = string(certJson, "account_id"),
+                publicKey = publicKey,
+                assertionScheme = string(certJson, "assertion_scheme"),
+                assertionKeyAlgorithm = string(certJson, "assertion_key_algorithm"),
+                assertionPublicKey = offCurveP256AssertionPublicKey(),
+                assertionUsageCountLimit = nullableInt(certJson, "assertion_usage_count_limit"),
+                oneUse = true,
+            )
+        }
     }
 
     @Test
@@ -649,11 +764,50 @@ class OfflineNoteV2Test {
             attestationRegistration(fixture, evidenceHash = badEvidenceHash)
         }
 
+        val forgedEvidence = attestationEvidence(ByteArray(32) { 0xA5.toByte() })
+        assertFailsWith<IllegalArgumentException> {
+            attestationRegistration(
+                fixture,
+                evidenceHash = OfflineNoteV2.hash(forgedEvidence),
+                evidence = forgedEvidence,
+            )
+        }
+
         assertFailsWith<IllegalArgumentException> {
             attestationRegistration(fixture, androidSigningCertificateSha256 = ByteArray(31) { 1 })
         }
         assertFailsWith<IllegalArgumentException> {
             attestationRegistration(fixture, publicKey = ByteArray(31) { 1 })
+        }
+        assertFailsWith<IllegalArgumentException> {
+            attestationRegistration(fixture, keyId = "not standard base64!")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            attestationRegistration(fixture, keyId = "AB==")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            attestationRegistration(fixture, keyId = " ${string(vector, "key_id")} ")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            attestationRegistration(fixture, deviceId = " ${string(vector, "device_id")} ")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            attestationRegistration(fixture, deviceId = "\u00A0\u2003")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            attestationRegistration(fixture, iosTeamId = " ${nullableString(vector, "ios_team_id")} ")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            attestationRegistration(fixture, iosBundleId = "${nullableString(vector, "ios_bundle_id")}\n")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            attestationRegistration(fixture, iosEnvironment = "\t${nullableString(vector, "ios_environment")}")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            attestationRegistration(fixture, androidPackageName = " jp.co.soramitsu.iroha.offline ")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            attestationRegistration(fixture, assertionPublicKey = offCurveP256AssertionPublicKey())
         }
         assertFailsWith<IllegalArgumentException> {
             attestationRegistration(fixture, recentBlockHash = ByteArray(31) { 1 })
@@ -663,6 +817,52 @@ class OfflineNoteV2Test {
         }
         assertFailsWith<IllegalArgumentException> {
             attestationRegistration(fixture, assetDefinitionId = "cash#bad")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            attestationRegistration(fixture, assertionUsageCountLimit = 1)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            attestationRegistration(
+                fixture,
+                platform = OfflineNoteV2.ANDROID_KEYMINT_PLATFORM,
+                assertionScheme = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME,
+                assertionKeyAlgorithm = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            attestationRegistration(
+                fixture,
+                platform = OfflineNoteV2.ANDROID_KEYMINT_PLATFORM,
+                assertionScheme = "android-keymint-ecdsa-p256-usage-limit",
+                assertionKeyAlgorithm = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+                assertionUsageCountLimit = 1,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            attestationRegistration(
+                fixture,
+                keyId = "00".repeat(32),
+                platform = OfflineNoteV2.ANDROID_KEYMINT_PLATFORM,
+                assertionScheme = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME,
+                assertionKeyAlgorithm = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+                assertionUsageCountLimit = 1,
+            )
+        }
+        val androidUppercaseKeyId = hex(
+            sha256(base64Bytes(string(vector, "assertion_public_key")))
+        ).uppercase(Locale.ROOT)
+        assertFailsWith<IllegalArgumentException> {
+            attestationRegistration(
+                fixture,
+                keyId = androidUppercaseKeyId,
+                platform = OfflineNoteV2.ANDROID_KEYMINT_PLATFORM,
+                assertionScheme = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME,
+                assertionKeyAlgorithm = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+                assertionUsageCountLimit = 1,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            attestationRegistration(fixture, platform = "ios-app-attest")
         }
     }
 
@@ -1037,6 +1237,16 @@ class OfflineNoteV2Test {
         androidSigningCertificateSha256: ByteArray? = null,
         publicKey: ByteArray? = null,
         assertionPublicKey: ByteArray? = null,
+        keyId: String? = null,
+        deviceId: String? = null,
+        platform: String? = null,
+        assertionScheme: String? = null,
+        assertionKeyAlgorithm: String? = null,
+        assertionUsageCountLimit: Int? = null,
+        iosTeamId: String? = null,
+        iosBundleId: String? = null,
+        iosEnvironment: String? = null,
+        androidPackageName: String? = null,
         attestationReport: ByteArray? = null,
         evidence: ByteArray? = null,
         recentBlockHash: ByteArray? = null,
@@ -1046,22 +1256,22 @@ class OfflineNoteV2Test {
         val vector = obj(obj(fixture, "chain_vectors"), "attestation_registration")
         return OfflineNoteV2.DeviceAttestationRegistrationV2(
             version = int(vector, "version"),
-            platform = string(vector, "platform"),
-            keyId = string(vector, "key_id"),
-            deviceId = string(vector, "device_id"),
+            platform = platform ?: string(vector, "platform"),
+            keyId = keyId ?: string(vector, "key_id"),
+            deviceId = deviceId ?: string(vector, "device_id"),
             accountId = string(vector, "account_id"),
             assetDefinitionId = assetDefinitionId ?: nullableString(vector, "asset_definition_id"),
-            iosTeamId = nullableString(vector, "ios_team_id"),
-            iosBundleId = nullableString(vector, "ios_bundle_id"),
-            iosEnvironment = nullableString(vector, "ios_environment"),
-            androidPackageName = nullableString(vector, "android_package_name"),
+            iosTeamId = iosTeamId ?: nullableString(vector, "ios_team_id"),
+            iosBundleId = iosBundleId ?: nullableString(vector, "ios_bundle_id"),
+            iosEnvironment = iosEnvironment ?: nullableString(vector, "ios_environment"),
+            androidPackageName = androidPackageName ?: nullableString(vector, "android_package_name"),
             androidSigningCertificateSha256 = androidSigningCertificateSha256
                 ?: nullableString(vector, "android_signing_certificate_sha256")?.let(::hexBytes),
             publicKey = publicKey ?: base64Bytes(string(vector, "public_key")),
-            assertionScheme = string(vector, "assertion_scheme"),
-            assertionKeyAlgorithm = string(vector, "assertion_key_algorithm"),
+            assertionScheme = assertionScheme ?: string(vector, "assertion_scheme"),
+            assertionKeyAlgorithm = assertionKeyAlgorithm ?: string(vector, "assertion_key_algorithm"),
             assertionPublicKey = assertionPublicKey ?: base64Bytes(string(vector, "assertion_public_key")),
-            assertionUsageCountLimit = nullableInt(vector, "assertion_usage_count_limit"),
+            assertionUsageCountLimit = assertionUsageCountLimit ?: nullableInt(vector, "assertion_usage_count_limit"),
             oneUse = oneUse ?: bool(vector, "one_use"),
             challengeHash = challengeHash ?: hexBytes(string(vector, "challenge_hash")),
             attestationReportHash = attestationReportHash ?: hexBytes(string(vector, "attestation_report_hash")),
@@ -1295,6 +1505,15 @@ class OfflineNoteV2Test {
 
     private fun hex(bytes: ByteArray): String =
         bytes.joinToString(separator = "") { "%02x".format(it.toInt() and 0xFF) }
+
+    private fun sha256(bytes: ByteArray): ByteArray =
+        MessageDigest.getInstance("SHA-256").digest(bytes)
+
+    private fun attestationEvidence(attestationReportHash: ByteArray): ByteArray =
+        OfflineNoteV2.DEVICE_ATTESTATION_EVIDENCE_PREFIX.toByteArray(Charsets.UTF_8) + attestationReportHash
+
+    private fun offCurveP256AssertionPublicKey(): ByteArray =
+        ByteArray(65).also { it[0] = 0x04 }
 
     private fun hashFromPublicValues(values: LongArray): ByteArray {
         val out = ByteArray(32)

@@ -14,16 +14,16 @@ use crate::{
     parameter::{CustomParameter, CustomParameterId},
 };
 
-/// Schema version for the initial SBD validation-fee policy.
+/// Schema version for the initial validation-fee policy.
 pub const VALIDATION_FEE_POLICY_SCHEMA_VERSION: u16 = 1;
-/// Scale used by SBD minor units.
+/// Decimal scale required for the initial SBD validation-fee policy.
 pub const VALIDATION_FEE_SBD_SCALE: u8 = 2;
-/// Initial fee amount in SBD minor units.
+/// Fee amount required by the initial SBD validation-fee policy, in minor units.
 pub const VALIDATION_FEE_INITIAL_MINOR_UNITS: u64 = 10;
 /// Domain separator for policy hashing.
-pub const VALIDATION_FEE_POLICY_HASH_DOMAIN: &[u8] = b"cbsi.validation_fee.policy.v1";
+pub const VALIDATION_FEE_POLICY_HASH_DOMAIN: &[u8] = b"iroha.validation_fee.policy.v1";
 /// Domain separator carried in signed validation-fee policy payloads.
-pub const VALIDATION_FEE_POLICY_SIGNATURE_DOMAIN: &str = "cbsi.validation_fee.policy.signature.v1";
+pub const VALIDATION_FEE_POLICY_SIGNATURE_DOMAIN: &str = "iroha.validation_fee.policy.signature.v1";
 /// Transaction metadata key that binds a signed transaction to a policy version.
 pub const VALIDATION_FEE_POLICY_VERSION_METADATA_KEY: &str = "validation_fee_policy_version";
 /// Transaction metadata key that binds a signed transaction to a policy hash.
@@ -185,7 +185,7 @@ impl std::error::Error for ValidationFeePolicyRegistryError {}
     rename_all = "SCREAMING_SNAKE_CASE"
 )]
 pub enum ValidationFeeChargingMode {
-    /// Charge once per qualifying SBD transfer instruction or batch entry.
+    /// Charge once per qualifying fee-asset transfer instruction or batch entry.
     PerQualifyingTransferInstruction,
 }
 
@@ -219,7 +219,7 @@ pub struct ValidationFeeGovernanceKeysetV1 {
 
 impl ValidationFeeGovernanceKeysetV1 {
     /// Identifier of the chain-level custom parameter carrying the active keyset.
-    pub const PARAMETER_ID_STR: &'static str = "cbsi:validation_fee_governance_keyset_v1";
+    pub const PARAMETER_ID_STR: &'static str = "iroha:validation_fee_governance_keyset_v1";
 
     /// Construct the custom-parameter identifier for this keyset.
     #[must_use]
@@ -331,7 +331,7 @@ pub struct ValidationFeePolicyRegistryV1 {
 
 impl ValidationFeePolicyRegistryV1 {
     /// Identifier of the chain-level custom parameter carrying the policy registry.
-    pub const PARAMETER_ID_STR: &'static str = "cbsi:validation_fee_policy_registry_v1";
+    pub const PARAMETER_ID_STR: &'static str = "iroha:validation_fee_policy_registry_v1";
 
     /// Construct the custom-parameter identifier for this registry.
     #[must_use]
@@ -456,11 +456,11 @@ pub struct ValidationFeePolicyV1 {
     /// Previous policy hash for policy-chain validation.
     #[norito(default)]
     pub previous_policy_hash: Option<[u8; 32]>,
-    /// SBD asset definition charged by this policy.
-    pub sbd_asset_definition_id: AssetDefinitionId,
-    /// SBD decimal scale.
-    pub sbd_scale: u8,
-    /// Fee amount in SBD minor units.
+    /// Asset definition charged by this policy.
+    pub fee_asset_definition_id: AssetDefinitionId,
+    /// Decimal scale used to interpret fee asset minor units.
+    pub fee_asset_scale: u8,
+    /// Fee amount in fee asset minor units.
     pub fee_minor_units: u64,
     /// Concrete validator treasury account.
     pub treasury_account_id: AccountId,
@@ -480,7 +480,7 @@ pub struct ValidationFeePolicyV1 {
 
 impl ValidationFeePolicyV1 {
     /// Identifier of the chain-level custom parameter carrying the active validation-fee policy.
-    pub const PARAMETER_ID_STR: &'static str = "cbsi:validation_fee_policy_v1";
+    pub const PARAMETER_ID_STR: &'static str = "iroha:validation_fee_policy_v1";
 
     /// Construct the custom-parameter identifier for this policy.
     #[must_use]
@@ -544,8 +544,8 @@ impl ValidationFeePolicyV1 {
         if self.policy_version > 1 && self.previous_policy_hash.is_none() {
             return Some("non-initial validation-fee policy must carry a previous policy hash");
         }
-        if self.sbd_scale != VALIDATION_FEE_SBD_SCALE {
-            return Some("validation-fee policy SBD scale must be 2");
+        if self.fee_asset_scale != VALIDATION_FEE_SBD_SCALE {
+            return Some("validation-fee policy asset scale must be 2");
         }
         if self.fee_minor_units != VALIDATION_FEE_INITIAL_MINOR_UNITS {
             return Some("validation-fee policy amount must be 10 minor units");
@@ -577,7 +577,7 @@ impl ValidationFeePolicyV1 {
     /// Fee amount as a ledger [`Numeric`].
     #[must_use]
     pub fn fee_amount_numeric(&self) -> Numeric {
-        Numeric::new(self.fee_minor_units, u32::from(self.sbd_scale))
+        Numeric::new(self.fee_minor_units, u32::from(self.fee_asset_scale))
     }
 
     /// Domain-separated payload that governance keys sign.
@@ -712,6 +712,9 @@ mod tests {
     use super::*;
     use crate::{domain::DomainId, name::Name};
 
+    const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_SBD_SCALE;
+    const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = VALIDATION_FEE_INITIAL_MINOR_UNITS;
+
     fn account(seed: u8) -> AccountId {
         let key_pair =
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key pair");
@@ -722,23 +725,23 @@ mod tests {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key pair")
     }
 
-    fn sbd() -> AssetDefinitionId {
+    fn fee_asset() -> AssetDefinitionId {
         AssetDefinitionId::new(
-            DomainId::try_new("cbsi", "universal").expect("domain id"),
-            Name::from_str("sbd").expect("asset name"),
+            DomainId::try_new("fees", "paynet").expect("domain id"),
+            Name::from_str("fee_token").expect("asset name"),
         )
     }
 
     fn policy() -> ValidationFeePolicyV1 {
         ValidationFeePolicyV1 {
             schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-            network_id: "cbsi-testnet".to_string(),
+            network_id: "generic-testnet".to_string(),
             genesis_hash: [7; 32],
             policy_version: 1,
             previous_policy_hash: None,
-            sbd_asset_definition_id: sbd(),
-            sbd_scale: VALIDATION_FEE_SBD_SCALE,
-            fee_minor_units: VALIDATION_FEE_INITIAL_MINOR_UNITS,
+            fee_asset_definition_id: fee_asset(),
+            fee_asset_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
+            fee_minor_units: TEST_VALIDATION_FEE_MINOR_UNITS,
             treasury_account_id: account(1),
             charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
             effective_from_height: 10,
@@ -1023,13 +1026,24 @@ mod tests {
     }
 
     #[test]
-    fn policy_invariants_reject_non_initial_fee() {
+    fn policy_invariants_reject_wrong_fee_amount() {
         let mut policy = policy();
-        policy.fee_minor_units = 9;
+        policy.fee_minor_units = VALIDATION_FEE_INITIAL_MINOR_UNITS + 1;
 
         assert_eq!(
             policy.policy_invariant_error(),
             Some("validation-fee policy amount must be 10 minor units")
+        );
+    }
+
+    #[test]
+    fn policy_invariants_reject_wrong_fee_scale() {
+        let mut policy = policy();
+        policy.fee_asset_scale = VALIDATION_FEE_SBD_SCALE + 1;
+
+        assert_eq!(
+            policy.policy_invariant_error(),
+            Some("validation-fee policy asset scale must be 2")
         );
     }
 

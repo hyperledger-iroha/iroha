@@ -2407,12 +2407,26 @@ class TonSccpProverTest {
             )
         }
         assertTrue(paddedPayloadHash.message?.contains("payloadHash must be canonical hex") == true)
+        val uppercasePayloadHash = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(
+                sampleProofRequestInput(
+                    publicInputs = samplePublicInputs().copy(payloadHash = "0x" + "AA".repeat(32)),
+                ),
+            )
+        }
+        assertTrue(uppercasePayloadHash.message?.contains("payloadHash must be canonical hex") == true)
         val paddedStatementHash = assertFailsWith<IllegalArgumentException> {
             SccpTon.buildProofRequest(
                 sampleProofRequestInput(statementHash = "56".repeat(32) + "\n"),
             )
         }
         assertTrue(paddedStatementHash.message?.contains("statementHash must be canonical hex") == true)
+        val uppercaseStatementHash = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(
+                sampleProofRequestInput(statementHash = "0X" + "56".repeat(32)),
+            )
+        }
+        assertTrue(uppercaseStatementHash.message?.contains("statementHash must be canonical hex") == true)
         val zeroStatementHash = assertFailsWith<IllegalArgumentException> {
             SccpTon.buildProofRequest(
                 sampleProofRequestInput(statementHash = "00".repeat(32)),
@@ -2437,6 +2451,17 @@ class TonSccpProverTest {
         }
         assertTrue(
             paddedDeploymentHash.message?.contains("sourceAdapterDeploymentHash must be canonical hex") == true,
+        )
+        val uppercaseDeploymentHash = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(
+                sampleProofRequestInput(
+                    sourceAdapterDeploymentHash = "0x" + "AA".repeat(32),
+                    sourceAdapterDeploymentReceiptHash = "bb".repeat(32),
+                ),
+            )
+        }
+        assertTrue(
+            uppercaseDeploymentHash.message?.contains("sourceAdapterDeploymentHash must be canonical hex") == true,
         )
         val nonCanonicalFinalityHeight = assertFailsWith<IllegalArgumentException> {
             SccpTon.buildProofRequest(

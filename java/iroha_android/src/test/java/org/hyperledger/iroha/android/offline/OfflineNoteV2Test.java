@@ -5,6 +5,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
@@ -46,6 +48,7 @@ public final class OfflineNoteV2Test {
     openVerifyEnvelopeDecoderRejectsMalformedV2EnvelopeFields();
     certificateValidationRejectsMalformedValues();
     offlineDeviceAttestationRegistrationMatchesRustVectors();
+    offlineDeviceAttestationRegistrationDraftBuildsChallengeBeforeEvidence();
     offlineDeviceAttestationRegistrationValidationRejectsMalformedValues();
     offlineDeviceAttestationRegistrationDefensivelyCopiesMutableByteArrays();
     auditBundleRejectsInvalidShapesAndUncommittedOutputs();
@@ -595,6 +598,37 @@ public final class OfflineNoteV2Test {
             new OfflineNoteV2.KeyCertificateV2(
                 OfflineNoteV2.KEY_CERTIFICATE_VERSION,
                 string(cert, "platform"),
+                "\u00A0\u2003",
+                string(cert, "device_id"),
+                string(cert, "account_id"),
+                publicKey,
+                string(cert, "assertion_scheme"),
+                string(cert, "assertion_key_algorithm"),
+                assertionPublicKey,
+                nullableInt(cert, "assertion_usage_count_limit"),
+                true,
+                issuerSignature),
+        "blank certificate key_id should throw");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.KeyCertificatePayloadV2(
+                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+                string(cert, "platform"),
+                string(cert, "key_id"),
+                "\u00A0\u2003",
+                string(cert, "account_id"),
+                publicKey,
+                string(cert, "assertion_scheme"),
+                string(cert, "assertion_key_algorithm"),
+                assertionPublicKey,
+                nullableInt(cert, "assertion_usage_count_limit"),
+                true),
+        "blank certificate payload device_id should throw");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.KeyCertificateV2(
+                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+                string(cert, "platform"),
                 string(cert, "key_id"),
                 string(cert, "device_id"),
                 string(cert, "account_id"),
@@ -622,6 +656,53 @@ public final class OfflineNoteV2Test {
                 true,
                 Arrays.copyOf(issuerSignature, 63)),
         "short issuer signature should throw");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.KeyCertificateV2(
+                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+                string(cert, "platform"),
+                string(cert, "key_id"),
+                string(cert, "device_id"),
+                string(cert, "account_id"),
+                publicKey,
+                string(cert, "assertion_scheme"),
+                string(cert, "assertion_key_algorithm"),
+                offCurveP256AssertionPublicKey(),
+                nullableInt(cert, "assertion_usage_count_limit"),
+                true,
+                issuerSignature),
+        "off-curve assertion public key should throw");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.KeyCertificateV2(
+                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+                string(cert, "platform"),
+                string(cert, "key_id"),
+                string(cert, "device_id"),
+                string(cert, "account_id"),
+                publicKey,
+                "apple-app-attest-v1",
+                string(cert, "assertion_key_algorithm"),
+                assertionPublicKey,
+                nullableInt(cert, "assertion_usage_count_limit"),
+                true,
+                issuerSignature),
+        "spliced iOS certificate profile should throw");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.KeyCertificatePayloadV2(
+                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+                string(cert, "platform"),
+                string(cert, "key_id"),
+                string(cert, "device_id"),
+                string(cert, "account_id"),
+                publicKey,
+                string(cert, "assertion_scheme"),
+                string(cert, "assertion_key_algorithm"),
+                offCurveP256AssertionPublicKey(),
+                nullableInt(cert, "assertion_usage_count_limit"),
+                true),
+        "off-curve payload assertion public key should throw");
   }
 
   private static void offlineDeviceAttestationRegistrationMatchesRustVectors()
@@ -654,6 +735,58 @@ public final class OfflineNoteV2Test {
         "device attestation registration norito");
   }
 
+  private static void offlineDeviceAttestationRegistrationDraftBuildsChallengeBeforeEvidence()
+      throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> vector =
+        obj(obj(fixture, "chain_vectors"), "attestation_registration");
+    final String androidSigningDigestHex =
+        nullableString(vector, "android_signing_certificate_sha256");
+    final OfflineNoteV2.DeviceAttestationRegistrationV2 draft =
+        new OfflineNoteV2.DeviceAttestationRegistrationV2(
+            intValue(vector, "version"),
+            string(vector, "platform"),
+            string(vector, "key_id"),
+            string(vector, "device_id"),
+            string(vector, "account_id"),
+            nullableString(vector, "asset_definition_id"),
+            nullableString(vector, "ios_team_id"),
+            nullableString(vector, "ios_bundle_id"),
+            nullableString(vector, "ios_environment"),
+            nullableString(vector, "android_package_name"),
+            androidSigningDigestHex == null ? null : hexBytes(androidSigningDigestHex),
+            base64Bytes(string(vector, "public_key")),
+            string(vector, "assertion_scheme"),
+            string(vector, "assertion_key_algorithm"),
+            base64Bytes(string(vector, "assertion_public_key")),
+            nullableInt(vector, "assertion_usage_count_limit"),
+            bool(vector, "one_use"),
+            null,
+            null,
+            null,
+            null,
+            null,
+            longValue(vector, "recent_block_height"),
+            hexBytes(string(vector, "recent_block_hash")),
+            longValue(vector, "expires_at_ms"));
+    final byte[] emptyReportHash = OfflineNoteV2.hash(new byte[0]);
+    final byte[] expectedEvidence = attestationEvidence(emptyReportHash);
+
+    assertEquals(
+        string(vector, "challenge_hash"),
+        hex(draft.canonicalChallengeHash()),
+        "draft device attestation canonical challenge hash");
+    assertEquals(
+        string(vector, "challenge_hash"),
+        hex(draft.challengeHash()),
+        "draft device attestation challenge hash");
+    assertArrayEquals(emptyReportHash, draft.attestationReportHash(), "draft report hash");
+    assertArrayEquals(new byte[0], draft.attestationReport(), "draft report");
+    assertArrayEquals(expectedEvidence, draft.evidence(), "draft evidence");
+    assertArrayEquals(
+        OfflineNoteV2.hash(expectedEvidence), draft.evidenceHash(), "draft evidence hash");
+  }
+
   private static void offlineDeviceAttestationRegistrationValidationRejectsMalformedValues()
       throws Exception {
     final Map<String, Object> fixture = loadFixture();
@@ -680,11 +813,103 @@ public final class OfflineNoteV2Test {
             attestationRegistration(
                 fixture, null, null, badEvidenceHash, null, null, null, null, null, null, null, null),
         "bad device attestation evidence hash should throw");
+    final byte[] forgedEvidenceReportHash = new byte[32];
+    Arrays.fill(forgedEvidenceReportHash, (byte) 0xA5);
+    final byte[] forgedEvidence = attestationEvidence(forgedEvidenceReportHash);
+    assertThrows(
+        () ->
+            attestationRegistration(
+                fixture,
+                null,
+                null,
+                OfflineNoteV2.hash(forgedEvidence),
+                null,
+                null,
+                null,
+                null,
+                forgedEvidence,
+                null,
+                null,
+                null),
+        "forged device attestation evidence envelope should throw");
     assertThrows(
         () ->
             attestationRegistration(
                 fixture, null, null, null, null, new byte[31], null, null, null, null, null, null),
         "short device attestation note public key should throw");
+    assertThrows(
+        () -> attestationRegistrationWithProfileAndKeyId(
+            fixture,
+            null,
+            "not standard base64!",
+            null,
+            null,
+            null),
+        "malformed iOS App Attest key_id should throw");
+    assertThrows(
+        () -> attestationRegistrationWithProfileAndKeyId(
+            fixture,
+            null,
+            "AB==",
+            null,
+            null,
+            null),
+        "non-canonical iOS App Attest key_id should throw");
+    assertThrows(
+        () ->
+            attestationRegistrationWithProfileAndKeyId(
+                fixture,
+                null,
+                " " + string(vector, "key_id") + " ",
+                null,
+                null,
+                null),
+        "padded device attestation key_id should throw");
+    assertThrows(
+        () -> attestationRegistrationWithDeviceId(fixture, " " + string(vector, "device_id") + " "),
+        "padded device attestation device_id should throw");
+    assertThrows(
+        () -> attestationRegistrationWithDeviceId(fixture, "   "),
+        "blank device attestation device_id should throw");
+    assertThrows(
+        () -> attestationRegistrationWithDeviceId(fixture, "\u00A0\u2003"),
+        "Unicode-blank device attestation device_id should throw");
+    assertThrows(
+        () ->
+            attestationRegistrationWithMetadata(
+                fixture, " " + nullableString(vector, "ios_team_id") + " ", null, null, null),
+        "padded iOS team id should throw");
+    assertThrows(
+        () ->
+            attestationRegistrationWithMetadata(
+                fixture, null, nullableString(vector, "ios_bundle_id") + "\n", null, null),
+        "padded iOS bundle id should throw");
+    assertThrows(
+        () ->
+            attestationRegistrationWithMetadata(
+                fixture, null, null, "\t" + nullableString(vector, "ios_environment"), null),
+        "padded iOS environment should throw");
+    assertThrows(
+        () ->
+            attestationRegistrationWithMetadata(
+                fixture, null, null, null, " jp.co.soramitsu.iroha.offline "),
+        "padded Android package name should throw");
+    assertThrows(
+        () ->
+            attestationRegistration(
+                fixture,
+                null,
+                null,
+                null,
+                null,
+                null,
+                offCurveP256AssertionPublicKey(),
+                null,
+                null,
+                null,
+                null,
+                null),
+        "off-curve device attestation assertion public key should throw");
     assertThrows(
         () ->
             attestationRegistration(
@@ -700,6 +925,63 @@ public final class OfflineNoteV2Test {
             attestationRegistration(
                 fixture, null, null, null, null, null, null, null, null, null, null, "cash#bad"),
         "bad device attestation asset definition id should throw");
+    assertThrows(
+        () ->
+            attestationRegistrationWithProfile(
+                fixture,
+                null,
+                null,
+                null,
+                Integer.valueOf(1)),
+        "iOS device attestation usage limit should throw");
+    assertThrows(
+        () ->
+            attestationRegistrationWithProfile(
+                fixture,
+                OfflineNoteV2.ANDROID_KEYMINT_PLATFORM,
+                OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME,
+                OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+                null),
+        "Android device attestation without usage limit should throw");
+    assertThrows(
+        () ->
+            attestationRegistrationWithProfile(
+                fixture,
+                OfflineNoteV2.ANDROID_KEYMINT_PLATFORM,
+                "android-keymint-ecdsa-p256-usage-limit",
+                OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+                Integer.valueOf(1)),
+        "Android device attestation legacy scheme should throw");
+    assertThrows(
+        () ->
+            attestationRegistrationWithProfileAndKeyId(
+                fixture,
+                OfflineNoteV2.ANDROID_KEYMINT_PLATFORM,
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME,
+                OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+                Integer.valueOf(1)),
+        "Android device attestation key_id mismatch should throw");
+    assertThrows(
+        () ->
+            attestationRegistrationWithProfileAndKeyId(
+                fixture,
+                OfflineNoteV2.ANDROID_KEYMINT_PLATFORM,
+                hex(sha256(base64Bytes(string(vector, "assertion_public_key"))))
+                    .toUpperCase(Locale.ROOT),
+                OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME,
+                OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+                Integer.valueOf(1)),
+        "Android device attestation uppercase key_id should throw");
+    assertThrows(
+        () ->
+            attestationRegistrationWithProfile(
+                fixture,
+                "ios-app-attest",
+                null,
+                null,
+                null),
+        "unsupported device attestation platform should throw");
   }
 
   private static void offlineDeviceAttestationRegistrationDefensivelyCopiesMutableByteArrays()
@@ -1165,31 +1447,270 @@ public final class OfflineNoteV2Test {
       final byte[] recentBlockHash,
       final Boolean oneUse,
       final String assetDefinitionId) {
+    return attestationRegistration(
+        fixture,
+        challengeHash,
+        attestationReportHash,
+        evidenceHash,
+        androidSigningCertificateSha256,
+        publicKey,
+        assertionPublicKey,
+        attestationReport,
+        evidence,
+        recentBlockHash,
+        oneUse,
+        assetDefinitionId,
+        null,
+        null,
+        null,
+        null);
+  }
+
+  private static OfflineNoteV2.DeviceAttestationRegistrationV2 attestationRegistrationWithProfile(
+      final Map<String, Object> fixture,
+      final String platform,
+      final String assertionScheme,
+      final String assertionKeyAlgorithm,
+      final Integer assertionUsageCountLimit) {
+    return attestationRegistration(
+        fixture,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        platform,
+        assertionScheme,
+        assertionKeyAlgorithm,
+        assertionUsageCountLimit);
+  }
+
+  private static OfflineNoteV2.DeviceAttestationRegistrationV2
+      attestationRegistrationWithProfileAndKeyId(
+          final Map<String, Object> fixture,
+          final String platform,
+          final String keyId,
+          final String assertionScheme,
+          final String assertionKeyAlgorithm,
+          final Integer assertionUsageCountLimit) {
+    return attestationRegistration(
+        fixture,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        platform,
+        assertionScheme,
+        assertionKeyAlgorithm,
+        assertionUsageCountLimit,
+        keyId,
+        null);
+  }
+
+  private static OfflineNoteV2.DeviceAttestationRegistrationV2
+      attestationRegistrationWithDeviceId(
+          final Map<String, Object> fixture,
+          final String deviceId) {
+    return attestationRegistration(
+        fixture,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        deviceId);
+  }
+
+  private static OfflineNoteV2.DeviceAttestationRegistrationV2
+      attestationRegistrationWithMetadata(
+          final Map<String, Object> fixture,
+          final String iosTeamId,
+          final String iosBundleId,
+          final String iosEnvironment,
+          final String androidPackageName) {
+    return attestationRegistration(
+        fixture,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        iosTeamId,
+        iosBundleId,
+        iosEnvironment,
+        androidPackageName);
+  }
+
+  private static OfflineNoteV2.DeviceAttestationRegistrationV2 attestationRegistration(
+      final Map<String, Object> fixture,
+      final byte[] challengeHash,
+      final byte[] attestationReportHash,
+      final byte[] evidenceHash,
+      final byte[] androidSigningCertificateSha256,
+      final byte[] publicKey,
+      final byte[] assertionPublicKey,
+      final byte[] attestationReport,
+      final byte[] evidence,
+      final byte[] recentBlockHash,
+      final Boolean oneUse,
+      final String assetDefinitionId,
+      final String platform,
+      final String assertionScheme,
+      final String assertionKeyAlgorithm,
+      final Integer assertionUsageCountLimit) {
+    return attestationRegistration(
+        fixture,
+        challengeHash,
+        attestationReportHash,
+        evidenceHash,
+        androidSigningCertificateSha256,
+        publicKey,
+        assertionPublicKey,
+        attestationReport,
+        evidence,
+        recentBlockHash,
+        oneUse,
+        assetDefinitionId,
+        platform,
+        assertionScheme,
+        assertionKeyAlgorithm,
+        assertionUsageCountLimit,
+        null,
+        null);
+  }
+
+  private static OfflineNoteV2.DeviceAttestationRegistrationV2 attestationRegistration(
+      final Map<String, Object> fixture,
+      final byte[] challengeHash,
+      final byte[] attestationReportHash,
+      final byte[] evidenceHash,
+      final byte[] androidSigningCertificateSha256,
+      final byte[] publicKey,
+      final byte[] assertionPublicKey,
+      final byte[] attestationReport,
+      final byte[] evidence,
+      final byte[] recentBlockHash,
+      final Boolean oneUse,
+      final String assetDefinitionId,
+      final String platform,
+      final String assertionScheme,
+      final String assertionKeyAlgorithm,
+      final Integer assertionUsageCountLimit,
+      final String keyId,
+      final String deviceId) {
+    return attestationRegistration(
+        fixture,
+        challengeHash,
+        attestationReportHash,
+        evidenceHash,
+        androidSigningCertificateSha256,
+        publicKey,
+        assertionPublicKey,
+        attestationReport,
+        evidence,
+        recentBlockHash,
+        oneUse,
+        assetDefinitionId,
+        platform,
+        assertionScheme,
+        assertionKeyAlgorithm,
+        assertionUsageCountLimit,
+        keyId,
+        deviceId,
+        null,
+        null,
+        null,
+        null);
+  }
+
+  private static OfflineNoteV2.DeviceAttestationRegistrationV2 attestationRegistration(
+      final Map<String, Object> fixture,
+      final byte[] challengeHash,
+      final byte[] attestationReportHash,
+      final byte[] evidenceHash,
+      final byte[] androidSigningCertificateSha256,
+      final byte[] publicKey,
+      final byte[] assertionPublicKey,
+      final byte[] attestationReport,
+      final byte[] evidence,
+      final byte[] recentBlockHash,
+      final Boolean oneUse,
+      final String assetDefinitionId,
+      final String platform,
+      final String assertionScheme,
+      final String assertionKeyAlgorithm,
+      final Integer assertionUsageCountLimit,
+      final String keyId,
+      final String deviceId,
+      final String iosTeamId,
+      final String iosBundleId,
+      final String iosEnvironment,
+      final String androidPackageName) {
     final Map<String, Object> vector =
         obj(obj(fixture, "chain_vectors"), "attestation_registration");
     final String androidSigningDigestHex =
         nullableString(vector, "android_signing_certificate_sha256");
     return new OfflineNoteV2.DeviceAttestationRegistrationV2(
         intValue(vector, "version"),
-        string(vector, "platform"),
-        string(vector, "key_id"),
-        string(vector, "device_id"),
+        platform == null ? string(vector, "platform") : platform,
+        keyId == null ? string(vector, "key_id") : keyId,
+        deviceId == null ? string(vector, "device_id") : deviceId,
         string(vector, "account_id"),
         assetDefinitionId == null ? nullableString(vector, "asset_definition_id") : assetDefinitionId,
-        nullableString(vector, "ios_team_id"),
-        nullableString(vector, "ios_bundle_id"),
-        nullableString(vector, "ios_environment"),
-        nullableString(vector, "android_package_name"),
+        iosTeamId == null ? nullableString(vector, "ios_team_id") : iosTeamId,
+        iosBundleId == null ? nullableString(vector, "ios_bundle_id") : iosBundleId,
+        iosEnvironment == null ? nullableString(vector, "ios_environment") : iosEnvironment,
+        androidPackageName == null ? nullableString(vector, "android_package_name") : androidPackageName,
         androidSigningCertificateSha256 != null
             ? androidSigningCertificateSha256
             : androidSigningDigestHex == null ? null : hexBytes(androidSigningDigestHex),
         publicKey == null ? base64Bytes(string(vector, "public_key")) : publicKey,
-        string(vector, "assertion_scheme"),
-        string(vector, "assertion_key_algorithm"),
+        assertionScheme == null ? string(vector, "assertion_scheme") : assertionScheme,
+        assertionKeyAlgorithm == null
+            ? string(vector, "assertion_key_algorithm")
+            : assertionKeyAlgorithm,
         assertionPublicKey == null
             ? base64Bytes(string(vector, "assertion_public_key"))
             : assertionPublicKey,
-        nullableInt(vector, "assertion_usage_count_limit"),
+        assertionUsageCountLimit == null
+            ? nullableInt(vector, "assertion_usage_count_limit")
+            : assertionUsageCountLimit,
         oneUse == null ? bool(vector, "one_use") : oneUse,
         challengeHash == null ? hexBytes(string(vector, "challenge_hash")) : challengeHash,
         attestationReportHash == null
@@ -1501,6 +2022,28 @@ public final class OfflineNoteV2Test {
     return builder.toString();
   }
 
+  private static byte[] sha256(final byte[] bytes) {
+    try {
+      return MessageDigest.getInstance("SHA-256").digest(bytes);
+    } catch (final NoSuchAlgorithmException ex) {
+      throw new AssertionError("SHA-256 must be available", ex);
+    }
+  }
+
+  private static byte[] attestationEvidence(final byte[] attestationReportHash) {
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    out.writeBytes(
+        OfflineNoteV2.DEVICE_ATTESTATION_EVIDENCE_PREFIX.getBytes(StandardCharsets.UTF_8));
+    out.writeBytes(attestationReportHash);
+    return out.toByteArray();
+  }
+
+  private static byte[] offCurveP256AssertionPublicKey() {
+    final byte[] key = new byte[65];
+    key[0] = 0x04;
+    return key;
+  }
+
   private static byte[] hashFromPublicValues(final long[] values) {
     final byte[] out = new byte[32];
     for (int idx = 0; idx < 4; idx++) {
@@ -1580,6 +2123,14 @@ public final class OfflineNoteV2Test {
   private static void assertEquals(final long expected, final long actual, final String message) {
     if (expected != actual) {
       throw new AssertionError(message + ": expected " + expected + " but got " + actual);
+    }
+  }
+
+  private static void assertArrayEquals(
+      final byte[] expected, final byte[] actual, final String message) {
+    if (!Arrays.equals(expected, actual)) {
+      throw new AssertionError(
+          message + ": expected " + hex(expected) + " but got " + hex(actual));
     }
   }
 

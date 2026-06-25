@@ -108,12 +108,12 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
     private static func encodeInstruction(wireName: String,
                                           typeName: String,
                                           modelPayload: Data) -> Data {
-        var concreteInstruction = OfflineNoritoWriter()
+        var concreteInstruction = OfflineCompactNoritoWriter()
         concreteInstruction.writeField(modelPayload)
         let framedInstruction = noritoEncode(
             typeName: typeName,
             payload: concreteInstruction.data,
-            flags: 0
+            flags: NoritoHeader.compactLen
         )
 
         var instructionBox = OfflineNoritoWriter()

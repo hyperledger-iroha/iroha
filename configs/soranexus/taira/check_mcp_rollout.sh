@@ -19,6 +19,7 @@ ROLLOUT_CANARY_GAS_ASSET_ID="${ROLLOUT_CANARY_GAS_ASSET_ID:-6TEAJqbb8oEPmLncoNiM
 POST_CANARY_STATUS_RECHECK_ATTEMPTS="${POST_CANARY_STATUS_RECHECK_ATTEMPTS:-10}"
 POST_CANARY_STATUS_RECHECK_DELAY_SECONDS="${POST_CANARY_STATUS_RECHECK_DELAY_SECONDS:-2}"
 MIN_VALIDATOR_SET_LEN="${MIN_VALIDATOR_SET_LEN:-4}"
+EXPECTED_TAIRA_GIT_SHA="${EXPECTED_TAIRA_GIT_SHA:-}"
 PUBLIC_LANE_ID="${PUBLIC_LANE_ID:-0}"
 CONTRACT_NAMESPACE="${CONTRACT_NAMESPACE:-universal}"
 SKIP_LOCAL=0
@@ -37,7 +38,7 @@ Usage: check_mcp_rollout.sh [--local-root URL] [--public-root URL] [--local-url 
                             [--write-config PATH] [--write-target local|public|URL]
                             [--gas-asset-id ASSET_DEFINITION_ID]
                             [--iroha-bin PATH] [--resolve-host HOST:IP|HOST:PORT:IP]
-                            [--skip-write-canary]
+                            [--expected-git-sha 7_TO_40_HEX_SHA] [--skip-write-canary]
 
 Verify that Taira's native Torii MCP endpoint is live locally and/or publicly.
 For a single public-node devex check, prefer the first-class CLI:
@@ -54,13 +55,19 @@ The check fails unless:
     `inputSchema` object (no top-level anyOf/oneOf/allOf/enum/not)
   - the tool list does not expose raw torii.* names
   - GET /status returns Torii counters
+  - when `--expected-git-sha` is supplied, GET /status reports a matching
+    `build.git_commit_sha` (published and expected values must be 7 to 40
+    hexadecimal characters; short or full prefix matches are accepted)
   - GET /v1/sumeragi/status reports at least 4 validators in the commit QC set
   - direct public Torii ingress also exposes SCCP, ZK, bridge, validator-set,
     public-lane, contract, and Musubi routes on the same node URL
 
-When diagnosing public write failures, prefer `/status` fields such as
-`blocks`, `queue_size`, `sumeragi.commit_qc_height`,
-`sumeragi.tx_queue_depth`, `sumeragi.tx_queue_saturated`, and
+When diagnosing public write failures, prefer `/status` and
+`/v1/sumeragi/status` fields such as `blocks`, `queue_size`,
+`commit_qc.height`, `highest_qc.height`, `locked_qc.height`, `canonical.height`,
+`membership.height`, `tx_queue.depth`, `tx_queue.capacity`,
+`tx_queue.saturated_by_count`, `tx_queue.saturated_by_age`,
+`tx_queue.oldest_queued_age_ms`, `view_change_causes.last_cause`, and
 `teu_dataspace_backlog`. Do not use `/status.peers` as validator-set size; it
 is the queried node's current remote-peer count.
 
@@ -171,6 +178,14 @@ while [[ $# -gt 0 ]]; do
       ROLLOUT_CANARY_GAS_ASSET_ID="$2"
       shift 2
       ;;
+    --expected-git-sha)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --expected-git-sha" >&2
+        exit 1
+      }
+      EXPECTED_TAIRA_GIT_SHA="$2"
+      shift 2
+      ;;
     --iroha-bin)
       [[ $# -ge 2 ]] || {
         echo "missing value for --iroha-bin" >&2
@@ -206,6 +221,14 @@ done
 if [[ $SKIP_LOCAL -eq 1 && $SKIP_PUBLIC -eq 1 ]]; then
   echo "nothing to check: both local and public checks were skipped" >&2
   exit 1
+fi
+
+if [[ -n "$EXPECTED_TAIRA_GIT_SHA" ]]; then
+  if [[ ! "$EXPECTED_TAIRA_GIT_SHA" =~ ^[0-9A-Fa-f]{7,40}$ ]]; then
+    echo "--expected-git-sha must be a 7 to 40 character hexadecimal git SHA prefix" >&2
+    exit 1
+  fi
+  EXPECTED_TAIRA_GIT_SHA="$(printf '%s' "$EXPECTED_TAIRA_GIT_SHA" | tr 'A-F' 'a-f')"
 fi
 
 if [[ -n "$WRITE_CONFIG" && $SKIP_WRITE_CANARY -eq 1 ]]; then
@@ -387,6 +410,7 @@ print_status_route_diagnostics() {
 
   python3 - "$last_body" <<'PY' >&2
 import json
+import re
 import sys
 
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
@@ -428,6 +452,7 @@ print_sumeragi_route_diagnostics() {
 
   python3 - "$last_body" <<'PY' >&2
 import json
+import re
 import sys
 
 def dig(obj, *path):
@@ -577,16 +602,39 @@ check_status_snapshot() {
     sed -n '1,20p' "$last_headers" >&2 || true
     exit 1
   fi
-  python3 - "$label" "$last_body" "$MIN_VALIDATOR_SET_LEN" "$allow_pending_commit_qc" <<'PY'
+  python3 - "$label" "$last_body" "$MIN_VALIDATOR_SET_LEN" "$allow_pending_commit_qc" "$EXPECTED_TAIRA_GIT_SHA" <<'PY'
 import json
+import re
 import sys
 
 label = sys.argv[1]
 path = sys.argv[2]
 min_validator_set_len = int(sys.argv[3])
 allow_pending_commit_qc = sys.argv[4] == "1"
+expected_git_sha = sys.argv[5].strip()
 with open(path, "r", encoding="utf-8") as handle:
     payload = json.load(handle)
+
+def dig(obj, *path):
+    cur = obj
+    for key in path:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(key)
+    return cur
+
+def first_int(*values):
+    for value in values:
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                continue
+    return None
 
 blocks = payload.get("blocks")
 queue_size = payload.get("queue_size")
@@ -596,6 +644,82 @@ if blocks is not None and (not isinstance(blocks, int) or blocks < 0):
 if queue_size is not None and (not isinstance(queue_size, int) or queue_size < 0):
     print(f"{label}: /status reported an invalid queue size: {queue_size!r}", file=sys.stderr)
     sys.exit(1)
+build = payload.get("build")
+build_git_sha = None
+if isinstance(build, dict):
+    for key in ("git_commit_sha", "git_sha", "commit_sha", "commit"):
+        value = build.get(key)
+        if isinstance(value, str) and value.strip():
+            build_git_sha = value.strip().lower()
+            break
+if expected_git_sha:
+    if build_git_sha is None:
+        print(
+            f"{label}: /status did not publish build.git_commit_sha; "
+            f"expected Taira git SHA {expected_git_sha}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if re.fullmatch(r"[0-9a-f]{7,40}", build_git_sha) is None:
+        print(
+            f"{label}: /status build git SHA {build_git_sha} is not a "
+            "7 to 40 character hexadecimal SHA prefix; "
+            f"expected {expected_git_sha}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not (
+        build_git_sha.startswith(expected_git_sha)
+        or expected_git_sha.startswith(build_git_sha)
+    ):
+        print(
+            f"{label}: /status build git SHA {build_git_sha} does not match "
+            f"expected {expected_git_sha}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+sumeragi = payload.get("sumeragi")
+if isinstance(sumeragi, dict):
+    commit_qc_height = first_int(
+        sumeragi.get("commit_qc_height"),
+        dig(sumeragi, "commit_qc", "height"),
+        payload.get("commit_qc_height"),
+        dig(payload, "commit_qc", "height"),
+    )
+    highest_qc_height = first_int(
+        sumeragi.get("highest_qc_height"),
+        dig(sumeragi, "highest_qc", "height"),
+        payload.get("highest_qc_height"),
+        dig(payload, "highest_qc", "height"),
+    )
+    locked_qc_height = first_int(
+        sumeragi.get("locked_qc_height"),
+        dig(sumeragi, "locked_qc", "height"),
+        payload.get("locked_qc_height"),
+        dig(payload, "locked_qc", "height"),
+    )
+    if (
+        highest_qc_height is not None
+        and commit_qc_height is not None
+        and highest_qc_height < commit_qc_height
+    ):
+        print(
+            f"{label}: /status Sumeragi highest QC height {highest_qc_height} "
+            f"is behind commit QC height {commit_qc_height}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if (
+        locked_qc_height is not None
+        and commit_qc_height is not None
+        and locked_qc_height < commit_qc_height
+    ):
+        print(
+            f"{label}: /status Sumeragi locked QC height {locked_qc_height} "
+            f"is behind commit QC height {commit_qc_height}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 PY
 }
 
@@ -629,6 +753,12 @@ def first_int(*values):
             return value
     return None
 
+def first_bool(*values):
+    for value in values:
+        if isinstance(value, bool):
+            return value
+    return None
+
 label = sys.argv[1]
 path = sys.argv[2]
 min_validator_set_len = int(sys.argv[3])
@@ -644,12 +774,44 @@ highest_qc_height = first_int(
     payload.get("highest_qc_height"),
     dig(payload, "highest_qc", "height"),
 )
+locked_qc_height = first_int(
+    payload.get("locked_qc_height"),
+    dig(payload, "locked_qc", "height"),
+)
 canonical_height = first_int(dig(payload, "canonical", "height"))
+membership_height = first_int(
+    payload.get("membership_height"),
+    dig(payload, "membership", "height"),
+)
 validator_set_len = first_int(
     payload.get("commit_qc_validator_set_len"),
     dig(payload, "commit_qc", "validator_set_len"),
 )
-tx_queue_saturated = payload.get("tx_queue_saturated", dig(payload, "tx_queue", "saturated"))
+tx_queue_depth = first_int(
+    payload.get("tx_queue_depth"),
+    dig(payload, "tx_queue", "depth"),
+)
+tx_queue_capacity = first_int(
+    payload.get("tx_queue_capacity"),
+    dig(payload, "tx_queue", "capacity"),
+)
+tx_queue_saturated = first_bool(
+    payload.get("tx_queue_saturated"),
+    dig(payload, "tx_queue", "saturated"),
+)
+tx_queue_saturated_by_count = first_bool(
+    payload.get("tx_queue_saturated_by_count"),
+    dig(payload, "tx_queue", "saturated_by_count"),
+)
+tx_queue_saturated_by_age = first_bool(
+    payload.get("tx_queue_saturated_by_age"),
+    dig(payload, "tx_queue", "saturated_by_age"),
+)
+tx_queue_oldest_queued_age_ms = first_int(
+    payload.get("tx_queue_oldest_queued_age_ms"),
+    dig(payload, "tx_queue", "oldest_queued_age_ms"),
+)
+view_change_last_cause = dig(payload, "view_change_causes", "last_cause")
 
 if commit_qc_height is None or commit_qc_height < 1:
     if allow_pending_commit_qc:
@@ -667,6 +829,12 @@ if commit_qc_height is None or commit_qc_height < 1:
 if highest_qc_height is not None and highest_qc_height < commit_qc_height:
     print(
         f"{label}: /v1/sumeragi/status highest QC height {highest_qc_height} is behind commit QC height {commit_qc_height}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+if locked_qc_height is not None and locked_qc_height < commit_qc_height:
+    print(
+        f"{label}: /v1/sumeragi/status locked QC height {locked_qc_height} is behind commit QC height {commit_qc_height}",
         file=sys.stderr,
     )
     sys.exit(1)
@@ -699,8 +867,40 @@ if validator_set_len < min_validator_set_len:
         file=sys.stderr,
     )
     sys.exit(1)
-if tx_queue_saturated is True:
-    print(f"{label}: /v1/sumeragi/status reports a saturated transaction queue", file=sys.stderr)
+legacy_count_saturated = (
+    tx_queue_saturated is True
+    and tx_queue_saturated_by_age is not True
+    and (
+        tx_queue_capacity is None
+        or tx_queue_depth is None
+        or tx_queue_depth >= tx_queue_capacity
+    )
+)
+if (
+    membership_height is not None
+    and commit_qc_height is not None
+    and membership_height > commit_qc_height
+):
+    cause = view_change_last_cause or "unknown"
+    print(
+        f"{label}: /v1/sumeragi/status reports a finality fault "
+        f"({cause}) with membership height ahead of commit QC "
+        f"({membership_height} > {commit_qc_height}); "
+        f"queue depth={tx_queue_depth!r}, capacity={tx_queue_capacity!r}, "
+        f"saturated_by_count={tx_queue_saturated_by_count!r}, "
+        f"saturated_by_age={tx_queue_saturated_by_age!r}, "
+        f"oldest_queued_age_ms={tx_queue_oldest_queued_age_ms!r}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+if tx_queue_saturated_by_count is True or (
+    tx_queue_saturated_by_count is None and legacy_count_saturated
+):
+    print(
+        f"{label}: /v1/sumeragi/status reports transaction queue capacity saturation "
+        f"(depth={tx_queue_depth!r}, capacity={tx_queue_capacity!r})",
+        file=sys.stderr,
+    )
     sys.exit(1)
 PY
 }

@@ -85,15 +85,23 @@ def _decode_hash_text(value: Any, *, label: str) -> bytes:
     text = value
     if not text:
         raise RuntimeError(f"{label} must be non-empty")
-    has_hex_prefix = text.lower().startswith("0x")
+    if text.startswith("0X"):
+        raise RuntimeError(f"{label} must use lowercase 0x prefix")
+    has_hex_prefix = text.startswith("0x")
     hex_text = text[2:] if has_hex_prefix else text
     if has_hex_prefix and (
         len(hex_text) != 64
         or any(symbol not in "0123456789abcdefABCDEF" for symbol in hex_text)
     ):
         raise RuntimeError(f"{label} must be 32-byte hex")
-    if len(hex_text) == 64 and all(symbol in "0123456789abcdefABCDEF" for symbol in hex_text):
+    if has_hex_prefix and hex_text != hex_text.lower():
+        raise RuntimeError(f"{label} must use lowercase hex")
+    if len(hex_text) == 64 and all(symbol in "0123456789abcdef" for symbol in hex_text):
         raw = bytes.fromhex(hex_text)
+    elif len(hex_text) == 64 and all(
+        symbol in "0123456789abcdefABCDEF" for symbol in hex_text
+    ):
+        raise RuntimeError(f"{label} must use lowercase hex")
     else:
         padded = text + "=" * ((4 - len(text) % 4) % 4)
         try:

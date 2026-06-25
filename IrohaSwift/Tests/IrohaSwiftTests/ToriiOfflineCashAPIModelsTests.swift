@@ -32,6 +32,28 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         }
     }
 
+    func testCompactKeyCertificateDefaultsUseCanonicalAttestationProfiles() throws {
+        let iosCertificate = try Self.certificate(platform: "ios-appattest").offlineNoteKeyCertificate()
+        XCTAssertEqual(iosCertificate.assertionScheme, "apple-appattest-counter-v1")
+        XCTAssertEqual(iosCertificate.assertionKeyAlgorithm, "app-attest-p256")
+        XCTAssertNil(iosCertificate.assertionUsageCountLimit)
+
+        let androidCertificate = try Self.certificate(
+            platform: "android-keymint",
+            assertionUsageCountLimit: 1
+        ).offlineNoteKeyCertificate()
+        XCTAssertEqual(androidCertificate.assertionScheme, "android-keymint-ecdsa-p256-usage-limit-v1")
+        XCTAssertEqual(androidCertificate.assertionKeyAlgorithm, "ecdsa-p256-sha256")
+        XCTAssertEqual(androidCertificate.assertionUsageCountLimit, 1)
+
+        let legacyExplicit = try Self.certificate(
+            platform: "android-keymint",
+            assertionScheme: "android-keymint-ecdsa-p256-usage-limit",
+            assertionUsageCountLimit: 1
+        ).offlineNoteKeyCertificate()
+        XCTAssertEqual(legacyExplicit.assertionScheme, "android-keymint-ecdsa-p256-usage-limit")
+    }
+
     func testKeyRefillRequestEncodesSnakeCaseAndLegacyAttestKeyAliasDecodes() throws {
         let request = ToriiOfflineKeyRefillRequest(
             operationId: "op-refill",
@@ -115,7 +137,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         let redemption = try ToriiOfflineRedemptionProof(
             sourceNoteCommitment: Self.hashHex(1),
             inputNullifiers: [Self.hashHex(3)],
-            senderKeyCertificate: Self.certificate(),
+            senderKeyCertificate: try Self.certificate(),
             recipientAccountId: "alice@hbl.sbp",
             assetDefinitionId: "pkr#sbp",
             amount: "25.00",
@@ -215,13 +237,20 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         )
     }
 
-    private static func certificate() -> OfflineCompactKeyCertificate {
-        OfflineCompactKeyCertificate(
-            platform: "ios-appattest",
+    private static func certificate(
+        platform: String = "ios-appattest",
+        assertionScheme: String? = nil,
+        assertionUsageCountLimit: Int? = nil
+    ) throws -> OfflineCompactKeyCertificate {
+        let keypair = try Keypair(privateKeyBytes: Data(0..<32))
+        return OfflineCompactKeyCertificate(
+            platform: platform,
             keyId: "attest-key",
             deviceId: "device-1",
-            accountId: "alice@hbl.sbp",
+            accountId: AccountId.make(publicKey: keypair.publicKey),
             publicKey: Data(repeating: 1, count: 32).base64EncodedString(),
+            assertionScheme: assertionScheme,
+            assertionUsageCountLimit: assertionUsageCountLimit,
             issuerSignatureBase64: Data(repeating: 2, count: 64).base64EncodedString()
         )
     }

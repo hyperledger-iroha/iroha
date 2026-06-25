@@ -40409,7 +40409,9 @@ mod tests {
         );
         if sccp_source_state_verifier_required(source_domain) {
             material.source_state_verifier_id =
-                format!("sccp:{chain}:source-state-verifier:mainnet:v1");
+                sccp_source_state_verifier_id_for_domain(source_domain)
+                    .expect("source-state verifier profile id")
+                    .to_owned();
             material.source_state_verifier_hash = prefixed_blake2b(
                 b"sccp:test:ready-source-material:source-state-verifier",
                 &source_domain.to_le_bytes(),
@@ -49237,7 +49239,10 @@ mod tests {
                 adapter.masterchain_config_proof.validator_set_payload_hash,
             )
         );
-        let material = sample_ready_source_verifier_material(SCCP_DOMAIN_TON);
+        let mut material = sample_ready_source_verifier_material(SCCP_DOMAIN_TON);
+        material.source_state_verifier_id.clear();
+        material.source_state_verifier_hash = [0u8; 32];
+        assert!(!sccp_source_state_verifier_is_production_ready(&material));
         assert!(verify_sccp_ton_masterchain_validator_signatures_proof(
             adapter, &valid, &material,
         ));
@@ -69892,6 +69897,10 @@ mod tests {
         assert!(
             !sccp_source_verifier_material_is_production_ready(&material),
             "generic SOL source material must stay fail-closed until it matches the deployed mainnet profile"
+        );
+        assert!(
+            verify_message_bundle_structure_with_source_verifier_material(&bundle, &material),
+            "diagnostic SOL material must still bind the fixture source proof structurally"
         );
         assert!(!manifest.production_ready);
         assert!(

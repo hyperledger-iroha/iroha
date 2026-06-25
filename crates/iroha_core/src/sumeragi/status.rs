@@ -1705,6 +1705,10 @@ pub fn set_highest_qc(height: u64, view: u64) {
     let Some(_guard) = try_reentrant_test_guard(&QC_STATUS_TEST_LOCK) else {
         return;
     };
+    set_highest_qc_raw(height, view);
+}
+
+fn set_highest_qc_raw(height: u64, view: u64) {
     HIGHEST_QC_HEIGHT.store(height, Ordering::Relaxed);
     HIGHEST_QC_VIEW.store(view, Ordering::Relaxed);
 }
@@ -1715,9 +1719,31 @@ pub fn set_highest_qc_hash(hash: HashOf<BlockHeader>) {
     let Some(_guard) = try_reentrant_test_guard(&QC_STATUS_TEST_LOCK) else {
         return;
     };
-    let h = UntypedHash::from(hash);
+    set_highest_qc_hash_inner(Some(hash));
+}
+
+fn set_highest_qc_hash_inner(hash: Option<HashOf<BlockHeader>>) {
     let slot = HIGHEST_QC_HASH.get_or_init(|| Mutex::new(None));
-    *lock_operator_status_slot(slot, "highest QC hash") = Some(h);
+    *lock_operator_status_slot(slot, "highest QC hash") = hash.map(UntypedHash::from);
+}
+
+fn set_highest_qc_monotonic(height: u64, view: u64, subject: Option<HashOf<BlockHeader>>) {
+    let cur_h = HIGHEST_QC_HEIGHT.load(Ordering::Relaxed);
+    let cur_v = HIGHEST_QC_VIEW.load(Ordering::Relaxed);
+    if (height, view) > (cur_h, cur_v) {
+        set_highest_qc_raw(height, view);
+        if subject.is_some() {
+            set_highest_qc_hash_inner(subject);
+        }
+        return;
+    }
+    if (height, view) == (cur_h, cur_v) {
+        if let Some(subject) = subject {
+            if highest_qc_hash() != Some(subject) {
+                set_highest_qc_hash_inner(Some(subject));
+            }
+        }
+    }
 }
 
 /// Get the subject block hash for the current `HighestQC` if known.
@@ -2304,6 +2330,10 @@ pub fn set_locked_qc(height: u64, view: u64, subject: Option<HashOf<BlockHeader>
     let Some(_guard) = try_reentrant_test_guard(&QC_STATUS_TEST_LOCK) else {
         return;
     };
+    set_locked_qc_inner(height, view, subject);
+}
+
+fn set_locked_qc_inner(height: u64, view: u64, subject: Option<HashOf<BlockHeader>>) {
     if height == 0 && view == 0 {
         LOCKED_QC_HEIGHT.store(0, Ordering::Relaxed);
         LOCKED_QC_VIEW.store(0, Ordering::Relaxed);
@@ -4265,6 +4295,7 @@ pub fn record_commit_qc(cert: Qc) {
     #[cfg(test)]
     let _guard = commit_history_test_guard();
     clear_active_view_change_cause_after_commit();
+    promote_observable_qc_from_commit(&cert);
     let mut guard =
         lock_operator_status_slot(commit_cert_history_slot(), "commit certificate history");
     // Keep the latest certificate per (height, block_hash) to avoid stale duplicates while
@@ -4278,6 +4309,30 @@ pub fn record_commit_qc(cert: Qc) {
     while guard.len() > commit_cert_history_cap() {
         guard.pop_front();
     }
+}
+
+fn promote_observable_qc_from_commit(cert: &Qc) {
+    let subject = Some(cert.subject_block_hash);
+    set_highest_qc_monotonic(cert.height, cert.view, subject);
+    set_locked_qc_inner(cert.height, cert.view, subject);
+}
+
+fn commit_consistent_qc_frontier(
+    height: u64,
+    view: u64,
+    subject: Option<HashOf<BlockHeader>>,
+    commit_qc: &QcSnapshot,
+) -> (u64, u64, Option<HashOf<BlockHeader>>) {
+    if commit_qc.height == 0 {
+        return (height, view, subject);
+    }
+    if (height, view) < (commit_qc.height, commit_qc.view) {
+        return (commit_qc.height, commit_qc.view, commit_qc.block_hash);
+    }
+    if (height, view) == (commit_qc.height, commit_qc.view) && subject.is_none() {
+        return (height, view, commit_qc.block_hash);
+    }
+    (height, view, subject)
 }
 
 fn clear_active_view_change_cause_after_commit() {
@@ -4797,6 +4852,19 @@ pub fn snapshot() -> StatusSnapshot {
     let last_flip_error = MODE_LAST_FLIP_ERROR
         .get()
         .and_then(|slot| lock_operator_status_slot(slot, "mode flip last error").clone());
+    let commit_qc = commit_qc_snapshot();
+    let (highest_qc_height, highest_qc_view, highest_qc_subject) = commit_consistent_qc_frontier(
+        HIGHEST_QC_HEIGHT.load(Ordering::Relaxed),
+        HIGHEST_QC_VIEW.load(Ordering::Relaxed),
+        highest_qc_hash(),
+        &commit_qc,
+    );
+    let (locked_qc_height, locked_qc_view, locked_qc_subject) = commit_consistent_qc_frontier(
+        LOCKED_QC_HEIGHT.load(Ordering::Relaxed),
+        LOCKED_QC_VIEW.load(Ordering::Relaxed),
+        locked_qc_hash(),
+        &commit_qc,
+    );
 
     StatusSnapshot {
         mode_tag,
@@ -4832,13 +4900,13 @@ pub fn snapshot() -> StatusSnapshot {
         view_change_suggest_total: VIEW_CHANGE_SUGGEST_TOTAL.load(Ordering::Relaxed),
         view_change_install_total: VIEW_CHANGE_INSTALL_TOTAL.load(Ordering::Relaxed),
         view_change_causes: view_change_cause_snapshot(),
-        highest_qc_height: HIGHEST_QC_HEIGHT.load(Ordering::Relaxed),
-        highest_qc_view: HIGHEST_QC_VIEW.load(Ordering::Relaxed),
-        locked_qc_height: LOCKED_QC_HEIGHT.load(Ordering::Relaxed),
-        locked_qc_view: LOCKED_QC_VIEW.load(Ordering::Relaxed),
-        highest_qc_subject: highest_qc_hash(),
-        locked_qc_subject: locked_qc_hash(),
-        commit_qc: commit_qc_snapshot(),
+        highest_qc_height,
+        highest_qc_view,
+        locked_qc_height,
+        locked_qc_view,
+        highest_qc_subject,
+        locked_qc_subject,
+        commit_qc,
         commit_quorum: commit_quorum_snapshot(),
         settlement: settlement_snapshot(),
         gossip_fallback_total: GOSSIP_FALLBACK_TOTAL.load(Ordering::Relaxed),
@@ -8598,6 +8666,42 @@ mod tests {
         checked_keypair().public_key().clone()
     }
 
+    fn commit_qc_fixture(height: u64, view: u64, hash_byte: u8) -> Qc {
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [hash_byte; UntypedHash::LENGTH],
+        ));
+        let peer = checked_peer();
+        let validator_set = vec![peer];
+        let validator_set_hash = HashOf::new(&validator_set);
+        Qc {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            height,
+            view,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash,
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set,
+            aggregate: QcAggregate {
+                signers_bitmap: Vec::new(),
+                bls_aggregate_signature: Vec::new(),
+            },
+        }
+    }
+
+    fn install_commit_qc_history_for_test(cert: Qc) {
+        let mut history =
+            super::lock_operator_status_slot(super::commit_cert_history_slot(), "commit history");
+        history.clear();
+        history.push_back(cert);
+    }
+
     fn reset_penalty_status_for_tests() {
         super::set_vrf_penalties(0, 0, 0, 0);
         super::set_vrf_late_reveals_total(0);
@@ -9817,6 +9921,160 @@ mod tests {
         assert_eq!(snapshot.validator_set_hash, Some(second.validator_set_hash));
         assert_eq!(snapshot.validator_set_len, 2);
         assert_eq!(snapshot.signatures_total, 0);
+    }
+
+    #[test]
+    fn record_commit_qc_advances_observable_qc_frontier() {
+        let _commit_guard = super::commit_history_test_guard();
+        let _qc_guard = super::qc_status_test_guard();
+        super::reset_commit_certs_for_tests();
+        super::set_highest_qc(0, 0);
+        super::set_locked_qc(0, 0, None);
+        super::set_highest_qc(4, 1);
+        super::set_locked_qc(4, 1, None);
+
+        let committed = commit_qc_fixture(12, 3, 0xD1);
+        super::record_commit_qc(committed.clone());
+
+        let snapshot = super::snapshot();
+        assert_eq!(snapshot.commit_qc.height, committed.height);
+        assert_eq!(snapshot.commit_qc.view, committed.view);
+        assert_eq!(snapshot.highest_qc_height, committed.height);
+        assert_eq!(snapshot.highest_qc_view, committed.view);
+        assert_eq!(
+            snapshot.highest_qc_subject,
+            Some(committed.subject_block_hash)
+        );
+        assert_eq!(snapshot.locked_qc_height, committed.height);
+        assert_eq!(snapshot.locked_qc_view, committed.view);
+        assert_eq!(
+            snapshot.locked_qc_subject,
+            Some(committed.subject_block_hash)
+        );
+
+        let stale_commit = commit_qc_fixture(9, 9, 0xD2);
+        super::record_commit_qc(stale_commit);
+
+        let snapshot = super::snapshot();
+        assert_eq!(snapshot.highest_qc_height, committed.height);
+        assert_eq!(snapshot.highest_qc_view, committed.view);
+        assert_eq!(
+            snapshot.highest_qc_subject,
+            Some(committed.subject_block_hash)
+        );
+        assert_eq!(snapshot.locked_qc_height, committed.height);
+        assert_eq!(snapshot.locked_qc_view, committed.view);
+        assert_eq!(
+            snapshot.locked_qc_subject,
+            Some(committed.subject_block_hash)
+        );
+
+        super::reset_commit_certs_for_tests();
+        super::set_highest_qc(0, 0);
+        super::set_locked_qc(0, 0, None);
+    }
+
+    #[test]
+    fn snapshot_repairs_stale_observable_qc_from_commit_history() {
+        let _commit_guard = super::commit_history_test_guard();
+        let _qc_guard = super::qc_status_test_guard();
+        super::reset_commit_certs_for_tests();
+        super::set_highest_qc(0, 0);
+        super::set_highest_qc_hash_inner(None);
+        super::set_locked_qc(0, 0, None);
+        super::set_highest_qc(4, 1);
+        super::set_locked_qc(4, 1, None);
+
+        let committed = commit_qc_fixture(12, 3, 0xD3);
+        install_commit_qc_history_for_test(committed.clone());
+
+        let snapshot = super::snapshot();
+        assert_eq!(snapshot.commit_qc.height, committed.height);
+        assert_eq!(snapshot.commit_qc.view, committed.view);
+        assert_eq!(snapshot.highest_qc_height, committed.height);
+        assert_eq!(snapshot.highest_qc_view, committed.view);
+        assert_eq!(
+            snapshot.highest_qc_subject,
+            Some(committed.subject_block_hash)
+        );
+        assert_eq!(snapshot.locked_qc_height, committed.height);
+        assert_eq!(snapshot.locked_qc_view, committed.view);
+        assert_eq!(
+            snapshot.locked_qc_subject,
+            Some(committed.subject_block_hash)
+        );
+
+        super::reset_commit_certs_for_tests();
+        super::set_highest_qc(0, 0);
+        super::set_highest_qc_hash_inner(None);
+        super::set_locked_qc(0, 0, None);
+    }
+
+    #[test]
+    fn snapshot_fills_missing_observable_qc_subject_from_commit_history() {
+        let _commit_guard = super::commit_history_test_guard();
+        let _qc_guard = super::qc_status_test_guard();
+        super::reset_commit_certs_for_tests();
+        super::set_highest_qc(0, 0);
+        super::set_highest_qc_hash_inner(None);
+        super::set_locked_qc(0, 0, None);
+
+        let committed = commit_qc_fixture(12, 3, 0xD4);
+        install_commit_qc_history_for_test(committed.clone());
+        super::set_highest_qc(committed.height, committed.view);
+        super::set_highest_qc_hash_inner(None);
+        super::set_locked_qc(committed.height, committed.view, None);
+
+        let snapshot = super::snapshot();
+        assert_eq!(snapshot.highest_qc_height, committed.height);
+        assert_eq!(snapshot.highest_qc_view, committed.view);
+        assert_eq!(
+            snapshot.highest_qc_subject,
+            Some(committed.subject_block_hash)
+        );
+        assert_eq!(snapshot.locked_qc_height, committed.height);
+        assert_eq!(snapshot.locked_qc_view, committed.view);
+        assert_eq!(
+            snapshot.locked_qc_subject,
+            Some(committed.subject_block_hash)
+        );
+
+        super::reset_commit_certs_for_tests();
+        super::set_highest_qc(0, 0);
+        super::set_highest_qc_hash_inner(None);
+        super::set_locked_qc(0, 0, None);
+    }
+
+    #[test]
+    fn snapshot_preserves_newer_observable_qc_than_commit_history() {
+        let _commit_guard = super::commit_history_test_guard();
+        let _qc_guard = super::qc_status_test_guard();
+        super::reset_commit_certs_for_tests();
+        super::set_highest_qc(0, 0);
+        super::set_highest_qc_hash_inner(None);
+        super::set_locked_qc(0, 0, None);
+
+        let committed = commit_qc_fixture(12, 3, 0xD5);
+        let newer_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0xD6; UntypedHash::LENGTH],
+        ));
+        install_commit_qc_history_for_test(committed);
+        super::set_highest_qc(13, 0);
+        super::set_highest_qc_hash(newer_hash);
+        super::set_locked_qc(13, 0, Some(newer_hash));
+
+        let snapshot = super::snapshot();
+        assert_eq!(snapshot.highest_qc_height, 13);
+        assert_eq!(snapshot.highest_qc_view, 0);
+        assert_eq!(snapshot.highest_qc_subject, Some(newer_hash));
+        assert_eq!(snapshot.locked_qc_height, 13);
+        assert_eq!(snapshot.locked_qc_view, 0);
+        assert_eq!(snapshot.locked_qc_subject, Some(newer_hash));
+
+        super::reset_commit_certs_for_tests();
+        super::set_highest_qc(0, 0);
+        super::set_highest_qc_hash_inner(None);
+        super::set_locked_qc(0, 0, None);
     }
 
     #[test]

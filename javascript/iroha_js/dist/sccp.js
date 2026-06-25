@@ -632,7 +632,7 @@ const normalizeHexInput = (value, label, byteLength = null) => {
   if (value.trim() !== value) {
     throw new TypeError(`${label} must be canonical hex`);
   }
-  const trimmed = value.replace(/^0x/i, "").toLowerCase();
+  const trimmed = value.startsWith("0x") ? value.slice(2) : value;
   if (!trimmed || /[^0-9a-f]/.test(trimmed) || trimmed.length % 2 !== 0) {
     throw new TypeError(`${label} must be canonical hex`);
   }

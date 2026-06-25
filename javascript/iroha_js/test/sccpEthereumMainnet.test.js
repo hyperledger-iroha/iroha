@@ -4182,6 +4182,41 @@ test("EthereumMainnetSccp binds custom outbound proof results to the requested p
   );
 });
 
+test("EthereumMainnetSccp rejects noncanonical-case hex in EVM-family proof requests", () => {
+  const sdk = new EthereumMainnetSccp();
+  const input = sampleOutboundInput();
+
+  for (const proofArtifactHash of [
+    `0X${"22".repeat(32)}`,
+    `0x${"AA".repeat(32)}`,
+  ]) {
+    assert.throws(
+      () =>
+        sdk.buildOutboundProofRequest({
+          ...input,
+          proofArtifactHash,
+          provingKeyHash: hex32("92"),
+        }),
+      /proof request\.proofArtifactHash/u,
+    );
+  }
+
+  for (const provingKeyHash of [
+    `0X${"22".repeat(32)}`,
+    `0x${"AA".repeat(32)}`,
+  ]) {
+    assert.throws(
+      () =>
+        sdk.buildOutboundProofRequest({
+          ...input,
+          proofArtifactHash: hex32("91"),
+          provingKeyHash,
+        }),
+      /proof request\.provingKeyHash/u,
+    );
+  }
+});
+
 test("EthereumMainnetSccp validates native prover bundle and binds artifact hashes", () => {
   const input = sampleOutboundInput();
   const referenceSdk = new EthereumMainnetSccp();

@@ -6622,11 +6622,17 @@ public final class SourceSccpProofs {
       throw new IllegalArgumentException(field + " must be canonical hex");
     }
     String body = input;
-    if (body.regionMatches(true, 0, "0x", 0, 2)) {
+    if (body.startsWith("0X")) {
+      throw new IllegalArgumentException(field + " must be canonical hex");
+    }
+    if (body.startsWith("0x")) {
       body = body.substring(2);
     }
     if (body.length() != byteLength * 2) {
       throw new IllegalArgumentException(field + " must be " + byteLength + " bytes");
+    }
+    if (!isLowercaseHexBody(body)) {
+      throw new IllegalArgumentException(field + " must be canonical hex");
     }
     final byte[] out = new byte[byteLength];
     for (int i = 0; i < out.length; i++) {
@@ -6638,6 +6644,16 @@ public final class SourceSccpProofs {
       out[i] = (byte) ((hi << 4) | lo);
     }
     return out;
+  }
+
+  private static boolean isLowercaseHexBody(final String value) {
+    for (int i = 0; i < value.length(); i++) {
+      final char character = value.charAt(i);
+      if (!((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f'))) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private static void writeU32Le(final ByteArrayOutputStream out, final int value) {

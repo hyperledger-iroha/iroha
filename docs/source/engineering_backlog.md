@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-24
+Last updated: 2026-06-25
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -24,6 +24,9 @@ unless governance explicitly re-opens that scope.
 The retired-network surface scan now rejects separator-obfuscated references to
 that family, so punctuation-spliced or whitespace-spliced names cannot re-enter
 SCCP-facing code, SDKs, scripts, or docs unnoticed.
+Translated public bridge-proof launch-scope docs now carry the same generic
+unsupported-family and not-remaining-work boundary, and the retired-network
+surface guard pins those localized files before release evidence can pass.
 Replace the remaining SCCP source-chain verifier placeholders behind the typed
 adapter variants with governed live verifier deployments and external-chain
 rule checks before inbound source proofs can be treated as production-ready:
@@ -39,7 +42,47 @@ live verifier engines and deployment artifacts are supplied. Standalone
 source-adapter deployment descriptors now directly reject built-in placeholder
 ID/hash replay across Ethereum, BSC, Solana, TON, and TRON, and the release
 source-inventory gate pins those adversarial checks while the live verifier
-engine replacement remains open. Common source-verifier evidence shape now also
+engine replacement remains open. Core admission now also rejects noncanonical
+source verifier material and source-adapter deployment hex spellings, including
+uppercase hash/address text and repeated `0x` prefixes, before decoded bytes
+can satisfy governed production material matching. User-level SCCP route
+manifest admission now applies the same canonical spelling rule to BSC/TRON
+route hashes, BSC EVM addresses, chain ids, optional proof/deployment evidence
+hashes, and BSC explorer transaction hashes, so uppercase, padded, or repeated
+prefix operator input cannot be normalized into production readiness. EVM
+destination rollout evidence helpers now also require fixed hashes, EVM
+addresses, and runtime bytecode to use canonical lowercase `0x` spellings;
+bare lowercase hex is rejected and pinned in release inventory before
+destination binding or route-allowlist TOML can be rendered. Direct ETH/BSC
+source-bridge evidence helpers apply the same `0x` prefix requirement to
+source bridge addresses, fixed component hashes, and runtime bytecode before
+source material or deployment-record TOML can be rendered. The TRON
+source-bridge evidence helper applies that canonical prefix rule to fixed
+component hashes and runtime bytecode while keeping TRON address decoding on
+its separate Base58/`0x41` address path. All-lanes evidence validation applies
+the same rule to copied fixed-width hashes, including EVM source deployment
+transaction input SHA-256 metadata, so bare lowercase aliases cannot be
+normalized into public readiness summaries. Direct Solana and TON destination
+evidence helpers now also require canonical lowercase `0x` spellings for fixed
+verifier hashes and inline verifier program or code-BoC hex preimages before
+destination or route-allowlist TOML can be rendered, and release inventory pins
+the corresponding bare, `0X`, and uppercase-byte rejection tests. Solana and
+TON source-state evidence helpers apply the same fixed-hash rule before source
+material or deployment TOML can be rendered, and release inventory pins those
+bare, `0X`, and uppercase-byte source-state hash regressions too. TON live
+`accountStates` hash decoding now rejects `0X` prefixes and uppercase hex-byte
+aliases before normalizing remote account, transaction, or code hashes into
+rollout evidence, while preserving canonical base64/base64url and lowercase
+hex forms used by public TON APIs.
+Python Torii-client, JavaScript, Swift, Kotlin/JVM, and Java Android SCCP
+proof-request, message-bundle, and source-proof hex normalization now reject
+`0X` prefixes and uppercase byte aliases for public-input hashes, statement
+hashes, optional Groth16 prover artifact/proving-key hashes, fixed source-proof
+hashes, and canonical SCCP message-bundle hash fields; release inventory pins
+those SDK guards so they are no longer tracked as remaining local launch work.
+The focused Kotlin/JVM and Java Android SCCP suites were rerun with Homebrew
+OpenJDK 21 pinned via `JAVA_HOME`, so that local validation is no longer tracked
+as remaining launch work. Common source-verifier evidence shape now also
 rejects nonzero source-role hash reuse and copied source-record template-hash
 replay, including ready and not-ready standalone all-lanes copied-summary
 preflight, before OpenVerify wrapper rebuilds or catalog matching can make
@@ -239,10 +282,16 @@ raw binding/hash overrides cannot drift from the descriptor-derived binding.
 Sub&#115;trate/Pol&#107;adot networks are explicitly out of scope for the current SCCP
 launch set; do not count them as production-readiness blockers until the
 launch-scope network policy is expanded.
-Native .NET SCCP proof-request canonical replay coverage still needs runtime
-validation on a Windows host with the `.NET 8` SDK, including the strict
-`SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, before release evidence can
-treat that lane as fully exercised locally.
+Native .NET SCCP proof-request canonical replay coverage is now present in the
+C# source tests for proof-request fixed hashes, local-admission source-material
+hashes, BSC outbound fixed hashes, and optional Groth16 artifact hashes. Runtime
+validation still needs a Windows host with the `.NET 8` SDK, including the
+strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, before release
+evidence can treat that lane as fully exercised locally.
+Required release evidence now explicitly names canonical-case rejection coverage
+for proof-request, message-bundle, source-proof, and optional Groth16 artifact
+hashes, including uppercase byte aliases and `0X` public-input, statement,
+bundle/source-proof, proof-artifact, and proving-key hashes.
 Readiness and strict-bundle transcript checks now also reject extra
 non-canonical `.NET` setup/test commands in the `.NET` phase, so stale
 ETH/BSC-only or otherwise narrow C# runs and forged setup probes cannot be
@@ -1037,11 +1086,38 @@ redistributable schemas, and official trust/revocation bundles.
 	  full-bootstrap execution proof attachments before backend verification,
 	  crypto now exposes a one-shot package builder that derives canonical
 	  machine-checkable report/archive bytes from governed artifacts before
-	  signing and validating the release-audit package, and data-model/Torii
-	  fixtures use that canonical builder instead of hand-assembled audit bodies,
+		  signing and validating the release-audit package, crypto also exposes a
+		  package-plus-digest helper so callers pin the digest of the same validated
+		  package they submit, data-model release-audit fixtures consume that helper,
+		  and Torii/Core production-path fixtures, including Core exact/bounded
+		  runtime and audited-prover rejection fixtures, consume paired
+		  external-review package/digest construction rather than split
+		  package/digest derivation. Crypto now also exposes an explicit
+		  external-review package/digest builder that rejects deterministic
+		  machine-generated inventory bodies before returning caller-pinnable
+		  package material. The `zk_stark` BFV full-bootstrap AIR prover
+		  fixture now keeps the same package/digest pairing for production-accepted
+		  external-review artifacts rather than the intentionally rejected
+		  machine-generated audit package, and data-model FHE execution policy
+		  validation now reuses the crypto external-review marker gate so
+		  machine-generated release-audit packages fail before policy admission even
+		  when the package digest and trusted reviewer match,
+		  the material/execution public schemas advertise the leading
+		  external-review report/archive markers, reviewer-id-bound external-review
+		  marker statements, plus machine-generated and separator-obfuscated
+		  machine-generated audit-body rejection,
 	  and the current material/execution schema hashes are
-		  `c54abfafd115e809d22b3b885e0c477f765ee080161afaa806edb958c4e24353`
-		  and `39e9909049c09866630fde67683f05dec32f773371eeaacf0fc08963ff9b6ca5`.
+		  `0714f79d58f9bf837a4a912ba8c89753b138abf13e6c2a9569a71d414cf11e6d`
+		  and `cae74417a2348108d7daf8a016f6320a9eceae5ede7738c66189af5a725bd0c5`.
+		  The registered bounded-noise compatibility wrappers for
+		  multiplication, Galois switching, outer-slot rotation, packed rotation,
+		  and bootstrap refresh now delegate to the registered target-limb
+		  basis-extension corridor, so
+		  production callers validate the same decomposition/evaluator-chain
+		  binding even when they use the older registered API names. Bounded
+		  outer-slot rotation public-bound propagation now also has direct and
+		  registered target-limb basis-extension wrappers, and Core uses the
+		  registered wrapper for multi-slot bounded `RotateLeft` bound checks.
 		  Core's release-audited material and execution prover entrypoints now also
 		  reject packages that downgrade the AIR-root FRI query-binding proof profile
 		  before native proof emission.
@@ -1258,23 +1334,34 @@ redistributable schemas, and official trust/revocation bundles.
   hashing, so governed material cannot commit to bytes that later fail envelope
   admission. Generated native circuit body validation applies that guard before
   digest and canonical-body comparison, so digest-correct template or handoff
-  text cannot reach generic material, envelope, or body-drift paths. Native
+  text cannot reach generic material, envelope, or body-drift paths. Generated
+  circuit-body backend/key-format/proof-system/field metadata now uses strict
+  canonical text-label preflight before body comparison. Native
   full-bootstrap payload circuit-id metadata now rejects placeholder and
   handoff labels before the generic canonical-id mismatch path. Proof-key
-  backend, key-format, and circuit-id metadata now uses the same placeholder
-  preflight before canonical mismatch. Native prover/verifier payloads and
+  backend and key-format metadata now use strict canonical text-label
+  preflight, proof-key circuit-id metadata uses the same placeholder preflight,
+  and outer proof-key/envelope circuit ids now share the strict canonical
+  `iroha_bfv_full_bootstrap_v1` preflight before
+  governed-material or envelope metadata matching. Native prover/verifier payloads and
   native proof-key material now also reject placeholder backend, key-format,
   proof-system, field, circuit-id, and payload-kind labels before generic
-  mismatch checks. Governed full-bootstrap circuit-id metadata now uses that
-  preflight across circuit material, evaluator digest material, arithmetic
-  trace/AIR/schema material, proof-key validation, and artifact envelopes.
-  Release-audit evidence, signoff payload, and manifest circuit-id metadata
-  now rejects placeholder labels before signature, manifest, or canonical
-  mismatch checks; release-audit proof-profile backend/key-format/proof-system/
-  field metadata and key-evidence payload-kind labels now use the same
-  preflight. Full-bootstrap transcript/domain-separator metadata now rejects
-  placeholder witness, statement, proof-input, and AIR composition domain
-  labels before generic domain mismatch checks.
+  mismatch checks. Governed full-bootstrap circuit material, evaluator
+  artifact-set digest material, arithmetic trace profiles, arithmetic AIR
+  material, proof public-input schemas, proof-key governed-material checks, and
+  artifact envelopes now share the strict canonical
+  `iroha_bfv_full_bootstrap_v1` preflight for governed full-bootstrap
+  circuit-id metadata.
+  Release-audit evidence, signoff payload, and manifest circuit-id metadata now
+  also use the strict canonical `iroha_bfv_full_bootstrap_v1` preflight;
+  release-audit proof-profile backend/key-format/proof-system/field metadata
+  and key-evidence payload-kind labels now use strict canonical text-label
+  preflight.
+  Full-bootstrap trace-profile witness, arithmetic AIR composition, proof
+  public-input schema statement/witness/AIR/proof-input, proof-key witness,
+  proof-key material envelope witness, and generated circuit-body witness
+  domains now use strict canonical byte-label preflight before generic domain
+  mismatch checks.
   Native verifier payloads now mirror the transparent prover payload profile by
   binding their field count, backend, key format, proof system, and field
   labels before material admission or Core canonicalization. Core's fallback
@@ -1870,10 +1957,11 @@ redistributable schemas, and official trust/revocation bundles.
 						  calls. The material and execution public-input schemas
 						  also mirror the release-audit evidence/signoff/record/manifest,
 						  proof-profile, native-payload text/digest sentinel, artifact-binding,
-						  and trusted-reviewer subcontracts under the pinned material
-						  `4ccf7ab1b5e74fab13cafd265aa56f854427f89250c8920f3ec0cf67ce6f5861`
+						  trusted-reviewer, and reviewer-id-bound external-review marker
+						  subcontracts under the pinned material
+						  `0714f79d58f9bf837a4a912ba8c89753b138abf13e6c2a9569a71d414cf11e6d`
 						  and execution
-						  `d2179784de2c6d2b395dfb217ee1fe9e90259c48355a6c5e27f5d366ef431a4f`
+						  `cae74417a2348108d7daf8a016f6320a9eceae5ede7738c66189af5a725bd0c5`
 						  schema hashes. Crypto now also exposes release-audit-gated
 						  exact and bounded artifact-aware execution and bound helpers,
 						  requiring the caller-trusted reviewer id/key and caller-pinned
@@ -1917,8 +2005,9 @@ redistributable schemas, and official trust/revocation bundles.
 				  opened-row replay policy, AIR-root FRI query scheduling, or
 							  release-audit package propagation of those verifier policies,
 							  caller-limit-aware Core native AIR opening-root and FRI query-shape
-							  replay, or artifact-aware full-bootstrap Galois-entry
-							  preflight before ciphertext/bound metadata use.
+							  replay, or artifact-aware full-bootstrap claim
+							  Galois-key-set digest preflight before ciphertext/bound
+							  metadata use.
 		  Remaining production work is the audited full-bootstrap arithmetic
 		  proof-producing backend plus release-grade
 		  prover/verifier artifacts and independent audit report/archive production
@@ -1929,19 +2018,20 @@ redistributable schemas, and official trust/revocation bundles.
 		  release-prover AIR contract/artifact digest binding,
 		  AIR contract material/digest/artifact binding,
 		  proof-key evaluator artifact-set binding,
+		  native circuit-fingerprint and generated circuit-body proof
+		  public-input schema-payload digest binding,
+		  native AIR envelope construction/replay validation,
+		  raw native proof-key payload placeholder preflight,
+		  proof attachment finalization, and statement-recomputation validation,
 			  audited release-package wrapper, release-audit transcript-inventory
 			  preflight, policy-pinned Core/Torii runtime release-audit gate,
 				  same-field separator-delimited label-token-bound and standalone-value-token release-audit report/archive commitment containment,
+				  reviewer-id-bound external-review marker statement validation,
 				  canonical generated report/archive byte-pair and package-builder path,
-					  native AIR envelope
-					  construction, schema/proof-key-advertised Merkle/FRI replay binding,
-					  transcript-derived canonical AIR opening schedule/public-padding replay
-					  validation with AIR contract/public-schema and generated-circuit/fingerprint
-					  binding,
-				  raw native proof-key payload placeholder preflight,
-				  generated circuit-body artifact-replay obligation binding,
-				  generated circuit-body embedded AIR material preflight,
-			  attachment-finalization, or statement-recomputation validation
+				  artifact-aware release-audit archive validation now also requires
+				  the evaluator-key, accumulator, proof-schema, arithmetic-AIR,
+				  and prover/verifier artifact hex payloads to match the exact
+				  governed artifact bytes, not only the signed artifact digests
 		  corridors documented above.
 	  Direct crypto
 	  refresh-transcript validation/digesting and Soracloud transcript digesting

@@ -38,6 +38,9 @@ requires a new source-proof design, fresh fixtures, SDK/Torii surface review,
 and explicit governance approval rather than reviving diagnostic code paths.
 The retired-network surface guard requires explicit no-support launch-scope
 wording in the docs and status files before release evidence can pass.
+Translated public bridge-proof launch-scope docs carry the same generic
+unsupported-family and not-remaining-work boundary so localized docs cannot
+silently preserve a narrower SCCP support statement.
 Generated release-readiness Markdown and verifier-owned release-bundle Markdown
 also carry the exact no-support sentence so public operator artifacts cannot
 imply hidden Sub&#115;trate/Pol&#107;adot compatibility.
@@ -76,6 +79,39 @@ The Rust readiness path requires those route allowlist and canary hashes to use
 the canonical lowercase `0x` spelling; bare hex, `0X` prefixes, uppercase byte
 aliases, and padded strings stay blockers. Deployment-bound EVM lane readiness
 replays that same canonical check for copied route-canary transaction hashes.
+User-level SCCP route manifests apply the same fail-closed spelling rule for
+BSC/TRON route hashes, BSC EVM addresses, chain ids, optional proof/deployment
+evidence hashes, and BSC explorer transaction hashes; uppercase, whitespace
+padded, or repeated-prefix operator input is rejected instead of normalized into
+readiness metadata. EVM destination rollout evidence helpers also require the
+same canonical lowercase `0x` spelling for fixed hashes, EVM addresses, and
+runtime bytecode; bare lowercase hex is rejected before destination binding or
+route-allowlist TOML can be rendered. Direct ETH/BSC source-bridge evidence
+helpers enforce the same `0x` prefix requirement for source bridge addresses,
+fixed component hashes, and runtime bytecode before source material or
+deployment-record TOML can be rendered. The TRON source-bridge evidence helper
+applies that canonical prefix rule to fixed component hashes and runtime
+bytecode while keeping TRON address decoding on its separate Base58/`0x41`
+address path. All-lanes evidence validation now applies the same rule to copied
+fixed-width hashes, including EVM source deployment transaction input SHA-256
+metadata, so bare lowercase aliases cannot be normalized into public readiness
+summaries.
+Direct Solana and TON destination evidence helpers now also require canonical
+lowercase `0x` spellings for fixed verifier hashes and inline verifier program
+or code-BoC hex preimages, so bare hex, `0X` prefixes, and uppercase byte
+aliases fail before destination or route-allowlist TOML can be rendered.
+The Solana and TON source-state evidence helpers apply the same canonical
+fixed-hash rule to trust-anchor, consensus, message-inclusion, source-state,
+finality-policy, adapter verifier, deployment receipt, and full-light-client
+audit hashes before source material or deployment TOML can be rendered.
+Python Torii-client, JavaScript, Swift, Kotlin/JVM, and Java Android SCCP
+proof-request, message-bundle, and source-proof hex normalization now reject
+`0X` prefixes and uppercase byte aliases for public-input hashes, statement
+hashes, optional Groth16 prover artifact/proving-key hashes, fixed source-proof
+hashes, and canonical SCCP message-bundle hash fields, while preserving
+lowercase bare and lowercase `0x` spellings where those SDK APIs already
+accepted both forms. Solana base58 identifiers remain on the separate Solana
+decoding path rather than being treated as hex aliases.
 Normalized codec JSON fixed-byte variants and shared public SCCP JSON hex
 helpers use the same canonical lowercase `0x` syntax for fixed hashes,
 byte-vector fields, and vector-of-byte-vector fields; bare, `0X`,
@@ -1050,9 +1086,9 @@ python3 scripts/sccp_bsc_source_bridge_evidence.py \
 The BSC destination leg also requires real Groth16 circuit, proving-key, and
 verifier material before a native prover bundle can be treated as production.
 The materializer must be given the full-message `r1cs`, final `zkey`,
-exported SnarkJS verifier key, canonical circuit source, the Powers-of-Tau
-file used to verify the final zkey, and both trusted-setup and reproducible
-build transcripts. Production materialization runs `snarkjs zkey verify
+exported SnarkJS verifier key, canonical circuit source, witness WASM, the
+Powers-of-Tau file used to verify the final zkey, and both trusted-setup and
+reproducible build transcripts. Production materialization runs `snarkjs zkey verify
 <r1cs> <ptau> <zkey>` and records the successful `ZKey Ok!` result plus the
 Powers-of-Tau SHA-256 in the manifest, attestation request, signed role
 payloads, and native prover bundle checks. A manifest without the PTAU hash or
@@ -1067,8 +1103,10 @@ node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material materialize \
   --ptau <powersOfTau28_hez_final_22.ptau> \
   --snarkjs-verifier-key <verification_key.json> \
   --circuit-source <full-message.circom> \
+  --witness-wasm <full-message_js/full-message.wasm> \
   --trusted-setup-transcript <trusted-setup-transcript.json> \
   --reproducible-build-transcript <reproducible-build-transcript.json> \
+  --snarkjs-bin <snarkjs> \
   --out-dir <groth16-material-dir>
 ```
 
@@ -1078,19 +1116,101 @@ sign the request-bound role payloads, inspect readiness, and only then finalize
 the manifest from those signed role files. The four production roles are
 `semanticSccpCircuit`, `circuitSecurity`, `trustedSetup`, and
 `reproducibleBuild`; signer fingerprints must be trusted explicitly and cannot
-be reused across roles. The transcript evidence must show at least two trusted
-setup contributors, destroyed toxic waste, a passing ceremony, a passing
+be reused across roles. The request is not signable until it also binds public
+semantic-review evidence (`iroha-sccp-bsc-groth16-semantic-review-evidence/v1`)
+and circuit-security audit evidence
+(`iroha-sccp-bsc-groth16-circuit-security-audit-evidence/v1`). Each evidence
+JSON must hash a concrete public review/audit report file, bind the route,
+network, public signals, circuit source, R1CS, PTAU, proving key, SnarkJS
+verification key, and BSC verifier key, and record a passing result with zero
+unresolved high/critical findings. Review/audit evidence schemas are closed;
+unknown top-level or nested report-reference fields are rejected before any role
+body can be signed, and camel/snake/hash alias conflicts are rejected rather
+than resolved by precedence. Report paths inside the evidence JSON must be
+portable safe relative paths, not absolute paths, URLs, parent traversal, or
+symlinks. The evidence SHA-256 and report SHA-256 are then embedded in the
+canonical role body before signing. The transcript evidence must show at least
+two trusted setup contributors, destroyed toxic waste, a passing ceremony, a passing
 Powers-of-Tau verification, at least two independent rebuilders, and a
 reproducible rebuild. Transcript command logs, when supplied, must show
 `materialize` was run with `--ptau`, `--trusted-setup-transcript`, and
 `--reproducible-build-transcript`; command logs that pass signed attestations
-directly to `materialize` are rejected as stale.
+directly to `materialize` are rejected as stale. Any optional transcript
+`sourceBuildTranscript.path` reference must also be a safe relative path to a
+regular public file.
+The toolchain-fingerprint command writes the Circom/SnarkJS executable
+SHA-256 values into a public reproducible-build transcript copy so operators do
+not sign placeholder or hand-entered binary hashes.
+The transcript-template command writes public trusted-setup and
+reproducible-build transcript drafts bound to the actual R1CS, PTAU, zkey,
+verification key, witness WASM, circuit source, and toolchain binaries. Those
+drafts intentionally keep contributor, toxic-waste, ceremony, rebuild, and
+zkey-verification result fields blocked; they must be completed from the
+independent ceremony and rebuild records before `materialize` can produce
+production-ready material.
+The evidence-template command writes manifest-bound public review/audit draft
+envelopes plus report files for the semantic and circuit-security roles. These
+drafts intentionally carry `pending` and `false` result fields and are not
+signable; reviewers must replace the report body and evidence fields with real
+passing review results before `attestation-request` marks the corresponding
+role ready for signature. The handoff-bundle command writes one public
+hash-bound operator packet tying the material manifest, transcript-template
+package, review-evidence package, attestation request, current role readiness,
+remaining blockers, and next commands together for external reviewers and
+signers. It separates handoff completeness from production, signing, and
+finalization readiness; creating the handoff bundle never marks candidate
+material production-ready. The verify-handoff command re-hashes every
+referenced public file, checks package schemas, and reruns attestation-status
+from the bundled request so stale handoff packets are rejected before reviewers
+or signers rely on them. It also rejects hand-edited package/readiness summaries
+when draft flags, role readiness, missing-role lists, production blockers, or
+problem counts do not match the recomputed public state. Handoff manifest,
+package, readiness, and command summaries are closed-shape JSON; unknown fields
+or snake/camel alias conflicts are blockers rather than ignored operator notes.
+The command summary must also preserve the signer, request, and role-attestation
+arguments needed for status checks, role signing, and finalization. Every file
+reference inside the handoff must be a safe relative path; absolute paths, URLs,
+query/fragment suffixes, control bytes, and parent traversal are rejected.
 
 ```bash
+node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material toolchain-fingerprint \
+  --transcript <reproducible-build-transcript.json> \
+  --circom-bin <circom> \
+  --snarkjs-bin <snarkjs> \
+  --out <reproducible-build-transcript.with-toolchain-hashes.json>
+
+node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material transcript-template \
+  --bsc-network testnet|mainnet \
+  --r1cs <full-message.r1cs> \
+  --zkey <full-message.final.zkey> \
+  --ptau <powersOfTau28_hez_final_22.ptau> \
+  --snarkjs-verifier-key <verification_key.json> \
+  --circuit-source <full-message.circom> \
+  --witness-wasm <full-message_js/full-message.wasm> \
+  --circom-bin <circom> \
+  --snarkjs-bin <snarkjs> \
+  --out-dir <transcript-dir>
+
+node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material evidence-template \
+  --manifest <candidate-groth16-material.manifest.json> \
+  --out-dir <review-evidence-dir>
+
 node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-request \
   --manifest <candidate-groth16-material.manifest.json> \
-  --toolchain-sha256 <0x...> \
+  --semantic-review-evidence <semantic-review-evidence.json> \
+  --circuit-security-audit-evidence <circuit-security-audit-evidence.json> \
   --out <attestation-request.json>
+
+node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material handoff-bundle \
+  --manifest <candidate-groth16-material.manifest.json> \
+  --transcript-template-package <transcript-template-package.json> \
+  --evidence-template-package <evidence-template-package.json> \
+  --request <attestation-request.json> \
+  --out <handoff.json>
+
+node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material verify-handoff \
+  --handoff <handoff.json> \
+  --trusted-attestation-signer <0x...>
 
 node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material sign-attestation \
   --request <attestation-request.json> \
@@ -1116,6 +1236,11 @@ node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material finalize-attestation
   --out-dir <groth16-material-dir>
 ```
 
+The request generator derives `toolchainSha256` from the transcript's canonical
+`toolchain` object. Use `--toolchain-sha256` only when the reproducible-build
+record intentionally supplies that hash out of band; do not sign placeholder or
+operator-entered hashes.
+
 Before the finalized material can be attached to a BSC native EVM prover
 bundle, operators must run a manifest-bound proof self-test against the witness
 calculator. The self-test binds the manifest, public signals, proof artifact,
@@ -1129,6 +1254,22 @@ node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material proof-self-test \
   --snarkjs-bin snarkjs \
   --out <bsc-groth16-proof-self-test.json>
 ```
+
+The `native-prover-bundle` command then reruns `snarkjs groth16 verify` with
+`--snarkjs-bin` against the proof and public signals embedded in that report,
+using the SnarkJS verification key path and hash from the signed material
+manifest. The supplied `--snarkjs-bin` must exactly match the signed material
+manifest's `selfChecks.snarkjs.snarkjsBinary`, and that manifest value must
+match the referenced reproducible-build transcript's `toolchain.snarkjs.binary`.
+The signed reproducible-build attestation must also carry the SHA-256 of the
+canonical transcript `toolchain` object. The transcript must include
+`toolchain.snarkjs.binarySha256`, and `native-prover-bundle` hashes the supplied
+`--snarkjs-bin` file before running verification, so the bundle cannot be
+verified with different executable bytes than the ones recorded by reproducible
+build evidence.
+A report whose proof shape and hashes are internally consistent but
+cryptographically invalid is rejected before the native prover bundle or
+production route manifest can be emitted.
 
 For deployed ETH/BSC source emitters, operators can collect the emitter code
 hash directly from read-only JSON-RPC with
@@ -1950,7 +2091,10 @@ account to be `active`, requires a present `code_boc`, normalizes the returned
 `code_hash`, `account_state_hash`, and last-transaction hash to 32-byte hex,
 and recomputes the `code_boc` single-root representation hash to reject any
 remote `code_hash` drift. Padded raw addresses or padded remote hash text fail
-closed instead of being trimmed into rollout evidence, and padded `code_boc`
+closed instead of being trimmed into rollout evidence. Remote TON hash text may
+use canonical base64/base64url, lowercase bare hex, or lowercase `0x` hex;
+`0X` prefixes and uppercase hex-byte aliases fail before rollout evidence is
+derived. Padded `code_boc`
 base64 fails both live collection and imported summary rendering before offline
 replay arguments or TOML comments are produced. The collector also rejects API
 URLs that embed credentials, params, queries, or fragments and caps the
@@ -2683,6 +2827,18 @@ Torii TOML is rendered. Route-manifest JSON string
 fields are canonical at the record boundary: surrounding whitespace in route
 ids, asset keys, network ids, post-deploy transaction ids, or offline full-TOML
 hashes is rejected instead of being trimmed into accepted production metadata.
+Production-ready BSC route manifests also require the deployment evidence to
+carry embedded `bscContractReadback` from live RPC reads. That readback must
+confirm bytecode at the token, bridge, source-bridge, and verifier addresses,
+publish direct `eth_getCode` hashes for each address, reject the empty-account
+code hash, and match the verifier bytecode hash to the route's declared
+verifier-code hash and destination binding. The same evidence must carry
+`compiledContractCodeHashes` from the local Solidity build, and production
+manifest generation rejects any token, bridge, source-bridge, or verifier hash
+that differs from live readback. Route manifests and generated TAIRA TOML carry
+`deploymentEvidenceSha256`, a canonical hash of the normalized deployment
+evidence snapshot, so the public route metadata remains audit-bound to the live
+readback and compiled-bytecode tuple used during manifest generation.
 The release-readiness source inventory pins those BSC route-config guards,
 including lowercase bytes32, lowercase EVM address, network metadata, and
 adversarial manifest tests for uppercase `bscNetwork`, `chainIdHex`,

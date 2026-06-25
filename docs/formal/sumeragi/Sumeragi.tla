@@ -12926,4 +12926,110 @@ SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope ==
   /\ FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope
   /\ RbcLifecycleAlwaysMatchesEndToEndEnvelope
 
+SumeragiConsensusCoreStateSafetyEnvelope ==
+  /\ TypeInvariant
+  /\ CommitImpliesQuorum
+  /\ CommitImpliesStakeQuorum
+  /\ CommitCertificateMatchesFinality
+  /\ LiveCommitGateMatchesFinality
+  /\ LiveCommitGateRbcEvidenceMatches
+  /\ CommitImpliesLiveVoteQuorum
+  /\ CommitImpliesLiveStakeQuorum
+  /\ CommitImpliesHonestSupport
+  /\ CommitImpliesDelivered
+  /\ CommitImpliesRbcEvidence
+  /\ FinalityCertificateStackComplete
+  /\ FinalityCertificateStackMatchesFinality
+  /\ FinalityClearsNewViewHandoff
+  /\ CommitDisablesProgressActions
+  /\ CommitDisablesByzantineCommitVote
+  /\ CommittedPhaseMatchesFinality
+  /\ CommitViewMatchesFinality
+  /\ CommitViewDoesNotLeadCurrentView
+  /\ GstElapsedGateMatchesPreGst
+  /\ CommittedPreGstOnlyEnablesGstElapsed
+  /\ TimeoutTickGateMatchesStalledProgress
+  /\ ByzantineCommitVoteDoesNotBlockTimeoutStall
+  /\ ViewEvidenceMatchesActiveView
+  /\ ViewEvidenceWitnessRequiresNonzeroActiveView
+  /\ NewViewPhaseBelowQuorum
+  /\ LiveNewViewVotesStayInHandoff
+  /\ HonestProposeGateMatchesHandoffEvidence
+  /\ NewViewVoteGateMatchesFreshViewEvidence
+  /\ NewViewVoteQuorumGateMatchesNextEvidence
+  /\ NewViewVotePendingGateMatchesMissingNextEvidence
+  /\ ViewEvidenceIsCompleteOrEmpty
+  /\ PreCommitPhasesHaveNoCommitVotes
+  /\ PrePreparePhasesHaveNoPrepareVotes
+  /\ LivePrepareVotesStayInHandoff
+  /\ PrepareVoteGateMatchesProposalEvidence
+  /\ PrepareVoteQuorumGateMatchesNextEvidence
+  /\ PrepareVotePendingGateMatchesMissingNextEvidence
+  /\ CommitImpliesViewQuorumEvidence
+  /\ CommitVotePhaseRequiresPrepareQuorum
+  /\ LiveCommitVotesRequirePrepareQuorum
+  /\ CommitVoteGateMatchesPrepareEvidence
+  /\ ByzantineCommitVoteGateMatchesPrepareEvidence
+  /\ HonestCommitVoteFinalityGateMatchesNextEvidence
+  /\ HonestCommitVotePendingGateMatchesMissingNextEvidence
+  /\ ByzantineCommitVoteFinalityGateMatchesNextEvidence
+  /\ ByzantineCommitVotePendingGateMatchesMissingNextEvidence
+  /\ LiveCommitVotesStayInCommitHandoff
+  /\ CommitImpliesPrepareQuorum
+  /\ CommitEvidenceMatchesVoteCounters
+  /\ CommitEvidenceIsCompleteOrEmpty
+  /\ CommitEvidenceIsBounded
+  /\ VoteCountersRespectRosterBudgets
+  /\ StakeSignedMatchesVoteCounters
+  /\ LiveStakeSignedIsBounded
+  /\ NoCommitEvidenceBeforeCommit
+  /\ NoCommitViewBeforeCommit
+  /\ DeliverImpliesEvidence
+  /\ RbcDeliveredWithoutFinalityHasNoCommitCertificate
+  /\ RbcDeliveredWithoutFinalityWaitsForCommitEvidence
+  /\ RbcProgressEvidenceMatchesState
+  /\ RbcPartialProgressEvidenceMatchesState
+  /\ RbcCorruptedNeverHasValidDigest
+  /\ RbcCorruptedRetainsHeaderEvidence
+  /\ RbcCorruptedHasNoFinalityArtifacts
+  /\ RbcCorruptedOnlyEnablesInitRepairProgress
+  /\ RbcMissingHeaderRequiresIdle
+  /\ RbcHeaderEvidenceRequiresNonIdle
+  /\ RbcValidDigestRequiresHeader
+  /\ RbcValidDigestRequiresActiveState
+  /\ RbcChunkEvidenceRequiresHeader
+  /\ RbcChunkEvidenceRequiresChunkOrCorruptedState
+  /\ RbcPartialChunkEvidenceRequiresChunkingOrCorruption
+  /\ RbcFullChunkCoverageRequiresCoveredOrCorruptedState
+  /\ RbcZeroChunkEvidenceRequiresPreChunkOrCorruption
+  /\ RbcReadyVotesRequireChunkHeaderEvidence
+  /\ RbcReadyVotesRequireReadyOrCorruptedState
+  /\ RbcPartialReadyEvidenceRequiresReadyPartialOrCorruption
+  /\ RbcReadyQuorumEvidenceRequiresQuorumOrCorruptedState
+  /\ RbcZeroReadyEvidenceRequiresPreReadyOrCorruption
+  /\ RbcCounterEvidenceRequiresValidDigestOrCorruption
+  /\ RbcInvalidDigestRequiresIdleOrCorruption
+  /\ ByzantineFaultGateMatchesCorruptibleRbc
+  /\ RbcInitGateMatchesRepairableState
+  /\ RbcChunkGateMatchesHeaderDigestEvidence
+  /\ RbcReadyGateMatchesChunkEvidence
+  /\ RbcDeliverGateMatchesCompleteEvidence
+  /\ RbcReadyQuorumEnablesDeliverGate
+  /\ RbcDeliverFinalityGateMatchesBufferedCommitEvidence
+  /\ RbcDeliverPendingGateMatchesMissingBufferedCommitEvidence
+  /\ LiveHeaderDigestEvidenceStayInRbcHandoff
+  /\ LiveChunkEvidenceStayInRbcHandoff
+  /\ LiveReadyVotesStayInRbcHandoff
+
+SumeragiConsensusCoreAlwaysMatchesStateSafetyEnvelope ==
+  [] SumeragiConsensusCoreStateSafetyEnvelope
+
+SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope ==
+  /\ SumeragiConsensusCoreAlwaysMatchesStateSafetyEnvelope
+  /\ SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope
+
+SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==
+  /\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope
+  /\ EventuallyCommit
+
 ====

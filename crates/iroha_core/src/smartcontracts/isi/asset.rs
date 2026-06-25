@@ -847,6 +847,11 @@ pub mod isi {
         if route_dataspace.is_some_and(|dataspace| dataspace != DataSpaceId::UNIVERSAL) {
             return Ok(route_dataspace);
         }
+        if let Some(home_dataspace) =
+            bare_restricted_asset_home_dataspace_hint(state_transaction, source_id)?
+        {
+            return Ok(Some(home_dataspace));
+        }
         unique_account_dataspace_hint(state_transaction, source_id.account())
             .map(|hint| hint.or(route_dataspace))
     }
@@ -898,10 +903,17 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
         definition: &AssetDefinition,
     ) -> Option<DataSpaceId> {
-        let dataspace_alias = definition
-            .alias()
-            .as_ref()
-            .map(|alias| alias.dataspace_segment().to_owned())
+        let dataspace_alias = state_transaction
+            .world
+            .asset_definition_alias_bindings
+            .get(definition.id())
+            .map(|binding| binding.alias.dataspace_segment().to_owned())
+            .or_else(|| {
+                definition
+                    .alias()
+                    .as_ref()
+                    .map(|alias| alias.dataspace_segment().to_owned())
+            })
             .or_else(|| {
                 definition
                     .id()
@@ -918,6 +930,31 @@ pub mod isi {
             }
             None => None,
         }
+    }
+
+    fn bare_restricted_asset_home_dataspace_hint(
+        state_transaction: &StateTransaction<'_, '_>,
+        asset_id: &AssetId,
+    ) -> Result<Option<DataSpaceId>, Error> {
+        if !matches!(
+            asset_id.scope(),
+            iroha_data_model::asset::AssetBalanceScope::Global
+        ) {
+            return Ok(None);
+        }
+
+        let definition = state_transaction
+            .world
+            .asset_definition(asset_id.definition())
+            .map_err(Error::from)?;
+        if definition.balance_scope_policy() != AssetBalancePolicy::DataspaceRestricted {
+            return Ok(None);
+        }
+
+        Ok(
+            asset_definition_home_dataspace_id(state_transaction, &definition)
+                .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL),
+        )
     }
 
     fn ensure_global_asset_write_on_authoritative_route(
@@ -1131,6 +1168,18 @@ pub mod isi {
             {
                 Some(DataSpaceId::UNIVERSAL)
             }
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace) => {
+                let hint = transfer_destination_dataspace_hint(state_transaction, destination_id)?;
+                if matches!(
+                    destination_id.scope(),
+                    iroha_data_model::asset::AssetBalanceScope::Dataspace(_)
+                ) || hint.is_some_and(|hint| hint != DataSpaceId::UNIVERSAL)
+                {
+                    hint
+                } else {
+                    Some(*dataspace)
+                }
+            }
             _ => transfer_destination_dataspace_hint(state_transaction, destination_id)?,
         };
         let destination_id = state_transaction
@@ -1193,7 +1242,7 @@ pub mod isi {
         Ok((source_id, destination_id))
     }
 
-    fn apply_resolved_numeric_asset_transfer_delta(
+    pub(crate) fn apply_resolved_numeric_asset_transfer_delta(
         state_transaction: &mut StateTransaction<'_, '_>,
         source_id: &AssetId,
         destination_id: &AssetId,
@@ -5223,6 +5272,120 @@ pub mod query {
                     .clone()
                     .into_inner(),
                 Numeric::new(9, 0)
+            );
+        }
+
+        #[test]
+        fn transfer_restricted_asset_uses_definition_home_dataspace_from_universal_route() {
+            let home_dataspace = DataSpaceId::new(7);
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
+            let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::new(domain_id, "rose".parse().unwrap());
+            let asset_def = {
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .with_balance_scope_policy(
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            )
+            .build(&ALICE_ID);
+            let source_asset_id = AssetId::with_scope(
+                asset_def_id.clone(),
+                ALICE_ID.clone(),
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(home_dataspace),
+            );
+            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+
+            let mut world = World::with_assets(
+                [domain],
+                [alice_account, bob_account],
+                [asset_def],
+                [source_asset],
+                [],
+            );
+            let alias: iroha_data_model::asset::AssetDefinitionAlias =
+                "rose#paynet".parse().expect("asset alias");
+            world
+                .asset_definition_aliases
+                .insert(alias.clone(), asset_def_id.clone());
+            world.asset_definition_alias_bindings.insert(
+                asset_def_id.clone(),
+                crate::state::AssetDefinitionAliasBindingRecord {
+                    alias,
+                    lease_expiry_ms: None,
+                    grace_until_ms: None,
+                    bound_at_ms: 0,
+                },
+            );
+
+            let kura = Kura::blank_kura_for_testing();
+            let query_store = LiveQueryStore::start_test();
+            let state = State::new(world, kura, query_store);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let catalog = DataSpaceCatalog::new(vec![
+                iroha_data_model::nexus::DataSpaceMetadata::default(),
+                iroha_data_model::nexus::DataSpaceMetadata {
+                    id: home_dataspace,
+                    alias: "paynet".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog");
+            block.nexus.dataspace_catalog = catalog.clone();
+            let mut stx = block.transaction();
+            stx.nexus.dataspace_catalog = catalog.clone();
+            stx.world.dataspace_catalog = catalog;
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            seed_test_call_hash(&mut stx, 0xB9);
+
+            Transfer::asset_numeric(
+                AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
+                3_u32,
+                BOB_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("bare restricted transfer uses definition home dataspace");
+
+            let destination_asset_id = AssetId::with_scope(
+                asset_def_id.clone(),
+                BOB_ID.clone(),
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(home_dataspace),
+            );
+            assert_eq!(
+                stx.world
+                    .asset(&destination_asset_id)
+                    .expect("destination asset created in definition home dataspace")
+                    .value()
+                    .clone()
+                    .into_inner(),
+                Numeric::new(3, 0)
+            );
+            assert_eq!(
+                stx.world
+                    .asset(&source_asset_id)
+                    .expect("source balance still exists")
+                    .value()
+                    .clone()
+                    .into_inner(),
+                Numeric::new(7, 0)
+            );
+            let universal_destination_asset_id = AssetId::with_scope(
+                asset_def_id,
+                BOB_ID.clone(),
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL),
+            );
+            assert!(
+                stx.world.asset(&universal_destination_asset_id).is_err(),
+                "bare restricted transfer must not fall back to universal dataspace"
             );
         }
 

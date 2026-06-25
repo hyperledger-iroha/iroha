@@ -3542,6 +3542,33 @@ public final class TonSccpProverTests {
     try {
       TonSccpProver.buildProofRequest(
           new TonSccpProver.ProofRequestInput(
+              new TonSccpProver.PublicInputsInput(
+                  1,
+                  repeat("11", 32),
+                  "0x" + repeat("AA", 32),
+                  TonSccpProver.DOMAIN_TON,
+                  repeat("33", 32),
+                  "19",
+                  repeat("aa", 32)),
+              sampleTonBundleBytes(),
+              new byte[0],
+              repeat("56", 32),
+              repeat("78", 32),
+              TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,
+              repeat("cc", 32),
+              repeat("aa", 32),
+              repeat("bb", 32),
+              TonSccpProver.CONTRACT_PROOF_BACKEND_V1,
+              TonSccpProver.DOMAIN_TON));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("payloadHash must be canonical hex");
+    }
+    assert threw : "TON proof requests must reject uppercase payload hashes";
+
+    threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          new TonSccpProver.ProofRequestInput(
               samplePublicInputs(),
               sampleTonBundleBytes(),
               new byte[0],
@@ -3557,6 +3584,26 @@ public final class TonSccpProverTests {
       threw = ex.getMessage().contains("statementHash must be canonical hex");
     }
     assert threw : "TON proof requests must reject padded statement hashes";
+
+    threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          new TonSccpProver.ProofRequestInput(
+              samplePublicInputs(),
+              sampleTonBundleBytes(),
+              new byte[0],
+              "0X" + repeat("56", 32),
+              repeat("78", 32),
+              TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,
+              repeat("cc", 32),
+              repeat("aa", 32),
+              repeat("bb", 32),
+              TonSccpProver.CONTRACT_PROOF_BACKEND_V1,
+              TonSccpProver.DOMAIN_TON));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("statementHash must be canonical hex");
+    }
+    assert threw : "TON proof requests must reject uppercase statement hashes";
 
     threw = false;
     try {
@@ -3606,6 +3653,15 @@ public final class TonSccpProverTests {
       threw = ex.getMessage().contains("sourceAdapterDeploymentHash must be canonical hex");
     }
     assert threw : "TON proof requests must reject padded deployment hashes";
+
+    threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          sampleProofRequestInput("0x" + repeat("AA", 32), repeat("bb", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceAdapterDeploymentHash must be canonical hex");
+    }
+    assert threw : "TON proof requests must reject uppercase deployment hashes";
 
     threw = false;
     try {

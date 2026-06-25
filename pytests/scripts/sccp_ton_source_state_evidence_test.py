@@ -137,6 +137,25 @@ def test_ton_hex_parser_rejects_zero_and_wrong_width():
     else:
         raise AssertionError("short TON source-state verifier hash was accepted")
 
+    for value, expected in (
+        ("11" * 32, "canonical lowercase 0x hex"),
+        ("0X" + "11" * 32, "lowercase 0x prefix"),
+        ("0x" + "AA" * 32, "lowercase hex"),
+    ):
+        try:
+            module.parse_hex_bytes(
+                value,
+                label="source state verifier hash",
+                byte_length=32,
+            )
+        except module.argparse.ArgumentTypeError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError(
+                f"noncanonical TON source-state verifier hash {value!r} "
+                "was accepted"
+            )
+
 
 def test_ton_source_hex_parser_redacts_parser_causes():
     """Invalid TON source-state hex inputs must not chain parser payloads."""

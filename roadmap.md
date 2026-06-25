@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-24
+Last updated: 2026-06-25
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -16,8 +16,9 @@ and completed history lives in [`status.md`](./status.md).
   middleware path preserves signed receipt admission while rejecting
   contradictory client profile and usage-limit binding fields before Torii
   issues a one-use certificate. The
-  on-chain path carries raw platform report/evidence bytes, binds them to
-  replay digests, anchors the challenge to recent ledger state, validates Apple
+  on-chain path carries raw platform reports plus deterministic evidence
+  envelopes, binds them to replay digests, anchors the challenge to recent ledger
+  state, validates Apple
   App Attest CBOR/authenticator data/nonce-extension/X.509 chains with
   duplicate-key rejection and Android KeyMint certificate
   arrays/challenge/security-level/app-identity extensions with duplicate
@@ -2294,7 +2295,10 @@ and completed history lives in [`status.md`](./status.md).
 		  pinned schema hashes, and Core audited prover tests pin the wrapper-surfaced
 		  record/manifest alias diagnostics. Package digesting now also rejects tampered signed
 	  report/archive bytes through the same digest mismatch gates as package
-	  validation.
+	  validation. External-review fixture package/digest construction now routes
+	  through the crypto marker-enforcing builder, while deterministic
+	  machine-generated report/archive bytes remain structural evidence material
+	  only and are rejected by the production-pinned path.
 		  Core's audited material and execution prover wrappers require that gate before
 			  native BFV proof attachments are emitted, including copied report/archive body
 			  rejection after edge-whitespace and alphanumeric normalization plus refresh transcript
@@ -2631,10 +2635,12 @@ and completed history lives in [`status.md`](./status.md).
 						  artifact/material/schema/native-envelope/audited-wrapper binding corridor,
 									  Core native verifier AIR-digest drift rejection,
 									  Core native envelope binary-decorated placeholder preflight,
-									  data-model native envelope placeholder preflight,
-									  Torii signed job-run native envelope placeholder preflight,
-									  data-model release-audit archive evidence schema advertisement,
-									  canonical generated release-audit package-builder path,
+										  data-model native envelope placeholder preflight,
+										  Torii signed job-run native envelope placeholder preflight,
+										  data-model release-audit archive evidence schema advertisement,
+										  data-model release-audit per-artifact evidence-digest schema advertisement,
+										  canonical generated release-audit package-builder path,
+									  canonical release-audit package-plus-digest builder path,
 									  native prover/verifier payload generated-circuit body bytes,
 									  raw native proof-key payload/material placeholder preflight,
 										  generated-body artifact-replay obligation flags, and
@@ -2644,10 +2650,15 @@ and completed history lives in [`status.md`](./status.md).
 											  release-audit report release-evidence/generated-body/proof-key-pair commitment and evidence-archive artifact-bundle/evaluator-artifact-set/centered-source-chain/generated-body/native-fingerprint/proof-key-pair/prover-key/verifier-key containment,
 											  release-audit evidence-archive generated-body byte-length,
 											  canonical generated-body hex, native prover/verifier payload hex,
-											  governed prover/verifier artifact hex evidence, and
-											  canonical report/archive byte-pair production,
-											  canonical generated release-audit package-builder path,
-											  same-field separator-delimited label-token-bound and standalone-value-token release-audit report/archive commitment containment,
+											  governed evaluator-key, accumulator, proof-schema,
+											  arithmetic-AIR, and prover/verifier artifact hex evidence, plus
+											  artifact-aware exact governed artifact-byte archive matching,
+												  duplicate generated/native/proof-key archive hex label rejection,
+												  canonical report/archive byte-pair production,
+												  canonical generated release-audit package-builder path,
+												  canonical release-audit package-plus-digest builder path,
+												  production-pinned byte-leading lowercase external-review marker with non-empty statement plus whitespace-prefixed/uppercase/empty-statement marker rejection and literal/separator-obfuscated machine-generated audit-body rejection,
+											  same-field lowercase label/hex-text signed-digest containment with raw-byte and colon-separator rejection, separator-delimited label-token-bound and standalone-value-token release-audit report/archive commitment containment,
 										  native circuit-fingerprint placeholder rejection,
 									  circuit-material registered-profile digest placeholder preflight,
 									  release-audit registered-profile digest placeholder preflight,
@@ -2666,11 +2677,12 @@ and completed history lives in [`status.md`](./status.md).
 							  replay validation with Core trace-material digest pinning,
 							  AIR contract/public-schema and
 									  generated-circuit/fingerprint binding plus native generated-body
+									  proof public-input schema-payload digest binding and
 									  typed decode plus placeholder/circuit-id/profile/digest/layout/obligation
 									  retarget preflight,
 								  limits-aware Core native AIR opening-root and FRI query-shape replay,
-								  artifact-aware full-bootstrap Galois-entry preflight before
-								  ciphertext/bound metadata use,
+								  artifact-aware full-bootstrap claim Galois-key-set digest
+								  preflight before ciphertext/bound metadata use,
 								  crypto-canonical execution native-AIR domain tags with bounded
 					  transcript-label attempts, Core release-prover native AIR synthesis
 				  routed through the shared BFV `zk_stark` wrapper,
@@ -3036,6 +3048,9 @@ and completed history lives in [`status.md`](./status.md).
   specific/generic no-support notes, active-tree forbidden-token scans, release
   gate wiring, and stale allowlist markers cannot silently degrade to sampled
   coverage.
+  Translated public bridge-proof launch-scope docs now carry the same generic
+  unsupported-family and not-remaining-work boundary, and the retired-network
+  surface guard pins those localized files before release evidence can pass.
   Strict release-bundle verifier inventory now also pins its own retired-network
   guard regressions, while stale retired-network allowlist markers are scanned
   only in the retired-network scan guard so adversarial verifier fixtures can
@@ -3321,7 +3336,37 @@ and completed history lives in [`status.md`](./status.md).
   Standalone source-adapter deployment descriptors must also reject built-in
   placeholder ID and hash replay directly across ETH, BSC, Solana, TON, and
   TRON, and the same role-validation inventory pins those descriptor-level
-  adversarial checks.
+  adversarial checks. Core source-material and source-adapter deployment config
+  admission now also rejects noncanonical hex spellings for governed hash and
+  EVM address fields, including uppercase text and repeated `0x` prefixes,
+  before decoded bytes can satisfy production material matching. User-level
+  SCCP route manifests now reject noncanonical BSC/TRON route hashes, BSC EVM
+  addresses, chain ids, optional proof/deployment evidence hashes, and BSC
+  explorer transaction hashes instead of normalizing uppercase, padded, or
+  repeated-prefix operator input into production readiness. EVM destination
+  rollout evidence helpers now also reject bare lowercase hex for fixed hashes,
+  EVM addresses, and runtime bytecode, with release inventory markers pinning
+  the parser and adversarial tests. Direct ETH/BSC source-bridge evidence
+  helpers now apply the same canonical `0x` prefix requirement to source bridge
+  addresses, fixed component hashes, and runtime bytecode before source
+  material or deployment-record TOML can be rendered. The TRON source-bridge
+  evidence helper applies that canonical prefix rule to fixed component hashes
+  and runtime bytecode while keeping TRON address decoding on its separate
+  Base58/`0x41` address path. All-lanes evidence validation now rejects bare
+  lowercase fixed-hash aliases, including EVM source deployment transaction
+  input SHA-256 metadata, before public readiness summaries can be rendered.
+  Direct Solana and TON destination evidence helpers now apply the same
+  canonical lowercase `0x` rule to fixed verifier hashes and inline verifier
+  program or code-BoC hex preimages, with bare, `0X`, and uppercase-byte
+  aliases pinned as release-inventory regressions.
+  Solana and TON source-state evidence helpers now apply that same fixed-hash
+  rule before source material or deployment TOML can be rendered, and their
+  bare, `0X`, and uppercase-byte source-state hash negatives are pinned in
+  release inventory as well.
+  TON live `accountStates` hash decoding now also rejects `0X` prefixes and
+  uppercase hex-byte aliases before account, transaction, or code hashes are
+  normalized into rollout evidence, while preserving canonical base64/base64url
+  and lowercase hex forms used by public TON APIs.
   Common source-verifier evidence shape must also reject nonzero role-hash reuse
   before OpenVerify wrapper rebuilds or material/deployment matching can run,
   and the role-validation inventory pins the Rust guard plus explicit
@@ -3336,6 +3381,15 @@ and completed history lives in [`status.md`](./status.md).
   Python, Swift, Kotlin/JVM, and Java Android proof-request SDK tests must all
   cover deployment-only, receipt-only, and equal deployment/receipt replay
   cases, with the proof-request bundle inventory pinning those markers.
+  Python, JavaScript, Swift, Kotlin/JVM, and Java Android proof-request,
+  message-bundle, and source-proof hex inputs also reject `0X` prefixes and
+  uppercase byte aliases for public-input hashes, statement hashes, optional
+	  Groth16 artifact hashes, fixed source-proof hashes, and canonical SCCP
+	  message-bundle hash fields; keep the SDK tests and strict bundle/readiness
+	  inventory markers pinned. The focused Kotlin/JVM and Java Android SCCP
+	  suites now pass locally with Homebrew OpenJDK 21 pinned via `JAVA_HOME`;
+	  the remaining host-dependent SCCP SDK certification is the Windows `.NET 8`
+	  evidence pass tracked below.
   Deployment-derived Rust bindings must additionally require the full
   standalone deployment descriptor shape before minting binding hashes, including
   TON partial-audit, receipt/VK replay, and adapter verifier-key drift
@@ -4351,7 +4405,16 @@ and completed history lives in [`status.md`](./status.md).
   `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, the positive
   `SCCP .NET SDK TRX bytes: <positive integer>` marker, and TRX/corridor log
   paths are recorded in `status.md`; fixture parity or a non-Windows run must
-  not be treated as final release evidence for this item. The corridor and
+  not be treated as final release evidence for this item. The source tree now
+  includes .NET SCCP canonical-case rejection coverage for proof-request fixed
+  hashes, local-admission source-material hashes, message-bundle/source-proof
+  binding, and optional Groth16 artifact hash fields; the Windows pass must
+  execute those tests and surface the uppercase byte alias plus `0X`
+  public-input, statement, source-material, proof-artifact, and proving-key hash
+  negatives in the `sccp-dotnet-sdk.trx` evidence. Required release evidence now
+  names that canonical-case coverage explicitly in both readiness Markdown and
+  strict bundle verification, so removing the Windows handoff requirement is
+  treated as public evidence drift. The corridor and
   strict readiness/bundle verifiers now enforce this handoff by requiring
   `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`,
   `dotnet restore`, the full `FullyQualifiedName~Sccp` `.NET` test command with
@@ -9800,11 +9863,13 @@ and completed history lives in [`status.md`](./status.md).
   RBC state protocol/fault provenance,
   RBC global state-change exit classification,
   RBC evidence protocol/fault provenance,
-  RBC global evidence-change effect classification,
-  RBC global progress/evidence mutation classifier,
-  RBC global progress/evidence handoff-envelope aggregate,
-  Sumeragi consensus core end-to-end safety envelope aggregate,
-  RBC header installation provenance,
+	  RBC global evidence-change effect classification,
+	  RBC global progress/evidence mutation classifier,
+	  RBC global progress/evidence handoff-envelope aggregate,
+	  Sumeragi consensus core end-to-end safety envelope aggregate,
+	  Sumeragi consensus core state+temporal safety envelope aggregate,
+	  Sumeragi consensus core correctness envelope aggregate,
+	  RBC header installation provenance,
   RBC header evidence monotonicity,
   RBC digest installation provenance,
   RBC digest invalidation fault provenance,
@@ -11823,11 +11888,13 @@ operator-provided rollout bundles.
   source evidence helpers now also require exact `u32` source/target domain ids
   before verifier-key, material, or deployment hashes are derived, so
   `target_domain = False` cannot stage SORA-bound source evidence. They also
-  reject padded bridge addresses, component hashes, domains, and deployment
-  block numbers before deriving source material or deployment-record hashes.
-  same exact-input posture to fixed-width component hashes, source/target
-  material, source-adapter deployment records, or full-light-client gate hashes.
-  The
+  reject bare, uppercase, or padded bridge addresses, component hashes, runtime
+  bytecode, domains, and deployment block numbers before deriving source
+  material or deployment-record hashes. TRON source evidence applies the same
+  canonical prefix rule to fixed component hashes and runtime bytecode while
+  retaining the separate Base58/`0x41` address parser. All-lanes evidence
+  validation rejects bare fixed-hash aliases at the copied-summary boundary,
+  including EVM source deployment transaction input SHA-256 metadata.
   Source, destination, live, and all-lanes evidence helpers now also require
   canonical ASCII decimal text for source-domain fields, EVM live/source-live
   RPC chain ids, deployment block numbers, audited ProgramData slots, TON
@@ -15956,7 +16023,8 @@ or ABI behavior.
 								  `1cf3dd56010dc765bd671004b1c9262499666ac1c1313573fceb59bae26d6caf`.
 									  The typed crypto schema and full-bootstrap execution schema now advertise
 										  artifact-bound release-prover input validation, stale
-										  Galois-key-set replay, stale proof-key artifact rejection,
+										  Galois-key-set replay including embedded digest retargeting,
+										  stale proof-key artifact rejection,
 											  transcript-derived opening schedule/public-padding replay, native
 											  Merkle/FRI verifier replay, and AIR-root FRI query binding.
 											  Release-audit evidence now exposes those replay-policy guarantees in
@@ -15964,14 +16032,35 @@ or ABI behavior.
 												  fingerprint material binds the same guarantees with field count 42,
 												  generated circuit bodies carry them with field count 43, and the current
 											  release-audit package schema advertises generated-body byte length/hex,
-											  native prover/verifier payload hex, governed prover/verifier artifact hex,
-											  and same-field signed commitment containment with standalone label tokens,
-											  explicit value separators, standalone value tokens, and
-											  relabel/cross-field/punctuation/conflicting- or same-value duplicate replay rejection. The current
-											  material/execution schema hashes are
-											  `c54abfafd115e809d22b3b885e0c477f765ee080161afaa806edb958c4e24353`
-											  and
-											  `39e9909049c09866630fde67683f05dec32f773371eeaacf0fc08963ff9b6ca5`.
+											  evaluator artifact hex for coefficient-to-slot, slot-to-coefficient,
+											  blind-rotation, sample-extraction, and accumulator artifacts, proof
+											  public-input schema and arithmetic AIR artifact hex, native
+												  prover/verifier payload hex, governed prover/verifier artifact hex,
+												  release-audit evidence per-artifact digest bindings for those evaluator,
+												  proof-schema, and arithmetic-AIR artifacts, and same-field signed
+													  commitment containment with standalone label tokens,
+													  explicit value separators, standalone value tokens, and
+													  relabel/cross-field/punctuation/conflicting- or same-value duplicate replay
+													  rejection, plus byte-leading lowercase external-review report/archive
+													  markers, required marker-colon separators, reviewer-id-bound non-empty marker
+													  statements, missing-colon/empty/generic-statement rejection,
+													  raw-byte, colon-separator, uppercase signed-digest/label, and same-value duplicate signed-commitment rejection, and
+												  machine-generated or separator-obfuscated machine-generated audit-body rejection. Raw native
+											  prover/verifier proof-key payloads now reject
+											  binary-decorated placeholder text before Norito decoding or digest-catalog
+												  fallback. The current
+													  material/execution schema hashes are
+														  `0714f79d58f9bf837a4a912ba8c89753b138abf13e6c2a9569a71d414cf11e6d`
+														  and
+														  `cae74417a2348108d7daf8a016f6320a9eceae5ede7738c66189af5a725bd0c5`.
+											  Registered bounded-noise compatibility wrappers for multiplication, Galois
+											  switching, outer-slot rotation, packed rotation, and bootstrap refresh now
+											  delegate to the registered target-limb basis-extension corridor, so older
+											  registered API names still validate the production
+											  decomposition/evaluator-chain binding. Bounded outer-slot rotation public-bound
+											  propagation now also has direct and registered target-limb
+											  basis-extension wrappers, and Core uses the registered wrapper for
+											  multi-slot bounded `RotateLeft` bound checks.
 											  Core release-audited material and execution prover entrypoints now also
 											  reject release packages that downgrade AIR-root FRI query-binding before
 											  native proof emission.
@@ -16028,10 +16117,29 @@ or ABI behavior.
 								  material admission, and generated pair validation rejects
 								  prover/verifier native-circuit mismatch before deriving or admitting a
 								  proof-key pair commitment. Native proof-key
-								  material now also rejects noncanonical native payload circuit ids
-								  outright, pinning release artifacts to `iroha_bfv_full_bootstrap_v1`
-								  instead of merely requiring prover/verifier pair consistency.
-								  Native verifier payloads now also carry the canonical field count,
+									  material now also rejects noncanonical native payload circuit ids
+									  outright, including digest-correct embedded prover/verifier payload
+									  plus generated-circuit-body circuit-id/payload-id and outer proof-key
+									  envelope circuit-id replays, and governed circuit material now uses
+									  the same canonical preflight along with evaluator artifact-set
+									  digest material, arithmetic trace profiles, arithmetic AIR material, and
+									  proof public-input schemas, proof-key governed-material checks, and artifact envelopes,
+									  pinning release artifacts to
+									  `iroha_bfv_full_bootstrap_v1`
+									  instead of merely requiring prover/verifier pair consistency.
+									  Release-audit evidence circuit-id validation now uses the same
+									  canonical preflight before release package commitments are derived, and
+									  release-audit signoff payloads and manifests use it before signature or
+									  manifest verification. Proof-key backend/key-format, release-audit
+									  proof-profile, and native payload-kind labels now use canonical
+									  text-label preflight before mismatch checks.
+									  Trace-profile witness digest, arithmetic AIR composition, proof public-input
+									  schema, proof-key witness, proof-key envelope witness, and generated-body
+									  witness domains now use canonical byte-label preflight before
+									  trace/AIR/schema/key/body digesting. Generated circuit-body
+									  backend/key-format/proof-system/field labels now use canonical
+									  text-label preflight before body comparison.
+									  Native verifier payloads now also carry the canonical field count,
 								  backend, key format, proof system, and field labels, and crypto/Core
 								  validation rejects relabeled STARK/FRI verifier payloads before
 								  governed proof-key material admission or artifact-derived verifier-key
@@ -16933,11 +17041,11 @@ or ABI behavior.
 - Fold focused ZK/FHE adversarial tests into the long workspace validation
   corridor.
 
-**Next checkpoints:** carry the fixture-bound RNS descriptor/residue corridor
-from material proof statements and release-audit evidence into the remaining
-signed release package corridors, add audited full-bootstrap prover/verifier
-artifact vectors beyond encrypted-zero refresh, and fold the focused ZK/FHE
-fixture corridor into broader release validation.
+**Next checkpoints:** replace the generated full-bootstrap proof-key fixture
+payloads with externally audited prover/verifier artifacts, carry the
+descriptor/residue and native-vector fixture corridors into broader release
+validation, and fold the focused ZK/FHE fixture corridor into the long workspace
+validation path.
 
 ## Consensus, Performance, and Operations
 

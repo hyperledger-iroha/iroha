@@ -783,11 +783,12 @@ def _normalize_hex_input(value: Any, label: str, byte_length: Optional[int] = No
         raise TypeError(f"{label} must be a hex string")
     if value.strip() != value:
         raise TypeError(f"{label} must be canonical hex")
-    trimmed = value.removeprefix("0x").removeprefix("0X")
+    trimmed = value[2:] if value.startswith("0x") else value
     if any(character.isspace() for character in trimmed):
         raise TypeError(f"{label} must be canonical hex")
-    trimmed = trimmed.lower()
     if not trimmed or len(trimmed) % 2 != 0:
+        raise TypeError(f"{label} must be canonical hex")
+    if any(character not in "0123456789abcdef" for character in trimmed):
         raise TypeError(f"{label} must be canonical hex")
     try:
         raw = bytes.fromhex(trimmed)

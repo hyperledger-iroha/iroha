@@ -4746,9 +4746,11 @@ object SccpTon {
     private fun hex32Bytes(value: String, field: String): ByteArray {
         require(value.trim() == value) { "$field must be canonical hex" }
         var body = value
-        if (body.startsWith("0x", ignoreCase = true)) body = body.substring(2)
+        require(!body.startsWith("0X")) { "$field must be canonical hex" }
+        if (body.startsWith("0x")) body = body.substring(2)
         require(body.none { it.isWhitespace() }) { "$field must be canonical hex" }
         require(body.length == 64) { "$field must be 32 bytes" }
+        require(isLowercaseHexBody(body)) { "$field must be canonical hex" }
         val out = ByteArray(32)
         for (i in out.indices) {
             out[i] = body.substring(i * 2, i * 2 + 2).toIntOrNull(16)?.toByte()
@@ -4777,6 +4779,9 @@ object SccpTon {
 
     private fun normalizeNonZeroHex32(value: String, field: String): String =
         "0x" + hexLower(nonZeroHex32Bytes(value, field))
+
+    private fun isLowercaseHexBody(value: String): Boolean =
+        value.all { it in '0'..'9' || it in 'a'..'f' }
 
     private fun normalizeNonEmpty(value: String, field: String): String {
         val trimmed = value.trim()
@@ -5929,9 +5934,11 @@ private fun selectTonProofRequestDeploymentHash(
 
 private fun normalizeTonProofRequestHex32(value: String, field: String): String {
     require(value.trim() == value) { "$field must be canonical hex" }
-    val body = if (value.startsWith("0x", ignoreCase = true)) value.substring(2) else value
+    require(!value.startsWith("0X")) { "$field must be canonical hex" }
+    val body = if (value.startsWith("0x")) value.substring(2) else value
     require(body.none { it.isWhitespace() }) { "$field must be canonical hex" }
     require(body.length == 64) { "$field must be 32 bytes" }
+    require(body.all { it in '0'..'9' || it in 'a'..'f' }) { "$field must be canonical hex" }
     val out = ByteArray(32)
     for (index in out.indices) {
         out[index] = body.substring(index * 2, index * 2 + 2).toIntOrNull(16)?.toByte()

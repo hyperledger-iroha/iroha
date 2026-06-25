@@ -4,6 +4,8 @@ import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
@@ -38,11 +40,24 @@ public final class OfflineNoteV2 {
       "iroha:offline-note:audit-public-inputs";
   public static final String DEVICE_ATTESTATION_CHALLENGE_DOMAIN =
       "iroha:offline-note:device-attestation-challenge:v1";
+  public static final String DEVICE_ATTESTATION_EVIDENCE_PREFIX =
+      "offline-device-attestation-evidence-v1";
   public static final String RECURSIVE_BACKEND = "halo2/ipa";
   public static final String RECURSIVE_VERIFIER_NAME = "offline-note-v2-recursive-v1";
   public static final String RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1 =
       "{\"schema\":\"offline_note_recursive\",\"public_inputs\":[\"public_inputs_hash_limb0\",\"public_inputs_hash_limb1\",\"public_inputs_hash_limb2\",\"public_inputs_hash_limb3\",\"proof_mode\",\"input_count\",\"output_count\",\"input_amount_sum\",\"output_amount_sum\",\"input_nullifier_sum_limb0\",\"output_commitment_sum_limb0\",\"key_certificate_payload_hash_limb0\",\"source_or_token_limb0\",\"input_claim_hash_sum_limb0\",\"output_claim_hash_sum_limb0\",\"reserved_zero\"]}";
   public static final int KEY_CERTIFICATE_VERSION = 1;
+  public static final String IOS_APP_ATTEST_PLATFORM = "ios-appattest";
+  public static final String IOS_APP_ATTEST_ASSERTION_SCHEME = "apple-appattest-counter-v1";
+  public static final String IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM = "app-attest-p256";
+  public static final String IOS_APP_ATTEST_LEGACY_PLATFORM = "ios-app-attest";
+  public static final String IOS_APP_ATTEST_LEGACY_ASSERTION_SCHEME = "apple-app-attest-v1";
+  public static final String IOS_APP_ATTEST_LEGACY_ASSERTION_KEY_ALGORITHM =
+      "ecdsa-p256-sha256";
+  public static final String ANDROID_KEYMINT_PLATFORM = "android-keymint";
+  public static final String ANDROID_KEYMINT_ASSERTION_SCHEME =
+      "android-keymint-ecdsa-p256-usage-limit-v1";
+  public static final String ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM = "ecdsa-p256-sha256";
 
   private static final int MULTISIG_POLICY_VERSION_V1 = 1;
   private static final int MAX_NUMERIC_SCALE = 28;
@@ -53,6 +68,14 @@ public final class OfflineNoteV2 {
   private static final long MODE_REDEEM = 1L;
   private static final long MODE_AUDIT = 2L;
   private static final BigInteger MAX_U64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
+  private static final BigInteger P256_FIELD_PRIME =
+      new BigInteger("FFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF", 16);
+  private static final BigInteger P256_B =
+      new BigInteger("5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B", 16);
+  private static final BigInteger P256_TWO = BigInteger.valueOf(2L);
+  private static final BigInteger P256_THREE = BigInteger.valueOf(3L);
+  private static final byte[] DEVICE_ATTESTATION_EVIDENCE_PREFIX_BYTES =
+      DEVICE_ATTESTATION_EVIDENCE_PREFIX.getBytes(StandardCharsets.UTF_8);
 
   private static final String KEY_CERTIFICATE_SCHEMA =
       "iroha_data_model::offline::model::OfflineNoteKeyCertificate";
@@ -522,9 +545,17 @@ public final class OfflineNoteV2 {
       this.assertionUsageCountLimit = assertionUsageCountLimit;
       this.oneUse = oneUse;
       requireCertificateCore(version, accountId, this.publicKey, oneUse);
+      requireAttestationIdentity(this.keyId, this.deviceId);
       if (assertionUsageCountLimit != null && assertionUsageCountLimit < 0) {
         throw new IllegalArgumentException("assertion usage count limit must be non-negative");
       }
+      requireKeyCertificateProfile(
+          this.platform,
+          this.keyId,
+          this.assertionScheme,
+          this.assertionKeyAlgorithm,
+          this.assertionPublicKey,
+          this.assertionUsageCountLimit);
     }
 
     public String domain() {
@@ -625,12 +656,20 @@ public final class OfflineNoteV2 {
       this.oneUse = oneUse;
       this.issuerSignature = copy(issuerSignature, "issuerSignature");
       requireCertificateCore(version, accountId, this.publicKey, oneUse);
+      requireAttestationIdentity(this.keyId, this.deviceId);
       if (this.issuerSignature.length != 64) {
         throw new IllegalArgumentException("issuer signature must be 64 bytes");
       }
       if (assertionUsageCountLimit != null && assertionUsageCountLimit < 0) {
         throw new IllegalArgumentException("assertion usage count limit must be non-negative");
       }
+      requireKeyCertificateProfile(
+          this.platform,
+          this.keyId,
+          this.assertionScheme,
+          this.assertionKeyAlgorithm,
+          this.assertionPublicKey,
+          this.assertionUsageCountLimit);
     }
 
     public int version() {
@@ -786,18 +825,29 @@ public final class OfflineNoteV2 {
       this.oneUse = oneUse;
       this.attestationReport =
           attestationReport == null ? new byte[0] : Arrays.copyOf(attestationReport, attestationReport.length);
-      this.evidence = evidence == null ? new byte[0] : Arrays.copyOf(evidence, evidence.length);
+      final byte[] submittedEvidence =
+          evidence == null ? new byte[0] : Arrays.copyOf(evidence, evidence.length);
       this.recentBlockHeight = recentBlockHeight;
       this.recentBlockHash = copy(recentBlockHash, "recentBlockHash");
       this.expiresAtMs = expiresAtMs;
 
       requireCertificateCore(version, accountId, this.publicKey, oneUse);
+      requireAttestationIdentity(this.keyId, this.deviceId);
+      requireOptionalAttestationMetadata(
+          this.iosTeamId, this.iosBundleId, this.iosEnvironment, this.androidPackageName);
       if (assetDefinitionId != null) {
         AssetDefinitionIdEncoder.parseAddressBytes(assetDefinitionId);
       }
       if (assertionUsageCountLimit != null && assertionUsageCountLimit < 0) {
         throw new IllegalArgumentException("assertion usage count limit must be non-negative");
       }
+      requireDeviceAttestationProfile(
+          this.platform,
+          this.keyId,
+          this.assertionScheme,
+          this.assertionKeyAlgorithm,
+          this.assertionPublicKey,
+          this.assertionUsageCountLimit);
       if (this.androidSigningCertificateSha256 != null
           && this.androidSigningCertificateSha256.length != 32) {
         throw new IllegalArgumentException("android_signing_certificate_sha256 must be 32 bytes");
@@ -824,6 +874,14 @@ public final class OfflineNoteV2 {
       }
       this.attestationReportHash = resolvedReportHash;
 
+      final byte[] resolvedEvidence =
+          this.attestationReport.length == 0
+                  && submittedEvidence.length == 0
+                  && evidenceHash == null
+              ? deviceAttestationEvidenceEnvelope(resolvedReportHash)
+              : submittedEvidence;
+      this.evidence = resolvedEvidence;
+      requireDeviceAttestationEvidenceEnvelope(this.evidence, resolvedReportHash);
       final byte[] expectedEvidenceHash = hash(this.evidence);
       final byte[] resolvedEvidenceHash =
           evidenceHash == null ? expectedEvidenceHash : Arrays.copyOf(evidenceHash, evidenceHash.length);
@@ -3047,6 +3105,210 @@ public final class OfflineNoteV2 {
     encodeAccountIdPayload(accountId);
   }
 
+  private static void requireAttestationIdentity(final String keyId, final String deviceId) {
+    if (isBlankAttestationText(keyId)) {
+      throw new IllegalArgumentException("attestation key_id must not be empty");
+    }
+    if (hasSurroundingAttestationWhitespace(keyId)) {
+      throw new IllegalArgumentException("attestation key_id must not contain surrounding whitespace");
+    }
+    if (isBlankAttestationText(deviceId)) {
+      throw new IllegalArgumentException("attestation device_id must not be empty");
+    }
+    if (hasSurroundingAttestationWhitespace(deviceId)) {
+      throw new IllegalArgumentException("attestation device_id must not contain surrounding whitespace");
+    }
+  }
+
+  private static void requireOptionalAttestationMetadata(
+      final String iosTeamId,
+      final String iosBundleId,
+      final String iosEnvironment,
+      final String androidPackageName) {
+    requireOptionalAttestationMetadataValue(iosTeamId, "ios_team_id");
+    requireOptionalAttestationMetadataValue(iosBundleId, "ios_bundle_id");
+    requireOptionalAttestationMetadataValue(iosEnvironment, "ios_environment");
+    requireOptionalAttestationMetadataValue(androidPackageName, "android_package_name");
+  }
+
+  private static void requireOptionalAttestationMetadataValue(
+      final String value, final String field) {
+    if (value == null) {
+      return;
+    }
+    if (isBlankAttestationText(value)) {
+      throw new IllegalArgumentException(field + " must not be empty when present");
+    }
+    if (hasSurroundingAttestationWhitespace(value)) {
+      throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
+    }
+  }
+
+  private static boolean isBlankAttestationText(final String value) {
+    if (value.isEmpty()) {
+      return true;
+    }
+    for (int offset = 0; offset < value.length(); ) {
+      final int codePoint = value.codePointAt(offset);
+      if (!Character.isWhitespace(codePoint) && !Character.isSpaceChar(codePoint)) {
+        return false;
+      }
+      offset += Character.charCount(codePoint);
+    }
+    return true;
+  }
+
+  private static boolean hasSurroundingAttestationWhitespace(final String value) {
+    final int first = value.codePointAt(0);
+    final int last = value.codePointBefore(value.length());
+    return isAttestationWhitespace(first) || isAttestationWhitespace(last);
+  }
+
+  private static boolean isAttestationWhitespace(final int codePoint) {
+    return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
+  }
+
+  private static void requireDeviceAttestationProfile(
+      final String platform,
+      final String keyId,
+      final String assertionScheme,
+      final String assertionKeyAlgorithm,
+      final byte[] assertionPublicKey,
+      final Integer assertionUsageCountLimit) {
+    requireP256AssertionPublicKey(assertionPublicKey);
+    if (IOS_APP_ATTEST_PLATFORM.equals(platform)) {
+      requireIosAppAttestRegistrationKeyId(keyId);
+      requireIosAppAttestProfile(assertionScheme, assertionKeyAlgorithm, assertionUsageCountLimit);
+      return;
+    }
+    if (ANDROID_KEYMINT_PLATFORM.equals(platform)) {
+      requireAndroidKeyMintProfile(
+          keyId, assertionScheme, assertionKeyAlgorithm, assertionPublicKey, assertionUsageCountLimit);
+      return;
+    }
+    throw new IllegalArgumentException("unsupported device attestation platform: " + platform);
+  }
+
+  private static void requireKeyCertificateProfile(
+      final String platform,
+      final String keyId,
+      final String assertionScheme,
+      final String assertionKeyAlgorithm,
+      final byte[] assertionPublicKey,
+      final Integer assertionUsageCountLimit) {
+    requireP256AssertionPublicKey(assertionPublicKey);
+    if (IOS_APP_ATTEST_PLATFORM.equals(platform)) {
+      requireIosAppAttestProfile(assertionScheme, assertionKeyAlgorithm, assertionUsageCountLimit);
+      return;
+    }
+    if (IOS_APP_ATTEST_LEGACY_PLATFORM.equals(platform)) {
+      if (!IOS_APP_ATTEST_LEGACY_ASSERTION_SCHEME.equals(assertionScheme)) {
+        throw new IllegalArgumentException(
+            "legacy iOS App Attest assertion scheme must be "
+                + IOS_APP_ATTEST_LEGACY_ASSERTION_SCHEME);
+      }
+      if (!IOS_APP_ATTEST_LEGACY_ASSERTION_KEY_ALGORITHM.equals(assertionKeyAlgorithm)) {
+        throw new IllegalArgumentException(
+            "legacy iOS App Attest assertion key algorithm must be "
+                + IOS_APP_ATTEST_LEGACY_ASSERTION_KEY_ALGORITHM);
+      }
+      if (assertionUsageCountLimit != null) {
+        throw new IllegalArgumentException(
+            "legacy iOS App Attest assertion usage count limit must be absent");
+      }
+      return;
+    }
+    if (ANDROID_KEYMINT_PLATFORM.equals(platform)) {
+      requireAndroidKeyMintProfile(
+          keyId, assertionScheme, assertionKeyAlgorithm, assertionPublicKey, assertionUsageCountLimit);
+      return;
+    }
+    throw new IllegalArgumentException("unsupported key certificate platform: " + platform);
+  }
+
+  private static void requireIosAppAttestRegistrationKeyId(final String keyId) {
+    final byte[] decoded;
+    try {
+      decoded = Base64.getDecoder().decode(keyId);
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalArgumentException(
+          "iOS App Attest key_id must be canonical standard base64 credential bytes", ex);
+    }
+    if (decoded.length == 0 || !Base64.getEncoder().encodeToString(decoded).equals(keyId)) {
+      throw new IllegalArgumentException(
+          "iOS App Attest key_id must be canonical standard base64 credential bytes");
+    }
+  }
+
+  private static void requireIosAppAttestProfile(
+      final String assertionScheme,
+      final String assertionKeyAlgorithm,
+      final Integer assertionUsageCountLimit) {
+    if (!IOS_APP_ATTEST_ASSERTION_SCHEME.equals(assertionScheme)) {
+      throw new IllegalArgumentException(
+          "iOS App Attest assertion scheme must be " + IOS_APP_ATTEST_ASSERTION_SCHEME);
+    }
+    if (!IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM.equals(assertionKeyAlgorithm)) {
+      throw new IllegalArgumentException(
+          "iOS App Attest assertion key algorithm must be "
+              + IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM);
+    }
+    if (assertionUsageCountLimit != null) {
+      throw new IllegalArgumentException("iOS App Attest assertion usage count limit must be absent");
+    }
+  }
+
+  private static void requireAndroidKeyMintProfile(
+      final String keyId,
+      final String assertionScheme,
+      final String assertionKeyAlgorithm,
+      final byte[] assertionPublicKey,
+      final Integer assertionUsageCountLimit) {
+    if (!ANDROID_KEYMINT_ASSERTION_SCHEME.equals(assertionScheme)) {
+      throw new IllegalArgumentException(
+          "Android KeyMint assertion scheme must be " + ANDROID_KEYMINT_ASSERTION_SCHEME);
+    }
+    if (!ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM.equals(assertionKeyAlgorithm)) {
+      throw new IllegalArgumentException(
+          "Android KeyMint assertion key algorithm must be "
+              + ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM);
+    }
+    if (assertionUsageCountLimit == null || assertionUsageCountLimit.intValue() != 1) {
+      throw new IllegalArgumentException(
+          "Android KeyMint assertion usage count limit must be exactly 1");
+    }
+    if (!keyId.equals(hexLower(sha256(assertionPublicKey)))) {
+      throw new IllegalArgumentException(
+          "Android KeyMint key_id must be lowercase hex SHA-256 of the assertion public key");
+    }
+  }
+
+  private static void requireP256AssertionPublicKey(final byte[] assertionPublicKey) {
+    if (assertionPublicKey.length != 65 || assertionPublicKey[0] != 0x04) {
+      throw new IllegalArgumentException(
+          "assertion public key must be an uncompressed P-256 SEC1 point");
+    }
+    final BigInteger x = new BigInteger(1, Arrays.copyOfRange(assertionPublicKey, 1, 33));
+    final BigInteger y = new BigInteger(1, Arrays.copyOfRange(assertionPublicKey, 33, 65));
+    if (x.signum() < 0 || x.compareTo(P256_FIELD_PRIME) >= 0) {
+      throw new IllegalArgumentException(
+          "assertion public key x-coordinate must be in the P-256 field");
+    }
+    if (y.signum() < 0 || y.compareTo(P256_FIELD_PRIME) >= 0) {
+      throw new IllegalArgumentException(
+          "assertion public key y-coordinate must be in the P-256 field");
+    }
+    final BigInteger lhs = y.modPow(P256_TWO, P256_FIELD_PRIME);
+    final BigInteger rhs =
+        x.modPow(P256_THREE, P256_FIELD_PRIME)
+            .subtract(P256_THREE.multiply(x))
+            .add(P256_B)
+            .mod(P256_FIELD_PRIME);
+    if (!lhs.equals(rhs)) {
+      throw new IllegalArgumentException("assertion public key must be a valid P-256 point");
+    }
+  }
+
   private static void requireHash(final byte[] value, final String field) {
     if (value.length != 32) {
       throw new IllegalArgumentException(field + " must be 32 bytes");
@@ -3063,6 +3325,34 @@ public final class OfflineNoteV2 {
     for (int i = 0; i < values.size(); i++) {
       requireHash(values.get(i), field + "[" + i + "]");
     }
+  }
+
+  private static void requireDeviceAttestationEvidenceEnvelope(
+      final byte[] evidence, final byte[] reportHash) {
+    final byte[] prefix = DEVICE_ATTESTATION_EVIDENCE_PREFIX_BYTES;
+    if (evidence.length != prefix.length + reportHash.length) {
+      throw new IllegalArgumentException(
+          "device attestation evidence envelope must bind attestation_report_hash");
+    }
+    for (int i = 0; i < prefix.length; i++) {
+      if (evidence[i] != prefix[i]) {
+        throw new IllegalArgumentException(
+            "device attestation evidence envelope must bind attestation_report_hash");
+      }
+    }
+    for (int i = 0; i < reportHash.length; i++) {
+      if (evidence[prefix.length + i] != reportHash[i]) {
+        throw new IllegalArgumentException(
+            "device attestation evidence envelope must bind attestation_report_hash");
+      }
+    }
+  }
+
+  private static byte[] deviceAttestationEvidenceEnvelope(final byte[] reportHash) {
+    final byte[] prefix = DEVICE_ATTESTATION_EVIDENCE_PREFIX_BYTES;
+    final byte[] evidence = Arrays.copyOf(prefix, prefix.length + reportHash.length);
+    System.arraycopy(reportHash, 0, evidence, prefix.length, reportHash.length);
+    return evidence;
   }
 
   private static byte[] canonicalSortKey(final MultisigMemberPayload member) {
@@ -3104,6 +3394,14 @@ public final class OfflineNoteV2 {
       builder.append(String.format("%02x", b & 0xFF));
     }
     return builder.toString();
+  }
+
+  private static byte[] sha256(final byte[] bytes) {
+    try {
+      return MessageDigest.getInstance("SHA-256").digest(bytes);
+    } catch (final NoSuchAlgorithmException e) {
+      throw new IllegalStateException("SHA-256 is unavailable", e);
+    }
   }
 
   private static String requireNonBlank(final String value, final String field) {

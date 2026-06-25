@@ -526,6 +526,9 @@ public sealed class SccpEthereumMainnetTests
             FinalityHeight: 42,
             FinalityBlockHash: SampleOutboundFinalityBlockHash);
 
+    private static string UpperFixedHex(string value)
+        => "0X" + value[2..].ToUpperInvariant();
+
     private static EthereumMainnetSourceVerifierMaterialInput SampleSourceMaterial()
         => new(
             SourceTrustAnchorHash: "0x" + new string('4', 64),
@@ -1350,10 +1353,22 @@ public sealed class SccpEthereumMainnetTests
             EthereumMainnetSccp.DestinationBinding(
                 "0X" + new string('1', 40).ToUpperInvariant(),
                 "0X" + new string('2', 40).ToUpperInvariant(),
-                "0X" + new string('b', 64).ToUpperInvariant(),
-                "0X" + new string('c', 64).ToUpperInvariant(),
+                "0x" + new string('b', 64),
+                "0x" + new string('c', 64),
                 expectedBindingHash: binding.BindingHash,
                 expectedKey: binding.Key).BindingHash);
+        Assert.Throws<ArgumentException>(
+            () => EthereumMainnetSccp.DestinationBinding(
+                "0x" + new string('1', 40),
+                "0x" + new string('2', 40),
+                "0X" + new string('b', 64).ToUpperInvariant(),
+                "0x" + new string('c', 64)));
+        Assert.Throws<ArgumentException>(
+            () => EthereumMainnetSccp.DestinationBinding(
+                "0x" + new string('1', 40),
+                "0x" + new string('2', 40),
+                "0x" + new string('b', 64),
+                "0X" + new string('c', 64).ToUpperInvariant()));
 
         Assert.Throws<ArgumentOutOfRangeException>(
             () => EthereumMainnetSccp.RequireMainnetChainId(56));
@@ -5077,6 +5092,84 @@ public sealed class SccpEthereumMainnetTests
     }
 
     [Fact]
+    public void OutboundProofRequestRejectsNonCanonicalFixedHexFields()
+    {
+        var binding = SampleDestinationBinding();
+        var publicInputs = SamplePublicInputs();
+        var input = SampleOutboundInput(binding, publicInputs);
+
+        static void AssertCanonicalHex(Action action, string field)
+        {
+            var error = Assert.Throws<ArgumentException>(action);
+            Assert.Contains(field, error.Message);
+            Assert.Contains("canonical lowercase 0x-prefixed 32-byte hex", error.Message);
+        }
+
+        AssertCanonicalHex(
+            () => EthereumMainnetSccp.BuildOutboundProofRequest(input with
+            {
+                PublicInputs = publicInputs with
+                {
+                    MessageId = UpperFixedHex(publicInputs.MessageId),
+                },
+            }),
+            "MessageId");
+        AssertCanonicalHex(
+            () => EthereumMainnetSccp.BuildOutboundProofRequest(input with
+            {
+                PublicInputs = publicInputs with
+                {
+                    PayloadHash = UpperFixedHex(publicInputs.PayloadHash),
+                },
+            }),
+            "PayloadHash");
+        AssertCanonicalHex(
+            () => EthereumMainnetSccp.BuildOutboundProofRequest(input with
+            {
+                PublicInputs = publicInputs with
+                {
+                    CommitmentRoot = UpperFixedHex(publicInputs.CommitmentRoot),
+                },
+            }),
+            "CommitmentRoot");
+        AssertCanonicalHex(
+            () => EthereumMainnetSccp.BuildOutboundProofRequest(input with
+            {
+                PublicInputs = publicInputs with
+                {
+                    FinalityBlockHash = UpperFixedHex(publicInputs.FinalityBlockHash),
+                },
+            }),
+            "FinalityBlockHash");
+        AssertCanonicalHex(
+            () => EthereumMainnetSccp.BuildOutboundProofRequest(input with
+            {
+                StatementHash = UpperFixedHex(input.StatementHash),
+            }),
+            "StatementHash");
+        AssertCanonicalHex(
+            () => EthereumMainnetSccp.BuildOutboundProofRequest(input with
+            {
+                DestinationBindingHash = UpperFixedHex(binding.BindingHash),
+            }),
+            "DestinationBindingHash");
+        AssertCanonicalHex(
+            () => EthereumMainnetSccp.BuildOutboundProofRequest(input with
+            {
+                ProofArtifactHash = UpperFixedHex("0x" + new string('9', 64)),
+                ProvingKeyHash = "0x" + new string('a', 64),
+            }),
+            "proofArtifactHash");
+        AssertCanonicalHex(
+            () => EthereumMainnetSccp.BuildOutboundProofRequest(input with
+            {
+                ProofArtifactHash = "0x" + new string('9', 64),
+                ProvingKeyHash = UpperFixedHex("0x" + new string('a', 64)),
+            }),
+            "provingKeyHash");
+    }
+
+    [Fact]
     public async Task OutboundCallbackAndSubmissionSnapshotsRejectMutation()
     {
         var input = SampleOutboundInput();
@@ -5196,12 +5289,28 @@ public sealed class SccpEthereumMainnetTests
         Assert.Throws<ArgumentException>(
             () => EthereumMainnetSccp.BuildLocalAdmissionSubmission(input with
             {
+                StatementHash = UpperFixedHex(input.StatementHash),
+            }));
+        Assert.Throws<ArgumentException>(
+            () => EthereumMainnetSccp.BuildLocalAdmissionSubmission(input with
+            {
                 SourceVerifierMaterialHash = "0x" + new string('0', 64),
             }));
         Assert.Throws<ArgumentException>(
             () => EthereumMainnetSccp.BuildLocalAdmissionSubmission(input with
             {
+                SourceVerifierMaterialHash = UpperFixedHex(input.SourceVerifierMaterialHash),
+            }));
+        Assert.Throws<ArgumentException>(
+            () => EthereumMainnetSccp.BuildLocalAdmissionSubmission(input with
+            {
                 SourceAdapterEngineDeploymentHash = "0x" + new string('0', 64),
+            }));
+        Assert.Throws<ArgumentException>(
+            () => EthereumMainnetSccp.BuildLocalAdmissionSubmission(input with
+            {
+                SourceAdapterEngineDeploymentHash =
+                    UpperFixedHex(input.SourceAdapterEngineDeploymentHash),
             }));
         Assert.Throws<ArgumentException>(
             () => EthereumMainnetSccp.BuildLocalAdmissionSubmission(input with

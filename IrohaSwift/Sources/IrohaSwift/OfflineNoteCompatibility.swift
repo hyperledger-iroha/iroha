@@ -177,8 +177,8 @@ public struct OfflineCompactKeyCertificate: Codable, Equatable, Sendable {
     public func offlineNoteKeyCertificate() throws -> OfflineNoteKeyCertificate {
         let platformLower = platform.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let defaultAssertionScheme = platformLower.contains("android")
-            ? "android-keymint-ecdsa-p256-usage-limit"
-            : "apple-appattest-counter"
+            ? "android-keymint-ecdsa-p256-usage-limit-v1"
+            : "apple-appattest-counter-v1"
         let defaultAssertionKeyAlgorithm = platformLower.contains("android")
             ? "ecdsa-p256-sha256"
             : "app-attest-p256"

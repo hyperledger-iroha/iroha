@@ -28,7 +28,7 @@ data class OfflineCompactKeyCertificate(
     @SerialName("device_id") val deviceId: String,
     @SerialName("account_id") val accountId: String,
     @SerialName("public_key") val publicKey: String,
-    @SerialName("assertion_scheme") val assertionScheme: String = "android-keymint-ecdsa-p256-usage-limit",
+    @SerialName("assertion_scheme") val assertionScheme: String = "android-keymint-ecdsa-p256-usage-limit-v1",
     @SerialName("assertion_key_algorithm") val assertionKeyAlgorithm: String = "ecdsa-p256-sha256",
     @SerialName("assertion_public_key") val assertionPublicKey: String = publicKey,
     @SerialName("assertion_usage_count_limit") val assertionUsageCountLimit: Int? = null,

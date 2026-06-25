@@ -14445,15 +14445,56 @@ mod tests {
             .as_ref()
             .and_then(|bootstrap_key| bootstrap_key.full_bootstrap_material.as_ref())
             .expect("fixture evaluation keys carry full-bootstrap material");
-        let (package, package_digest) =
-            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_package_and_digest_for_artifacts_v1(
+        let (generated_report_bytes, generated_archive_bytes) =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_report_and_archive_bytes_for_artifacts_v1(
                 &params,
                 material,
                 artifacts,
-                SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REVIEWER_ID,
-                reviewer_keypair.private_key(),
             )
-            .expect("fixture release audit package validates");
+            .expect("fixture release audit generated report/archive bytes");
+        let generated_report_body = generated_report_bytes
+            .strip_prefix(iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1)
+            .expect("generated report bytes carry canonical header");
+        let generated_archive_body = generated_archive_bytes
+            .strip_prefix(iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1)
+            .expect("generated archive bytes carry canonical header");
+        let report_suffix = generated_report_body
+            .strip_prefix(b"machine-generated BFV full-bootstrap release audit report inventory v1")
+            .expect("generated report body carries deterministic inventory prefix");
+        let archive_suffix = generated_archive_body
+            .strip_prefix(
+                b"machine-generated BFV full-bootstrap release evidence archive inventory v1",
+            )
+            .expect("generated archive body carries deterministic inventory prefix");
+        let report_body = [
+            b"external-review-approved: independent BFV full-bootstrap release audit report v1"
+                .as_slice(),
+            report_suffix,
+        ]
+        .concat();
+        let archive_body = [
+            b"external-review-evidence-archive: independent BFV full-bootstrap prover verifier evidence v1"
+                .as_slice(),
+            archive_suffix,
+        ]
+        .concat();
+        let report_bytes =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_report_bytes_v1(&report_body)
+                .expect("fixture external-review report bytes");
+        let archive_bytes =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_archive_bytes_v1(&archive_body)
+                .expect("fixture external-review archive bytes");
+        let (package, package_digest) =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_external_review_package_and_digest_v1(
+            &params,
+            material,
+            artifacts,
+            &report_bytes,
+            &archive_bytes,
+            SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REVIEWER_ID,
+            reviewer_keypair.private_key(),
+        )
+            .expect("fixture external-review release audit package and digest");
         policy.full_bootstrap_release_audit_package = Some(package);
         policy.full_bootstrap_release_audit_package_digest = Some(package_digest);
         policy.full_bootstrap_release_audit_trusted_reviewer_id =
@@ -18681,7 +18722,7 @@ mod tests {
         let evaluation_keys = fixture_bfv_evaluation_key_bundle();
         let evaluation_key_refresh_transcript =
             fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let artifacts = sample_full_bootstrap_circuit_artifacts();
+        let artifacts = valid_full_bootstrap_circuit_artifacts();
         let governance_tx_hash = Hash::new(b"governance-with-full-bootstrap-artifacts");
         let payload = FheJobRunPayload {
             service_name: "health_portal".to_owned(),
@@ -18843,7 +18884,7 @@ mod tests {
     #[test]
     fn fhe_job_run_proof_preflight_rejects_execution_public_input_shape_replay() {
         let mut proof = sample_fhe_full_bootstrap_execution_proof();
-        let artifacts = sample_full_bootstrap_circuit_artifacts();
+        let artifacts = valid_full_bootstrap_circuit_artifacts();
         let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&proof.proof.proof.bytes)
             .expect("decode sample OpenVerifyEnvelope");
         let mut replay_envelope = envelope.clone();
@@ -19360,7 +19401,7 @@ mod tests {
 
     #[test]
     fn fhe_job_run_proof_preflight_rejects_full_bootstrap_statement_digest_drift_without_proof() {
-        let artifacts = sample_full_bootstrap_circuit_artifacts();
+        let artifacts = valid_full_bootstrap_circuit_artifacts();
         let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
         let evaluation_key_refresh_transcript =
             fixture_full_bootstrap_evaluation_key_refresh_transcript();
@@ -19404,7 +19445,7 @@ mod tests {
 
     #[test]
     fn fhe_job_run_proof_preflight_rejects_full_bootstrap_multi_count_before_missing_proofs() {
-        let artifacts = sample_full_bootstrap_circuit_artifacts();
+        let artifacts = valid_full_bootstrap_circuit_artifacts();
         let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
         let evaluation_key_refresh_transcript =
             fixture_full_bootstrap_evaluation_key_refresh_transcript();
@@ -19447,7 +19488,7 @@ mod tests {
 
     #[test]
     fn fhe_job_run_proof_preflight_rejects_full_bootstrap_policy_with_zero_refresh_statement() {
-        let artifacts = sample_full_bootstrap_circuit_artifacts();
+        let artifacts = valid_full_bootstrap_circuit_artifacts();
         let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
         let evaluation_key_refresh_transcript =
             fixture_full_bootstrap_evaluation_key_refresh_transcript();
@@ -19601,7 +19642,7 @@ mod tests {
 
     #[test]
     fn fhe_job_run_proof_preflight_rejects_missing_required_full_bootstrap_material_proof() {
-        let artifacts = sample_full_bootstrap_circuit_artifacts();
+        let artifacts = valid_full_bootstrap_circuit_artifacts();
         let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
         let evaluation_key_refresh_transcript =
             fixture_full_bootstrap_evaluation_key_refresh_transcript();
@@ -19644,7 +19685,7 @@ mod tests {
 
     #[test]
     fn fhe_job_run_proof_preflight_rejects_full_bootstrap_material_proof_statement_mismatch() {
-        let artifacts = sample_full_bootstrap_circuit_artifacts();
+        let artifacts = valid_full_bootstrap_circuit_artifacts();
         let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
         let evaluation_key_refresh_transcript =
             fixture_full_bootstrap_evaluation_key_refresh_transcript();
@@ -19795,7 +19836,7 @@ mod tests {
     #[test]
     fn fhe_job_run_proof_preflight_rejects_execution_proofs_without_artifacts() {
         let proof = sample_fhe_full_bootstrap_execution_proof();
-        let artifacts = sample_full_bootstrap_circuit_artifacts();
+        let artifacts = valid_full_bootstrap_circuit_artifacts();
         let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
         let evaluation_key_refresh_transcript =
             fixture_full_bootstrap_evaluation_key_refresh_transcript();
@@ -20127,7 +20168,7 @@ mod tests {
 
     #[test]
     fn fhe_job_run_proof_preflight_rejects_execution_proof_count_above_slot_count() {
-        let artifacts = sample_full_bootstrap_circuit_artifacts();
+        let artifacts = valid_full_bootstrap_circuit_artifacts();
         let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
         let evaluation_key_refresh_transcript =
             fixture_full_bootstrap_evaluation_key_refresh_transcript();
@@ -20180,7 +20221,7 @@ mod tests {
 
     #[test]
     fn fhe_job_run_proof_preflight_rejects_artifacts_with_param_set_drift_before_decode() {
-        let artifacts = sample_full_bootstrap_circuit_artifacts();
+        let artifacts = valid_full_bootstrap_circuit_artifacts();
         let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
         let evaluation_key_refresh_transcript =
             fixture_full_bootstrap_evaluation_key_refresh_transcript();
@@ -20230,7 +20271,8 @@ mod tests {
     #[test]
     fn fhe_job_run_proof_preflight_rejects_malformed_full_bootstrap_artifacts_locally() {
         let artifacts = sample_full_bootstrap_circuit_artifacts();
-        let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
+        let valid_artifacts = valid_full_bootstrap_circuit_artifacts();
+        let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&valid_artifacts);
         let evaluation_key_refresh_transcript =
             fixture_full_bootstrap_evaluation_key_refresh_transcript();
         let policy = fixture_fhe_execution_policy_for_evaluation_material(

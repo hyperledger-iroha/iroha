@@ -50,7 +50,7 @@ use iroha_crypto::{
         bfv_multiply_bounded_noise_output_bound, bfv_multiply_output_residual_multiple_bound,
         bfv_packed_rotate_left_bounded_noise_output_bound,
         bfv_packed_rotate_left_output_residual_multiple_bound,
-        bfv_rotate_slots_left_bounded_noise_output_bounds,
+        bfv_rotate_slots_left_bounded_noise_registered_rns_basis_extension_output_bounds,
         bfv_rotate_slots_left_output_residual_multiple_bounds,
         bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_rounds,
         bootstrap_ciphertext_registered_rns_exact_rounds,
@@ -65,7 +65,7 @@ use iroha_crypto::{
         multiply_ciphertexts_registered_rns_exact, multiply_plain_scalar,
         ram_lfe_bfv_parameters_v1, registered_bfv_key_switch_decomposition_chain_digest,
         registered_bfv_parameter_digest, registered_bfv_rns_modulus_chain_digest,
-        rotate_ciphertext_slots_left_bounded_noise_registered_rns_exact,
+        rotate_ciphertext_slots_left_bounded_noise_registered_rns_basis_extension_exact,
         rotate_ciphertext_slots_left_registered_rns_exact,
         rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_registered_rns_basis_extension_exact,
         rotate_packed_ciphertext_slots_left_with_galois_keys_registered_rns_exact,
@@ -9915,14 +9915,15 @@ fn soracloud_fhe_job_output_bounded_noise_bound(
                     ))
                 })?;
             let slot_bounds = vec![input_bound; slots.len()];
-            let output_bounds = bfv_rotate_slots_left_bounded_noise_output_bounds(
-                params,
-                rotation_key,
-                &slot_bounds,
-            )
-            .map_err(|err| {
-                invalid_parameter(format!("FHE rotate bounded-noise bound exceeded: {err}"))
-            })?;
+            let output_bounds =
+                bfv_rotate_slots_left_bounded_noise_registered_rns_basis_extension_output_bounds(
+                    params,
+                    rotation_key,
+                    &slot_bounds,
+                )
+                .map_err(|err| {
+                    invalid_parameter(format!("FHE rotate bounded-noise bound exceeded: {err}"))
+                })?;
             Ok(output_bounds.into_iter().max())
         }
         FheJobOperationV1::Bootstrap => {
@@ -10340,12 +10341,15 @@ fn execute_soracloud_fhe_job_bounded_noise_with_full_bootstrap_artifacts(
                         job.rotation_steps
                     ))
                 })?;
-            let slots = rotate_ciphertext_slots_left_bounded_noise_registered_rns_exact(
-                params,
-                rotation_key,
-                slots,
-            )
-            .map_err(|err| invalid_parameter(format!("FHE bounded-noise rotate failed: {err}")))?;
+            let slots =
+                rotate_ciphertext_slots_left_bounded_noise_registered_rns_basis_extension_exact(
+                    params,
+                    rotation_key,
+                    slots,
+                )
+                .map_err(|err| {
+                    invalid_parameter(format!("FHE bounded-noise rotate failed: {err}"))
+                })?;
             Ok(BfvIdentifierCiphertext { slots })
         }
         FheJobOperationV1::Bootstrap => {
@@ -20237,13 +20241,35 @@ mod tests {
         let archive_body = archive_bytes
             .strip_prefix(iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1)
             .expect("sample release audit archive bytes carry the v1 header");
-        [
-            b"production BFV full-bootstrap combined release audit body v1; ".as_slice(),
-            report_body,
-            b"; ".as_slice(),
-            archive_body,
-        ]
-        .concat()
+        let mut seen_labels = std::collections::BTreeSet::new();
+        let mut copied_body =
+            b"copied-full-bootstrap-release-audit-report-and-archive-body-shared-evidence".to_vec();
+        for field in report_body
+            .split(|byte| *byte == b';')
+            .chain(archive_body.split(|byte| *byte == b';'))
+        {
+            let start = field
+                .iter()
+                .position(|byte| !byte.is_ascii_whitespace())
+                .unwrap_or(field.len());
+            let end = field
+                .iter()
+                .rposition(|byte| !byte.is_ascii_whitespace())
+                .map_or(start, |index| index + 1);
+            let trimmed = &field[start..end];
+            let Some(label_end) = trimmed.iter().position(|byte| *byte == b'=') else {
+                continue;
+            };
+            let label_key = trimmed[..label_end]
+                .iter()
+                .map(u8::to_ascii_lowercase)
+                .collect::<Vec<_>>();
+            if !label_key.is_empty() && seen_labels.insert(label_key) {
+                copied_body.extend_from_slice(b"; ");
+                copied_body.extend_from_slice(trimmed);
+            }
+        }
+        copied_body
     }
 
     fn sample_full_bootstrap_release_audit_package(
@@ -20277,16 +20303,55 @@ mod tests {
             .full_bootstrap_material
             .as_ref()
             .expect("sample full-bootstrap key carries governed material");
-        iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_package_and_digest_for_artifacts_v1(
+        let (generated_report_bytes, generated_archive_bytes) =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_report_and_archive_bytes_for_artifacts_v1(
+                params,
+                material,
+                artifacts,
+            )
+            .expect("sample full-bootstrap release audit generated report/archive bytes");
+        let generated_report_body = generated_report_bytes
+            .strip_prefix(iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1)
+            .expect("generated report bytes carry canonical header");
+        let generated_archive_body = generated_archive_bytes
+            .strip_prefix(iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1)
+            .expect("generated archive bytes carry canonical header");
+        let report_suffix = generated_report_body
+            .strip_prefix(b"machine-generated BFV full-bootstrap release audit report inventory v1")
+            .expect("generated report body carries deterministic inventory prefix");
+        let archive_suffix = generated_archive_body
+            .strip_prefix(
+                b"machine-generated BFV full-bootstrap release evidence archive inventory v1",
+            )
+            .expect("generated archive body carries deterministic inventory prefix");
+        let report_body = [
+            b"external-review-approved: reviewer-id=sora-zk-audit-wg-2026 independent BFV full-bootstrap release audit report v1"
+                .as_slice(),
+            report_suffix,
+        ]
+        .concat();
+        let archive_body = [
+            b"external-review-evidence-archive: reviewer-id=sora-zk-audit-wg-2026 independent BFV full-bootstrap prover verifier evidence v1"
+                .as_slice(),
+            archive_suffix,
+        ]
+        .concat();
+        let report_bytes =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_report_bytes_v1(&report_body)
+                .expect("sample external-review report bytes");
+        let archive_bytes =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_archive_bytes_v1(&archive_body)
+                .expect("sample external-review archive bytes");
+        iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_external_review_package_and_digest_v1(
             params,
             material,
             artifacts,
+            &report_bytes,
+            &archive_bytes,
             "sora-zk-audit-wg-2026",
             reviewer_key_pair.private_key(),
         )
-        .expect(
-            "sample full-bootstrap release audit package and digest validate against governed artifacts",
-        )
+        .expect("sample external-review full-bootstrap release audit package and digest")
     }
 
     #[cfg(feature = "zk-stark")]
@@ -20376,13 +20441,6 @@ mod tests {
                 audit_evidence_archive_bytes,
             },
         )
-    }
-
-    fn sample_full_bootstrap_release_audit_package_digest(
-        package: &iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditPackageV1,
-    ) -> Hash {
-        iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_package_digest_v1(package)
-            .expect("sample full-bootstrap release audit package digest validates")
     }
 
     fn sample_full_bootstrap_execution_output_and_bounds(
@@ -27337,14 +27395,13 @@ mod tests {
         );
         let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
         let mut downgraded_package = release_audit_package.clone();
         downgraded_package
             .record
@@ -27384,14 +27441,13 @@ mod tests {
         );
         let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
 
         let mut role_spliced_artifacts = artifacts.clone();
         role_spliced_artifacts.sample_extraction_key =
@@ -27445,14 +27501,13 @@ mod tests {
         );
         let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
         let full_bootstrap_material = evaluation_keys
             .bootstrap_key
             .as_ref()
@@ -27546,14 +27601,13 @@ mod tests {
         );
         let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
         let release_audit_material = evaluation_keys
             .bootstrap_key
             .as_ref()
@@ -28098,14 +28152,13 @@ mod tests {
         );
         let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
 
         let mut missing_bootstrap_keys = evaluation_keys.clone();
         missing_bootstrap_keys.bootstrap_key = None;
@@ -28288,14 +28341,13 @@ mod tests {
         );
         let wrong_vk_box = sample_fhe_full_bootstrap_execution_vk_box();
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
 
         let err =
             prove_soracloud_fhe_full_bootstrap_material_proof_for_evaluation_keys_with_release_audit_v1(
@@ -31096,7 +31148,9 @@ mod tests {
                 validates_artifact_bound_prover_input: true,
                 rejects_stale_galois_key_set_replay: true,
                 rejects_stale_proof_key_artifacts: true,
-                key_material_commitment: Hash::new(b"reviewed inert verifier-key commitment"),
+                key_material_commitment: Hash::new(
+                    b"soracloud-invalid-inert-verifier-key-commitment",
+                ),
                 key_material,
             };
             let key_payload = norito::to_bytes(&key).expect("encode forged verifier-key payload");
@@ -32172,14 +32226,13 @@ mod tests {
             output_bound,
         ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
         let mut downgraded_package = release_audit_package.clone();
         downgraded_package
             .record
@@ -32225,14 +32278,13 @@ mod tests {
             output_bound,
         ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
 
         let mut drifted_output = output.clone();
         drifted_output.slots[0].c0[0] =
@@ -32299,14 +32351,13 @@ mod tests {
             output_bound,
         ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
 
         let mut role_spliced_artifacts = artifacts.clone();
         role_spliced_artifacts.sample_extraction_key =
@@ -32366,14 +32417,13 @@ mod tests {
             output_bound,
         ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
         let full_bootstrap_material = evaluation_keys
             .bootstrap_key
             .as_ref()
@@ -32477,14 +32527,13 @@ mod tests {
             output_bound,
         ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
         let release_audit_material = evaluation_keys
             .bootstrap_key
             .as_ref()
@@ -33124,14 +33173,13 @@ mod tests {
             output_bound,
         ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
 
         let mut missing_bootstrap_keys = evaluation_keys.clone();
         missing_bootstrap_keys.bootstrap_key = None;
@@ -33291,6 +33339,39 @@ mod tests {
             );
         assert_invalid_parameter_contains(err, "max_refresh_rounds");
 
+        let mut malformed_zero_refresh_entries = evaluation_keys.clone();
+        malformed_zero_refresh_entries
+            .bootstrap_key
+            .as_mut()
+            .expect("sample carries bootstrap key")
+            .zero_refresh
+            .c0
+            .push(1);
+        let err =
+            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
+                &params,
+                &malformed_zero_refresh_entries,
+                &transcript,
+                &artifacts,
+                &input,
+                &output,
+                BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                input_bound,
+                output_bound,
+                &vk_box,
+                &release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            )
+            .expect_err(
+                "malformed governed bootstrap-key zero-refresh entries must fail before execution proof generation",
+            );
+        assert_invalid_parameter_contains(
+            err,
+            "must not carry encrypted-zero zero_refresh material",
+        );
+
         let mut all_zero_seed_transcript = transcript.clone();
         all_zero_seed_transcript.rotation_transcripts[0].seed =
             vec![0; BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES];
@@ -33419,14 +33500,13 @@ mod tests {
         ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
         let wrong_vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
 
         let err =
             prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
@@ -33718,6 +33798,71 @@ mod tests {
             &vk_box,
         )
         .expect_err("stale Galois key set must fail before proof generation");
+        assert_invalid_parameter_contains(err, "Galois key set digest mismatch");
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn soracloud_fhe_full_bootstrap_execution_prover_rejects_stale_galois_key_set_digest() {
+        let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
+        let (
+            params,
+            evaluation_keys,
+            transcript,
+            artifacts,
+            _job,
+            input,
+            output,
+            input_bound,
+            output_bound,
+        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
+        let prover_input_material = sample_full_bootstrap_execution_prover_input_material(
+            &params,
+            &evaluation_keys,
+            &transcript,
+            &artifacts,
+            &input,
+            &output,
+            input_bound,
+            output_bound,
+        );
+
+        let mut stale_witness = prover_input_material
+            .proof_input_material
+            .witness_material
+            .clone();
+        stale_witness.galois_key_set_digest =
+            Hash::new(b"stale Core full-bootstrap prover-input Galois key-set digest");
+        assert_ne!(
+            stale_witness.galois_key_set_digest,
+            prover_input_material
+                .proof_input_material
+                .witness_material
+                .galois_key_set_digest,
+            "fixture must retarget the embedded Galois key-set digest"
+        );
+        let stale_proof_input = bfv_full_bootstrap_execution_proof_input_material_v1(
+            &transcript.public_key,
+            &stale_witness,
+        )
+        .expect("derive internally consistent stale-Galois-digest proof input");
+        let stale_prover_input = bfv_full_bootstrap_execution_prover_input_material_v1(
+            &stale_proof_input,
+            &prover_input_material.prover_key,
+            &prover_input_material.verifier_key,
+        )
+        .expect("derive internally consistent stale-Galois-digest prover input");
+        validate_bfv_full_bootstrap_execution_prover_input_material_v1(&stale_prover_input)
+            .expect("generic prover input validation accepts self-consistent stale Galois digest");
+
+        let err = prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material_v1(
+            &params,
+            &evaluation_keys,
+            &artifacts,
+            &stale_prover_input,
+            &vk_box,
+        )
+        .expect_err("stale Galois key-set digest must fail before proof generation");
         assert_invalid_parameter_contains(err, "Galois key set digest mismatch");
     }
 
@@ -36928,6 +37073,81 @@ mod tests {
     }
 
     #[test]
+    fn soracloud_bounded_noise_outer_rotate_uses_target_limb_refresh_bridge() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (secret_key, public_key, mut evaluation_keys, _transcript, _digest) =
+            sample_registered_bounded_noise_bfv_material();
+        let rotation_key = rotation_key_bounded_noise_from_seed(
+            &params,
+            &public_key,
+            1,
+            b"soracloud-bounded-target-limb-outer-rotation",
+        )
+        .expect("bounded-noise outer rotation key");
+        evaluation_keys.rotation_keys = vec![rotation_key];
+        let input = BfvIdentifierCiphertext {
+            slots: vec![
+                encrypt_bounded_noise_from_seed(
+                    &params,
+                    &public_key,
+                    &[11],
+                    b"soracloud-bounded-target-limb-rotate-slot-0",
+                )
+                .expect("encrypt rotate slot 0"),
+                encrypt_bounded_noise_from_seed(
+                    &params,
+                    &public_key,
+                    &[13],
+                    b"soracloud-bounded-target-limb-rotate-slot-1",
+                )
+                .expect("encrypt rotate slot 1"),
+                encrypt_bounded_noise_from_seed(
+                    &params,
+                    &public_key,
+                    &[17],
+                    b"soracloud-bounded-target-limb-rotate-slot-2",
+                )
+                .expect("encrypt rotate slot 2"),
+            ],
+        };
+        let mut job = sample_fhe_job(Vec::new());
+        job.operation = FheJobOperationV1::RotateLeft;
+        job.rotation_steps = 1;
+        let input_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh noise bound");
+        let rotate_slot_bounds = vec![input_bound; input.slots.len()];
+        let expected_output_bound =
+            bfv_rotate_slots_left_bounded_noise_registered_rns_basis_extension_output_bounds(
+                &params,
+                &evaluation_keys.rotation_keys[0],
+                &rotate_slot_bounds,
+            )
+            .expect("outer rotate output noise bounds")
+            .into_iter()
+            .max();
+
+        let (output, output_bound) = execute_soracloud_fhe_job_with_bounded_noise_bounds(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+        )
+        .expect("execute bounded-noise outer rotate through target-limb bridge");
+        let plaintext_slots = output
+            .slots
+            .iter()
+            .map(|slot| {
+                decrypt_bounded_noise(&params, &secret_key, slot)
+                    .expect("decrypt bounded outer rotate output")[0]
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(plaintext_slots, vec![13, 17, 11]);
+        assert_eq!(output_bound, expected_output_bound);
+    }
+
+    #[test]
     fn soracloud_bounded_noise_packed_rotate_uses_target_limb_key_switch_bridge() {
         let params = ram_lfe_bfv_parameters_v1();
         let (secret_key, public_key, relinearization_key) =
@@ -38024,14 +38244,13 @@ mod tests {
         }
 
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
         let release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
             package: &release_audit_package,
             expected_package_digest: release_audit_package_digest,
@@ -38151,14 +38370,13 @@ mod tests {
         assert_invalid_parameter_contains(err, "requires release audit package");
 
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
         policy.full_bootstrap_release_audit_package = Some(release_audit_package.clone());
         policy.full_bootstrap_release_audit_package_digest = Some(release_audit_package_digest);
         policy.full_bootstrap_release_audit_trusted_reviewer_id =
@@ -38495,14 +38713,13 @@ mod tests {
         }
 
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
         let release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
             package: &release_audit_package,
             expected_package_digest: release_audit_package_digest,

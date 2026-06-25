@@ -5082,6 +5082,16 @@ public static class EthereumMainnetSccp
             throw new ArgumentException($"{parameterName} must be canonical hex.", parameterName);
         }
 
+        if (byteLength != 20
+            && (!value.StartsWith("0x", StringComparison.Ordinal)
+                || value.Length != byteLength * 2 + 2
+                || !value[2..].All(IsLowerHex)))
+        {
+            throw new ArgumentException(
+                $"{parameterName} must be canonical lowercase 0x-prefixed {byteLength}-byte hex.",
+                parameterName);
+        }
+
         var text = value.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
             ? value[2..]
             : value;

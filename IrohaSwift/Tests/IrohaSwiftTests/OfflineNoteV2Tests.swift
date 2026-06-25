@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 @testable import IrohaSwift
 
 final class OfflineNoteV2Tests: XCTestCase {
@@ -297,13 +298,50 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertEqual(try registration.keyCertificatePayloadHash().hexLowercased(), vector.keyCertificatePayloadHash)
         XCTAssertEqual(try registration.noritoEncoded().base64EncodedString(), vector.noritoBase64)
 
+        let changedReport = Data("other-report".utf8)
         let changed = try registration.replacingAttestationEvidence(
-            attestationReport: Data("other-report".utf8),
-            evidence: Data("other-evidence".utf8)
+            attestationReport: changedReport,
+            evidence: Self.attestationEvidence(attestationReportHash: IrohaHash.hash(changedReport))
         )
         XCTAssertEqual(try changed.canonicalChallengeHash(), try registration.canonicalChallengeHash())
         XCTAssertNotEqual(changed.attestationReportHash, registration.attestationReportHash)
         XCTAssertNotEqual(changed.evidenceHash, registration.evidenceHash)
+    }
+
+    func testOfflineDeviceAttestationRegistrationDraftBuildsChallengeBeforeEvidence() throws {
+        let fixture = try Self.loadFixture()
+        let vector = fixture.chainVectors.attestationRegistration
+        let draft = try OfflineDeviceAttestationRegistration(
+            version: vector.version,
+            platform: vector.platform,
+            keyId: vector.keyId,
+            deviceId: vector.deviceId,
+            accountId: vector.accountId,
+            assetDefinitionId: vector.assetDefinitionId,
+            iosTeamId: vector.iosTeamId,
+            iosBundleId: vector.iosBundleId,
+            iosEnvironment: vector.iosEnvironment,
+            androidPackageName: vector.androidPackageName,
+            androidSigningCertificateSha256: try vector.androidSigningCertificateSha256.map(Self.hex),
+            publicKey: try Self.base64(vector.publicKey),
+            assertionScheme: vector.assertionScheme,
+            assertionKeyAlgorithm: vector.assertionKeyAlgorithm,
+            assertionPublicKey: try Self.base64(vector.assertionPublicKey),
+            assertionUsageCountLimit: vector.assertionUsageCountLimit,
+            oneUse: vector.oneUse,
+            recentBlockHeight: vector.recentBlockHeight,
+            recentBlockHash: try Self.hex(vector.recentBlockHash),
+            expiresAtMs: vector.expiresAtMs
+        )
+        let emptyReportHash = IrohaHash.hash(Data())
+        let expectedEvidence = Self.attestationEvidence(attestationReportHash: emptyReportHash)
+
+        XCTAssertEqual(try draft.canonicalChallengeHash().hexLowercased(), vector.challengeHash)
+        XCTAssertEqual(draft.challengeHash.hexLowercased(), vector.challengeHash)
+        XCTAssertEqual(draft.attestationReportHash, emptyReportHash)
+        XCTAssertEqual(draft.attestationReport, Data())
+        XCTAssertEqual(draft.evidence, expectedEvidence)
+        XCTAssertEqual(draft.evidenceHash, IrohaHash.hash(expectedEvidence))
     }
 
     func testOfflineNoteV2TransactionBuildersProduceSignedEnvelopes() throws {
@@ -550,6 +588,40 @@ final class OfflineNoteV2Tests: XCTestCase {
                 .invalidIssuerSignatureLength(expected: 64, actual: 63)
             )
         }
+        XCTAssertThrowsError(try OfflineNoteKeyCertificateV2(
+            platform: cert.platform,
+            keyId: cert.keyId,
+            deviceId: cert.deviceId,
+            accountId: cert.accountId,
+            publicKey: publicKey,
+            assertionScheme: cert.assertionScheme,
+            assertionKeyAlgorithm: cert.assertionKeyAlgorithm,
+            assertionPublicKey: Self.offCurveP256AssertionPublicKey(),
+            assertionUsageCountLimit: cert.assertionUsageCountLimit,
+            oneUse: true,
+            issuerSignature: issuerSignature
+        )) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try OfflineNoteKeyCertificateV2(
+            platform: cert.platform,
+            keyId: cert.keyId,
+            deviceId: cert.deviceId,
+            accountId: cert.accountId,
+            publicKey: publicKey,
+            assertionScheme: "apple-app-attest-v1",
+            assertionKeyAlgorithm: cert.assertionKeyAlgorithm,
+            assertionPublicKey: assertionPublicKey,
+            assertionUsageCountLimit: cert.assertionUsageCountLimit,
+            oneUse: true,
+            issuerSignature: issuerSignature
+        )) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
     }
 
     func testOfflineDeviceAttestationRegistrationValidationRejectsMalformedValues() throws {
@@ -576,6 +648,17 @@ final class OfflineNoteV2Tests: XCTestCase {
             XCTAssertEqual(error as? OfflineNoteV2Error, .deviceAttestationHashMismatch(field: "evidence_hash"))
         }
 
+        let forgedEvidence = Self.attestationEvidence(attestationReportHash: Data(repeating: 0xA5, count: 32))
+        XCTAssertThrowsError(try Self.attestationRegistration(
+            fixture,
+            evidenceHash: IrohaHash.hash(forgedEvidence),
+            evidence: forgedEvidence
+        )) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+
         XCTAssertThrowsError(try Self.attestationRegistration(
             fixture,
             androidSigningCertificateSha256: Data(repeating: 0x01, count: 31)
@@ -589,13 +672,127 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, publicKey: Data(repeating: 0x01, count: 31))) { error in
             XCTAssertEqual(error as? OfflineNoteV2Error, .invalidNotePublicKeyLength(expected: 32, actual: 31))
         }
+        XCTAssertThrowsError(try Self.attestationRegistration(fixture, keyId: "not standard base64!")) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try Self.attestationRegistration(fixture, keyId: "AB==")) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try Self.attestationRegistration(fixture, keyId: " \(vector.keyId) ")) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try Self.attestationRegistration(fixture, deviceId: " \(vector.deviceId) ")) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try Self.attestationRegistration(fixture, deviceId: "\u{00A0}\u{2003}")) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try Self.attestationRegistration(fixture, iosTeamId: " \(vector.iosTeamId ?? "") ")) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try Self.attestationRegistration(fixture, iosBundleId: "\(vector.iosBundleId ?? "")\n")) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try Self.attestationRegistration(fixture, iosEnvironment: "\t\(vector.iosEnvironment ?? "")")) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try Self.attestationRegistration(fixture, androidPackageName: " jp.co.soramitsu.iroha.offline ")) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try Self.attestationRegistration(
+            fixture,
+            assertionPublicKey: Self.offCurveP256AssertionPublicKey()
+        )) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, recentBlockHash: Data(repeating: 0x01, count: 31))) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .invalidHashLength(field: "recent_block_hash", expected: 32, actual: 31))
+            XCTAssertEqual(
+                error as? OfflineNoteV2Error,
+                .invalidHashLength(field: "recent_block_hash", expected: 32, actual: 31)
+            )
         }
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, oneUse: false)) { error in
             XCTAssertEqual(error as? OfflineNoteV2Error, .certificateMustBeOneUse)
         }
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, assetDefinitionId: "cash#bad"))
+        XCTAssertThrowsError(try Self.attestationRegistration(fixture, assertionUsageCountLimit: 1)) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try Self.attestationRegistration(
+            fixture,
+            platform: OfflineNoteV2Constants.androidKeyMintPlatform,
+            assertionScheme: OfflineNoteV2Constants.androidKeyMintAssertionScheme,
+            assertionKeyAlgorithm: OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm
+        )) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try Self.attestationRegistration(
+            fixture,
+            platform: OfflineNoteV2Constants.androidKeyMintPlatform,
+            assertionScheme: "android-keymint-ecdsa-p256-usage-limit",
+            assertionKeyAlgorithm: OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm,
+            assertionUsageCountLimit: 1
+        )) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try Self.attestationRegistration(
+            fixture,
+            keyId: String(repeating: "00", count: 32),
+            platform: OfflineNoteV2Constants.androidKeyMintPlatform,
+            assertionScheme: OfflineNoteV2Constants.androidKeyMintAssertionScheme,
+            assertionKeyAlgorithm: OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm,
+            assertionUsageCountLimit: 1
+        )) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+        let androidUppercaseKeyId = Data(SHA256.hash(data: try Self.base64(vector.assertionPublicKey)))
+            .hexLowercased()
+            .uppercased()
+        XCTAssertThrowsError(try Self.attestationRegistration(
+            fixture,
+            keyId: androidUppercaseKeyId,
+            platform: OfflineNoteV2Constants.androidKeyMintPlatform,
+            assertionScheme: OfflineNoteV2Constants.androidKeyMintAssertionScheme,
+            assertionKeyAlgorithm: OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm,
+            assertionUsageCountLimit: 1
+        )) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try Self.attestationRegistration(fixture, platform: "ios-app-attest")) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
     }
 
     func testOfflineDeviceAttestationRegistrationUsesValueSemanticsForData() throws {
@@ -1006,19 +1203,19 @@ final class OfflineNoteV2Tests: XCTestCase {
         )
         let limitedPayload = try OfflineNoteKeyCertificatePayloadV2(
             version: OfflineNoteV2Constants.keyCertificateVersion,
-            platform: certificate.platform,
-            keyId: certificate.keyId,
+            platform: OfflineNoteV2Constants.androidKeyMintPlatform,
+            keyId: Data(SHA256.hash(data: certificate.assertionPublicKey)).hexLowercased(),
             deviceId: certificate.deviceId,
             accountId: certificate.accountId,
             publicKey: certificate.publicKey,
-            assertionScheme: certificate.assertionScheme,
-            assertionKeyAlgorithm: certificate.assertionKeyAlgorithm,
+            assertionScheme: OfflineNoteV2Constants.androidKeyMintAssertionScheme,
+            assertionKeyAlgorithm: OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm,
             assertionPublicKey: certificate.assertionPublicKey,
-            assertionUsageCountLimit: 7,
+            assertionUsageCountLimit: 1,
             oneUse: true
         )
         XCTAssertNil(noLimitPayload.assertionUsageCountLimit)
-        XCTAssertEqual(limitedPayload.assertionUsageCountLimit, 7)
+        XCTAssertEqual(limitedPayload.assertionUsageCountLimit, 1)
         XCTAssertNotEqual(try noLimitPayload.noritoEncoded(), try limitedPayload.noritoEncoded())
 
         XCTAssertThrowsError(try OfflineNoteKeyCertificatePayloadV2(
@@ -1052,6 +1249,81 @@ final class OfflineNoteV2Tests: XCTestCase {
                 .invalidNotePublicKeyLength(expected: 32, actual: 31)
             )
         }
+        XCTAssertThrowsError(try OfflineNoteKeyCertificatePayloadV2(
+            version: OfflineNoteV2Constants.keyCertificateVersion,
+            platform: certificate.platform,
+            keyId: certificate.keyId,
+            deviceId: "\u{00A0}\u{2003}",
+            accountId: certificate.accountId,
+            publicKey: certificate.publicKey,
+            assertionScheme: certificate.assertionScheme,
+            assertionKeyAlgorithm: certificate.assertionKeyAlgorithm,
+            assertionPublicKey: certificate.assertionPublicKey,
+            assertionUsageCountLimit: certificate.assertionUsageCountLimit,
+            oneUse: true
+        )) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try OfflineNoteKeyCertificateV2(
+            version: OfflineNoteV2Constants.keyCertificateVersion,
+            platform: certificate.platform,
+            keyId: "\u{00A0}\u{2003}",
+            deviceId: certificate.deviceId,
+            accountId: certificate.accountId,
+            publicKey: certificate.publicKey,
+            assertionScheme: certificate.assertionScheme,
+            assertionKeyAlgorithm: certificate.assertionKeyAlgorithm,
+            assertionPublicKey: certificate.assertionPublicKey,
+            assertionUsageCountLimit: certificate.assertionUsageCountLimit,
+            oneUse: true,
+            issuerSignature: certificate.issuerSignature
+        )) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try OfflineNoteKeyCertificatePayloadV2(
+            version: OfflineNoteV2Constants.keyCertificateVersion,
+            platform: certificate.platform,
+            keyId: certificate.keyId,
+            deviceId: certificate.deviceId,
+            accountId: certificate.accountId,
+            publicKey: certificate.publicKey,
+            assertionScheme: certificate.assertionScheme,
+            assertionKeyAlgorithm: certificate.assertionKeyAlgorithm,
+            assertionPublicKey: Self.offCurveP256AssertionPublicKey(),
+            assertionUsageCountLimit: certificate.assertionUsageCountLimit,
+            oneUse: true
+        )) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try OfflineNoteKeyCertificatePayloadV2(
+            version: OfflineNoteV2Constants.keyCertificateVersion,
+            platform: OfflineNoteV2Constants.androidKeyMintPlatform,
+            keyId: Data(SHA256.hash(data: certificate.assertionPublicKey)).hexLowercased(),
+            deviceId: certificate.deviceId,
+            accountId: certificate.accountId,
+            publicKey: certificate.publicKey,
+            assertionScheme: OfflineNoteV2Constants.androidKeyMintAssertionScheme,
+            assertionKeyAlgorithm: OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm,
+            assertionPublicKey: certificate.assertionPublicKey,
+            assertionUsageCountLimit: 7,
+            oneUse: true
+        )) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+    }
+
+    private static func offCurveP256AssertionPublicKey() -> Data {
+        var key = Data(repeating: 0, count: 65)
+        key[0] = 0x04
+        return key
     }
 
     func testOfflineNoteV2PublicInputConstructorsRejectMalformedInputs() throws {
@@ -1255,6 +1527,16 @@ final class OfflineNoteV2Tests: XCTestCase {
         androidSigningCertificateSha256: Data? = nil,
         publicKey: Data? = nil,
         assertionPublicKey: Data? = nil,
+        keyId: String? = nil,
+        deviceId: String? = nil,
+        platform: String? = nil,
+        assertionScheme: String? = nil,
+        assertionKeyAlgorithm: String? = nil,
+        assertionUsageCountLimit: UInt32? = nil,
+        iosTeamId: String? = nil,
+        iosBundleId: String? = nil,
+        iosEnvironment: String? = nil,
+        androidPackageName: String? = nil,
         attestationReport: Data? = nil,
         evidence: Data? = nil,
         recentBlockHash: Data? = nil,
@@ -1264,22 +1546,22 @@ final class OfflineNoteV2Tests: XCTestCase {
         let vector = fixture.chainVectors.attestationRegistration
         return try OfflineDeviceAttestationRegistration(
             version: vector.version,
-            platform: vector.platform,
-            keyId: vector.keyId,
-            deviceId: vector.deviceId,
+            platform: platform ?? vector.platform,
+            keyId: keyId ?? vector.keyId,
+            deviceId: deviceId ?? vector.deviceId,
             accountId: vector.accountId,
             assetDefinitionId: assetDefinitionId ?? vector.assetDefinitionId,
-            iosTeamId: vector.iosTeamId,
-            iosBundleId: vector.iosBundleId,
-            iosEnvironment: vector.iosEnvironment,
-            androidPackageName: vector.androidPackageName,
+            iosTeamId: iosTeamId ?? vector.iosTeamId,
+            iosBundleId: iosBundleId ?? vector.iosBundleId,
+            iosEnvironment: iosEnvironment ?? vector.iosEnvironment,
+            androidPackageName: androidPackageName ?? vector.androidPackageName,
             androidSigningCertificateSha256: androidSigningCertificateSha256
                 ?? vector.androidSigningCertificateSha256.map(hex),
             publicKey: publicKey ?? (try base64(vector.publicKey)),
-            assertionScheme: vector.assertionScheme,
-            assertionKeyAlgorithm: vector.assertionKeyAlgorithm,
+            assertionScheme: assertionScheme ?? vector.assertionScheme,
+            assertionKeyAlgorithm: assertionKeyAlgorithm ?? vector.assertionKeyAlgorithm,
             assertionPublicKey: assertionPublicKey ?? (try base64(vector.assertionPublicKey)),
-            assertionUsageCountLimit: vector.assertionUsageCountLimit,
+            assertionUsageCountLimit: assertionUsageCountLimit ?? vector.assertionUsageCountLimit,
             oneUse: oneUse ?? vector.oneUse,
             challengeHash: challengeHash ?? hex(vector.challengeHash),
             attestationReportHash: attestationReportHash ?? hex(vector.attestationReportHash),
@@ -1350,6 +1632,12 @@ final class OfflineNoteV2Tests: XCTestCase {
             throw OfflineNoteV2FixtureError.invalidBase64
         }
         return data
+    }
+
+    private static func attestationEvidence(attestationReportHash: Data) -> Data {
+        var evidence = Data(OfflineNoteV2Constants.deviceAttestationEvidencePrefix.utf8)
+        evidence.append(attestationReportHash)
+        return evidence
     }
 
     private static func recursiveProofPayload(

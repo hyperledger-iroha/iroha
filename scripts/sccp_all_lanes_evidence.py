@@ -1075,7 +1075,9 @@ def _strip_0x(value: str) -> str:
 def _canonical_hex_text(value: str) -> str | None:
     if value.startswith("0X"):
         return None
-    text = value[2:] if value.startswith("0x") else value
+    if not value.startswith("0x"):
+        return None
+    text = value[2:]
     if text != text.lower():
         return None
     return text
@@ -1174,7 +1176,11 @@ def _parse_exact_runtime_bytecode(
         )
     if value.startswith("0X"):
         raise argparse.ArgumentTypeError(f"{label} must use lowercase 0x prefix")
-    text = value[2:] if value.startswith("0x") else value
+    if not value.startswith("0x"):
+        raise argparse.ArgumentTypeError(
+            f"{label} must be canonical lowercase 0x hex"
+        ) from None
+    text = value[2:]
     if text != text.lower():
         raise argparse.ArgumentTypeError(f"{label} must use lowercase hex")
     if any(symbol.isspace() for symbol in text):
@@ -6689,6 +6695,8 @@ def _source_adapter_gate_release_metadata_blockers(
     lane_label: str,
     lane: dict[str, Any],
     source_adapter_gate: dict[str, Any],
+    *,
+    require_ready_state: bool = True,
 ) -> list[str]:
     gate_field, expected_audit_fields = _source_adapter_gate_requirements(
         lane.get("domain")
@@ -6717,21 +6725,21 @@ def _source_adapter_gate_release_metadata_blockers(
             blockers.append(
                 f"{lane_label}: source adapter gate audit hashes must be empty when not required"
             )
-        if gate_ready is not True:
+        if require_ready_state and gate_ready is not True:
             blockers.append(
                 f"{lane_label}: source adapter gate ready must be true when not required"
             )
-        if isinstance(gate_blockers, list) and gate_blockers:
+        if require_ready_state and isinstance(gate_blockers, list) and gate_blockers:
             blockers.append(
                 f"{lane_label}: source adapter gate blockers must be empty when not required"
             )
         return blockers
 
-    if gate_ready is not True:
+    if require_ready_state and gate_ready is not True:
         blockers.append(
             f"{lane_label}: source adapter gate ready must be true when required"
         )
-    if isinstance(gate_blockers, list) and gate_blockers:
+    if require_ready_state and isinstance(gate_blockers, list) and gate_blockers:
         blockers.append(
             f"{lane_label}: source adapter gate blockers must be empty when required"
         )
@@ -8775,10 +8783,12 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
         lane_require_ready = (
             require_ready or lane_ready is True or domain == SCCP_DOMAIN_ETH
         )
+        lane_require_structure = domain in LANE_PROFILES
 
         records = lane.get("records")
         if not isinstance(records, dict):
             errors.append(f"{lane_label} records must be an object")
+            record_flags: dict[str, Any] = {}
         else:
             for field in sorted(
                 (field for field in records if field not in PUBLIC_LANE_RECORD_FIELDS),
@@ -8790,6 +8800,56 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                     errors.append(f"{lane_label} records.{field} must be a boolean")
                 elif lane_require_ready and records.get(field) is not True:
                     errors.append(f"{lane_label} records.{field} must be true")
+            record_flags = records
+        copied_source_records_present = (
+            record_flags.get("source_verifier_material") is True
+            and record_flags.get("source_adapter_deployment") is True
+        )
+        copied_destination_record_present = (
+            record_flags.get("destination_rollout") is True
+        )
+        copied_route_record_present = record_flags.get("route_allowlist") is True
+        copied_live_records_present = all(
+            record_flags.get(field) is True for field in PUBLIC_LANE_RECORD_FIELDS
+        )
+        source_records_require_ready = (
+            lane_require_ready or copied_source_records_present
+        )
+        route_allowlist_require_ready = lane_require_ready or copied_route_record_present
+        live_metadata_require_ready = lane_require_ready or copied_live_records_present
+        copied_evm_live_metadata_present = (
+            isinstance(lane.get("evm_live_metadata"), dict)
+            and any(
+                isinstance(lane["evm_live_metadata"].get(field), str)
+                and lane["evm_live_metadata"].get(field)
+                for field in (
+                    "source_rpc_chain_id",
+                    "destination_rpc_chain_id",
+                    "source_block_tag",
+                    "destination_block_tag",
+                )
+            )
+        )
+        source_records_require_structure = (
+            lane_require_ready
+            or copied_source_records_present
+            or bool(lane.get("source_record_hashes"))
+        )
+        destination_binding_require_structure = (
+            lane_require_ready
+            or copied_destination_record_present
+            or bool(lane.get("destination_binding"))
+        )
+        route_allowlist_require_structure = (
+            lane_require_ready
+            or copied_route_record_present
+            or bool(lane.get("route_allowlist"))
+        )
+        live_metadata_require_structure = (
+            lane_require_ready
+            or copied_live_records_present
+            or copied_evm_live_metadata_present
+        )
 
         errors.extend(
             _public_lane_object_field_errors(
@@ -8805,7 +8865,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                 PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS,
             )
         )
-        if lane_require_ready:
+        if source_records_require_structure:
             errors.extend(
                 _public_lane_missing_field_errors(
                     lane.get("source_record_hashes"),
@@ -8902,7 +8962,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
             if lane_require_ready and gate_blockers:
                 errors.append(f"{lane_label}.source_adapter_gate blockers must be empty")
             if (
-                lane_require_ready
+                lane_require_structure
                 and type(gate_required) is bool
                 and type(gate_ready) is bool
             ):
@@ -8911,6 +8971,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                         lane_label,
                         lane,
                         source_adapter_gate,
+                        require_ready_state=source_records_require_ready,
                     )
                 )
         errors.extend(
@@ -8959,7 +9020,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                     ("required",),
                 )
             )
-            if lane_require_ready and domain == SCCP_DOMAIN_ETH:
+            if live_metadata_require_ready and domain == SCCP_DOMAIN_ETH:
                 errors.extend(
                     _public_lane_required_true_errors(
                         evm_live_metadata,
@@ -8967,7 +9028,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                         ("ready",),
                     )
                 )
-            elif lane_require_ready:
+            elif live_metadata_require_structure:
                 errors.extend(
                     _public_lane_required_bool_errors(
                         evm_live_metadata,
@@ -8975,7 +9036,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                         ("ready",),
                     )
                 )
-            if lane_require_ready:
+            if live_metadata_require_structure:
                 errors.extend(
                     _public_lane_required_positive_decimal_string_errors(
                         evm_live_metadata,
@@ -8983,7 +9044,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                         ("source_rpc_chain_id", "destination_rpc_chain_id"),
                     )
                 )
-            if lane_require_ready and domain == SCCP_DOMAIN_ETH:
+            if live_metadata_require_structure and domain == SCCP_DOMAIN_ETH:
                 errors.extend(
                     _public_lane_required_exact_string_errors(
                         evm_live_metadata,
@@ -8994,7 +9055,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                         },
                     )
                 )
-            elif lane_require_ready:
+            elif live_metadata_require_structure:
                 errors.extend(
                     _public_lane_required_canonical_string_errors(
                         evm_live_metadata,
@@ -9002,7 +9063,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                         ("source_block_tag", "destination_block_tag"),
                     )
                 )
-            if lane_require_ready:
+            if live_metadata_require_ready:
                 errors.extend(
                     _public_lane_optional_true_errors(
                         evm_live_metadata,
@@ -9054,7 +9115,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                 ),
             )
         )
-        if lane_require_ready:
+        if destination_binding_require_structure:
             errors.extend(
                 _public_lane_missing_field_errors(
                     lane.get("destination_binding"),
@@ -9097,7 +9158,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                 ),
             )
         )
-        if lane_require_ready:
+        if destination_binding_require_structure:
             errors.extend(
                 _public_lane_destination_family_errors(
                     lane.get("destination_binding"),
@@ -9153,7 +9214,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                 ),
             )
         )
-        if lane_require_ready:
+        if route_allowlist_require_structure:
             errors.extend(
                 _public_lane_missing_field_errors(
                     route_allowlist,
@@ -9200,7 +9261,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                 route_allowlist,
             )
         )
-        if lane_require_ready:
+        if route_allowlist_require_ready:
             errors.extend(
                 _public_lane_required_true_errors(
                     route_allowlist,
@@ -9214,7 +9275,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                 domain,
                 PUBLIC_LANE_ROUTE_CANARY_FIELDS,
             )
-            if lane_require_ready or "route_canary" in route_allowlist:
+            if route_allowlist_require_structure or "route_canary" in route_allowlist:
                 errors.extend(
                     _public_lane_object_field_errors(
                         route_canary,
@@ -9222,7 +9283,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                         route_canary_fields,
                     )
                 )
-            if lane_require_ready:
+            if route_allowlist_require_structure:
                 errors.extend(
                     _public_lane_missing_field_errors(
                         route_canary,
@@ -9255,7 +9316,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                     ),
                 )
             )
-            if lane_require_ready:
+            if route_allowlist_require_structure:
                 errors.extend(
                     _public_lane_required_bytes32_errors(
                         route_canary,
@@ -9437,6 +9498,182 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                         ),
                     )
                 )
+            if route_allowlist_require_structure:
+                if domain in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC):
+                    errors.extend(
+                        _public_lane_required_bytes32_errors(
+                            route_canary,
+                            canary_label,
+                            (
+                                "transaction_hash",
+                                "receipt_block_hash",
+                                "block_receipts_root",
+                                "call_data_sha256",
+                                "message_id",
+                                "payload_hash",
+                                "statement_hash",
+                                "commitment_root",
+                                "finality_height",
+                                "finality_block_hash",
+                            ),
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_positive_int_errors(
+                            route_canary,
+                            canary_label,
+                            ("receipt_block_number",),
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_u32_errors(
+                            route_canary,
+                            canary_label,
+                            ("log_index",),
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_lane_domain_errors(
+                            route_canary,
+                            canary_label,
+                            "target_domain",
+                            domain,
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_int_constant_errors(
+                            route_canary,
+                            canary_label,
+                            "proof_version",
+                            1,
+                            "1",
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_int_constant_errors(
+                            route_canary,
+                            canary_label,
+                            "proof_source_domain",
+                            SCCP_DOMAIN_SORA,
+                            "SORA domain",
+                        )
+                    )
+                elif domain == SCCP_DOMAIN_TRON:
+                    errors.extend(
+                        _public_lane_required_bytes32_errors(
+                            route_canary,
+                            canary_label,
+                            (
+                                "transaction_id",
+                                "message_id",
+                                "call_data_sha256",
+                                "payload_hash",
+                                "statement_hash",
+                                "commitment_root",
+                                "finality_height",
+                                "finality_block_hash",
+                                "signature_sha256",
+                            ),
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_tron_address_errors(
+                            route_canary,
+                            canary_label,
+                            (
+                                "transaction_owner_address",
+                                "signature_recovered_address",
+                            ),
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_tron_address_match_errors(
+                            route_canary,
+                            canary_label,
+                            "transaction_owner_address",
+                            "signature_recovered_address",
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_positive_int_errors(
+                            route_canary,
+                            canary_label,
+                            ("block_number",),
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_nonnegative_int_errors(
+                            route_canary,
+                            canary_label,
+                            ("block_timestamp",),
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_u32_errors(
+                            route_canary,
+                            canary_label,
+                            ("log_index",),
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_lane_domain_errors(
+                            route_canary,
+                            canary_label,
+                            "target_domain",
+                            SCCP_DOMAIN_TRON,
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_int_constant_errors(
+                            route_canary,
+                            canary_label,
+                            "proof_version",
+                            1,
+                            "1",
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_int_constant_errors(
+                            route_canary,
+                            canary_label,
+                            "proof_source_domain",
+                            SCCP_DOMAIN_SORA,
+                            "SORA domain",
+                        )
+                    )
+                elif domain == SCCP_DOMAIN_TON:
+                    errors.extend(
+                        _public_lane_required_bytes32_errors(
+                            route_canary,
+                            canary_label,
+                            (
+                                "ton_account_state_hash",
+                                "ton_last_transaction_hash",
+                            ),
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_positive_decimal_string_errors(
+                            route_canary,
+                            canary_label,
+                            ("ton_last_transaction_lt",),
+                        )
+                    )
+                elif domain == SCCP_DOMAIN_SOL:
+                    errors.extend(
+                        _public_lane_required_canonical_string_errors(
+                            route_canary,
+                            canary_label,
+                            ("solana_programdata_address",),
+                        )
+                    )
+                    errors.extend(
+                        _public_lane_required_positive_decimal_string_errors(
+                            route_canary,
+                            canary_label,
+                            ("solana_programdata_slot",),
+                        )
+                    )
             if lane_require_ready:
                 errors.extend(
                     _public_lane_required_exact_string_errors(

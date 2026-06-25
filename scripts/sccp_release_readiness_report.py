@@ -1013,6 +1013,27 @@ def _bsc_groth16_material_documentation_gate_inventory_errors(
         ]
 
 
+def _bsc_groth16_material_evidence_guard_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for BSC Groth16 material evidence guards."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_bsc_groth16_material_evidence_guard_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception:  # pragma: no cover - exercised through blocker text.
+        return [
+            "BSC Groth16 material evidence guard source inventory "
+            "cannot run release-bundle verifier helper"
+        ]
+
+
 def _ethereum_data_collection_no_proxy_gate_inventory_errors(
     regions: dict[str, tuple[str | Path, str, str, tuple[str, ...]]] | None = None,
 ) -> list[str]:
@@ -3109,8 +3130,7 @@ def _native_evm_manifest_relative_path(
     markdown_unsafe_character = _path_markdown_unsafe_character(value)
     if markdown_unsafe_character is not None:
         return None, [
-            f"{prefix} path contains Markdown-unsafe character "
-            f"{markdown_unsafe_character}"
+            f"{prefix} path contains Markdown-unsafe character"
         ]
     percent_traversal = _path_percent_encoded_traversal(value)
     if percent_traversal is not None:
@@ -4125,6 +4145,7 @@ def _native_evm_prover_bundle_status(
         payload,
     )
     blockers.extend(self_test_blockers)
+    validation_blockers = list(dict.fromkeys(blockers))
 
     return {
         "required": True,
@@ -4153,8 +4174,8 @@ def _native_evm_prover_bundle_status(
         "cross_sdk_fixture_parity_artifact": parity_artifact,
         "native_prover_self_test_artifact": self_test_artifact,
         "sdk_artifacts": sdk_artifacts,
-        "validation_status": "passed" if not blockers else "blocked",
-        "validation_blockers": blockers,
+        "validation_status": "passed" if not validation_blockers else "blocked",
+        "validation_blockers": validation_blockers,
     }
 
 
@@ -4736,6 +4757,11 @@ def _append_unique(items: list[str], value: str) -> None:
         items.append(value)
 
 
+def _command_token_looks_like_node_runner(token: str) -> bool:
+    basename = _command_token_basename(token).lower()
+    return bool(re.search(r"(^|[-_.])node(?:[0-9.]+)?($|[-_.])", basename))
+
+
 def _node_expected_test_files_for_phase(phase: str) -> tuple[str, ...]:
     test_files: list[str] = []
     for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase, ()):
@@ -4748,7 +4774,7 @@ def _node_expected_test_files_for_phase(phase: str) -> tuple[str, ...]:
 
 
 def _node_test_command_files(tokens: list[str]) -> tuple[str, ...]:
-    if len(tokens) < 3 or _command_token_basename(tokens[0]) != "node":
+    if len(tokens) < 3 or not _command_token_looks_like_node_runner(tokens[0]):
         return ()
     if tokens[1] != "--test":
         return ()
@@ -4761,7 +4787,7 @@ def _node_test_command_files(tokens: list[str]) -> tuple[str, ...]:
 def _node_check_command_matches(tokens: list[str], expected_path: str) -> bool:
     return (
         len(tokens) == 3
-        and _command_token_basename(tokens[0]) == "node"
+        and _command_token_looks_like_node_runner(tokens[0])
         and tokens[1] == "--check"
         and tokens[2] == expected_path
     )
@@ -4935,6 +4961,11 @@ def _gradle_test_selector_matches(expected: str, actual: str) -> bool:
     return actual == expected
 
 
+def _command_token_looks_like_python_runner(token: str) -> bool:
+    basename = _command_token_basename(token).lower()
+    return bool(re.search(r"(^|[-_.])python(?:[0-9.]+)?($|[-_.])", basename))
+
+
 def _gradle_test_command_selectors(tokens: list[str], task: str) -> list[str]:
     if (
         len(tokens) < 5
@@ -5003,7 +5034,7 @@ def _evidence_pytest_command_has_fragment(
     fragment: str,
 ) -> bool:
     tokens = _phase_effective_command_tokens(command)
-    if not tokens or not _command_token_basename(tokens[0]).startswith("python"):
+    if not tokens or not _command_token_looks_like_python_runner(tokens[0]):
         return False
     module_index = next(
         (
@@ -7208,6 +7239,9 @@ def _build_report(
     bsc_groth16_material_documentation_gate_blockers = (
         _bsc_groth16_material_documentation_gate_inventory_errors()
     )
+    bsc_groth16_material_evidence_guard_gate_blockers = (
+        _bsc_groth16_material_evidence_guard_gate_inventory_errors()
+    )
     ethereum_data_collection_no_proxy_gate_blockers = (
         _ethereum_data_collection_no_proxy_gate_inventory_errors()
     )
@@ -7388,6 +7422,16 @@ def _build_report(
             ),
             "validation_blockers": (
                 bsc_groth16_material_documentation_gate_blockers
+            ),
+        },
+        "bsc_groth16_material_evidence_guard_gate": {
+            "validation_status": (
+                "passed"
+                if not bsc_groth16_material_evidence_guard_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": (
+                bsc_groth16_material_evidence_guard_gate_blockers
             ),
         },
         "ethereum_data_collection_no_proxy_gate": {
@@ -7956,6 +8000,7 @@ def _build_report(
         and not ethereum_launch_policy_documentation_gate_blockers
         and not public_discovery_documentation_gate_blockers
         and not bsc_groth16_material_documentation_gate_blockers
+        and not bsc_groth16_material_evidence_guard_gate_blockers
         and not ethereum_data_collection_no_proxy_gate_blockers
         and not ethereum_inbound_adversarial_gate_blockers
         and not bsc_inbound_adversarial_gate_blockers
@@ -8037,6 +8082,7 @@ def _build_report(
     blockers.extend(ethereum_launch_policy_documentation_gate_blockers)
     blockers.extend(public_discovery_documentation_gate_blockers)
     blockers.extend(bsc_groth16_material_documentation_gate_blockers)
+    blockers.extend(bsc_groth16_material_evidence_guard_gate_blockers)
     blockers.extend(ethereum_data_collection_no_proxy_gate_blockers)
     blockers.extend(ethereum_inbound_adversarial_gate_blockers)
     blockers.extend(bsc_inbound_adversarial_gate_blockers)
@@ -9228,7 +9274,7 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report {ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE} and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
             f"- {ACTIVE_LAUNCH_DISPLAY} route-canary transaction metadata must include a canonical non-zero transaction hash, finalized receipt block number/hash, receipts root, message id, and `{ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE}` evidence source before launch readiness can pass.",
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked. Required source-verifier evidence by lane: Ethereum recursive source-adapter verifier deployment and remaining beacon light-client update/state branches are not complete for the SCCP inbound path; BSC recursive source-adapter verifier deployment is not complete for the SCCP inbound path; Solana audited Tower replay, full-bank AccountsDB lattice, bank/fork-choice, and source-adapter verifier deployment evidence is not complete for the SCCP inbound path; TON governed full-light-client verifier deployment, canary, and source-adapter deployment evidence are not complete for the SCCP inbound path; TRON transaction-Merkle source-call verifier deployment is not complete for the SCCP inbound path.",
-            "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, the `SCCP .NET SDK version:` marker emitted after `dotnet --version`, phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order, no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, or restore/build failed markers, exact host markers `SCCP .NET SDK OS: Windows`, `SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and `SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` emitted after `dotnet --info`, exact native bridge markers `connect_norito_bridge native bridge: ...connect_norito_bridge.dll` and `connect_norito_bridge native bridge sha256: <64 lowercase hex>` emitted after `cargo build -p connect_norito_bridge`, `dotnet restore Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, a non-zero passed VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` emitted after the strict `dotnet test` command, with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a numeric unit duration, and with a positive TRX byte count plus a TRX marker that full-matches the C# test project `TestResults/sccp-dotnet-sdk.trx` path before release readiness can pass.",
+            "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, canonical-case rejection coverage for proof-request, message-bundle, source-proof, and optional Groth16 artifact hash fields, including uppercase byte aliases and `0X` public-input, statement, bundle/source-proof, proof-artifact, and proving-key hashes, the `SCCP .NET SDK version:` marker emitted after `dotnet --version`, phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order, no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, or restore/build failed markers, exact host markers `SCCP .NET SDK OS: Windows`, `SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and `SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` emitted after `dotnet --info`, exact native bridge markers `connect_norito_bridge native bridge: ...connect_norito_bridge.dll` and `connect_norito_bridge native bridge sha256: <64 lowercase hex>` emitted after `cargo build -p connect_norito_bridge`, `dotnet restore Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, a non-zero passed VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` emitted after the strict `dotnet test` command, with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a numeric unit duration, and with a positive TRX byte count plus a TRX marker that full-matches the C# test project `TestResults/sccp-dotnet-sdk.trx` path before release readiness can pass.",
             "- An audited `--native-evm-prover-bundle` manifest with `schema = sccp-native-evm-groth16-prover-bundle-v1`, `no_wasm = true`, `remote_prover_required = false`, and matching Ethereum destination binding/proving-key hashes.",
             f"- {SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE}",
             f"- {SCCP_NOT_REMAINING_WORK_SCOPE_NOTE}",
@@ -9237,6 +9283,7 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- SCCP Ethereum launch-policy documentation source inventory must pin the active Ethereum-mainnet policy wording and reject stale BSC-only production-packaging text.",
             "- SCCP public discovery documentation source inventory must pin supported launch-lane and verifier-target wording so unsupported lanes cannot re-enter Torii discovery evidence silently.",
             "- BSC Groth16 material documentation source inventory must pin PTAU-bound zkey verification, attestation request and finalize flow, and proof self-test operator steps before public bundle readiness can pass.",
+            "- BSC Groth16 material evidence guard source inventory must pin closed review/audit evidence schemas, alias-conflict rejection, safe relative evidence path validation, non-symlink report/transcript reads, bounded public evidence files, required review/audit evidence flags, and adversarial tests before public bundle readiness can pass.",
             "- SCCP Ethereum no-proxy data-collection source inventory must pin app-owned execution/Beacon provider reads and reject Torii proxy or embedded HTTP-client fallbacks across public SDKs.",
             "- SCCP Ethereum inbound adversarial source inventory must pin public SDK regressions for failed receipts, source-event drift, hash-only proof bypasses, immutable evidence snapshots, oversized proof bytes, finality mismatches, sync-committee quorum checks, and wrong-domain receipt transcripts before inbound source proofs can be accepted.",
             "- SCCP BSC inbound adversarial source inventory must pin public SDK regressions for hash-only proof bypasses, receipt-proof metadata binding, source-event digest drift, malformed source logs, and missing source-event validation before BSC inbound source proofs can be accepted.",
@@ -9784,6 +9831,7 @@ def _public_native_evm_artifact_errors(
     label: str,
     *,
     expected_hash: Any = None,
+    require_hash_match: bool = True,
 ) -> list[str]:
     """Return bounded blockers for malformed native-prover artifact metadata."""
 
@@ -9809,7 +9857,8 @@ def _public_native_evm_artifact_errors(
     if "sha256" in value and not _is_canonical_sha256_text(artifact_hash):
         errors.append(f"{label} sha256 must be a canonical SHA-256 hex string")
     if (
-        expected_hash is not None
+        require_hash_match
+        and expected_hash is not None
         and _is_canonical_sha256_text(artifact_hash)
         and _is_nonzero_hex32(expected_hash)
         and f"0x{artifact_hash}" != expected_hash
@@ -9843,11 +9892,15 @@ def _public_native_evm_sdk_id_error(sdk: Any) -> str | None:
 def _public_native_evm_audit_hash_errors(
     value: dict[str, Any],
     label: str,
+    *,
+    require_complete: bool = True,
 ) -> list[str]:
     """Return bounded blockers for public native-prover audit hashes."""
 
     audit_hashes = value.get("audit_hashes")
-    if not isinstance(audit_hashes, dict) or not audit_hashes:
+    if not isinstance(audit_hashes, dict):
+        return [f"{label} audit_hashes must be a non-empty object"]
+    if require_complete and not audit_hashes:
         return [f"{label} audit_hashes must be a non-empty object"]
 
     errors: list[str] = []
@@ -9862,8 +9915,11 @@ def _public_native_evm_audit_hash_errors(
                 "unexpected",
             )
         )
-    for field in sorted(set(NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES) - set(audit_hashes)):
-        errors.append(f"{label} audit_hashes missing field: {field}")
+    if require_complete:
+        for field in sorted(
+            set(NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES) - set(audit_hashes)
+        ):
+            errors.append(f"{label} audit_hashes missing field: {field}")
 
     reserved_hash_roles = {
         "proof_artifact_hash": value.get("proof_artifact_hash"),
@@ -9890,6 +9946,8 @@ def _public_native_evm_audit_hash_errors(
                 "32-byte hex value"
             )
             continue
+        if not require_complete:
+            continue
         previous_field = seen_audit_hashes.get(audit_hash)
         if previous_field is not None:
             errors.append(
@@ -9906,10 +9964,15 @@ def _public_native_evm_audit_hash_errors(
 def _public_native_evm_sdk_artifact_errors(
     value: Any,
     label: str,
+    *,
+    require_hash_match: bool = True,
+    require_complete: bool = True,
 ) -> list[str]:
     """Return bounded blockers for public native-prover SDK artifacts."""
 
-    if not isinstance(value, list) or not value:
+    if not isinstance(value, list):
+        return [f"{label} sdk_artifacts must be a non-empty list"]
+    if require_complete and not value:
         return [f"{label} sdk_artifacts must be a non-empty list"]
 
     errors: list[str] = []
@@ -9944,7 +10007,7 @@ def _public_native_evm_sdk_artifact_errors(
 
         assert isinstance(sdk, str)
         semantic_sdk_order.append(sdk)
-        if sdk in seen_sdks:
+        if require_complete and sdk in seen_sdks:
             errors.append(f"{row_label} sdk is duplicated")
         seen_sdks.add(sdk)
 
@@ -9961,13 +10024,15 @@ def _public_native_evm_sdk_artifact_errors(
                 row.get("implementation_artifact"),
                 f"{row_label} implementation_artifact",
                 expected_hash=row.get("implementation_hash"),
+                require_hash_match=require_hash_match,
             )
         )
 
-    for sdk in sorted(set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - seen_sdks):
-        errors.append(f"{label} sdk_artifacts missing sdk: {sdk}")
-    if semantic_sdk_order != sorted(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS):
-        errors.append(f"{label} sdk_artifacts must match expected SDK order")
+    if require_complete:
+        for sdk in sorted(set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - seen_sdks):
+            errors.append(f"{label} sdk_artifacts missing sdk: {sdk}")
+        if semantic_sdk_order != sorted(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS):
+            errors.append(f"{label} sdk_artifacts must match expected SDK order")
     return errors
 
 
@@ -9993,59 +10058,104 @@ def _public_native_evm_prover_bundle_errors(value: Any) -> list[str]:
     if value.get("required") is not True:
         errors.append(f"{label} required must be true")
 
+    validation_status = value.get("validation_status")
+    validation_blockers = value.get("validation_blockers")
+    manifest_load_blocker_prefixes = (
+        "native EVM Groth16 prover bundle JSON contains duplicate key:",
+    )
+    manifest_load_blockers = {
+        "native EVM Groth16 prover bundle manifest is required",
+        "native EVM Groth16 prover bundle is not valid JSON",
+        "native EVM Groth16 prover bundle is not UTF-8 text",
+        "native EVM Groth16 prover bundle cannot be read",
+        "native EVM Groth16 prover bundle artifact path metadata is invalid",
+        "native EVM Groth16 prover bundle must be a JSON object",
+        "native EVM Groth16 prover bundle JSON contains duplicate key with control character",
+        "native EVM Groth16 prover bundle JSON contains duplicate key with non-ASCII character",
+        "native EVM Groth16 prover bundle JSON contains duplicate key with sensitive key name",
+    }
+    manifest_load_blocked = (
+        validation_status == "blocked"
+        and isinstance(validation_blockers, list)
+        and any(
+            blocker in manifest_load_blockers
+            or any(
+                blocker.startswith(prefix)
+                for prefix in manifest_load_blocker_prefixes
+            )
+            for blocker in validation_blockers
+            if isinstance(blocker, str)
+        )
+    )
+
     expected_fields = {
         "schema": NATIVE_EVM_PROVER_BUNDLE_SCHEMA,
         "bundle_id": NATIVE_EVM_PROVER_BUNDLE_ID,
         "lanes": ACTIVE_LAUNCH_CHAIN,
         "proof_backend": "evm-groth16-bn254-v1",
     }
-    for field, expected in expected_fields.items():
-        if field in value and value.get(field) != expected:
-            errors.append(f"{label} {field} must match the canonical native bundle")
+    if not manifest_load_blocked:
+        for field, expected in expected_fields.items():
+            if field in value and value.get(field) != expected:
+                errors.append(f"{label} {field} must match the canonical native bundle")
 
-    for field in (
-        "proof_artifact_hash",
-        "proving_key_hash",
-        "verifier_key_hash",
-        "destination_binding_hash",
-    ):
-        if field in value and not _is_nonzero_hex32(value.get(field)):
-            errors.append(
-                f"{label} {field} must be a canonical non-zero 32-byte hex value"
+        for field in (
+            "proof_artifact_hash",
+            "proving_key_hash",
+            "verifier_key_hash",
+            "destination_binding_hash",
+        ):
+            if field in value and not _is_nonzero_hex32(value.get(field)):
+                errors.append(
+                    f"{label} {field} must be a canonical non-zero 32-byte hex value"
+                )
+
+        audit_hashes = value.get("audit_hashes")
+        support_artifact_hashes = audit_hashes if isinstance(audit_hashes, dict) else {}
+        for artifact_field, hash_field in (
+            ("artifact", None),
+            ("proof_artifact", "proof_artifact_hash"),
+            ("proving_key", "proving_key_hash"),
+            ("verifier_key", "verifier_key_hash"),
+            ("cross_sdk_fixture_parity_artifact", "cross_sdk_fixture_parity"),
+            ("native_prover_self_test_artifact", "native_prover_self_test"),
+        ):
+            if validation_status == "blocked" and value.get(artifact_field) is None:
+                continue
+            errors.extend(
+                _public_native_evm_artifact_errors(
+                    value.get(artifact_field),
+                    f"{label} {artifact_field}",
+                    expected_hash=(
+                        value.get(hash_field)
+                        if hash_field in value
+                        else support_artifact_hashes.get(hash_field)
+                    )
+                    if hash_field is not None
+                    else None,
+                    require_hash_match=validation_status != "blocked",
+                )
             )
 
-    audit_hashes = value.get("audit_hashes")
-    support_artifact_hashes = audit_hashes if isinstance(audit_hashes, dict) else {}
-    for artifact_field, hash_field in (
-        ("artifact", None),
-        ("proof_artifact", "proof_artifact_hash"),
-        ("proving_key", "proving_key_hash"),
-        ("verifier_key", "verifier_key_hash"),
-        ("cross_sdk_fixture_parity_artifact", "cross_sdk_fixture_parity"),
-        ("native_prover_self_test_artifact", "native_prover_self_test"),
-    ):
         errors.extend(
-            _public_native_evm_artifact_errors(
-                value.get(artifact_field),
-                f"{label} {artifact_field}",
-                expected_hash=(
-                    value.get(hash_field)
-                    if hash_field in value
-                    else support_artifact_hashes.get(hash_field)
-                )
-                if hash_field is not None
-                else None,
+            _public_native_evm_audit_hash_errors(
+                value,
+                label,
+                require_complete=validation_status != "blocked",
+            )
+        )
+        errors.extend(
+            _public_native_evm_sdk_artifact_errors(
+                value.get("sdk_artifacts"),
+                label,
+                require_hash_match=validation_status != "blocked",
+                require_complete=validation_status != "blocked",
             )
         )
 
-    errors.extend(_public_native_evm_audit_hash_errors(value, label))
-    errors.extend(_public_native_evm_sdk_artifact_errors(value.get("sdk_artifacts"), label))
-
-    validation_status = value.get("validation_status")
     if validation_status not in {"passed", "blocked"}:
         errors.append(f"{label} validation_status must be passed or blocked")
 
-    validation_blockers = value.get("validation_blockers")
     if not isinstance(validation_blockers, list):
         errors.append(
             f"{label} validation_blockers must be a list of non-empty "
@@ -10104,6 +10214,82 @@ def _public_embedded_evidence_errors(value: Any) -> list[str]:
             "readiness report evidence must be a canonical public all-lanes summary"
         ]
     return []
+
+
+def _redacted_native_evm_artifact_summary(
+    value: Any,
+    *,
+    redact_unsafe_path: bool,
+) -> Any:
+    """Return copied artifact metadata with unsafe public paths redacted."""
+
+    if not isinstance(value, dict):
+        return value
+    redacted = dict(value)
+    if (
+        redact_unsafe_path
+        and "path" in redacted
+        and not _native_evm_markdown_path_is_safe(redacted.get("path"))
+    ):
+        redacted["path"] = "redacted"
+    return redacted
+
+
+def _redacted_public_native_evm_prover_bundle(value: dict[str, Any]) -> dict[str, Any]:
+    """Return a copied native-prover summary safe for public JSON rendering."""
+
+    redacted = dict(value)
+    blocked = redacted.get("validation_status") == "blocked"
+    if blocked:
+        audit_hashes = redacted.get("audit_hashes")
+        if isinstance(audit_hashes, dict):
+            redacted["audit_hashes"] = {
+                field: audit_hash
+                for field, audit_hash in audit_hashes.items()
+                if _is_nonzero_hex32(audit_hash)
+            }
+    for field in (
+        "artifact",
+        "proof_artifact",
+        "proving_key",
+        "verifier_key",
+        "cross_sdk_fixture_parity_artifact",
+        "native_prover_self_test_artifact",
+    ):
+        if field in redacted:
+            redacted[field] = _redacted_native_evm_artifact_summary(
+                redacted.get(field),
+                redact_unsafe_path=blocked,
+            )
+
+    sdk_artifacts = redacted.get("sdk_artifacts")
+    if isinstance(sdk_artifacts, list):
+        copied_rows: list[Any] = []
+        for row in sdk_artifacts:
+            if isinstance(row, dict):
+                expected_implementation = NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS.get(
+                    row.get("sdk")
+                )
+                if blocked and (
+                    _public_native_evm_sdk_id_error(row.get("sdk")) is not None
+                    or not _is_nonzero_hex32(row.get("implementation_hash"))
+                    or row.get("implementation") != expected_implementation
+                ):
+                    continue
+                copied = dict(row)
+                copied["implementation_artifact"] = (
+                    _redacted_native_evm_artifact_summary(
+                        copied.get("implementation_artifact"),
+                        redact_unsafe_path=blocked,
+                    )
+                )
+                if blocked and not isinstance(copied.get("implementation_artifact"), dict):
+                    continue
+                copied_rows.append(copied)
+            else:
+                copied_rows.append(row)
+        redacted["sdk_artifacts"] = copied_rows
+    return redacted
 
 
 def _public_source_inventory_gate_error(gate: Any) -> str | None:
@@ -10700,6 +10886,7 @@ def _public_report_payload(report: Any) -> dict[str, Any]:
             "production_ready": False,
             "blockers": ["readiness report must be an object"],
         }
+    report = dict(report)
 
     blockers: list[str] = []
     public_report_fields = set(READINESS_REPORT_PUBLIC_FIELDS)
@@ -10785,6 +10972,9 @@ def _public_report_payload(report: Any) -> dict[str, Any]:
         root_errors["native_evm_prover_bundle"] = (
             "readiness report native_evm_prover_bundle must be an object"
         )
+    elif isinstance(native_bundle, dict):
+        native_bundle = _redacted_public_native_evm_prover_bundle(native_bundle)
+        report["native_evm_prover_bundle"] = native_bundle
     if "input_artifacts" in report and "input_artifacts" not in root_errors:
         input_artifact_errors = _public_input_artifact_errors(
             report.get("input_artifacts")

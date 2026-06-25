@@ -329,6 +329,7 @@ def test_evm_address_and_hash_parsers_reject_zero_and_wrong_width(tmp_path):
     ) == bytes.fromhex("6080604052")
 
     for value, expected in (
+        ("11" * 20, "canonical lowercase 0x hex"),
         ("0X" + "11" * 20, "lowercase 0x prefix"),
         ("0x" + "AA" * 20, "lowercase hex"),
     ):
@@ -340,6 +341,7 @@ def test_evm_address_and_hash_parsers_reject_zero_and_wrong_width(tmp_path):
             raise AssertionError("non-canonical EVM address was accepted")
 
     for value, expected in (
+        ("33" * 32, "canonical lowercase 0x hex"),
         ("0X" + "33" * 32, "lowercase 0x prefix"),
         ("0x" + "AA" * 32, "lowercase hex"),
     ):
@@ -362,6 +364,7 @@ def test_evm_address_and_hash_parsers_reject_zero_and_wrong_width(tmp_path):
             raise AssertionError("padded EVM runtime bytecode was accepted")
 
     for value, expected in (
+        ("6080604052", "canonical lowercase 0x hex"),
         ("0X6080604052", "lowercase 0x prefix"),
         ("0x60806040AB", "lowercase hex"),
     ):

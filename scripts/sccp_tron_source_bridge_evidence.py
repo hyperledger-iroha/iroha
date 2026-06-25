@@ -136,7 +136,11 @@ def _strip_0x(value: str) -> str:
 def _strip_lower_0x_hex(value: str, *, label: str) -> str:
     if value.startswith("0X"):
         raise argparse.ArgumentTypeError(f"{label} must use lowercase 0x prefix")
-    text = value[2:] if value.startswith("0x") else value
+    if not value.startswith("0x"):
+        raise argparse.ArgumentTypeError(
+            f"{label} must be canonical lowercase 0x hex"
+        ) from None
+    text = value[2:]
     if text != text.lower():
         raise argparse.ArgumentTypeError(f"{label} must use lowercase hex")
     return text

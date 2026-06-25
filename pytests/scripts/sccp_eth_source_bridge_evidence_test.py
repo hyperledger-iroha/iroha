@@ -113,6 +113,7 @@ def test_eth_address_parser_rejects_zero_and_wrong_width(tmp_path):
     ) == bytes.fromhex("6080604052")
 
     for value, expected in (
+        ("11" * 20, "canonical lowercase 0x hex"),
         ("0X" + "11" * 20, "lowercase 0x prefix"),
         ("0x" + "AA" * 20, "lowercase hex"),
     ):
@@ -135,6 +136,7 @@ def test_eth_address_parser_rejects_zero_and_wrong_width(tmp_path):
             raise AssertionError("padded ETH runtime bytecode was accepted")
 
     for value, expected in (
+        ("6080604052", "canonical lowercase 0x hex"),
         ("0X6080604052", "lowercase 0x prefix"),
         ("0x60806040AB", "lowercase hex"),
     ):
@@ -285,6 +287,17 @@ def test_eth_hash_parser_rejects_zero_and_wrong_width():
         label="source trust anchor hash",
         byte_length=32,
     ) == bytes.fromhex("44" * 32)
+
+    try:
+        module.parse_hex_bytes(
+            "44" * 32,
+            label="source trust anchor hash",
+            byte_length=32,
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        assert "canonical lowercase 0x hex" in str(exc)
+    else:
+        raise AssertionError("bare ETH component hash was accepted")
 
     try:
         module.parse_hex_bytes(
@@ -497,7 +510,7 @@ def test_eth_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding():
         in rendered
     )
     assert (
-        '# sccp_evm_source_deployment_transaction_input_sha256 = "'
+        '# sccp_evm_source_deployment_transaction_input_sha256 = "0x'
         + "cd" * 32
         + '"'
         in rendered
@@ -1061,7 +1074,7 @@ def test_eth_cli_json_summary_and_toml_output(capsys):
     )
     assert output["deployment_transaction_block_hash"] == "0x" + "bb" * 32
     assert output["deployment_transaction_block_number"] == 4660
-    assert output["deployment_transaction_input_sha256"] == "cd" * 32
+    assert output["deployment_transaction_input_sha256"] == "0x" + "cd" * 32
     assert (
         output["adapter_verifier_vk_hash"]
         == "0x" + ETH_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR

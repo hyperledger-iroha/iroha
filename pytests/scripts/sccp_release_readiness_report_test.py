@@ -2437,6 +2437,50 @@ def test_release_readiness_report_guards_bsc_groth16_material_documentation_gate
         assert checked_markers > 0
 
 
+def test_release_readiness_report_guards_bsc_groth16_material_evidence_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin BSC Groth16 material evidence guards."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert report._bsc_groth16_material_evidence_guard_gate_inventory_errors() == []
+
+    for index, (source_path, required_markers) in enumerate(
+        verifier.BSC_GROTH16_MATERIAL_EVIDENCE_GUARD_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"bsc-groth16-evidence-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+
+            errors = (
+                report._bsc_groth16_material_evidence_guard_gate_inventory_errors(
+                    ((sparse_source, required_markers),),
+                )
+            )
+
+            assert any(
+                "BSC Groth16 material evidence guard source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+
 def test_release_readiness_report_guards_ethereum_data_collection_no_proxy_gate_inventory(
     tmp_path: Path,
 ) -> None:
@@ -6695,6 +6739,9 @@ def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventor
     assert "bundleBytes.sourceDomain must match sourceDomain" in dotnet_eth_test_markers
     assert "OutboundCallbackAndSubmissionSnapshotsRejectMutation" in dotnet_eth_test_markers
     assert "EthereumMainnetSccp.BuildEthereumCalldata" in dotnet_eth_test_markers
+    assert "OutboundProofRequestRejectsNonCanonicalFixedHexFields" in dotnet_eth_test_markers
+    assert "ProofArtifactHash = UpperFixedHex" in dotnet_eth_test_markers
+    assert "SourceVerifierMaterialHash = UpperFixedHex" in dotnet_eth_test_markers
     assert (
         "ProofBase64 = Convert.ToBase64String(mutatedProofBytes)"
         in dotnet_eth_test_markers
@@ -6710,6 +6757,8 @@ def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventor
     assert "bundleBytes.commitment_root is too short" in dotnet_bsc_test_markers
     assert "OutboundCallbackAndSubmissionSnapshotsRejectMutation" in dotnet_bsc_test_markers
     assert "BscMainnetSccp.BuildBscCalldata" in dotnet_bsc_test_markers
+    assert "OutboundProofRequestRejectsNonCanonicalFixedHexFields" in dotnet_bsc_test_markers
+    assert "DestinationBindingHash = UpperFixedHex(binding.BindingHash)" in dotnet_bsc_test_markers
     assert (
         "ProofBase64 = Convert.ToBase64String(mutatedProofBytes)"
         in dotnet_bsc_test_markers
@@ -8983,6 +9032,50 @@ def test_release_readiness_report_blocks_missing_bsc_groth16_material_documentat
     }
 
 
+def test_release_readiness_report_blocks_missing_bsc_groth16_material_evidence_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when BSC Groth16 evidence guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "BSC Groth16 material evidence guard source inventory "
+        "scripts/sccp_bsc_groth16_material.mjs missing marker: "
+        "function evidenceReportPathBlockers"
+    )
+    monkeypatch.setattr(
+        report,
+        "_bsc_groth16_material_evidence_guard_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["bsc_groth16_material_evidence_guard_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["bsc_groth16_material_documentation_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+    assert readiness["source_inventory"]["proof_request_bundle_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
 def test_release_readiness_report_blocks_missing_ethereum_data_collection_no_proxy_gate(
     tmp_path: Path,
     monkeypatch,
@@ -10974,6 +11067,52 @@ def test_release_readiness_evidence_phase_accepts_pytest_runner_command_shape() 
         )
 
 
+def test_release_readiness_phase_command_matchers_accept_runner_overrides() -> None:
+    """Runner path overrides must still match the traced command semantics."""
+
+    report = load_report_module()
+    evidence_command = (
+        "+ /tmp/iroha-python-pytest -m pytest -q "
+        + " ".join(corridor_evidence_script_tests())
+    )
+    js_command = (
+        "+ /tmp/iroha-node20 --test "
+        + " ".join(report._node_expected_test_files_for_phase("js-sdk"))
+    )
+    contract_node_command = (
+        "+ /tmp/iroha-node20 --test "
+        + " ".join(report._node_expected_test_files_for_phase("contract-smoke"))
+    )
+    contract_check_command = (
+        "+ /tmp/iroha-node20 --check "
+        "contracts/evm/sccp/test/sccp_message_bridge_smoke.js"
+    )
+
+    for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]:
+        assert report._phase_command_matches_required_fragment(
+            "evidence-scripts",
+            evidence_command,
+            fragment,
+        )
+    for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["js-sdk"]:
+        assert report._phase_command_matches_required_fragment(
+            "js-sdk",
+            js_command,
+            fragment,
+        )
+    for fragment in report._node_expected_test_files_for_phase("contract-smoke"):
+        assert report._phase_command_matches_required_fragment(
+            "contract-smoke",
+            contract_node_command,
+            fragment,
+        )
+    assert report._phase_command_matches_required_fragment(
+        "contract-smoke",
+        contract_check_command,
+        "--check contracts/evm/sccp/test/sccp_message_bridge_smoke.js",
+    )
+
+
 def test_release_readiness_phase_command_matchers_accept_corridor_dry_run() -> None:
     """All required phase commands must match the runner's real dry-run output."""
 
@@ -12891,13 +13030,13 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
     ]
     assert "cryptographic_evidence" not in payload
     assert "evidence" not in payload
-    assert "native_evm_prover_bundle" not in payload
+    assert payload["native_evm_prover_bundle"]["validation_status"] == "blocked"
     assert (
-        "readiness report evidence must be a canonical public all-lanes summary"
-        in payload["blockers"]
+        "native EVM Groth16 prover bundle manifest is required"
+        in payload["native_evm_prover_bundle"]["validation_blockers"]
     )
     assert (
-        "readiness report native_evm_prover_bundle is invalid"
+        "readiness report evidence must be a canonical public all-lanes summary"
         in payload["blockers"]
     )
     assert "readiness report cryptographic_evidence is invalid" in payload["blockers"]
@@ -31519,7 +31658,7 @@ def test_release_readiness_rejects_markdown_unsafe_native_evm_payload_paths(
     assert native_status["validation_status"] == "blocked"
     assert any(
         "native EVM Groth16 prover bundle proof_artifact path contains "
-        "Markdown-unsafe character '|'"
+        "Markdown-unsafe character"
         in blocker
         for blocker in native_status["validation_blockers"]
     )

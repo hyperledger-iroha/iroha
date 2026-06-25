@@ -550,9 +550,9 @@ def _receipt_summary(
         "deployment_transaction_block_hash": _hex(transaction_block_hash),
         "deployment_transaction_block_number": transaction_block_number,
         "deployment_transaction_contract_creation": True,
-        "deployment_transaction_input_sha256": hashlib.sha256(
-            transaction_input
-        ).hexdigest(),
+        "deployment_transaction_input_sha256": _hex(
+            hashlib.sha256(transaction_input).digest()
+        ),
         "deployment_transaction_block_matches": True,
         "deployment_receipt_status": status,
         "deployment_receipt_contract_address": _hex(parsed_contract_address),
@@ -851,7 +851,7 @@ def _source_args(
         ),
         deployment_transaction_input_sha256=(
             _parse_hex32(
-                "0x" + str(source_bridge["deployment_transaction_input_sha256"]),
+                source_bridge["deployment_transaction_input_sha256"],
                 label="deployment transaction input SHA-256",
             )
             if source_bridge.get("deployment_transaction_input_sha256") is not None
@@ -1043,7 +1043,7 @@ def _source_bridge_deployment_receipt_is_verified(source_bridge: dict[str, Any])
             label="deployment transaction block number",
         )
         _parse_hex32(
-            "0x" + str(source_bridge.get("deployment_transaction_input_sha256")),
+            source_bridge.get("deployment_transaction_input_sha256"),
             label="deployment transaction input SHA-256",
         )
         receipt_block_hash = _parse_hex32(
@@ -1459,7 +1459,7 @@ def render_offline_toml(summary: dict[str, Any]) -> str:
         label="deployment transaction block number",
     )
     args.deployment_transaction_input_sha256 = _parse_hex32(
-        "0x" + str(source_bridge["deployment_transaction_input_sha256"]),
+        source_bridge["deployment_transaction_input_sha256"],
         label="deployment transaction input SHA-256",
     )
     rendered = evidence.render_toml(args)

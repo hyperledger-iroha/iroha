@@ -1,0 +1,38 @@
+diff --git a/crates/iroha_core/src/block.rs b/crates/iroha_core/src/block.rs
+index 615b5ea096..3163fbcc41 100644
+--- a/crates/iroha_core/src/block.rs
++++ b/crates/iroha_core/src/block.rs
+@@ -127,6 +127,10 @@ fn taira_legacy_replay_confidential_digest(
+             6, 56, 47, 173, 129, 176, 103, 189, 91, 113, 130, 211, 80, 254, 226, 208, 22, 148, 210,
+             194, 47, 87, 152, 25, 162, 34, 156, 2, 45, 189, 111, 213,
+         ],
++        [
++            127, 253, 243, 16, 56, 84, 148, 21, 121, 38, 145, 202, 29, 204, 49, 113, 127, 74, 95,
++            145, 75, 228, 201, 193, 47, 33, 181, 167, 92, 108, 248, 61,
++        ],
+     ];
+ 
+     let (Some(expected), Some(actual)) = (expected, actual) else {
+@@ -19276,6 +19280,22 @@ mod tests {
+             Some(actual)
+         ));
+ 
++        let height_2584_policy_hash = [
++            127, 253, 243, 16, 56, 84, 148, 21, 121, 38, 145, 202, 29, 204, 49, 113, 127, 74, 95,
++            145, 75, 228, 201, 193, 47, 33, 181, 167, 92, 108, 248, 61,
++        ];
++        let actual_height_2584 = ConfidentialFeatureDigest::new(
++            expected.vk_set_hash,
++            expected.poseidon_params_id,
++            expected.pedersen_params_id,
++            expected.conf_rules_version,
++            Some(height_2584_policy_hash),
++        );
++        assert!(taira_legacy_replay_confidential_digest(
++            Some(expected),
++            Some(actual_height_2584)
++        ));
++
+         let mut mismatched_vk = actual;
+         mismatched_vk.vk_set_hash = Some([0x44; 32]);
+         assert!(!taira_legacy_replay_confidential_digest(

@@ -726,6 +726,43 @@ def test_live_ton_evidence_rejects_noncanonical_remote_hash_base64():
             raise AssertionError(f"noncanonical live TON {label} was accepted")
 
 
+def test_live_ton_evidence_rejects_noncanonical_remote_hash_hex():
+    module = load_live_module()
+
+    for label, kwargs, expected in (
+        (
+            "code_hash",
+            {"code_hash_text": "0X" + TON_CODE_BOC_ROOT_HASH},
+            "lowercase 0x prefix",
+        ),
+        (
+            "account_state_hash",
+            {"account_state_hash_text": "0x" + "AA" * 32},
+            "lowercase hex",
+        ),
+        (
+            "last_transaction_hash",
+            {"last_transaction_hash_text": "AA" * 32},
+            "lowercase hex",
+        ),
+    ):
+        fake = fake_ton_opener(module, **kwargs)
+        try:
+            module.collect_live_evidence(
+                "https://toncenter.example",
+                verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
+                opener=fake.opener,
+                timeout=3.0,
+            )
+        except RuntimeError as exc:
+            assert label in str(exc)
+            assert expected in str(exc)
+        else:
+            raise AssertionError(
+                f"noncanonical live TON {label} hex was accepted"
+            )
+
+
 def test_live_ton_evidence_rejects_padded_code_boc_text():
     module = load_live_module()
     valid_code_boc = base64.b64encode(bytes.fromhex(TON_CODE_BOC_HEX)).decode("ascii")

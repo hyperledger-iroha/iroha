@@ -124,6 +124,17 @@ def load_report_module():
     return module
 
 
+def assert_phase_output_matches_required_fragments(report, phase: str, output: str) -> None:
+    """Assert that a dry-run phase would satisfy release transcript matching."""
+
+    commands = report._phase_command_lines(output)
+    for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]:
+        assert any(
+            report._phase_command_matches_required_fragment(phase, command, fragment)
+            for command in commands
+        ), f"{phase} dry-run missing required release fragment: {fragment}"
+
+
 def test_sccp_production_corridor_script_is_listable() -> None:
     """The runner must stay syntactically valid and expose every release phase."""
 
@@ -480,8 +491,7 @@ def test_sccp_production_corridor_override_dry_run_matches_release_fragments() -
         else:
             end = len(output)
         phase_output = output[start:end]
-        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]:
-            assert fragment in phase_output
+        assert_phase_output_matches_required_fragments(report, phase, phase_output)
 
 
 def test_sccp_production_corridor_dry_run_matches_release_phase_fragments() -> None:
@@ -517,8 +527,7 @@ def test_sccp_production_corridor_dry_run_matches_release_phase_fragments() -> N
         else:
             end = len(output)
         phase_output = output[start:end]
-        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]:
-            assert fragment in phase_output
+        assert_phase_output_matches_required_fragments(report, phase, phase_output)
 
 
 def test_sccp_production_corridor_evidence_phase_has_no_untracked_pytests() -> None:

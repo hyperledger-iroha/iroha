@@ -449,14 +449,17 @@ SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS = (
             "def _ethereum_launch_policy_documentation_gate_inventory_errors",
             "def _sccp_public_discovery_documentation_gate_inventory_errors",
             "def _bsc_groth16_material_documentation_gate_inventory_errors",
+            "def _bsc_groth16_material_evidence_guard_gate_inventory_errors",
             "\"launch_scope_constant_gate\"",
             "\"ethereum_launch_policy_documentation_gate\"",
             "\"public_discovery_documentation_gate\"",
             "\"bsc_groth16_material_documentation_gate\"",
+            "\"bsc_groth16_material_evidence_guard_gate\"",
             "SCCP launch-scope source inventory must pin",
             "SCCP Ethereum launch-policy documentation source inventory must pin",
             "SCCP public discovery documentation source inventory must pin",
             "BSC Groth16 material documentation source inventory must pin",
+            "BSC Groth16 material evidence guard source inventory must pin",
         ),
     ),
     (
@@ -466,14 +469,17 @@ SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS = (
             "def test_release_readiness_report_guards_ethereum_launch_policy_documentation_gate_inventory",
             "def test_release_readiness_report_guards_public_discovery_documentation_gate_inventory",
             "def test_release_readiness_report_guards_bsc_groth16_material_documentation_gate_inventory",
+            "def test_release_readiness_report_guards_bsc_groth16_material_evidence_gate_inventory",
             "def test_release_readiness_report_blocks_missing_launch_scope_source_gate",
             "def test_release_readiness_report_blocks_missing_ethereum_launch_policy_documentation_gate",
             "def test_release_readiness_report_blocks_missing_public_discovery_documentation_gate",
             "def test_release_readiness_report_blocks_missing_bsc_groth16_material_documentation_gate",
+            "def test_release_readiness_report_blocks_missing_bsc_groth16_material_evidence_gate",
             "launch_scope_constant_gate",
             "ethereum_launch_policy_documentation_gate",
             "public_discovery_documentation_gate",
             "bsc_groth16_material_documentation_gate",
+            "bsc_groth16_material_evidence_guard_gate",
         ),
     ),
     (
@@ -483,11 +489,13 @@ SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS = (
             "def test_release_bundle_verifier_guards_launch_scope_constant_inventory",
             "def test_release_bundle_verifier_guards_ethereum_launch_policy_documentation",
             "def test_release_bundle_verifier_guards_bsc_groth16_material_documentation",
+            "def test_release_bundle_verifier_guards_bsc_groth16_material_evidence_guard",
             "def test_release_bundle_verifier_rejects_missing_launch_scope_inventory_gate",
             "def test_release_bundle_verifier_rejects_missing_ethereum_launch_policy_documentation_inventory_gate",
             "def test_release_bundle_verifier_rejects_missing_public_discovery_documentation_inventory_gate",
             "def test_release_bundle_verifier_rejects_missing_bsc_groth16_material_documentation_inventory_gate",
             "def test_release_bundle_accepts_active_launch_lane_without_future_lanes",
+            "def test_release_bundle_verifier_rejects_missing_bsc_groth16_material_evidence_inventory_gate",
             "def test_release_bundle_verifier_rejects_all_lanes_required_domain_drift",
             "def test_release_bundle_verifier_rejects_launch_scope_domain_drift",
         ),
@@ -641,6 +649,8 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "TRON transaction-Merkle source-call verifier deployment is not complete for the SCCP inbound path",
     "Windows `.NET 8.0.x` SCCP SDK phase evidence",
     "FullyQualifiedName~Sccp",
+    "canonical-case rejection coverage for proof-request, message-bundle, source-proof, and optional Groth16 artifact hash fields",
+    "uppercase byte aliases and `0X` public-input, statement, bundle/source-proof, proof-artifact, and proving-key hashes",
     "`SCCP .NET SDK version:` marker emitted after `dotnet --version`",
     "phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order",
     "no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`",
@@ -675,6 +685,7 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "Ethereum launch-policy documentation source inventory",
     "public discovery documentation source inventory",
     "BSC Groth16 material documentation source inventory",
+    "BSC Groth16 material evidence guard source inventory",
     "Ethereum no-proxy data-collection source inventory",
     "Ethereum inbound adversarial source inventory",
     "BSC inbound adversarial source inventory",
@@ -1003,6 +1014,7 @@ SOURCE_INVENTORY_REQUIRED_GATES = {
     "ethereum_launch_policy_documentation_gate",
     "public_discovery_documentation_gate",
     "bsc_groth16_material_documentation_gate",
+    "bsc_groth16_material_evidence_guard_gate",
     "ethereum_data_collection_no_proxy_gate",
     "ethereum_inbound_adversarial_gate",
     "bsc_inbound_adversarial_gate",
@@ -1511,12 +1523,23 @@ ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS = (
         ),
     ),
     (
+        "javascript/iroha_js/test/sccpSolanaProver.test.js",
+        (
+            "rejects noncanonical-case hex in EVM-family proof requests",
+            '`0X${"22".repeat(32)}`',
+            '`0x${"AA".repeat(32)}`',
+        ),
+    ),
+    (
         "python/iroha_torii_client/tests/sccp_test.py",
         (
             "destinationBindingHash must match destinationBinding",
             "outbound_prover_called = False",
             "assert not outbound_prover_called",
             "proof_artifact_hash",
+            "test_sccp_proof_request_hex_inputs_reject_noncanonical_case",
+            '"0X" + "22" * 32',
+            '"0x" + "AA" * 32',
             "proofResult proofArtifactHash and provingKeyHash must be supplied together",
             "proofResult proofArtifactHash and provingKeyHash must match request",
         ),
@@ -1524,6 +1547,8 @@ ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS = (
     (
         "javascript/iroha_js/src/sccp.js",
         (
+            'const trimmed = value.startsWith("0x") ? value.slice(2) : value;',
+            "/[^0-9a-f]/.test(trimmed)",
             "const proverArtifactRequestBytes =",
             "hexToBytes(proofArtifactHash, \"proofArtifactHash\", 32)",
             "...proverArtifactRequestBytes,\n        ...publicSignalWordBytes,",
@@ -1533,6 +1558,8 @@ ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS = (
     (
         "javascript/iroha_js/dist/sccp.js",
         (
+            'const trimmed = value.startsWith("0x") ? value.slice(2) : value;',
+            "/[^0-9a-f]/.test(trimmed)",
             "const proverArtifactRequestBytes =",
             "hexToBytes(proofArtifactHash, \"proofArtifactHash\", 32)",
             "...proverArtifactRequestBytes,\n        ...publicSignalWordBytes,",
@@ -1542,6 +1569,9 @@ ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS = (
     (
         "python/iroha_torii_client/sccp.py",
         (
+            "def _normalize_hex_input(",
+            'trimmed = value[2:] if value.startswith("0x") else value',
+            'character not in "0123456789abcdef"',
             "def _normalize_optional_groth16_prover_artifacts(",
             'prover_artifacts = _normalize_optional_groth16_prover_artifacts(\n        value,\n        "proof request",\n    )',
             'prover_artifacts["proof_artifact_hash"]',
@@ -1552,6 +1582,8 @@ ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS = (
         "IrohaSwift/Sources/IrohaSwift/SccpEvmProver.swift",
         (
             "let proverArtifacts = try normalizeOptionalEvmGroth16ProverArtifacts(",
+            'let hex = value.hasPrefix("0x") ? String(value.dropFirst(2)) : value',
+            "evmIsLowercaseHexBody(hex)",
             "if let proverArtifacts {\n        try preimage.append(evmBytesFromHex32(proverArtifacts.proofArtifactHash",
             "for signal in publicSignalWords {",
         ),
@@ -1560,6 +1592,8 @@ ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS = (
         "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt",
         (
             "val proverArtifacts = normalizeOptionalGroth16ProverArtifacts(",
+            'require(!body.startsWith("0X")) { "$field must be canonical hex" }',
+            "require(isLowercaseHexBody(body)) { \"$field must be canonical hex\" }",
             'preimage.write(hex32Bytes(proverArtifacts.proofArtifactHash, "proofArtifactHash"))',
             'publicSignalWords.forEach { preimage.write(hex32Bytes(it, "publicSignalWords")) }',
         ),
@@ -1568,6 +1602,8 @@ ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS = (
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EvmSccpProver.java",
         (
             "final Groth16ProverArtifacts proverArtifacts =",
+            'if (body.startsWith("0X")) {',
+            "if (!isLowercaseHexBody(body)) {",
             'write(preimage, hex32Bytes(proverArtifacts.proofArtifactHash(), "proofArtifactHash"))',
             "for (final String signal : publicSignalWords) {",
         ),
@@ -1591,6 +1627,8 @@ ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS = (
             "proofArtifactHash: String(repeating: \"91\", count: 32)",
             ".invalidPublicInputs(\"proofArtifactHash/provingKeyHash\")",
             ".zeroField(\"proofArtifactHash\")",
+            ".invalidHex32(\"publicInputs.messageId\")",
+            ".invalidHex32(\"proofResult.proofContext.statementHash\")",
             "artifactResult.proofArtifactHash",
         ),
     ),
@@ -1601,6 +1639,8 @@ ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS = (
             "outboundProverCalled",
             'request.copy(destinationBindingHash = "0x" + "99".repeat(32))',
             'proofArtifactHash = "91".repeat(32)',
+            '"0x" + "AA".repeat(32)',
+            '"0X" + "56".repeat(32)',
             "proofArtifactHash and provingKeyHash",
             "artifactResult.proofArtifactHash",
         ),
@@ -1614,6 +1654,8 @@ ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS = (
             "evmRequestWithDestinationBindingHash",
             "partial proof artifact metadata must be rejected",
             "zero proof artifact hash must be rejected",
+            '"0x" + repeat("AA", 32)',
+            '"0X" + repeat("56", 32)',
             "proof result must carry proof artifact hash",
         ),
     ),
@@ -3898,6 +3940,8 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
         "scripts/sccp_eth_source_bridge_evidence.py",
         (
             "def _require_nonzero_fixed_bytes(",
+            "{label} must be canonical lowercase 0x hex",
+            "+ json.dumps(_hex(args.deployment_transaction_input_sha256))",
             "def _require_canonical_adapter_verifier_vk_hash(",
             "def _require_source_role_hash_separation(",
             "ETH source-adapter verifier profile",
@@ -3917,12 +3961,18 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "ETH deployment hash accepted reused role hashes",
             "noncanonical ETH adapter vk hash was accepted",
             "mismatched ETH adapter verifier vk hash was accepted",
+            '("11" * 20, "canonical lowercase 0x hex")',
+            '("6080604052", "canonical lowercase 0x hex")',
+            'output["deployment_transaction_input_sha256"] == "0x" + "cd" * 32',
+            "bare ETH component hash was accepted",
         ),
     ),
     (
         "scripts/sccp_bsc_source_bridge_evidence.py",
         (
             "def _require_nonzero_fixed_bytes(",
+            "{label} must be canonical lowercase 0x hex",
+            "+ json.dumps(_hex(args.deployment_transaction_input_sha256))",
             "def _require_canonical_adapter_verifier_vk_hash(",
             "def _require_source_role_hash_separation(",
             "BSC source-adapter verifier profile",
@@ -3942,11 +3992,19 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "BSC deployment hash accepted reused role hashes",
             "noncanonical BSC adapter vk hash was accepted",
             "mismatched BSC adapter verifier vk hash was accepted",
+            '("11" * 20, "canonical lowercase 0x hex")',
+            '("6080604052", "canonical lowercase 0x hex")',
+            'output["deployment_transaction_input_sha256"] == "0x" + "cd" * 32',
+            "bare BSC component hash was accepted",
         ),
     ),
     (
         "scripts/sccp_solana_source_state_evidence.py",
         (
+            "def _strip_lower_0x_hex(",
+            "{label} must be canonical lowercase 0x hex",
+            "{label} must use lowercase 0x prefix",
+            "{label} must use lowercase hex",
             "def _require_nonzero_fixed_bytes(",
             "def _require_source_role_hash_separation(",
             "def _require_light_client_evidence_role_separation(",
@@ -3969,13 +4027,38 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "Solana material hash accepted reused role hashes",
             "Solana deployment hash accepted reused role hashes",
             "noncanonical Solana adapter vk hash was accepted",
+            "noncanonical Solana source-state verifier hash",
             "mismatched Solana adapter verifier vk hash was accepted",
             "duplicate Solana full-light-client audit hashes were accepted",
+            '("11" * 32, "canonical lowercase 0x hex")',
+        ),
+    ),
+    (
+        "scripts/sccp_solana_destination_evidence.py",
+        (
+            "def _strip_lower_0x_hex(",
+            "{label} must be canonical lowercase 0x hex",
+            "{label} must use lowercase 0x prefix",
+            "{label} must use lowercase hex",
+            "def parse_program_bytes_hex(",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_solana_destination_evidence_test.py",
+        (
+            "noncanonical Solana verifier hash",
+            "noncanonical Solana verifier program hex",
+            '("33" * 32, "canonical lowercase 0x hex")',
+            '(b"\\x7fELFsol".hex(), "canonical lowercase 0x hex")',
         ),
     ),
     (
         "scripts/sccp_ton_source_state_evidence.py",
         (
+            "def _strip_lower_0x_hex(",
+            "{label} must be canonical lowercase 0x hex",
+            "{label} must use lowercase 0x prefix",
+            "{label} must use lowercase hex",
             "def _require_nonzero_fixed_bytes(",
             "def _require_source_role_hash_separation(",
             "def _require_light_client_evidence_role_separation(",
@@ -3997,8 +4080,10 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "TON material hash accepted reused role hashes",
             "TON deployment hash accepted reused role hashes",
             "noncanonical TON adapter vk hash was accepted",
+            "noncanonical TON source-state verifier hash",
             "mismatched TON adapter verifier vk hash was accepted",
             "TON TOML accepted reused full-light-client audit hashes",
+            '("11" * 32, "canonical lowercase 0x hex")',
         ),
     ),
     (
@@ -4014,6 +4099,8 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "TON live code BoC base64 metadata is invalid",
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             "except (SystemExit, RuntimeError, TypeError, binascii.Error, ValueError):",
+            "{label} must use lowercase 0x prefix",
+            "{label} must use lowercase hex",
             'raise RuntimeError(f"{label} must be 32-byte hex or base64") from None',
             'raise RuntimeError("TON verifier account code_boc is invalid") from None',
             'raise ValueError("TON live code BoC base64 metadata is invalid") from None',
@@ -4022,6 +4109,10 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
     (
         "scripts/sccp_ton_destination_evidence.py",
         (
+            "def _strip_lower_0x_hex(",
+            "{label} must be canonical lowercase 0x hex",
+            "{label} must use lowercase 0x prefix",
+            "{label} must use lowercase hex",
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
             "except (SystemExit, RuntimeError, TypeError, ValueError):",
             'f"{label} must be base64 or base64url"',
@@ -4044,6 +4135,10 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "secret-token-ton-destination-fixed-hex",
             "secret-token-ton-destination-code-hex",
             "secret-token-ton-destination-code-boc",
+            "noncanonical TON verifier hash",
+            "noncanonical TON code BoC hex",
+            '("33" * 32, "canonical lowercase 0x hex")',
+            "(TON_CODE_BOC_HEX, \"canonical lowercase 0x hex\")",
             "secret-token-ton-destination-file-path",
             "secret-token-ton-destination-account-status",
             "secret-token-ton-destination-last-lt",
@@ -4075,6 +4170,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "def test_live_ton_account_states_redacts_invalid_json_parser_details",
             "def test_live_ton_evidence_redacts_account_address_parser_failures",
             "def test_live_ton_evidence_redacts_code_boc_parser_failures",
+            "def test_live_ton_evidence_rejects_noncanonical_remote_hash_hex",
             "def test_live_ton_hash_decoder_redacts_base64_parser_causes",
             "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
             "secret-token-ton-error",
@@ -4095,6 +4191,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
     (
         "scripts/sccp_tron_source_bridge_evidence.py",
         (
+            "{label} must be canonical lowercase 0x hex",
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             "def _require_fixed_bytes(",
@@ -4125,6 +4222,9 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "TRON deployment hash accepted reused role hashes",
             "noncanonical adapter verifier vk hash was accepted",
             "mismatched adapter verifier vk hash was accepted",
+            "bare TRON source network id was accepted",
+            "bare inline runtime bytecode was accepted",
+            "bare runtime bytecode file was accepted",
         ),
     ),
     (
@@ -4760,6 +4860,7 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "deployment transaction blockHash must be a non-zero bytes32",
             "deployment transaction to must be null for contract creation",
             "deployment transaction input must not be empty or zero",
+            '"deployment_transaction_input_sha256": _hex(',
             "deployment receipt block hash must be a non-zero bytes32",
             "deployment receipt blockHash does not match eth_getBlockByNumber",
             "deployment receipt block receiptsRoot must be a non-zero bytes32",
@@ -4805,6 +4906,8 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "test_evm_source_live_rejects_finalized_deployment_receipt_hash_drift",
             "test_evm_source_live_rejects_zero_receipt_block_receipts_root",
             "test_evm_source_live_rejects_receipt_block_code_hash_drift",
+            'source["deployment_transaction_input_sha256"] == "0x" + hashlib.sha256(',
+            '# sccp_evm_source_deployment_transaction_input_sha256 = "0x',
             "test_evm_source_live_cli_defaults_eth_to_finalized_and_bsc_to_latest",
             'assert eth_summary["block_tag"] == "finalized"',
             'assert bsc_summary["block_tag"] == "latest"',
@@ -5000,6 +5103,7 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
     (
         "scripts/sccp_evm_destination_evidence.py",
         (
+            "{label} must be canonical lowercase 0x hex",
             "--{output} has invalid {label} evidence",
             "                    SystemExit,",
             "                    RuntimeError,",
@@ -5022,6 +5126,9 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             'assert "secret-token" not in rendered',
             "assert forbidden_detail not in rendered",
             'assert "must be hex" not in rendered',
+            '("11" * 20, "canonical lowercase 0x hex")',
+            '("33" * 32, "canonical lowercase 0x hex")',
+            '("6080604052", "canonical lowercase 0x hex")',
         ),
     ),
     (
@@ -5556,11 +5663,234 @@ BSC_GROTH16_MATERIAL_DOCUMENTATION_MARKERS = (
             "The BSC destination leg also requires real Groth16 circuit, proving-key, and",
             "Production materialization runs `snarkjs zkey verify",
             "--ptau <powersOfTau28_hez_final_22.ptau>",
+            "--witness-wasm <full-message_js/full-message.wasm>",
             "The materializer no longer accepts signed production attestations directly.",
             "`semanticSccpCircuit`, `circuitSecurity`, `trustedSetup`, and",
             "Transcript command logs, when supplied, must show",
             "adversarial witness evidence",
             "groth16-material proof-self-test",
+            "`native-prover-bundle` command then reruns `snarkjs groth16 verify`",
+            "`--snarkjs-bin` must exactly match the signed material",
+            "reproducible-build transcript's `toolchain.snarkjs.binary`",
+            "canonical transcript `toolchain` object",
+            "`toolchain.snarkjs.binarySha256`",
+            "toolchain-fingerprint command writes",
+            "The transcript-template command writes public",
+            "--out-dir <transcript-dir>",
+            "The evidence-template command writes manifest-bound public review/audit draft",
+            "The handoff-bundle command writes one public",
+            "The verify-handoff command re-hashes every",
+            "--out <handoff.json>",
+            "drafts intentionally carry `pending` and `false` result fields",
+            "different executable bytes",
+        ),
+    ),
+)
+BSC_GROTH16_MATERIAL_EVIDENCE_GUARD_MARKERS = (
+    (
+        "scripts/sccp_bsc_groth16_material.mjs",
+        (
+            "const BSC_GROTH16_EVIDENCE_REPORT_MAX_BYTES = 16 * 1024 * 1024;",
+            "async function sourceBuildTranscriptBlockers",
+            "function pathHasDecodedParentSegment",
+            "function evidenceAllowedFields",
+            "function unknownFieldBlockers",
+            "function aliasFieldBlockers",
+            "function attestationSignatureShapeBlockers",
+            "function materialManifestShapeBlockers",
+            "function attestationRequestPackageShapeBlockers",
+            "function trustedSetupTranscriptShapeBlockers",
+            "function reproducibleBuildTranscriptShapeBlockers",
+            "function reproducibleBuildTranscriptToolchainBlockers",
+            "function reproducibleBuildTranscriptMaterialBindingBlockers",
+            "function resolveCommandExecutableForHash",
+            "export async function fingerprintBscGroth16Toolchain",
+            "export async function writeBscGroth16EvidenceTemplates",
+            "export async function writeBscGroth16TranscriptTemplates",
+            "export async function writeBscGroth16AttestationHandoff",
+            "export async function verifyBscGroth16AttestationHandoff",
+            "function handoffShapeBlockers",
+            "function handoffCommandSummaryBlockers",
+            "function handoffManifestSummaryBlockers",
+            "BSC Groth16 attestation handoff commands",
+            "BSC Groth16 transcript template package handoff summary",
+            "manifest.productionReady must match material manifest",
+            "handoff reference",
+            "--trusted-attestation-signer <0x...>",
+            "BSC_GROTH16_EVIDENCE_TEMPLATE_PACKAGE_SCHEMA",
+            "BSC_GROTH16_TRANSCRIPT_TEMPLATE_PACKAGE_SCHEMA",
+            "BSC_GROTH16_ATTESTATION_HANDOFF_SCHEMA",
+            "draftsAreNotSignable",
+            "handoffComplete",
+            "draftsAreNotProductionReady must match referenced package",
+            "readiness.problemCount must match verified handoff status",
+            "readiness.attestationStatusProblems must match attestation status",
+            "transcript-derived toolchainSha256 is required",
+            "function proofSelfTestPathBlocker",
+            "function proofSelfTestGroth16VerificationBlocker",
+            "proof self-test embedded Groth16 proof must verify against SnarkJS verification key",
+            "proof self-test manifest.path",
+            "proof self-test sample.syntheticInputWords must match deterministic BSC Groth16 self-test input",
+            "toolchain-fingerprint --circom-bin",
+            "transcript-template --bsc-network",
+            "handoffBundle",
+            "--witness-wasm ${repoRelativePath(paths.witnessWasm)}",
+            "evidence-template --manifest",
+            "material manifest shape is not production-ready",
+            "attestation request package shape is not production-ready",
+            "function evidenceReportPathBlockers",
+            "async function validateEvidenceReportFile",
+            "sourceBuildTranscript must not be a symbolic link.",
+            "report must not be a symbolic link.",
+            "--semantic-review-evidence <semantic-review-evidence.json>",
+            "--circuit-security-audit-evidence <circuit-security-audit-evidence.json>",
+        ),
+    ),
+    (
+        "scripts/sccp_bsc_groth16_material.test.mjs",
+        (
+            "materialize refuses unsafe source build transcript references",
+            "materialize refuses transcript shadow fields and duplicate aliases",
+            "materialize refuses reproducible transcript artifact summary drift",
+            "materialize refuses signed attestation bodies with duplicate aliases",
+            "attestation-status rejects signed role files with shadow signature metadata",
+            "attestation-request refuses material manifest shadow fields and aliases",
+            "toolchain-fingerprint writes exact executable hashes into transcript copies",
+            "toolchain-fingerprint refuses unresolved executable paths",
+            "transcript-template writes artifact-bound drafts that remain materialization blockers",
+            "evidence-template writes manifest-bound drafts that remain unsigned blockers",
+            "handoff-bundle writes a hash-bound public readiness packet",
+            "handoff-bundle rejects adversarial package schema drift",
+            "sha256 must match handoff reference",
+            "readiness\\.problemCount must match verified handoff status",
+            "readiness\\.attestationStatusProblems must match attestation status",
+            "transcript template package handoff draftsAreNotProductionReady must match referenced package",
+            "forged-manifest-summary-handoff.json",
+            "manifest\\.productionBlockers must match material manifest",
+            "forged-package-schema-handoff.json",
+            "transcript template package handoff schema must be iroha-sccp-bsc-groth16-transcript-template-package",
+            "forged-shape-handoff.json",
+            "transcript template package handoff summary contains unknown field: drafts_are_not_production_ready",
+            "attestation handoff commands verifyHandoff must not use multiple aliases",
+            "forged-command-summary-handoff.json",
+            "commands\\.signAttestation must include --private-key-pem <ed25519-private-key\\.pem>",
+            "commands\\.finalizeAttestations must include --trusted-attestation-signer <0x\\.\\.\\.",
+            "absolute-handoff-path.json",
+            "parent-traversal-handoff-path.json",
+            "handoff reference path must be a safe relative path",
+            "materialize records witness WASM artifacts for reproducible transcript binding",
+            "sign-attestation refuses request package shadow fields and duplicate aliases",
+            "preflight rejects proof self-test path metadata drift",
+            "preflight rejects proof self-test forged proof bodies",
+            "preflight rejects proof self-test deterministic sample drift",
+            "result.commands.toolchainFingerprint",
+            "sourceBuildTranscript sha256 must not use multiple aliases",
+            "semantic SCCP circuit attestation signature contains unknown field: operatorOverride",
+            "forced proof object verification failure",
+            "proof self-test R1CS path must be",
+            "proof self-test sample\\.inputSha256 must match deterministic self-test input",
+            "reproducible build transcript circuit\\.sha256 must match",
+            "binarySha256: sha256Hex(Buffer.from(\"snarkjs executable bytes\"))",
+            "binarySha256: sha256Hex(Buffer.from(\"circom executable bytes\"))",
+            "trusted setup transcript routeId must not use multiple aliases",
+            "reproducible build transcript verificationKey verifierKeyHash must not use multiple aliases",
+            "material manifest routeId must not use multiple aliases",
+            "attestation request package contains unknown field: operatorShadowDecision",
+            "semantic-absolute-report-path",
+            "semantic-parent-report-path",
+            "semantic-route-alias-conflict",
+            "semantic-shadow-field",
+            "semantic-report-shadow-field",
+            "semantic-report-container-alias-conflict",
+            "semantic-report-path-alias-conflict",
+            "semantic-report-hash-alias-conflict",
+            "semantic-symlink-report-path",
+            "semantic-oversized-report-path",
+            "circuit-absolute-report-path",
+            "circuit-parent-report-path",
+            "circuit-approved-alias-conflict",
+            "circuit-shadow-field",
+            "circuit-report-shadow-field",
+            "circuit-symlink-report-path",
+            "circuit-oversized-report-path",
+        ),
+    ),
+    (
+        "scripts/sccp_bsc_taira_xor_deploy.mjs",
+        (
+            "semanticReviewEvidenceSchema",
+            "circuitSecurityAuditEvidenceSchema",
+            "function bscGroth16MaterialManifestShapeProblems",
+            "function groth16MaterialManifestArtifactPath",
+            "function readGroth16ProofSelfTestArtifactPath",
+            "function groth16ProofSelfTestPathProblem",
+            "function bscGroth16DeterministicProofSelfTestSample",
+            "async function verifyBscGroth16ProofSelfTestWithSnarkjs",
+            "Groth16 proof self-test sample.syntheticInputWords must match deterministic BSC Groth16 self-test input",
+            "must be a BN254 scalar field element",
+            "Groth16 proof self-test SnarkJS verification key path must match signed material manifest",
+            "SnarkJS verification key artifact hash must match signed Groth16 material manifest",
+            "Groth16 proof self-test embedded Groth16 proof must verify against SnarkJS verification key",
+            "native-prover-bundle SnarkJS proof verifier",
+            "Groth16 material manifest SnarkJS binary command is required",
+            "native-prover-bundle --snarkjs-bin must match signed Groth16 material manifest selfChecks.snarkjs.snarkjsBinary",
+            "function groth16ReproducibleBuildTranscriptToolchainEvidence",
+            "toolchain object is required",
+            "toolchain.snarkjs.binary is required",
+            "toolchain.snarkjs.binarySha256 is required",
+            "native-prover-bundle --snarkjs-bin sha256 must match reproducible build transcript toolchain.snarkjs.binarySha256",
+            "selfChecks.snarkjs.snarkjsBinary must match reproducible build transcript toolchain.snarkjs.binary",
+            "requires reproducible build transcript-derived toolchainSha256",
+            "[\"routeId\", [\"routeId\", \"route_id\"]]",
+            "[\"powersOfTau\", [\"powersOfTau\", \"powers_of_tau\"]]",
+            "groth16-material toolchain-fingerprint",
+            "groth16-material transcript-template",
+            "groth16-material handoff-bundle",
+            "groth16-material verify-handoff",
+            "groth16TranscriptTemplate",
+            "groth16AttestationHandoff",
+            "groth16VerifyHandoff",
+            "groth16ToolchainFingerprint",
+            "--witness-wasm <production-circuit.wasm>",
+            "--semantic-review-evidence <semantic-review-evidence.json>",
+            "--circuit-security-audit-evidence <circuit-security-audit-evidence.json>",
+            "--snarkjs-bin <snarkjs>",
+        ),
+    ),
+    (
+        "scripts/sccp_bsc_taira_xor_deploy.test.mjs",
+        (
+            "BSC native-prover-bundle validates bound Groth16 material manifests",
+            "semanticReviewEvidenceSchema: undefined",
+            "circuitSecurityAuditEvidenceSchema: undefined",
+            "Groth16 material manifest contains unknown field: operatorShadow",
+            "Groth16 material manifest routeId must not use multiple aliases",
+            "Groth16 proof self-test manifest path must be groth16-material\\.json",
+            "Groth16 proof self-test R1CS path must be proof-artifact\\.r1cs",
+            "Groth16 proof self-test BSC verifier key path must be verifier-key\\.json",
+            "Groth16 proof self-test sample\\.id must be sccp-bsc-groth16-full-message-self-test-v1",
+            "Groth16 proof self-test sample\\.inputSha256 must match deterministic self-test input",
+            "Groth16 proof self-test publicSignals\\[0\\] must be a BN254 scalar field element",
+            "snarkjs-drift",
+            "native-prover-bundle SnarkJS proof verifier requires --snarkjs-bin",
+            "groth16Material.help, /groth16-material toolchain-fingerprint",
+            "groth16Material.help, /groth16-material transcript-template",
+            "groth16Material.help, /groth16-material handoff-bundle",
+            "groth16Material.help, /groth16-material verify-handoff",
+            "written.commands.groth16TranscriptTemplate",
+            "written.commands.groth16AttestationHandoff",
+            "written.commands.groth16VerifyHandoff",
+            "written.commands.groth16ToolchainFingerprint",
+            "written.commands.groth16AttestationRequest",
+            "Guard: production requirements must not emit placeholder Groth16 toolchain hashes.",
+            "Groth16 proof self-test embedded Groth16 proof must verify against SnarkJS verification key",
+            "Groth16 material manifest SnarkJS binary command is required",
+            "native-prover-bundle --snarkjs-bin must match signed Groth16 material manifest selfChecks\\.snarkjs\\.snarkjsBinary",
+            "reproducible build transcript toolchain object is required",
+            "selfChecks\\.snarkjs\\.snarkjsBinary must match reproducible build transcript toolchain\\.snarkjs\\.binary",
+            "toolchain\\.snarkjs\\.binarySha256 is required",
+            "native-prover-bundle --snarkjs-bin sha256 must match reproducible build transcript toolchain\\.snarkjs\\.binarySha256",
+            "reproducible build attestation toolchainSha256 must match",
         ),
     ),
 )
@@ -5576,8 +5906,10 @@ SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
             "def test_generic_no_support_note_stays_in_launch_scope_files",
             "def test_specific_no_support_note_stays_in_launch_scope_files",
             "def test_not_remaining_work_note_stays_in_launch_scope_files",
+            "def test_translated_no_support_scope_notes_stay_complete",
             "def test_active_tree_excludes_retired_network_surface_tokens",
             "BANNED_PATTERNS",
+            "SCCP_TRANSLATED_UNSUPPORTED_SCOPE_NOTE_FILES",
             "SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES",
             "SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE",
             "SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_FILES",
@@ -5672,6 +6004,21 @@ BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "function readOptionalCanonicalManifestText(",
             "function normalizeCanonicalHex32(value, label = \"value\")",
             "function normalizeCanonicalEvmAddress(value, label = \"address\")",
+            "const EVM_EMPTY_CODE_KECCAK256 =",
+            "const BSC_CONTRACT_CODE_ROLES = Object.freeze([",
+            "async function readCodeMetadata(provider, addresses)",
+            "function normalizeBscCompiledContractCodeHashes(",
+            "function compiledContractCodeHashesFromArtifacts(artifacts)",
+            "function assertBscCompiledCodeHashesMatchReadback({",
+            "function bscDeploymentEvidenceHashSnapshot(routeEvidence)",
+            "function bscDeploymentEvidenceSha256(routeEvidence)",
+            "BSC contract readback must include codeHashes.",
+            "BSC readback verifier bytecode hash does not match declared verifier code hash.",
+            "BSC deployment evidence must include compiledContractCodeHashes.",
+            "BSC compiled verifier code hash does not match declared verifier code hash.",
+            "production-ready BSC route manifests require embedded bscContractReadback in deployment evidence.",
+            "route manifest productionReady requires deploymentEvidenceSha256.",
+            "deployment_evidence_sha256",
             "route manifest bscNetwork must be canonical lowercase text",
             "route manifest chain must be canonical lowercase text",
             "route manifest chainIdHex must be canonical lowercase hex.",
@@ -5685,6 +6032,15 @@ BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
         "scripts/sccp_bsc_taira_xor_deploy.test.mjs",
         (
             "BSC route-config rejects malformed or foreign route manifests",
+            "const EVM_EMPTY_CODE_HASH =",
+            "codeHashes: {",
+            "compiledContractCodeHashes: compiledContractCodeHashes()",
+            "compiled_contract_code_hashes: baseEvidence.compiledContractCodeHashes",
+            "/require embedded bscContractReadback/u",
+            "/must include compiledContractCodeHashes/u",
+            "/compiled bridge code hash does not match live readback/u",
+            "/requires deploymentEvidenceSha256/u",
+            "deployment_evidence_sha256: HASH_88",
             "routeId: \" taira_bsc_xor\"",
             "assetKey: \"xor \"",
             "bscNetwork: \"BSC-TESTNET\"",
@@ -5724,6 +6080,24 @@ BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "BSC route canary blocker malformed entry",
             "/route_canary_production_blockers\\[0\\].*non-empty canonical string/u",
             "offlineFullTomlSha256: HASH_33.toUpperCase()",
+        ),
+    ),
+    (
+        "crates/iroha_config/src/parameters/user.rs",
+        (
+            "pub deployment_evidence_sha256: Option<String>",
+            "SCCP BSC route manifest production_ready requires deployment_evidence_sha256",
+            "deployment_evidence_sha256 must be non-zero",
+            "production_ready_bsc_route_requires_deployment_evidence_hash",
+            "bsc_route_rejects_zero_deployment_evidence_hash",
+        ),
+    ),
+    (
+        "crates/iroha_torii/src/routing.rs",
+        (
+            "pub deployment_evidence_sha256: Option<String>",
+            "deployment_evidence_sha256: manifest.deployment_evidence_sha256.clone()",
+            "dto.deployment_evidence_sha256.as_deref()",
         ),
     ),
     (
@@ -6385,6 +6759,7 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "def _public_lane_missing_field_errors(",
             "Return bounded public errors for omitted copied lane object fields.",
             "def _public_lane_required_bytes32_errors(",
+            'if not value.startswith("0x"):',
             "must be a canonical non-zero bytes32",
             "def _public_lane_optional_bytes32_errors(",
             "def _public_lane_required_fixed_hex_errors(",
@@ -6454,6 +6829,8 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "all-lanes summary lanes must be a list of objects",
             "lane_require_ready = (",
             "require_ready or lane_ready is True or domain == SCCP_DOMAIN_ETH",
+            "lane_require_structure = domain in LANE_PROFILES",
+            "require_ready_state=source_records_require_ready",
             "elif lane_require_ready and records.get(field) is not True:",
             "if lane_require_ready and gate_blockers:",
             "all-lanes summary lanes missing domain",
@@ -6546,11 +6923,13 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             'eth_lane["source_adapter_gate"]["required"] = "true"',
             'bsc_lane["source_adapter_gate"]["gate_hash"] = hex32(0)',
             "def test_all_lanes_cli_rejects_copied_ready_lane_hash_shape_drift",
+            "def test_all_lanes_evidence_rejects_bare_fixed_hex_aliases",
             "def test_all_lanes_cli_rejects_active_copied_source_record_template_replay_when_lane_not_ready",
             "def test_all_lanes_cli_rejects_active_copied_source_record_missing_fields_when_lane_not_ready",
             "def test_all_lanes_cli_rejects_copied_not_ready_nested_hash_shape_drift",
             "def test_all_lanes_cli_rejects_copied_not_ready_nested_scalar_shape_drift",
             "def test_all_lanes_cli_rejects_copied_not_ready_nested_semantic_drift",
+            "def test_all_lanes_cli_rejects_copied_not_ready_false_record_structural_drift",
             "def test_all_lanes_cli_rejects_active_copied_route_canary_semantic_drift_when_lane_not_ready",
             "def test_all_lanes_cli_rejects_active_copied_evm_route_canary_proof_drift_when_lane_not_ready",
             "def test_all_lanes_cli_rejects_active_copied_evm_route_canary_transcript_drift_when_lane_not_ready",
@@ -8149,12 +8528,14 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "validateCanonicalSccpBundleEvmHexAddress",
             "irohaKeccak256(Data(lowercasePayload))",
             "raw.firstIndex(of: 0)",
+            "sccpBundleIsLowercaseHexBody(hex)",
         ),
     ),
     (
         "IrohaSwift/Sources/IrohaSwift/SccpEvmProver.swift",
         (
             "requireSccpProofRequestBundleMatchesPublicInputs",
+            "evmIsLowercaseHexBody(hex)",
             "throw EvmSccpProverError.invalidPublicInputs(\"sourceDomain\")",
             "throw EvmSccpProverError.invalidPublicInputs(\"bundleBytes.sourceDomain\")",
         ),
@@ -8163,6 +8544,7 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
         "IrohaSwift/Sources/IrohaSwift/SccpTronProver.swift",
         (
             "requireSccpProofRequestBundleMatchesPublicInputs",
+            "tronIsLowercaseHexBody(hex)",
             "throw TronSccpProverError.invalidPublicInputs(\"sourceDomain\")",
             "throw TronSccpProverError.invalidPublicInputs(\"bundleBytes.sourceDomain\")",
         ),
@@ -8172,6 +8554,7 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
         (
             "func requireTonSccpProofRequestBundleMatchesPublicInputs",
             "func decodeCanonicalTonSccpMessageProofBundleSummary",
+            "tonIsLowercaseHexBody(hex)",
             "requireSccpSourceProofMatchesBundle(",
             "throw TonSccpProverError.invalidField(\"sourceProofBytes\")",
             "tonFixedAsciiFieldIsNonEmpty",
@@ -8225,6 +8608,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sourceAdapterDeployment: auditedTonDeployment",
             "sccpTonSourceAdapterDeploymentBindingFromDeployment",
             "sourceAdapterDeployment.sourceStateVerifierHash",
+            ".invalidHex32(\"publicInputs.messageId\")",
+            ".invalidHex32(\"proofResult.proofContext.statementHash\")",
         ),
     ),
     (
@@ -8238,12 +8623,14 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sourceProofBytes must match bundleBytes and publicInputs",
             "$label must be a canonical EIP-55 EVM address",
             "raw.indexOf(0.toByte())",
+            'require(!body.startsWith("0X")) { "$field must be canonical hex" }',
         ),
     ),
     (
         "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt",
         (
             "SccpMessageProofBundles.requireMatchesPublicInputs",
+            "require(isLowercaseHexBody(body)) { \"$field must be canonical hex\" }",
             "require(input.sourceDomain == DOMAIN_SORA) { \"sourceDomain must be SORA\" }",
             "bundleBytes.sourceDomain must match sourceDomain",
         ),
@@ -8252,6 +8639,7 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
         "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TronSccpProver.kt",
         (
             "SccpMessageProofBundles.requireMatchesPublicInputs",
+            "require(isLowercaseHexBody(body)) { \"$field must be canonical hex\" }",
             "require(input.sourceDomain == DOMAIN_SORA) { \"sourceDomain must be SORA\" }",
             "bundleBytes.sourceDomain must match sourceDomain",
         ),
@@ -8276,6 +8664,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "SccpBsc.buildSubmission",
             "buildEthereumCalldata",
             "proofBase64",
+            '"0x" + "AA".repeat(32)',
+            '"0X" + "56".repeat(32)',
         ),
     ),
     (
@@ -8290,6 +8680,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sourceProofBytes must be empty for SORA source bundle",
             "sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1",
             "proofResult.copy(sourceProofBytes = byteArrayOf(9, 11))",
+            '"0x" + "AA".repeat(32)',
+            '"0X" + "56".repeat(32)',
         ),
     ),
     (
@@ -8303,12 +8695,14 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sourceProofBytes must match bundleBytes and publicInputs",
             "must be a canonical EIP-55 EVM address",
             "raw[index] == 0",
+            "field + \" must be canonical hex\"",
         ),
     ),
     (
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EvmSccpProver.java",
         (
             "SccpMessageProofBundles.requireMatchesPublicInputs",
+            "if (!isLowercaseHexBody(body)) {",
             "throw new IllegalArgumentException(\"sourceDomain must be SORA\")",
             "bundleBytes.sourceDomain must match sourceDomain",
         ),
@@ -8333,6 +8727,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "BscSccpProver.buildSubmission",
             "evmResultWithProofBase64(artifactBoundResult, \"AAAA\")",
             "proofBase64",
+            '"0x" + repeat("AA", 32)',
+            '"0X" + repeat("56", 32)',
         ),
     ),
     (
@@ -8347,6 +8743,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sourceProofBytes must be empty for SORA source bundle",
             "sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1",
             "tronResultWithSourceProofBytes(proofResult, new byte[] {9, 11})",
+            '"0x" + repeat("AA", 32)',
+            '"0X" + repeat("56", 32)',
         ),
     ),
     (
@@ -8402,6 +8800,9 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "bundleBytes.commitment_root must match merkle proof",
             "OutboundCallbackAndSubmissionSnapshotsRejectMutation",
             "EthereumMainnetSccp.BuildEthereumCalldata",
+            "OutboundProofRequestRejectsNonCanonicalFixedHexFields",
+            "ProofArtifactHash = UpperFixedHex",
+            "SourceVerifierMaterialHash = UpperFixedHex",
             "ProofBase64 = Convert.ToBase64String(mutatedProofBytes)",
             "BundleBytes = [0, 0]",
             "BundleBytes = [1, 2, 3]",
@@ -8416,6 +8817,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "bundleBytes.commitment_root is too short",
             "OutboundCallbackAndSubmissionSnapshotsRejectMutation",
             "BscMainnetSccp.BuildBscCalldata",
+            "OutboundProofRequestRejectsNonCanonicalFixedHexFields",
+            "DestinationBindingHash = UpperFixedHex(binding.BindingHash)",
             "ProofBase64 = Convert.ToBase64String(mutatedProofBytes)",
             "BundleBytes = [0, 0]",
             "BundleBytes = [1, 2, 3]",
@@ -9290,9 +9693,11 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "def _pytest_command_positionals(",
             "def _pytest_expected_positionals_for_phase(",
             "tuple(pytest_positionals) != expected_positionals",
+            "def _command_token_looks_like_node_runner(",
             "def _node_expected_test_files_for_phase(",
             "def _node_test_command_files(",
             "def _node_check_command_matches(",
+            "def _command_token_looks_like_python_runner(",
             "def _dotnet_sdk_command_matches(",
             "def _dotnet_setup_command_matches(",
             "def _dotnet_phase_block_forbidden_test_command(",
@@ -9532,9 +9937,11 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "def _pytest_command_positionals(",
             "def _pytest_expected_positionals_for_phase(",
             "tuple(pytest_positionals) != expected_positionals",
+            "def _command_token_looks_like_node_runner(",
             "def _node_expected_test_files_for_phase(",
             "def _node_test_command_files(",
             "def _node_check_command_matches(",
+            "def _command_token_looks_like_python_runner(",
             "def _dotnet_sdk_command_matches(",
             "def _dotnet_setup_command_matches(",
             "def _dotnet_phase_block_forbidden_test_command(",
@@ -11962,6 +12369,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "TON accountStates account address must be a canonical raw address",
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             "except (SystemExit, RuntimeError, TypeError, binascii.Error, ValueError):",
+            "{label} must use lowercase 0x prefix",
+            "{label} must use lowercase hex",
             'raise RuntimeError(f"{label} must be 32-byte hex or base64") from None',
             'raise RuntimeError("TON verifier account code_boc is invalid") from None',
             'raise ValueError("TON live code BoC base64 metadata is invalid") from None',
@@ -12922,6 +13331,8 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "TRON transaction-Merkle source-call verifier deployment is not complete for the SCCP inbound path",
             "Windows `.NET 8.0.x` SCCP SDK phase evidence",
             "FullyQualifiedName~Sccp",
+            "canonical-case rejection coverage for proof-request, message-bundle, source-proof, and optional Groth16 artifact hash fields",
+            "uppercase byte aliases and `0X` public-input, statement, bundle/source-proof, proof-artifact, and proving-key hashes",
             "`SCCP .NET SDK version:` marker emitted after `dotnet --version`",
             "phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order",
             "no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`",
@@ -13027,6 +13438,8 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "TRON transaction-Merkle source-call verifier deployment is not complete for the SCCP inbound path",
             "Windows `.NET 8.0.x` SCCP SDK phase evidence",
             "FullyQualifiedName~Sccp",
+            "canonical-case rejection coverage for proof-request, message-bundle, source-proof, and optional Groth16 artifact hash fields",
+            "uppercase byte aliases and `0X` public-input, statement, bundle/source-proof, proof-artifact, and proving-key hashes",
             "`SCCP .NET SDK version:` marker emitted after `dotnet --version`",
             "phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order",
             "no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`",
@@ -15739,6 +16152,19 @@ def _bsc_groth16_material_documentation_inventory_errors(
     )
 
 
+def _bsc_groth16_material_evidence_guard_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for BSC Groth16 material evidence guards."""
+
+    if inventory is None:
+        inventory = BSC_GROTH16_MATERIAL_EVIDENCE_GUARD_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="BSC Groth16 material evidence guard",
+    )
+
+
 def _sccp_retired_network_surface_guard_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
     forbidden_markers: tuple[str, ...] | None = None,
@@ -16913,6 +17339,11 @@ def _append_unique(items: list[str], value: str) -> None:
         items.append(value)
 
 
+def _command_token_looks_like_node_runner(token: str) -> bool:
+    basename = _command_token_basename(token).lower()
+    return bool(re.search(r"(^|[-_.])node(?:[0-9.]+)?($|[-_.])", basename))
+
+
 def _node_expected_test_files_for_phase(phase: str) -> tuple[str, ...]:
     test_files: list[str] = []
     for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase, ()):
@@ -16925,7 +17356,7 @@ def _node_expected_test_files_for_phase(phase: str) -> tuple[str, ...]:
 
 
 def _node_test_command_files(tokens: list[str]) -> tuple[str, ...]:
-    if len(tokens) < 3 or _command_token_basename(tokens[0]) != "node":
+    if len(tokens) < 3 or not _command_token_looks_like_node_runner(tokens[0]):
         return ()
     if tokens[1] != "--test":
         return ()
@@ -16938,7 +17369,7 @@ def _node_test_command_files(tokens: list[str]) -> tuple[str, ...]:
 def _node_check_command_matches(tokens: list[str], expected_path: str) -> bool:
     return (
         len(tokens) == 3
-        and _command_token_basename(tokens[0]) == "node"
+        and _command_token_looks_like_node_runner(tokens[0])
         and tokens[1] == "--check"
         and tokens[2] == expected_path
     )
@@ -17112,6 +17543,11 @@ def _gradle_test_selector_matches(expected: str, actual: str) -> bool:
     return actual == expected
 
 
+def _command_token_looks_like_python_runner(token: str) -> bool:
+    basename = _command_token_basename(token).lower()
+    return bool(re.search(r"(^|[-_.])python(?:[0-9.]+)?($|[-_.])", basename))
+
+
 def _gradle_test_command_selectors(tokens: list[str], task: str) -> list[str]:
     if (
         len(tokens) < 5
@@ -17180,7 +17616,7 @@ def _evidence_pytest_command_has_fragment(
     fragment: str,
 ) -> bool:
     tokens = _phase_effective_command_tokens(command)
-    if not tokens or not _command_token_basename(tokens[0]).startswith("python"):
+    if not tokens or not _command_token_looks_like_python_runner(tokens[0]):
         return False
     module_index = next(
         (
@@ -21871,7 +22307,7 @@ def _render_readiness_markdown(
             f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report {ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE} and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
             f"- {ACTIVE_LAUNCH_DISPLAY} route-canary transaction metadata must include a canonical non-zero transaction hash, finalized receipt block number/hash, receipts root, message id, and `{ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE}` evidence source before launch readiness can pass.",
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked. Required source-verifier evidence by lane: Ethereum recursive source-adapter verifier deployment and remaining beacon light-client update/state branches are not complete for the SCCP inbound path; BSC recursive source-adapter verifier deployment is not complete for the SCCP inbound path; Solana audited Tower replay, full-bank AccountsDB lattice, bank/fork-choice, and source-adapter verifier deployment evidence is not complete for the SCCP inbound path; TON governed full-light-client verifier deployment, canary, and source-adapter deployment evidence are not complete for the SCCP inbound path; TRON transaction-Merkle source-call verifier deployment is not complete for the SCCP inbound path.",
-            "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, the `SCCP .NET SDK version:` marker emitted after `dotnet --version`, phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order, no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, or restore/build failed markers, exact host markers `SCCP .NET SDK OS: Windows`, `SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and `SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` emitted after `dotnet --info`, exact native bridge markers `connect_norito_bridge native bridge: ...connect_norito_bridge.dll` and `connect_norito_bridge native bridge sha256: <64 lowercase hex>` emitted after `cargo build -p connect_norito_bridge`, `dotnet restore Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, a non-zero passed VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` emitted after the strict `dotnet test` command, with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a numeric unit duration, and with a positive TRX byte count plus a TRX marker that full-matches the C# test project `TestResults/sccp-dotnet-sdk.trx` path before release readiness can pass.",
+            "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, canonical-case rejection coverage for proof-request, message-bundle, source-proof, and optional Groth16 artifact hash fields, including uppercase byte aliases and `0X` public-input, statement, bundle/source-proof, proof-artifact, and proving-key hashes, the `SCCP .NET SDK version:` marker emitted after `dotnet --version`, phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order, no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, or restore/build failed markers, exact host markers `SCCP .NET SDK OS: Windows`, `SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and `SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` emitted after `dotnet --info`, exact native bridge markers `connect_norito_bridge native bridge: ...connect_norito_bridge.dll` and `connect_norito_bridge native bridge sha256: <64 lowercase hex>` emitted after `cargo build -p connect_norito_bridge`, `dotnet restore Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, a non-zero passed VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` emitted after the strict `dotnet test` command, with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a numeric unit duration, and with a positive TRX byte count plus a TRX marker that full-matches the C# test project `TestResults/sccp-dotnet-sdk.trx` path before release readiness can pass.",
             "- An audited `--native-evm-prover-bundle` manifest with `schema = sccp-native-evm-groth16-prover-bundle-v1`, `no_wasm = true`, `remote_prover_required = false`, and matching Ethereum destination binding/proving-key hashes.",
             f"- {SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE}",
             f"- {SCCP_NOT_REMAINING_WORK_SCOPE_NOTE}",
@@ -21880,6 +22316,7 @@ def _render_readiness_markdown(
             "- SCCP Ethereum launch-policy documentation source inventory must pin the active Ethereum-mainnet policy wording and reject stale BSC-only production-packaging text.",
             "- SCCP public discovery documentation source inventory must pin supported launch-lane and verifier-target wording so unsupported lanes cannot re-enter Torii discovery evidence silently.",
             "- BSC Groth16 material documentation source inventory must pin PTAU-bound zkey verification, attestation request and finalize flow, and proof self-test operator steps before public bundle readiness can pass.",
+            "- BSC Groth16 material evidence guard source inventory must pin closed review/audit evidence schemas, alias-conflict rejection, safe relative evidence path validation, non-symlink report/transcript reads, bounded public evidence files, required review/audit evidence flags, and adversarial tests before public bundle readiness can pass.",
             "- SCCP Ethereum no-proxy data-collection source inventory must pin app-owned execution/Beacon provider reads and reject Torii proxy or embedded HTTP-client fallbacks across public SDKs.",
             "- SCCP Ethereum inbound adversarial source inventory must pin public SDK regressions for failed receipts, source-event drift, hash-only proof bypasses, immutable evidence snapshots, oversized proof bytes, finality mismatches, sync-committee quorum checks, and wrong-domain receipt transcripts before inbound source proofs can be accepted.",
             "- SCCP BSC inbound adversarial source inventory must pin public SDK regressions for hash-only proof bypasses, receipt-proof metadata binding, source-event digest drift, malformed source logs, and missing source-event validation before BSC inbound source proofs can be accepted.",
@@ -27373,6 +27810,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     errors.extend(_ethereum_launch_policy_documentation_inventory_errors())
     errors.extend(_sccp_public_discovery_documentation_inventory_errors())
     errors.extend(_bsc_groth16_material_documentation_inventory_errors())
+    errors.extend(_bsc_groth16_material_evidence_guard_inventory_errors())
     errors.extend(_sccp_retired_network_surface_guard_inventory_errors())
     errors.extend(_ethereum_core_range_finality_binding_inventory_errors())
     errors.extend(_ethereum_core_message_replay_guard_inventory_errors())

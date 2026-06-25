@@ -5391,7 +5391,7 @@ final class SccpSolanaProverTests: XCTestCase {
             sourceAdapterDeploymentBinding: proofResult.sourceAdapterDeploymentBinding,
             envelopeHash: proofResult.envelopeHash
         )
-        let normalizedMetadataSubmission = try buildSolanaSccpSubmission(SolanaSccpSubmissionInput(
+        XCTAssertThrowsError(try buildSolanaSccpSubmission(SolanaSccpSubmissionInput(
             publicInputs: SolanaSccpSubmissionPublicInputs(
                 messageId: submissionPublicInputs.messageId.uppercased(),
                 payloadHash: submissionPublicInputs.payloadHash.uppercased(),
@@ -5400,16 +5400,33 @@ final class SccpSolanaProverTests: XCTestCase {
                 finalityHeight: submissionPublicInputs.finalityHeight,
                 finalityBlockHash: submissionPublicInputs.finalityBlockHash.uppercased()
             ),
+            proofBytes: proofResult.proofBytes,
+            bundleBytes: Data([5, 6, 7]),
+            statementHash: proofResult.proofContext.statementHash,
+            destinationBindingHash: solanaDestinationBindingHash,
+            proofContextHash: proofResult.proofContextHash,
+            proofResult: proofResult
+        ))) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("publicInputs.messageId"))
+        }
+        XCTAssertThrowsError(try buildSolanaSccpSubmission(SolanaSccpSubmissionInput(
+            publicInputs: submissionPublicInputs,
             proofBytes: uppercaseProofResult.proofBytes,
             bundleBytes: Data([5, 6, 7]),
-            statementHash: proofResult.proofContext.statementHash.uppercased(),
-            destinationBindingHash: solanaDestinationBindingHash.uppercased(),
-            proofContextHash: proofResult.proofContextHash.uppercased(),
+            statementHash: proofResult.proofContext.statementHash,
+            destinationBindingHash: solanaDestinationBindingHash,
+            proofContextHash: proofResult.proofContextHash,
             proofResult: uppercaseProofResult
-        ))
-        XCTAssertEqual(normalizedMetadataSubmission.proofContextHash, proofResult.proofContextHash)
-        XCTAssertEqual(normalizedMetadataSubmission.statementHash, proofResult.proofContext.statementHash)
-        XCTAssertEqual(normalizedMetadataSubmission.destinationBindingHash, solanaDestinationBindingHash)
+        ))) { error in
+            let acceptedErrors: [SolanaSccpProverError] = [
+                .invalidHex32("statementHash"),
+                .invalidHex32("proofResult.proofContext.statementHash"),
+            ]
+            guard let proverError = error as? SolanaSccpProverError else {
+                return XCTFail("Expected SolanaSccpProverError")
+            }
+            XCTAssertTrue(acceptedErrors.contains(proverError))
+        }
         let missingEnvelopeProofResult = SolanaSccpProofResult(
             version: proofResult.version,
             backend: proofResult.backend,
