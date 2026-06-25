@@ -4318,6 +4318,59 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_repeatable_command_selectors_are_emitted_in_canonical_order(self):
+        def flag_values(command, flag):
+            values = []
+            for offset, item in enumerate(command):
+                if item == flag:
+                    values.append(command[offset + 1])
+                elif item.startswith(flag + "="):
+                    values.append(item.split("=", 1)[1])
+            return values
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            config = write_config(
+                root,
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "audit-export",
+                        "dry_run": True,
+                        "endpoints": [
+                            "https://z-notary.local-bank.bank/iso-anchor",
+                            "https://a-notary.local-bank.bank/iso-anchor",
+                        ],
+                    },
+                    "verify": {
+                        "include_stage_receipts": False,
+                        "receipt_dirs": ["z-receipts", "a-receipts"],
+                        "receipts": [
+                            "manual-z/z.receipt.json",
+                            "manual-a/a.receipt.json",
+                        ],
+                    },
+                },
+            )
+
+            rc, stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+
+            self.assertEqual(rc, 0, stderr)
+            summary = load_summary(stdout)
+            notary_stage = next(
+                stage for stage in summary["planned_stages"] if stage["name"] == "notary"
+            )
+            verify_stage = next(
+                stage for stage in summary["planned_stages"] if stage["name"] == "verify"
+            )
+            endpoint_values = flag_values(notary_stage["command"], "--endpoint")
+            receipt_dir_values = flag_values(verify_stage["command"], "--receipt-dir")
+            receipt_values = flag_values(verify_stage["command"], "--receipt")
+            self.assertEqual(endpoint_values, sorted(endpoint_values))
+            self.assertEqual(receipt_dir_values, sorted(receipt_dir_values))
+            self.assertEqual(receipt_values, sorted(receipt_values))
+
     def test_duplicate_runbook_paths_do_not_echo_raw_segments(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

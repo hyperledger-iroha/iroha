@@ -4930,6 +4930,32 @@ fn append_kagemusha_vesta_complete_add_point_instance_columns(
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_vesta_affine_windowed_shared_table_term_base<
+    const WINDOWS: usize,
+    const WINDOW_BITS: usize,
+>(
+    term: &pasta_tiny::NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar<
+        WINDOWS,
+        WINDOW_BITS,
+    >,
+) -> &pasta_tiny::NonNativeVestaAffineMaybeIdentity {
+    if WINDOW_BITS == 1 && WINDOWS > 1 {
+        term.window_base_doubles
+            .first()
+            .and_then(|doubles| doubles.first())
+            .expect("shared-table direct MSM term has a first assigned base")
+            .p
+            .as_ref()
+    } else {
+        &term
+            .tables
+            .first()
+            .expect("shared-table windowed MSM term has a first table")
+            .table[1]
+    }
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
 fn kagemusha_vesta_affine_windowed_msm_shared_table_native_scalar_instance_columns<
     const TERMS: usize,
     const WINDOWS: usize,
@@ -4945,11 +4971,7 @@ fn kagemusha_vesta_affine_windowed_msm_shared_table_native_scalar_instance_colum
     for term in &circuit.term_muls {
         append_kagemusha_vesta_complete_add_point_instance_columns(
             &mut instances,
-            &term
-                .tables
-                .first()
-                .expect("shared-table windowed MSM term has a first table")
-                .table[1],
+            kagemusha_vesta_affine_windowed_shared_table_term_base(term),
         );
     }
     append_kagemusha_vesta_complete_add_point_instance_columns(
@@ -26614,14 +26636,23 @@ mod kagemusha_non_native_limb_circuit_tests {
         >,
     ) -> Vec<Vec<Scalar>> {
         let mut instances = Vec::with_capacity(18);
-        append_complete_add_point_instances(
-            &mut instances,
+        let direct_one_bit_select = WINDOW_BITS == 1 && WINDOWS > 1;
+        let base = if direct_one_bit_select {
+            circuit
+                .window_base_doubles
+                .first()
+                .and_then(|doubles| doubles.first())
+                .expect("shared-table direct scalar mul has a first assigned base")
+                .p
+                .as_ref()
+        } else {
             &circuit
                 .tables
                 .first()
                 .expect("shared-table windowed scalar mul has a first table")
-                .table[1],
-        );
+                .table[1]
+        };
+        append_complete_add_point_instances(&mut instances, base);
         append_complete_add_point_instances(
             &mut instances,
             circuit
@@ -26774,14 +26805,22 @@ mod kagemusha_non_native_limb_circuit_tests {
     ) -> Vec<Vec<Scalar>> {
         let mut instances = Vec::with_capacity((TERMS + 1) * 9);
         for term in &circuit.term_muls {
-            append_complete_add_point_instances(
-                &mut instances,
+            let direct_one_bit_select = WINDOW_BITS == 1 && WINDOWS > 1;
+            let base = if direct_one_bit_select {
+                term.window_base_doubles
+                    .first()
+                    .and_then(|doubles| doubles.first())
+                    .expect("shared-table direct MSM term has a first assigned base")
+                    .p
+                    .as_ref()
+            } else {
                 &term
                     .tables
                     .first()
                     .expect("shared-table windowed MSM term has a first table")
-                    .table[1],
-            );
+                    .table[1]
+            };
+            append_complete_add_point_instances(&mut instances, base);
         }
         append_complete_add_point_instances(
             &mut instances,
@@ -28323,7 +28362,18 @@ mod kagemusha_non_native_limb_circuit_tests {
         >,
         term_index: usize,
     ) -> TestVestaPointScalars {
-        vesta_maybe_identity_witness_scalars(&msm.term_muls[term_index].tables[0].table[1])
+        let term = &msm.term_muls[term_index];
+        let base = if WINDOW_BITS == 1 && WINDOWS > 1 {
+            term.window_base_doubles
+                .first()
+                .and_then(|doubles| doubles.first())
+                .expect("shared-table direct MSM term has a first assigned base")
+                .p
+                .as_ref()
+        } else {
+            &term.tables[0].table[1]
+        };
+        vesta_maybe_identity_witness_scalars(base)
     }
 
     fn vesta_windowed_msm_shared_table_output_scalars<
@@ -31328,6 +31378,104 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_omits_direct_mode_duplicate_witnesses()
+     {
+        run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(3));
+            let circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar::<2, 1>::try_from_scalar(
+                    Scalar::from(3),
+                    base,
+                    output,
+                )
+                .expect("valid shared-table direct scalar multiplication");
+
+            assert!(circuit.tables.is_empty());
+            assert!(circuit.selections.is_empty());
+            assert_eq!(circuit.window_base_doubles.len(), 1);
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_synthesis_rejects_extra_direct_duplicate_witnesses()
+     {
+        run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(3));
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar::<2, 1>::try_from_scalar(
+                    Scalar::from(3),
+                    base,
+                    output,
+                )
+                .expect("valid shared-table direct scalar multiplication");
+            let instances =
+                vesta_affine_windowed_scalar_mul_shared_table_native_scalar_instances(&circuit);
+
+            circuit
+                .tables
+                .push(pasta_tiny::NonNativeVestaAffineFixedWindowTable::<1>::default());
+            circuit
+                .selections
+                .push(pasta_tiny::NonNativeVestaAffineFixedWindowSelectFromTable::<1>::default());
+
+            let err = MockProver::run(8, &circuit, instances)
+                .err()
+                .expect("direct-mode duplicate witness vectors must fail synthesis");
+            assert!(
+                matches!(err, PlonkError::Synthesis),
+                "extra direct-mode duplicate witnesses must be rejected before assignment"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_synthesis_rejects_missing_direct_window_base()
+     {
+        run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(3));
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar::<2, 1>::try_from_scalar(
+                    Scalar::from(3),
+                    base,
+                    output,
+                )
+                .expect("valid shared-table direct scalar multiplication");
+            let instances =
+                vesta_affine_windowed_scalar_mul_shared_table_native_scalar_instances(&circuit);
+            circuit.window_base_doubles.clear();
+
+            let err = MockProver::run(8, &circuit, instances)
+                .err()
+                .expect("truncated direct-mode window-base witness must fail synthesis");
+            assert!(
+                matches!(err, PlonkError::Synthesis),
+                "missing direct-mode window-base transition must be rejected before assignment"
+            );
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy windowed shared-table scalar-mul mock prover; regression for one-bit identity-base selection"]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_accepts_identity_base() {
+        run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
+            let base = vesta_identity_limbs();
+            let output = vesta_identity_limbs();
+            let circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar::<2, 1>::try_from_scalar(
+                    Scalar::from(3),
+                    base,
+                    output,
+                )
+                .expect("valid shared-table identity-base scalar multiplication");
+
+            assert!(verify_vesta_affine_windowed_scalar_mul_shared_table_native_scalar(circuit));
+        });
+    }
+
+    #[test]
     #[ignore = "heavy windowed shared-table scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_output_substitution()
      {
@@ -31357,8 +31505,8 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
-    #[ignore = "heavy windowed shared-table scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
-    fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_selection_bit_splice()
+    #[ignore = "heavy windowed shared-table scalar-mul mock prover; covered in the default suite by builder checks and fixed-window direct-select constraints"]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_scalar_bit_splice()
      {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -31370,15 +31518,15 @@ mod kagemusha_non_native_limb_circuit_tests {
                     output,
                 )
                 .expect("valid shared-table two-window scalar multiplication");
-            circuit.selections[0].digit_bits[0] = Scalar::from(0);
+            circuit.scalar.digit_bits[0][0] = Scalar::from(0);
 
             assert!(!verify_vesta_affine_windowed_scalar_mul_shared_table_native_scalar(circuit));
         });
     }
 
     #[test]
-    #[ignore = "heavy windowed shared-table scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
-    fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_selection_level_tamper()
+    #[ignore = "heavy windowed shared-table scalar-mul mock prover; covered in the default suite by builder checks and fixed-window direct-select constraints"]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_direct_selected_addend_tamper()
      {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -31390,7 +31538,13 @@ mod kagemusha_non_native_limb_circuit_tests {
                     output,
                 )
                 .expect("valid shared-table two-window scalar multiplication");
-            circuit.selections[1].selection_levels[0][0].0[0] += Scalar::from(1);
+            let identity = vesta_identity_limbs();
+            circuit.sum_adds[1].q = Box::new(
+                pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs(
+                    identity.0, identity.1, identity.2,
+                )
+                .expect("valid forged selected addend"),
+            );
 
             assert!(!verify_vesta_affine_windowed_scalar_mul_shared_table_native_scalar(circuit));
         });
@@ -31410,7 +31564,7 @@ mod kagemusha_non_native_limb_circuit_tests {
                     output,
                 )
                 .expect("valid shared-table two-window scalar multiplication");
-            circuit.window_base_doubles[0][0].r = Box::new(circuit.tables[0].table[1].clone());
+            circuit.window_base_doubles[0][0].r = circuit.window_base_doubles[0][0].p.clone();
 
             assert!(!verify_vesta_affine_windowed_scalar_mul_shared_table_native_scalar(circuit));
         });
@@ -31435,6 +31589,51 @@ mod kagemusha_non_native_limb_circuit_tests {
             assert!(verify_vesta_affine_windowed_msm_shared_table_native_scalar(
                 circuit
             ));
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy windowed shared-table native-scalar MSM mock prover; regression for two-window identity-base term"]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_accepts_identity_base_term()
+     {
+        run_vesta_affine_windowed_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let identity = VestaAffine::identity();
+            let terms = [(Scalar::from(3), identity), (Scalar::from(1), generator)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let circuit = pasta_tiny::NonNativeVestaAffineWindowedMsmSharedTableNativeScalar::<
+                2,
+                2,
+                1,
+            >::try_from_terms(vesta_msm_encoded_terms(terms), output)
+            .expect("two-window shared-table MSM with identity-base term");
+
+            assert!(verify_vesta_affine_windowed_msm_shared_table_native_scalar(
+                circuit
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_omits_direct_mode_duplicate_witnesses()
+     {
+        run_vesta_affine_windowed_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let identity = VestaAffine::identity();
+            let terms = [(Scalar::from(3), identity), (Scalar::from(1), generator)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let circuit = pasta_tiny::NonNativeVestaAffineWindowedMsmSharedTableNativeScalar::<
+                2,
+                2,
+                1,
+            >::try_from_terms(vesta_msm_encoded_terms(terms), output)
+            .expect("two-window shared-table MSM with identity-base term");
+
+            for term in &circuit.term_muls {
+                assert!(term.tables.is_empty());
+                assert!(term.selections.is_empty());
+                assert_eq!(term.window_base_doubles.len(), 1);
+            }
         });
     }
 
@@ -32610,6 +32809,34 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    fn kagemusha_non_native_vesta_affine_native_scalar_mul_synthesis_rejects_extra_conditional_step()
+     {
+        run_vesta_affine_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(1));
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineScalarMulNativeScalar::<1>::try_from_scalar(
+                    Scalar::from(1),
+                    base,
+                    output,
+                )
+                .expect("bounded native scalar-mul witness");
+            let instances = vesta_affine_scalar_mul_native_scalar_instances(&circuit);
+            circuit
+                .conditional_adds
+                .push(pasta_tiny::NonNativeVestaAffineConditionalAdd::default());
+
+            let err = MockProver::run(8, &circuit, instances)
+                .err()
+                .expect("extra native scalar-mul conditional step must fail synthesis");
+            assert!(
+                matches!(err, PlonkError::Synthesis),
+                "extra native scalar-mul conditional steps must be rejected before assignment"
+            );
+        });
+    }
+
+    #[test]
     #[ignore = "heavy non-windowed native-scalar scalar-mul mock prover; covered in the default suite by one-bit acceptance, builder checks, and lower-level scalar/add constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_mul_rejects_public_scalar_substitution() {
         run_vesta_affine_scalar_mul_native_scalar_test(|| {
@@ -32752,6 +32979,32 @@ mod kagemusha_non_native_limb_circuit_tests {
             .err()
             .expect("builder must reject scalar above one-bit MSM width");
             assert!(err.contains("exceeds configured bit width"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_native_scalar_msm_synthesis_rejects_truncated_term_shape()
+    {
+        run_vesta_affine_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let terms = [(Scalar::from(3), generator)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineMsmNativeScalar::<1, 2>::try_from_terms(
+                    vesta_msm_encoded_terms(terms),
+                    output,
+                )
+                .expect("single-term two-bit native-scalar MSM witness");
+            let instances = vesta_affine_msm_native_scalar_instances(&circuit);
+            circuit.doubles[0].clear();
+
+            let err = MockProver::run(8, &circuit, instances)
+                .err()
+                .expect("truncated native-scalar MSM term shape must fail synthesis");
+            assert!(
+                matches!(err, PlonkError::Synthesis),
+                "truncated native-scalar MSM term shapes must be rejected before assignment"
+            );
         });
     }
 
@@ -37498,6 +37751,62 @@ mod kagemusha_non_native_limb_circuit_tests {
             assert!(vesta_affine_ipa_verifier_shared_table_host_links_hold(
                 &circuit
             ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_direct_one_bit_profile_uses_assigned_bases()
+     {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let circuit =
+                vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit_with_profile::<2, 1>(
+                );
+            for round in &circuit.round_accumulators {
+                for term in &round.msm.term_muls {
+                    assert!(term.tables.is_empty());
+                    assert!(term.selections.is_empty());
+                }
+            }
+            for fold_layer in &circuit.generator_folds {
+                for fold in fold_layer {
+                    for term in fold
+                        .g_msm
+                        .term_muls
+                        .iter()
+                        .chain(fold.h_msm.term_muls.iter())
+                    {
+                        assert!(term.tables.is_empty());
+                        assert!(term.selections.is_empty());
+                    }
+                }
+            }
+            for term in &circuit.final_msm.msm.term_muls {
+                assert!(term.tables.is_empty());
+                assert!(term.selections.is_empty());
+            }
+            assert!(circuit.host_links_hold());
+            assert!(vesta_affine_ipa_verifier_shared_table_host_links_hold(
+                &circuit
+            ));
+        });
+    }
+
+    #[test]
+    #[cfg(feature = "zk-halo2-ipa")]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_direct_one_bit_public_instances_use_assigned_bases()
+     {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let circuit =
+                vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit_with_profile::<2, 1>(
+                );
+            for term in &circuit.final_msm.msm.term_muls {
+                assert!(term.tables.is_empty());
+                assert!(term.selections.is_empty());
+            }
+            let instances =
+                kagemusha_vesta_affine_ipa_verifier_shared_table_instance_columns(&circuit)
+                    .expect("direct one-bit shared-table IPA public instances use assigned bases");
+            assert!(!instances.is_empty());
         });
     }
 
@@ -56111,6 +56420,25 @@ mod pasta_tiny {
         }
     }
 
+    fn ensure_witness_vector_len(config_len: usize, witness_len: usize) -> Result<(), PlonkError> {
+        if config_len == witness_len {
+            Ok(())
+        } else {
+            Err(PlonkError::Synthesis)
+        }
+    }
+
+    fn ensure_nested_witness_vector_lens<C, W>(
+        config: &[Vec<C>],
+        witness: &[Vec<W>],
+    ) -> Result<(), PlonkError> {
+        ensure_witness_vector_len(config.len(), witness.len())?;
+        for (config_layer, witness_layer) in config.iter().zip(witness.iter()) {
+            ensure_witness_vector_len(config_layer.len(), witness_layer.len())?;
+        }
+        Ok(())
+    }
+
     fn assign_native_pasta_fp_fixed_window_decomposition_region<
         const WINDOWS: usize,
         const WINDOW_BITS: usize,
@@ -56119,6 +56447,8 @@ mod pasta_tiny {
         config: &NativePastaFpFixedWindowDecompositionConfig,
         witness: &NativePastaFpFixedWindowDecomposition<WINDOWS, WINDOW_BITS>,
     ) -> Result<(), PlonkError> {
+        ensure_witness_vector_len(config.digits.len(), witness.digits.len())?;
+        ensure_nested_witness_vector_lens(&config.digit_bits, &witness.digit_bits)?;
         config.link.enable(region, 0)?;
         assign_native_pasta_fp_scalar_region(
             region,
@@ -62183,6 +62513,9 @@ mod pasta_tiny {
         config: &NonNativeVestaAffineFixedWindowSelectConfig,
         witness: &NonNativeVestaAffineFixedWindowSelect<WINDOW_BITS>,
     ) -> Result<(), PlonkError> {
+        ensure_witness_vector_len(config.digit_bits.len(), witness.digit_bits.len())?;
+        ensure_witness_vector_len(config.table.len(), witness.table.len())?;
+        ensure_nested_witness_vector_lens(&config.selection_levels, &witness.selection_levels)?;
         config.link.enable(region, 0)?;
         for (index, bit) in witness.digit_bits.iter().copied().enumerate() {
             crate::zk::assign_advice_compat(
@@ -62501,6 +62834,8 @@ mod pasta_tiny {
         config: &NonNativeVestaAffineFixedWindowSelectFromTableConfig,
         witness: &NonNativeVestaAffineFixedWindowSelectFromTable<WINDOW_BITS>,
     ) -> Result<(), PlonkError> {
+        ensure_witness_vector_len(config.digit_bits.len(), witness.digit_bits.len())?;
+        ensure_nested_witness_vector_lens(&config.selection_levels, &witness.selection_levels)?;
         config.link.enable(region, 0)?;
         for (index, bit) in witness.digit_bits.iter().copied().enumerate() {
             crate::zk::assign_advice_compat(
@@ -62743,6 +63078,8 @@ mod pasta_tiny {
         config: &NonNativeVestaAffineFixedWindowTableConfig,
         witness: &NonNativeVestaAffineFixedWindowTable<WINDOW_BITS>,
     ) -> Result<(), PlonkError> {
+        ensure_witness_vector_len(config.table.len(), witness.table.len())?;
+        ensure_witness_vector_len(config.adds.len(), witness.adds.len())?;
         config.link.enable(region, 0)?;
         for (point_config, point) in config.table.iter().zip(witness.table.iter()) {
             assign_non_native_vesta_affine_maybe_identity_region(region, point_config, point)?;
@@ -63327,6 +63664,13 @@ mod pasta_tiny {
         config: &NonNativeVestaAffineWindowedScalarMulNativeScalarConfig,
         witness: &NonNativeVestaAffineWindowedScalarMulNativeScalar<WINDOWS, WINDOW_BITS>,
     ) -> Result<(), PlonkError> {
+        ensure_witness_vector_len(config.tables.len(), witness.tables.len())?;
+        ensure_witness_vector_len(config.selections.len(), witness.selections.len())?;
+        ensure_nested_witness_vector_lens(
+            &config.window_base_doubles,
+            &witness.window_base_doubles,
+        )?;
+        ensure_witness_vector_len(config.sum_adds.len(), witness.sum_adds.len())?;
         config.link.enable(region, 0)?;
         assign_native_pasta_fp_fixed_window_decomposition_region(
             region,
@@ -63473,6 +63817,7 @@ mod pasta_tiny {
             let base_affine = vesta_affine_from_limbs(base)?;
             let expected_output = vesta_affine_from_limbs(output)?;
             let table_len = 1usize << WINDOW_BITS;
+            let one_bit_direct_select = WINDOW_BITS == 1 && WINDOWS > 1;
 
             let mut window_base = base_affine.to_curve();
             let mut accumulator = VestaAffine::identity().to_curve();
@@ -63498,17 +63843,19 @@ mod pasta_tiny {
                     }
                 }
                 let selected = table[usize::try_from(digit).expect("digit fits usize")];
-                tables.push(
-                    NonNativeVestaAffineFixedWindowTable::<WINDOW_BITS>::try_from_base(
-                        window_base_limbs,
-                        table.clone(),
-                    )?,
-                );
-                selections.push(
-                    NonNativeVestaAffineFixedWindowSelectFromTable::<WINDOW_BITS>::try_from_table(
-                        digit, table, selected,
-                    )?,
-                );
+                if !one_bit_direct_select {
+                    tables.push(
+                        NonNativeVestaAffineFixedWindowTable::<WINDOW_BITS>::try_from_base(
+                            window_base_limbs,
+                            table.clone(),
+                        )?,
+                    );
+                    selections.push(
+                        NonNativeVestaAffineFixedWindowSelectFromTable::<WINDOW_BITS>::try_from_table(
+                            digit, table, selected,
+                        )?,
+                    );
+                }
 
                 let accumulator_before = vesta_affine_to_limbs(accumulator.to_affine());
                 accumulator += vesta_affine_from_limbs(selected)?.to_curve();
@@ -63679,8 +64026,12 @@ mod pasta_tiny {
                             &sum_adds[window_index].q,
                             Rotation::cur(),
                         );
-                        constraints
-                            .push(s.clone() * (sum_q.2.clone() + scalar_bit.clone() - one.clone()));
+                        constraints.push(
+                            s.clone()
+                                * (sum_q.2.clone() + scalar_bit.clone()
+                                    - one.clone()
+                                    - scalar_bit.clone() * current_base.2.clone()),
+                        );
                         for limb_index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
                             constraints.push(
                                 s.clone()
@@ -63929,6 +64280,13 @@ mod pasta_tiny {
             WINDOW_BITS,
         >,
     ) -> Result<(), PlonkError> {
+        ensure_witness_vector_len(config.tables.len(), witness.tables.len())?;
+        ensure_witness_vector_len(config.selections.len(), witness.selections.len())?;
+        ensure_nested_witness_vector_lens(
+            &config.window_base_doubles,
+            &witness.window_base_doubles,
+        )?;
+        ensure_witness_vector_len(config.sum_adds.len(), witness.sum_adds.len())?;
         config.link.enable(region, 0)?;
         assign_native_pasta_fp_fixed_window_decomposition_region(
             region,
@@ -64137,19 +64495,11 @@ mod pasta_tiny {
                         &base_instances[term_index],
                         Rotation::cur(),
                     );
-                    let first_window_base = if WINDOW_BITS == 1 && WINDOWS > 1 {
-                        query_non_native_vesta_affine_maybe_identity_point(
-                            meta,
-                            &term_muls[term_index].window_base_doubles[0][0].p,
-                            Rotation::cur(),
-                        )
-                    } else {
-                        query_non_native_vesta_affine_maybe_identity_point(
-                            meta,
-                            &term_muls[term_index].tables[0].table[1],
-                            Rotation::cur(),
-                        )
-                    };
+                    let first_window_base =
+                        query_non_native_vesta_affine_windowed_shared_table_term_base::<
+                            WINDOWS,
+                            WINDOW_BITS,
+                        >(meta, &term_muls[term_index], Rotation::cur());
                     push_non_native_vesta_point_equality_constraints(
                         &mut constraints,
                         &s,
@@ -64246,6 +64596,8 @@ mod pasta_tiny {
             WINDOW_BITS,
         >,
     ) -> Result<(), PlonkError> {
+        ensure_witness_vector_len(config.term_muls.len(), witness.term_muls.len())?;
+        ensure_witness_vector_len(config.sum_adds.len(), witness.sum_adds.len())?;
         config.link.enable(region, 0)?;
         for (term_config, term_witness) in config.term_muls.iter().zip(witness.term_muls.iter()) {
             assign_non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar_region(
@@ -64291,6 +64643,29 @@ mod pasta_tiny {
                         self,
                     )
                 },
+            )
+        }
+    }
+
+    fn query_non_native_vesta_affine_windowed_shared_table_term_base<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut halo2_proofs::plonk::VirtualCells<'_, Scalar>,
+        term: &NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalarConfig,
+        rotation: Rotation,
+    ) -> VestaPointExpressions {
+        if WINDOW_BITS == 1 && WINDOWS > 1 {
+            query_non_native_vesta_affine_maybe_identity_point(
+                meta,
+                &term.window_base_doubles[0][0].p,
+                rotation,
+            )
+        } else {
+            query_non_native_vesta_affine_maybe_identity_point(
+                meta,
+                &term.tables[0].table[1],
+                rotation,
             )
         }
     }
@@ -64666,6 +65041,8 @@ mod pasta_tiny {
         config: &NonNativeVestaAffineWindowedMsmNativeScalarConfig,
         witness: &NonNativeVestaAffineWindowedMsmNativeScalar<TERMS, WINDOWS, WINDOW_BITS>,
     ) -> Result<(), PlonkError> {
+        ensure_witness_vector_len(config.term_muls.len(), witness.term_muls.len())?;
+        ensure_witness_vector_len(config.sum_adds.len(), witness.sum_adds.len())?;
         config.link.enable(region, 0)?;
         for (term_config, term_witness) in config.term_muls.iter().zip(witness.term_muls.iter()) {
             assign_non_native_vesta_affine_windowed_scalar_mul_native_scalar_region(
@@ -66781,6 +67158,8 @@ mod pasta_tiny {
             config: Self::Config,
             mut layouter: impl Layouter<Scalar>,
         ) -> Result<(), PlonkError> {
+            ensure_witness_vector_len(config.conditional_adds.len(), self.conditional_adds.len())?;
+            ensure_witness_vector_len(config.doubles.len(), self.doubles.len())?;
             layouter.assign_region(
                 || "non_native_vesta_affine_scalar_mul",
                 |mut region| {
@@ -67108,6 +67487,8 @@ mod pasta_tiny {
             config: Self::Config,
             mut layouter: impl Layouter<Scalar>,
         ) -> Result<(), PlonkError> {
+            ensure_witness_vector_len(config.conditional_adds.len(), self.conditional_adds.len())?;
+            ensure_witness_vector_len(config.doubles.len(), self.doubles.len())?;
             layouter.assign_region(
                 || "non_native_vesta_affine_scalar_mul_native_scalar",
                 |mut region| {
@@ -67523,6 +67904,10 @@ mod pasta_tiny {
         config: &NonNativeVestaAffineMsmNativeScalarConfig,
         witness: &NonNativeVestaAffineMsmNativeScalar<TERMS, BITS>,
     ) -> Result<(), PlonkError> {
+        ensure_witness_vector_len(config.scalars.len(), witness.scalars.len())?;
+        ensure_nested_witness_vector_lens(&config.conditional_adds, &witness.conditional_adds)?;
+        ensure_nested_witness_vector_lens(&config.doubles, &witness.doubles)?;
+        ensure_witness_vector_len(config.sum_adds.len(), witness.sum_adds.len())?;
         config.link.enable(region, 0)?;
         for (scalar_config, scalar) in config.scalars.iter().zip(witness.scalars.iter()) {
             assign_native_pasta_fp_scalar_region(region, scalar_config, scalar, false)?;
@@ -68974,11 +69359,11 @@ mod pasta_tiny {
                     &generator_fold.g_msm.sum_adds[1].r,
                     Rotation::cur(),
                 );
-                let final_g_base = query_non_native_vesta_affine_maybe_identity_point(
-                    meta,
-                    &final_msm.msm.term_muls[0].tables[0].table[1],
-                    Rotation::cur(),
-                );
+                let final_g_base =
+                    query_non_native_vesta_affine_windowed_shared_table_term_base::<
+                        WINDOWS,
+                        WINDOW_BITS,
+                    >(meta, &final_msm.msm.term_muls[0], Rotation::cur());
                 push_non_native_vesta_point_equality_constraints(
                     &mut constraints,
                     &s,
@@ -68991,11 +69376,11 @@ mod pasta_tiny {
                     &generator_fold.h_msm.sum_adds[1].r,
                     Rotation::cur(),
                 );
-                let final_h_base = query_non_native_vesta_affine_maybe_identity_point(
-                    meta,
-                    &final_msm.msm.term_muls[1].tables[0].table[1],
-                    Rotation::cur(),
-                );
+                let final_h_base =
+                    query_non_native_vesta_affine_windowed_shared_table_term_base::<
+                        WINDOWS,
+                        WINDOW_BITS,
+                    >(meta, &final_msm.msm.term_muls[1], Rotation::cur());
                 push_non_native_vesta_point_equality_constraints(
                     &mut constraints,
                     &s,
@@ -70869,7 +71254,18 @@ mod pasta_tiny {
         msm: &NonNativeVestaAffineWindowedMsmSharedTableNativeScalar<TERMS, WINDOWS, WINDOW_BITS>,
         term_index: usize,
     ) -> NonNativeVestaPointScalars {
-        non_native_vesta_maybe_identity_scalars(&msm.term_muls[term_index].tables[0].table[1])
+        let term = &msm.term_muls[term_index];
+        let base = if WINDOW_BITS == 1 && WINDOWS > 1 {
+            term.window_base_doubles
+                .first()
+                .and_then(|doubles| doubles.first())
+                .expect("shared-table direct MSM term has a first assigned base")
+                .p
+                .as_ref()
+        } else {
+            &term.tables[0].table[1]
+        };
+        non_native_vesta_maybe_identity_scalars(base)
     }
 
     fn configure_non_native_vesta_ipa_verifier_shared_table_native_scalar<
@@ -70979,11 +71375,15 @@ mod pasta_tiny {
                     Rotation::cur(),
                 );
                 if round_index + 1 < rounds {
-                    let next_q_before = query_non_native_vesta_affine_maybe_identity_point(
-                        meta,
-                        &round_accumulators[round_index + 1].msm.term_muls[1].tables[0].table[1],
-                        Rotation::cur(),
-                    );
+                    let next_q_before =
+                        query_non_native_vesta_affine_windowed_shared_table_term_base::<
+                            WINDOWS,
+                            WINDOW_BITS,
+                        >(
+                            meta,
+                            &round_accumulators[round_index + 1].msm.term_muls[1],
+                            Rotation::cur(),
+                        );
                     push_non_native_vesta_point_equality_constraints(
                         &mut constraints,
                         &s,
@@ -71024,20 +71424,26 @@ mod pasta_tiny {
                         } else {
                             (pair_index - next_half, 1)
                         };
-                        let next_g_base = query_non_native_vesta_affine_maybe_identity_point(
-                            meta,
-                            &generator_folds[round_index + 1][next_pair].g_msm.term_muls[next_term]
-                                .tables[0]
-                                .table[1],
-                            Rotation::cur(),
-                        );
-                        let next_h_base = query_non_native_vesta_affine_maybe_identity_point(
-                            meta,
-                            &generator_folds[round_index + 1][next_pair].h_msm.term_muls[next_term]
-                                .tables[0]
-                                .table[1],
-                            Rotation::cur(),
-                        );
+                        let next_g_base =
+                            query_non_native_vesta_affine_windowed_shared_table_term_base::<
+                                WINDOWS,
+                                WINDOW_BITS,
+                            >(
+                                meta,
+                                &generator_folds[round_index + 1][next_pair].g_msm.term_muls
+                                    [next_term],
+                                Rotation::cur(),
+                            );
+                        let next_h_base =
+                            query_non_native_vesta_affine_windowed_shared_table_term_base::<
+                                WINDOWS,
+                                WINDOW_BITS,
+                            >(
+                                meta,
+                                &generator_folds[round_index + 1][next_pair].h_msm.term_muls
+                                    [next_term],
+                                Rotation::cur(),
+                            );
                         push_non_native_vesta_point_equality_constraints(
                             &mut constraints,
                             &s,
@@ -71051,16 +71457,20 @@ mod pasta_tiny {
                             &next_h_base,
                         );
                     } else {
-                        let final_g_base = query_non_native_vesta_affine_maybe_identity_point(
-                            meta,
-                            &final_msm.msm.term_muls[0].tables[0].table[1],
-                            Rotation::cur(),
-                        );
-                        let final_h_base = query_non_native_vesta_affine_maybe_identity_point(
-                            meta,
-                            &final_msm.msm.term_muls[1].tables[0].table[1],
-                            Rotation::cur(),
-                        );
+                        let final_g_base =
+                            query_non_native_vesta_affine_windowed_shared_table_term_base::<
+                                WINDOWS,
+                                WINDOW_BITS,
+                            >(
+                                meta, &final_msm.msm.term_muls[0], Rotation::cur()
+                            );
+                        let final_h_base =
+                            query_non_native_vesta_affine_windowed_shared_table_term_base::<
+                                WINDOWS,
+                                WINDOW_BITS,
+                            >(
+                                meta, &final_msm.msm.term_muls[1], Rotation::cur()
+                            );
                         push_non_native_vesta_point_equality_constraints(
                             &mut constraints,
                             &s,

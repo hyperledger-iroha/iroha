@@ -1700,6 +1700,10 @@ def _receipt_entry_content_metadata(receipt_entry: dict[str, Any]) -> tuple[tupl
     return tuple((key, receipt_entry.get(key)) for key in (*generic_keys, *keys))
 
 
+def _receipt_summary_entry_order_key(entry: dict[str, Any]) -> tuple[str, str, str]:
+    return (entry["receipt_kind"], entry["path"], entry["receipt_sha256"])
+
+
 def _required_cli_string(value: str | None, label: str) -> str:
     if value is None:
         raise EvidenceError(f"provide {label}")
@@ -1874,6 +1878,8 @@ def _required_sha256_list(value: dict[str, Any], key: str, label: str) -> list[s
             )
         seen[item] = offset
         result.append(item)
+    if result != sorted(result):
+        raise EvidenceError(f"{label}.{key} must be sorted by sha256")
     return result
 
 
@@ -1932,6 +1938,8 @@ def _required_oid_list(value: dict[str, Any], key: str, label: str) -> list[str]
             )
         seen[item] = offset
         result.append(item)
+    if result != sorted(result):
+        raise EvidenceError(f"{label}.{key} must be sorted in canonical order")
     return result
 
 
@@ -1949,6 +1957,7 @@ def _required_canonical_base64_list(
         )
     result: list[str] = []
     seen: dict[str, int] = {}
+    order_keys: list[tuple[str, int]] = []
     for offset, item in enumerate(items):
         if len(item) > MAX_TRUST_DER_BASE64_CHARS:
             raise EvidenceError(
@@ -1976,7 +1985,12 @@ def _required_canonical_base64_list(
                 f"{label}.{key}[{offset}] duplicates {label}.{key}[{seen[canonical]}]"
             )
         seen[canonical] = offset
+        order_keys.append((sha256_hex(decoded), len(decoded)))
         result.append(canonical)
+    if order_keys != sorted(order_keys):
+        raise EvidenceError(
+            f"{label}.{key} must be sorted by sha256 and byte_len"
+        )
     return result
 
 
@@ -2133,6 +2147,7 @@ def _required_der_summary_entries(
         )
     result: dict[str, int] = {}
     seen_labels: dict[str, int] = {}
+    order_keys: list[tuple[str, int]] = []
     for offset, raw_entry in enumerate(items):
         entry_label = f"{label}.{key}[{offset}]"
         entry = _require_object(raw_entry, entry_label)
@@ -2169,6 +2184,9 @@ def _required_der_summary_entries(
                 f"{MAX_TRUST_DER_BYTES}"
             )
         result[digest] = byte_len
+        order_keys.append((digest, byte_len))
+    if order_keys != sorted(order_keys):
+        raise EvidenceError(f"{label}.{key} must be sorted by sha256 and byte_len")
     return result
 
 
@@ -2226,6 +2244,14 @@ def _compact_der_entries(entries: dict[str, int]) -> list[dict[str, int | str]]:
         }
         for digest in sorted(entries)
     ]
+
+
+def _trust_bundle_summary_order_key(bundle: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(bundle["profile_id"]),
+        str(bundle["path"]),
+        str(bundle["bundle_sha256"]),
+    )
 
 
 def _reject_sha256_overlap(first: list[str], second: list[str], label: str) -> None:
@@ -2500,6 +2526,8 @@ def _verify_receipt_verifier_summary(
     unsupported = sorted(receipt_kind_set - REQUIRED_RECEIPT_KINDS)
     if unsupported:
         raise EvidenceError(f"{label} contains unsupported receipt kinds")
+    if receipt_kind != sorted(receipt_kind_set):
+        raise EvidenceError(f"{label}.receipt_kind must be sorted in canonical order")
 
     receipt_entries_raw = _require_list(receipt_obj.get("receipts"), f"{label}.receipts")
     if len(receipt_entries_raw) != verified_receipts:
@@ -2508,6 +2536,7 @@ def _verify_receipt_verifier_summary(
     receipt_entry_kinds: set[str] = set()
     seen_receipt_paths: dict[str, int] = {}
     seen_receipt_digests: dict[str, int] = {}
+    receipt_order_keys: list[tuple[str, str, str]] = []
     seen_source_material_signatures: dict[tuple[str, tuple[tuple[str, str], ...]], int] = {}
     seen_source_material_fields: dict[tuple[str, str], dict[str, int]] = {}
     has_failed_receipt = False
@@ -2539,6 +2568,15 @@ def _verify_receipt_verifier_summary(
                 f"{label}.receipts[{seen_receipt_digests[receipt_sha256]}].receipt_sha256"
             )
         seen_receipt_digests[receipt_sha256] = offset
+        receipt_order_keys.append(
+            _receipt_summary_entry_order_key(
+                {
+                    "receipt_kind": entry_kind,
+                    "path": receipt_path,
+                    "receipt_sha256": receipt_sha256,
+                }
+            )
+        )
         ok = receipt_entry.get("ok")
         if not isinstance(ok, bool):
             raise EvidenceError(f"{entry_label}.ok must be a boolean")
@@ -2643,6 +2681,10 @@ def _verify_receipt_verifier_summary(
                 seen_for_field[value] = offset
         receipt_entry_kinds.add(entry_kind)
         receipt_entries.append(dict(receipt_entry))
+    if receipt_order_keys != sorted(receipt_order_keys):
+        raise EvidenceError(
+            f"{label}.receipts must be sorted by receipt_kind, path, and receipt_sha256"
+        )
     if receipt_kind_set != receipt_entry_kinds:
         raise EvidenceError(f"{label}.receipt_kind does not match receipts[].receipt_kind")
     if allow_failed and not has_failed_receipt:
@@ -2915,6 +2957,20 @@ def _check_command_urls(
                     reject_local_hosts=True,
                 )
 
+    endpoint_values = _command_flag_values(command, "--endpoint", label)
+    endpoint_order = [value for _offset, value in endpoint_values]
+    seen_endpoints: dict[str, int] = {}
+    for offset, endpoint in endpoint_values:
+        previous = seen_endpoints.get(endpoint)
+        if previous is not None:
+            raise EvidenceError(
+                f"{label}.command[{offset}] duplicates --endpoint at "
+                f"{label}.command[{previous}]"
+            )
+        seen_endpoints[endpoint] = offset
+    if endpoint_order != sorted(endpoint_order):
+        raise EvidenceError(f"{label}.command --endpoint values must be sorted")
+
 
 def _check_redacted_bearer_files(command: list[str], label: str) -> None:
     for offset, item in enumerate(command):
@@ -3185,6 +3241,13 @@ def _check_verify_receipt_selectors(
                 f"{label}.command[{offset}] --receipt is already covered by "
                 "--receipt-dir"
             )
+
+    receipt_dir_order = [receipt_dir for _offset, receipt_dir in receipt_dirs]
+    if receipt_dir_order != sorted(receipt_dir_order):
+        raise EvidenceError(f"{label}.command --receipt-dir values must be sorted")
+    receipt_file_order = [receipt_file for _offset, receipt_file in receipt_files]
+    if receipt_file_order != sorted(receipt_file_order):
+        raise EvidenceError(f"{label}.command --receipt values must be sorted")
 
     return (
         [receipt_dir for _offset, receipt_dir in receipt_dirs],
@@ -4697,6 +4760,13 @@ def verify_trust_summary(
                 f"{label}.profile_json_sha256 does not match archived profile_overrides"
             )
     _reject_trust_digest_role_reuse(profile_json_sha256, bundle_summaries, label)
+    bundle_order_keys = [
+        _trust_bundle_summary_order_key(bundle) for bundle in bundle_summaries
+    ]
+    if bundle_order_keys != sorted(bundle_order_keys):
+        raise EvidenceError(
+            f"{label}.bundles must be sorted by profile_id, path, and bundle_sha256"
+        )
     seen_profile_ids: dict[str, int] = {}
     seen_bundle_paths: dict[str, int] = {}
     seen_bundle_digests: dict[str, int] = {}
@@ -4738,6 +4808,10 @@ def verify_trust_summary(
             f"{label}.allow_insecure_source_url requires at least one http:// "
             "or local/private source URL"
         )
+    compact_profiles = sorted(
+        bundle_summaries,
+        key=lambda bundle: bundle["profile_id"],
+    )
     return {
         "version": version,
         "path": str(path),
@@ -4750,7 +4824,7 @@ def verify_trust_summary(
         "profile_json_emitted": profile_json_emitted,
         "profile_json_emittable": profile_json_emittable,
         "profile_json_sha256": profile_json_sha256,
-        "profiles": bundle_summaries,
+        "profiles": compact_profiles,
         "summary_sha256": digest,
     }
 
@@ -4943,6 +5017,10 @@ def _receipt_summaries_have_source_file_gap(
 
 def _public_canary_summary(canary: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in canary.items() if not key.startswith("_")}
+
+
+def _compact_summary_order_key(summary: dict[str, Any]) -> tuple[str, str]:
+    return (summary["path"], summary["summary_sha256"])
 
 
 def _reject_cross_canary_receipt_reuse(canaries: list[dict[str, Any]]) -> None:
@@ -5432,13 +5510,18 @@ def run(args: argparse.Namespace) -> int:
             "with source=null"
         )
     _reject_canary_rail_receipts_without_trust(canaries, trusts, args)
+    public_canaries = sorted(
+        (_public_canary_summary(canary) for canary in canaries),
+        key=_compact_summary_order_key,
+    )
+    public_trusts = sorted(trusts, key=_compact_summary_order_key)
 
     output: dict[str, Any] = {
         "version": EVIDENCE_VERSION,
         "verified_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
         "ok": True,
-        "canary_summaries": [_public_canary_summary(canary) for canary in canaries],
-        "trust_summaries": trusts,
+        "canary_summaries": public_canaries,
+        "trust_summaries": public_trusts,
         "receipt_verification": receipt_summary,
         "policy": {
             "provider": args.provider,

@@ -40279,6 +40279,30 @@ fn build_account_history_index(
 }
 
 #[cfg(feature = "app_api")]
+fn account_history_cache_extends_append_only(
+    existing: &AccountHistoryIndex,
+    state: &CoreState,
+    next_key: &AccountHistoryIndexCacheKey,
+) -> bool {
+    if next_key.committed_height < existing.cache_key.committed_height {
+        return false;
+    }
+    if next_key.committed_height == existing.cache_key.committed_height {
+        return existing.cache_key == *next_key;
+    }
+    if existing.cache_key.committed_height == 0 {
+        return true;
+    }
+    let Some(height_nz) = std::num::NonZeroUsize::new(existing.cache_key.committed_height) else {
+        return false;
+    };
+    let Some(block) = state.block_by_height(height_nz) else {
+        return false;
+    };
+    Some(format!("{}", block.hash())) == existing.cache_key.tip_block_hash
+}
+
+#[cfg(feature = "app_api")]
 fn extend_account_history_index(
     state: &CoreState,
     previous: &AccountHistoryIndex,
@@ -40324,7 +40348,11 @@ fn account_history_index_snapshot(state: &CoreState) -> Arc<AccountHistoryIndex>
     }
 
     let rebuilt = if let Some(previous) = guard.as_ref() {
-        Arc::new(extend_account_history_index(state, previous, cache_key))
+        if account_history_cache_extends_append_only(previous.as_ref(), state, &cache_key) {
+            Arc::new(extend_account_history_index(state, previous, cache_key))
+        } else {
+            Arc::new(build_account_history_index(state, cache_key))
+        }
     } else {
         Arc::new(build_account_history_index(state, cache_key))
     };
@@ -47104,6 +47132,30 @@ mod tx_query_filter_tests {
         assert!(!account_history_projection_matches_asset_selector(
             projection,
             &TxHistoryAssetSelector::DefinitionId(other_def)
+        ));
+    }
+
+    #[test]
+    fn account_history_cache_extension_rejects_missing_previous_tip() {
+        let state = iroha_core::state::State::new_for_testing(
+            iroha_core::state::World::default(),
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
+        let existing = AccountHistoryIndex {
+            cache_key: AccountHistoryIndexCacheKey {
+                committed_height: 1,
+                tip_block_hash: Some("unrelated-tip".to_owned()),
+            },
+            ..Default::default()
+        };
+        let next_key = AccountHistoryIndexCacheKey {
+            committed_height: 2,
+            tip_block_hash: None,
+        };
+
+        assert!(!account_history_cache_extends_append_only(
+            &existing, &state, &next_key
         ));
     }
 

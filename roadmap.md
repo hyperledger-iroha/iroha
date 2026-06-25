@@ -11,6 +11,9 @@ and completed history lives in [`status.md`](./status.md).
 
 **Status:** active.
 
+- Snapshot-backed node restarts now target hash-journal validation for
+  historical blocks, keeping full Kura block-body loads only for suffix replay
+  and the existing latest-tip rollback repair path.
 - Offline Note V2 device attestation now supports both the centralized
   middleware certificate flow and a receiptless on-chain registration flow. The
   middleware path preserves signed receipt admission while rejecting
@@ -2901,9 +2904,10 @@ and completed history lives in [`status.md`](./status.md).
   `xtask sorafs-gateway-fixtures --verify` validates the envelope JSON shape,
   signer public key, manifest digest, chunk-plan digest, profile aliases, and
   signature, and the published fixture metadata now pins the envelope digest in
-  the aggregate bundle hash. The prior fixture-envelope TODO is closed; future
-  work should replace or add release governance key material only through the
-  normal signed release process, not by reintroducing placeholder signatures.
+  the aggregate bundle hash. The prior fixture-envelope placeholder is closed;
+  future work should replace or add release governance key material only through
+  the normal signed release process, not by reintroducing placeholder
+  signatures.
 - SoraFS SF-11 reference validator now has provider-advert,
   provider-admission-envelope, replication-order, orderbook payload, PoR
   challenge/proof, PDP commitment/challenge/proof, PoTR receipt, repair
@@ -3016,8 +3020,9 @@ and completed history lives in [`status.md`](./status.md).
   (`dashboards/grafana/sorafs_provider_admission.json`) plus Prometheus alert
   rules and test vectors for missing admission envelopes, stale admission
   material, policy-reject spikes, and downgrade warnings. The SF-2b dashboard
-  and alert TODO is closed; keep new admission failure reasons mirrored in the
-  dashboard variables, alert tests, and rollout docs when Torii adds labels.
+  and alert placeholder is closed; keep new admission failure reasons mirrored
+  in the dashboard variables, alert tests, and rollout docs when Torii adds
+  labels.
 - SoraFS SF-2d provider advert integration docs now reflect the implemented
   range-fetch state: provider discovery exposes parsed range metadata, CAR and
   chunk range endpoints enforce stream-token validation plus
@@ -4105,7 +4110,7 @@ and completed history lives in [`status.md`](./status.md).
   `explorerHost` metadata, while disabled legacy drafts can be backfilled to
   the selected profile and contradictory explorer aliases still fail closed.
   Production-ready BSC manifests must also reject own-key and non-opaque string
-  handoff placeholders (`TODO`, `example`, `replace-me`, `changeme`, `sample`,
+  handoff placeholders (`to-do`, `example`, `replace-me`, `changeme`, `sample`,
   `stub`, `test-only`, `your-*`) before route-config rendering or canonical
   production-output publication. The same handoff-placeholder scan applies to
   canonical BSC deployment evidence and native prover bundle artifacts under
@@ -6678,7 +6683,7 @@ and completed history lives in [`status.md`](./status.md).
 	  their owning features. SoraFS proof streaming rejects reserved
 	  `proof_kind=pdp` as `400 Bad Request` until the SF-13 provider protocol
 	  lands, and PoR/PDP proof-stream request envelopes cap `sample_count` at
-	  `500` before manifest lookup. The code-only placeholder/TODO sweep now
+	  `500` before manifest lookup. The code-only placeholder-marker sweep now
 	  leaves only intentional
 	  negative tests, fail-closed placeholder-material guards, fallback skeleton
 	  naming, manifest-derived source rendering, and telemetry peer compatibility
@@ -8743,6 +8748,10 @@ and completed history lives in [`status.md`](./status.md).
   pending submitting-organisation labels must be bounded canonical ISO-style
   comma-space-separated names without URL/contact delimiters, semicolon path
   parameters, placeholders, or path-like slash smuggling;
+  direct XSD summaries now also emit nested profile-catalog `versions`,
+  `missing_schema_versions`, and `skipped_family_versions` in canonical
+  profile/message/direction/version order, and final readiness rejects
+  digest-correct reordered nested catalog arrays;
   catalog
   `versions` lists can skip schema-backed checks only for the exact
   message-family alias, not arbitrary strings, and
@@ -8788,7 +8797,15 @@ and completed history lives in [`status.md`](./status.md).
   matched trust profile's rail
   profile instead of relying on an implicit Torii default, and production
   readiness replays that binding against compact trust profiles before the
-  aggregate can pass. Final readiness also rejects XSD summary, manifest,
+  aggregate can pass. Trust-bundle verifier summaries now canonicalize raw
+  bundle, DER-material, pin, and OID list order, direct evidence replay rejects
+  digest-correct raw trust-summary reordering, and final readiness blocks
+  digest-correct compact trust DER proof reordering. Canary command planning
+  now canonicalizes repeatable notary endpoint and verify receipt selectors,
+  while evidence replay rejects digest-correct child-command selector
+  reordering. Final readiness also canonicalizes top-level XSD/evidence summary
+  references plus blocker/reviewed-gap warning and nested diagnostic-entry order
+  before digesting release summaries and rejects XSD summary, manifest,
   schema, fixture, blocked-source, and profile-catalog artifact paths replayed
   under a different XSD material role, so a copied summary, manifest, catalog,
   schema, fixture, or blocked-source path cannot satisfy another proof class,
@@ -9141,14 +9158,19 @@ and completed history lives in [`status.md`](./status.md).
 	  archival, and requires trust-summary and receipt-summary policy booleans,
 	  trust profile JSON emission booleans plus a digest recomputed from archived
 	  profile overrides, trust revocation booleans/counts, bundle SHA-256 values,
-	  duplicate-free supported receipt-kind lists and compact receipt entry kinds,
+	  canonical sorted duplicate-free supported receipt-kind lists and compact
+	  receipt entry kinds, canonical compact receipt-entry order by
+	  receipt kind, path, and digest, canonical top-level canary/trust summary
+	  order by compact path and digest, canonical `profile_id` order for compact
+	  trust profiles,
 	  per-receipt `ok=true` plus 2xx `status_code` success metadata,
 	  kind-specific compact notary anchor/index/count and rail
 	  message/profile/payload metadata,
 	  exact direct-archive receipt digest/kind/status/endpoint-policy/metadata binding to canary summaries, no copied
 	  receipt paths or digests reused across canary summaries, no relabelled
 	  rail receipt `source_path`, `payload_sha256`, or `rail_message_id` reuse
-	  inside one compact receipt summary,
+	  inside one compact receipt summary, with nullable `rail_message_id` never
+	  suppressing source path or payload digest replay checks,
 	  and plan-only status booleans to be
 	  present explicitly so omissions cannot become production defaults. Archived
 	  profile overrides must also keep
@@ -9318,6 +9340,8 @@ and completed history lives in [`status.md`](./status.md).
 	  requiring compact XSD schema/fixture/blocked-source/pending-source message-definition
 	  roles plus manifest/profile-catalog paths and digest roles to stay unique
 	  across repeated XSD-summary inputs,
+	  requiring compact XSD schema, fixture, blocked-source, and pending-source
+	  arrays to remain in canonical message-definition/path or source-provenance order,
 	  requiring compact
 	  canary/trust summary paths and `summary_sha256` references to stay
 	  role-separated, with digest references canonical nonzero digests
@@ -9347,7 +9371,7 @@ and completed history lives in [`status.md`](./status.md).
 				  compact `stage_dry_run` booleans aligned with `stage_names`, and
 				  rejecting receipt kinds attached to dry-run-only rail/notary stages,
 		  requiring summary digests, rejecting duplicate receipt paths or receipt digests,
-	  rejecting rail/notary source path or source digest replay across canary summaries during evidence verification, rail source XML path, payload digest, or rail message-id replay within canary/archive receipt summaries when relabelled entries reuse compact source material, and rail/notary source-material replay across distinct evidence summaries during readiness replay,
+	  rejecting rail/notary source path or source digest replay across canary summaries during evidence verification, rail source XML path, payload digest, or rail message-id replay within canary/archive receipt summaries when relabelled entries reuse compact source material, keeping source path and payload digest checks active when rail message ids are null, and rail/notary source-material replay across distinct evidence summaries during readiness replay,
 	  rejecting non-canonical compact receipt paths and all-zero compact receipt
 	  digests, compact receipt paths
 	  under checked-in ISO fixture coordinates, rejecting duplicate compact
@@ -9355,6 +9379,7 @@ and completed history lives in [`status.md`](./status.md).
 	  across trust summaries, rejecting all-zero compact trust bundle/profile
 	  JSON/DER proof digests, rejecting control-bearing or whitespace-padded
   compact identity strings, rejecting non-canonical compact trust profile IDs,
+  reordered compact trust-profile arrays,
   and rejecting compact trust rail IDs outside `generic-iso20022`,
   `swift-cbpr-plus`, `fedwire-funds`, `sepa-sct-inst`, and `securities-csd`,
   rejecting unknown compact evidence fields,
@@ -11398,9 +11423,29 @@ and completed history lives in [`status.md`](./status.md).
   table directly instead of assigning a duplicate private selection-table copy,
   and shared-table native-scalar multiplication now composes that selector with
   scalar decomposition, shifted-base table derivation, window-base doubling, and
-  selected-point accumulation. Shared-table multi-term MSM composition now
-  chains those scalar-multiplication terms into one public MSM output while
-  keeping term outputs private, and shared-table final IPA MSM composition adds
+  selected-point accumulation, including the identity-base branch where a
+  selected scalar bit must still accept an identity table base without forcing
+	  a non-identity output. The direct one-bit shared-table adversarial tests now
+	  tamper assigned scalar-bit and selected-addend witnesses, not unassigned
+	  duplicate selection-table witness copies, and the direct-mode builders omit
+	  those duplicate table/selection witness vectors entirely. Fixed-window and
+	  shared-table assignment now also rejects malformed witness-vector shapes
+	  before assignment, including adversarial extra direct-mode duplicate vectors
+	  and truncated direct-mode window-base chains that would otherwise be skipped
+	  by `zip`; the older bitwise native-scalar scalar-mul/MSM path now has the
+		  same synthesis-time shape rejection for extra conditional steps and truncated
+		  term ladders. Shared-table multi-term MSM composition now chains those
+		  scalar-multiplication terms into one public MSM output while keeping term
+		  outputs private; ignored regression coverage also exercises a two-window MSM
+		  term whose selected base is the identity point. Shared-table IPA verifier
+		  base-link checks now use the assigned direct-mode base helper as well, so
+		  direct one-bit shared-table profiles can omit duplicate table/selection
+		  witnesses while preserving the `Q`, folded-generator, and final-MSM host
+		  links; release-facing public-instance column generation uses the same
+		  assigned-base helper for direct shared-table MSM terms, with a routed
+		  policy negative control guarding both helper paths against table-index
+		  drift. Shared-table
+	  final IPA MSM composition adds
   the native-field `a * b` product link for the `U` term. Shared-table
   round-accumulator and generator-fold composition now binds those MSM scalars
   back to the transcript challenge and inverse for per-round IPA verification,
@@ -16275,7 +16320,7 @@ or ABI behavior.
 							  before verifier-record lookup even when artifact digest/commitment
 							  metadata is recalculated.
 							  Release-audit trusted reviewer ids now also share the external
-							  audit-artifact placeholder scanner, so draft, fake, TODO,
+							  audit-artifact placeholder scanner, so draft, fake, to-do,
 							  pending-audit, sample, template, example, and not-production-ready
 							  reviewer labels fail before signoff construction, trusted-reviewer
 							  checks, package validation, or
@@ -16612,7 +16657,7 @@ or ABI behavior.
 									  trace private/public row policy and proof-key-bound release prover input
 									  package.
 									  Governed full-bootstrap artifact payloads now also reject blank text
-									  plus placeholder, pending/TODO, handoff,
+									  plus placeholder, pending/to-do, handoff,
 									  non-production, template, and example sentinels at the shared
 									  payload guard before role-specific Norito decoding, while avoiding a
 									  raw `sample` substring ban so sample-extraction role names remain

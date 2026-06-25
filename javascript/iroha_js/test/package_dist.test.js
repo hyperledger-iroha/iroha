@@ -8952,7 +8952,7 @@ test("package declarations expose Torii iterable count mode aliases", () => {
   assert.match(listOptions, /\n  count_mode\?: ToriiCountMode;\n/u);
 
   const queryOptions = declarationInterface("IterableQueryOptions");
-  assert.match(queryOptions, /\n  fetchSize\?: NumericLike;\n/u);
+  assert.doesNotMatch(queryOptions, /\n  fetchSize\?: NumericLike;\n/u);
   assert.match(queryOptions, /\n  fetch_size\?: NumericLike;\n/u);
   assert.match(queryOptions, /\n  queryName\?: string;\n/u);
   assert.match(queryOptions, /\n  query_name\?: string;\n/u);

@@ -1138,7 +1138,7 @@ def _sha256_list(bundle: dict[str, Any], key: str, label: str) -> list[str]:
             raise TrustBundleError(f"{label}.{key}[{offset}] duplicates SHA-256")
         seen.add(digest)
         result.append(digest)
-    return result
+    return sorted(result)
 
 
 def _oid_list(bundle: dict[str, Any], key: str, label: str) -> list[str]:
@@ -1164,7 +1164,7 @@ def _oid_list(bundle: dict[str, Any], key: str, label: str) -> list[str]:
             raise TrustBundleError(f"{label}.{key}[{offset}] duplicates OID")
         seen.add(value)
         result.append(value)
-    return result
+    return sorted(result)
 
 
 def _valid_oid(value: str) -> bool:
@@ -1381,7 +1381,6 @@ def _der_objects(
     if len(raw) > MAX_DER_BLOBS:
         raise TrustBundleError(f"{label}.{key} must not contain more than {MAX_DER_BLOBS} entries")
     entries: list[dict[str, Any]] = []
-    base64_values: list[str] = []
     seen: set[str] = set()
     seen_labels: set[str] = set()
     uses_synthetic_der = False
@@ -1437,8 +1436,13 @@ def _der_objects(
         if name is not None:
             entry["label"] = name
         entries.append(entry)
-        base64_values.append(canonical_b64)
+    entries.sort(key=_der_summary_order_key)
+    base64_values = [str(entry["der_base64"]) for entry in entries]
     return entries, base64_values, uses_synthetic_der
+
+
+def _der_summary_order_key(entry: dict[str, Any]) -> tuple[str, int]:
+    return str(entry["sha256"]), int(entry["byte_len"])
 
 
 def _source(
@@ -1720,6 +1724,14 @@ def _public_bundle_summary(summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _bundle_summary_order_key(summary: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(summary["profile_id"]),
+        str(summary["path"]),
+        str(summary["bundle_sha256"]),
+    )
+
+
 def _reject_profile_emission_blockers(
     args: argparse.Namespace,
     summaries: list[dict[str, Any]],
@@ -1869,7 +1881,7 @@ def _merge_unique(values: list[str], additions: list[str], label: str) -> list[s
             raise TrustBundleError(f"{label} duplicates SHA-256")
         seen.add(value)
         result.append(value)
-    return result
+    return sorted(result)
 
 
 def _reject_overlap(left: list[str], right: list[str], label: str) -> None:
@@ -2167,11 +2179,16 @@ def run(args: argparse.Namespace) -> int:
     _reject_duplicate_summary_field(summaries, "bundle_sha256", "bundles")
     _reject_duplicate_summary_field(summaries, "profile_id", "bundles")
     profile_json_emittable = _profile_json_emittable(args, summaries)
-    public_summaries = [_public_bundle_summary(summary) for summary in summaries]
+    canonical_summaries = sorted(summaries, key=_bundle_summary_order_key)
+    public_summaries = [
+        _public_bundle_summary(summary) for summary in canonical_summaries
+    ]
     profile_text = None
     profile_json_sha256 = None
     if args.emit_profile_json is not None:
-        profile_config = [summary["profile_overrides"] for summary in summaries]
+        profile_config = [
+            summary["profile_overrides"] for summary in canonical_summaries
+        ]
         profile_text = json.dumps(profile_config, indent=2, sort_keys=True) + "\n"
         profile_json_sha256 = sha256_hex(profile_text.encode("utf-8"))
     output: dict[str, Any] = {

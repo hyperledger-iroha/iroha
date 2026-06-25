@@ -1791,6 +1791,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-assembler-identity-fields",
     ),
     (
+        "native C bridge ABI version negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-c-bridge-abi-version",
+    ),
+    (
         "native bridge zero-envelope Pallas guard negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-zero-envelope-pallas-guard",
     ),
@@ -45271,6 +45275,37 @@ if mode == "--negative-control-android-device-lab-assembler-identity-fields":
             print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Android device-lab assembler identity field drift was not detected")
+
+if mode == "--negative-control-native-c-bridge-abi-version":
+    mutated = dict(texts)
+    target = "crates/connect_norito_bridge/src/lib.rs"
+    original = mutated[target]
+    updated = original.replace(
+        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 10;",
+        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 8;",
+        1,
+    )
+    if updated == original or "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 10;" in updated:
+        raise SystemExit("negative control failed: unable to mutate native C bridge ABI version")
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            r"C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*10\s*;",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: native C bridge ABI drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected native C bridge ABI drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: native C bridge ABI drift was not detected")
 
 if mode == "--negative-control-native-bridge-zero-envelope-pallas-guard":
     mutated = dict(texts)

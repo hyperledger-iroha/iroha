@@ -68,6 +68,17 @@ def crl_b64():
     return base64.b64encode(seq(tbs, ALG_ID, der_bit_string(b"\x04"))).decode("ascii")
 
 
+def alternate_crl_b64():
+    tbs = seq(
+        der_integer(1),
+        ALG_ID,
+        NAME,
+        der_time(b"260605000000Z"),
+        der_time(b"270605000000Z"),
+    )
+    return base64.b64encode(seq(tbs, ALG_ID, der_bit_string(b"\x05"))).decode("ascii")
+
+
 def ocsp_b64():
     response_bytes = seq(
         der_oid(b"\x2b\x06\x01\x05\x05\x07\x30\x01\x01"),
@@ -80,6 +91,7 @@ CERT_ONE_B64 = cert_b64(1)
 CERT_TWO_B64 = cert_b64(2)
 CERT_THREE_B64 = cert_b64(3)
 CRL_B64 = crl_b64()
+ALT_CRL_B64 = alternate_crl_b64()
 OCSP_B64 = ocsp_b64()
 PROFILE_FRESHNESS_ARGS = ["--max-source-age-days", "36500"]
 
@@ -1027,6 +1039,118 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             )
             self.assertEqual(emitted[0]["x509_require_crl_revocation_check"], True)
             self.assertEqual(emitted[0]["x509_require_ocsp_revocation_check"], True)
+
+    def test_summary_bundles_and_der_material_are_emitted_in_canonical_order(self):
+        def der_entry(label, value):
+            return {
+                "label": label,
+                "der_base64": value,
+                "sha256": der_digest(value),
+            }
+
+        def reverse_digest_order(values):
+            return sorted(values, key=der_digest, reverse=True)
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            swift = valid_bundle()
+            swift["signature_public_key_sha256_pins"] = ["9" * 64, "8" * 64]
+            swift["x509_trust_anchor_sha256_pins"] = ["7" * 64]
+            swift["revoked_certificate_sha256"] = ["6" * 64]
+            swift["x509_required_certificate_policy_oids"] = [
+                "1.3.6.1.4.1.55555.2",
+                "1.3.6.1.4.1.55555.1",
+            ]
+            swift["x509_trust_anchors"] = [
+                der_entry(f"root-{offset}", value)
+                for offset, value in enumerate(
+                    reverse_digest_order([CERT_ONE_B64, CERT_THREE_B64])
+                )
+            ]
+            swift["x509_crls"] = [
+                der_entry(f"rail-crl-{offset}", value)
+                for offset, value in enumerate(reverse_digest_order([CRL_B64, ALT_CRL_B64]))
+            ]
+            fedwire = valid_bundle()
+            fedwire.update(
+                {
+                    "profile_id": "fedwire-funds",
+                    "rail": "fedwire-funds",
+                    "source": {
+                        **fedwire["source"],
+                        "url": "https://pki.local-bank.bank/fedwire-funds",
+                    },
+                }
+            )
+            swift_root = root / "swift"
+            fedwire_root = root / "fedwire"
+            swift_root.mkdir()
+            fedwire_root.mkdir()
+            swift_path = write_bundle(swift_root, swift)
+            fedwire_path = write_bundle(fedwire_root, fedwire)
+            profile_path = root / "profile.json"
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--bundle",
+                    str(swift_path),
+                    "--bundle",
+                    str(fedwire_path),
+                    "--max-source-age-days",
+                    "36500",
+                    "--emit-profile-json",
+                    str(profile_path),
+                ]
+            )
+
+            self.assertEqual(rc, 0, stderr)
+            summary = json.loads(stdout)
+            self.assertEqual(
+                [bundle["profile_id"] for bundle in summary["bundles"]],
+                ["fedwire-funds", "swift-cbpr-plus"],
+            )
+            swift_summary = next(
+                bundle
+                for bundle in summary["bundles"]
+                if bundle["profile_id"] == "swift-cbpr-plus"
+            )
+            self.assertEqual(
+                [entry["sha256"] for entry in swift_summary["x509_trust_anchors"]],
+                sorted(entry["sha256"] for entry in swift_summary["x509_trust_anchors"]),
+            )
+            self.assertEqual(
+                [entry["sha256"] for entry in swift_summary["x509_crls"]],
+                sorted(entry["sha256"] for entry in swift_summary["x509_crls"]),
+            )
+            emitted = json.loads(profile_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [profile["id"] for profile in emitted],
+                ["fedwire-funds", "swift-cbpr-plus"],
+            )
+            swift_profile = next(
+                profile for profile in emitted if profile["id"] == "swift-cbpr-plus"
+            )
+            self.assertEqual(
+                swift_profile["signature_public_key_sha256_pins"],
+                sorted(swift_profile["signature_public_key_sha256_pins"]),
+            )
+            self.assertEqual(
+                swift_profile["x509_trust_anchor_sha256_pins"],
+                sorted(swift_profile["x509_trust_anchor_sha256_pins"]),
+            )
+            self.assertEqual(
+                swift_profile["revoked_certificate_sha256"],
+                sorted(swift_profile["revoked_certificate_sha256"]),
+            )
+            self.assertEqual(
+                swift_profile["x509_required_certificate_policy_oids"],
+                sorted(swift_profile["x509_required_certificate_policy_oids"]),
+            )
+            crl_values = swift_profile["x509_crl_der_base64"]
+            self.assertEqual(
+                [der_digest(value) for value in crl_values],
+                sorted(der_digest(value) for value in crl_values),
+            )
 
     def test_symlinked_bundle_is_rejected_before_summary(self):
         with tempfile.TemporaryDirectory() as raw_root:

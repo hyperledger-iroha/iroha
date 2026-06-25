@@ -3198,7 +3198,19 @@ guard-script surfaces for
 unfinished-work markers. The only remaining release handoff markers allowed by
 that guard live in the active roadmap's C# Windows host certification notes, so
 non-C# Kagemusha follow-up placeholders cannot be introduced without a routed
-negative control failing first.
+negative control failing first. Generic runtime and ingress files that carry
+the Kagemusha path, including core transaction admission, offline ISI execution,
+Torii Offline V2/OpenAPI/ZK-prover ingress, and the JavaScript native host, are
+also explicitly scanned and injected by the routed control. The guard inventories
+source-like Kagemusha paths under the active workflow, CI, Rust, SDK, script,
+integration, and docs roots and fails if any such path is left outside the marker
+scan, except for the policy script's own injected-marker controls and the
+deferred C# Windows runner. A second content-bearing inventory covers generic
+non-C# runtime and SDK files whose filenames do not include Kagemusha but whose
+contents do, including Swift, Android/Java, JVM/Kotlin, JavaScript, Python, core,
+and Torii surfaces. Those generic files use a Kagemusha-line-scoped marker check
+so unrelated ISO currency fixtures or non-Kagemusha implementation notes do not
+mask a Kagemusha release handoff.
 Recursive aggregation proof public inputs also expose the folded public-input
 hash as four public limbs. Internal expected-circuit helpers compare those limbs
 to the compact token's chain-visible folded public inputs and enforce the

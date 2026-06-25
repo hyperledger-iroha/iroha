@@ -86,6 +86,7 @@ test("ToriiBrowserClient queryVisibleTransactions posts a browser-safe envelope"
     select: [" entrypoint_hash ", { authority: true }],
     sort: "newest",
     limit: 25,
+    fetch_size: 50,
     queryName: "VisibleTransactions",
     countMode: " BOUNDED ",
   });
@@ -104,6 +105,7 @@ test("ToriiBrowserClient queryVisibleTransactions posts a browser-safe envelope"
       args: ["asset_id", "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb"],
     },
     select: ["entrypoint_hash", { authority: true }],
+    fetch_size: 50,
     query: "VisibleTransactions",
     count_mode: "bounded",
   });

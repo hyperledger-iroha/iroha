@@ -4768,14 +4768,12 @@ async fn handler_account_history_get(
     }
     let query_string = encode_torii_proxy_query(&params)?;
     let _ = allowed_asset_definition_id;
-    Ok(execute_torii_list_read_for_routes(
+    Ok(execute_torii_account_history_read_for_routes(
         &app,
         routes,
         route_scope,
-        ToriiReadEndpointV1::AccountHistoryGet,
         vec![canonical_account_id.to_string()],
         query_string,
-        Vec::new(),
     )
     .await)
 }
@@ -15876,6 +15874,106 @@ fn merged_list_response(
 }
 
 #[cfg(feature = "app_api")]
+#[derive(Debug)]
+struct AccountHistoryMergeItem {
+    timestamp_ms: u64,
+    id: String,
+    canonical: Vec<u8>,
+    value: Value,
+}
+
+#[cfg(feature = "app_api")]
+fn account_history_merge_item(payload: &Value) -> Result<AccountHistoryMergeItem, Response> {
+    let canonical = canonical_json_bytes(payload)?;
+    let object = payload
+        .as_object()
+        .ok_or_else(|| torii_internal_json_error("account history item must be a JSON object"))?;
+    let timestamp_ms = object
+        .get("timestamp_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let id = object
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    Ok(AccountHistoryMergeItem {
+        timestamp_ms,
+        id,
+        canonical,
+        value: payload.clone(),
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn account_history_count_mode_label(raw: Option<&str>) -> &'static str {
+    match raw {
+        Some("bounded") => "bounded",
+        Some("exact") | None => "exact",
+        Some(_) => "bounded",
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn merged_account_history_response(
+    payloads: Vec<Value>,
+    page_offset: u64,
+    page_limit: u64,
+    count_mode_label: &'static str,
+    routed_by: &'static str,
+) -> Result<Response, Response> {
+    let mut seen = BTreeSet::<Vec<u8>>::new();
+    let mut merged_items = Vec::new();
+    for payload in payloads {
+        let payload_items = list_items_from_payload(
+            &payload,
+            "expected JSON object with `items` while merging account history response",
+        )?;
+        for item in payload_items {
+            let merge_item = account_history_merge_item(item)?;
+            if seen.insert(merge_item.canonical.clone()) {
+                merged_items.push(merge_item);
+            }
+        }
+    }
+
+    merged_items.sort_by(|left, right| {
+        right
+            .timestamp_ms
+            .cmp(&left.timestamp_ms)
+            .then_with(|| left.id.cmp(&right.id))
+            .then_with(|| left.canonical.cmp(&right.canonical))
+    });
+
+    let total = merged_items.len();
+    let start = usize::try_from(page_offset)
+        .unwrap_or(usize::MAX)
+        .min(total);
+    let limit = usize::try_from(page_limit).unwrap_or(usize::MAX);
+    let end = start.saturating_add(limit).min(total);
+    let has_more = end < total;
+    let items = merged_items
+        .into_iter()
+        .skip(start)
+        .take(end.saturating_sub(start))
+        .map(|item| item.value)
+        .collect::<Vec<_>>();
+
+    let mut root = norito::json::Map::new();
+    root.insert("items".into(), Value::Array(items));
+    if count_mode_label == "exact" {
+        root.insert("total".into(), Value::from(total as u64));
+    }
+    root.insert("has_more".into(), Value::from(has_more));
+    root.insert("count_mode".into(), Value::from(count_mode_label));
+    root.insert("query_source".into(), Value::from("account_history_fanout"));
+    let mut response =
+        crate::utils::respond_value_with_format(Value::Object(root), ResponseFormat::Json);
+    insert_routed_by_header(&mut response, routed_by);
+    Ok(response)
+}
+
+#[cfg(feature = "app_api")]
 fn torii_empty_list_response(routed_by: &'static str) -> Response {
     let mut root = norito::json::Map::new();
     root.insert("items".into(), Value::Array(Vec::new()));
@@ -18218,6 +18316,45 @@ mod torii_routed_read_tests {
             .map(|item| item["id"].as_str().expect("each item should have an id"))
             .collect();
         assert_eq!(ids, vec!["b", "a", "c"]);
+    }
+
+    #[tokio::test]
+    async fn merged_account_history_response_sorts_deduplicates_and_pages_globally() {
+        let response = merged_account_history_response(
+            vec![
+                norito::json!({
+                    "items": [
+                        {"id": "old", "timestamp_ms": 100, "account_id": "alice"},
+                        {"id": "new", "timestamp_ms": 300, "account_id": "alice"}
+                    ],
+                    "total": 2
+                }),
+                norito::json!({
+                    "items": [
+                        {"id": "mid", "timestamp_ms": 200, "account_id": "alice"},
+                        {"id": "old", "timestamp_ms": 100, "account_id": "alice"}
+                    ],
+                    "total": 2
+                }),
+            ],
+            1,
+            2,
+            "exact",
+            "proxy",
+        )
+        .expect("account history merge should succeed");
+
+        let json = response_json(response).await;
+        let ids = json["items"]
+            .as_array()
+            .expect("merged account history should include items")
+            .iter()
+            .map(|item| item["id"].as_str().expect("item id should be present"))
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["mid", "old"]);
+        assert_eq!(json["total"].as_u64(), Some(3));
+        assert_eq!(json["has_more"].as_bool(), Some(false));
+        assert_eq!(json["count_mode"].as_str(), Some("exact"));
     }
 
     #[cfg(feature = "app_api")]
@@ -21242,6 +21379,180 @@ async fn execute_torii_account_read_for_resolved_routes(
 }
 
 #[cfg(feature = "app_api")]
+fn account_history_payload_has_more(payload: &Value, item_count: usize, page_limit: u64) -> bool {
+    payload
+        .as_object()
+        .and_then(|object| object.get("has_more"))
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| u64::try_from(item_count).unwrap_or(u64::MAX) >= page_limit)
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_torii_account_history_read_for_resolved_routes(
+    app: &SharedAppState,
+    routes: Vec<RoutingDecision>,
+    path_args: Vec<String>,
+    query_string: Option<String>,
+) -> Response {
+    if routes.is_empty() {
+        return with_torii_fanout_headers(
+            torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "no Nexus dataspace routes are configured",
+            ),
+            ToriiFanoutDiagnostics::default(),
+        );
+    }
+    let Some(account_id) = path_args.get(0).cloned() else {
+        return torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_proxy_request",
+            "missing proxied path argument `account_id`",
+        );
+    };
+    let mut params =
+        match decode_torii_proxy_query::<routing::AccountHistoryGetParams>(query_string.as_deref())
+        {
+            Ok(params) => params,
+            Err(response) => return response,
+        };
+    let limits = routing::app_query_limits();
+    let page_limit = match limits.clamp_page_limit(params.limit) {
+        Ok(0) => {
+            return Error::AppQueryValidation {
+                code: "invalid_pagination",
+                message: format!(
+                    "limit must be between 1 and {} for {}",
+                    limits.max_page_limit,
+                    routing::ENDPOINT_ACCOUNTS_HISTORY
+                ),
+            }
+            .into_response();
+        }
+        Ok(limit) => limit,
+        Err(error) => return error.into_response(),
+    };
+    params.limit = Some(page_limit);
+    let count_mode_label = account_history_count_mode_label(params.count_mode.as_deref());
+    let per_route_target = (count_mode_label == "bounded")
+        .then(|| params.offset.saturating_add(page_limit).saturating_add(1));
+    let chunk_limit = limits.max_page_limit.max(1);
+    let routed_by = routed_by_for_routes(app, &routes);
+    let mut payloads = Vec::new();
+    let mut diagnostics = ToriiFanoutDiagnostics::default();
+    let mut last_not_found = None;
+    let mut last_route_unavailable = None;
+
+    for route in &routes {
+        diagnostics.record_attempt();
+        let mut route_offset = 0_u64;
+        let mut route_items_seen = 0_u64;
+        let mut route_succeeded = false;
+
+        loop {
+            let mut page_params = params.clone();
+            page_params.offset = route_offset;
+            let next_limit = per_route_target
+                .map(|target| {
+                    target
+                        .saturating_sub(route_items_seen)
+                        .max(1)
+                        .min(chunk_limit)
+                })
+                .unwrap_or(chunk_limit);
+            page_params.limit = Some(next_limit);
+            let page_query_string = match encode_torii_proxy_query(&page_params) {
+                Ok(query_string) => query_string,
+                Err(error) => return error.into_response(),
+            };
+            let response = execute_torii_single_route_read(
+                app,
+                *route,
+                ToriiReadEndpointV1::AccountHistoryGet,
+                vec![account_id.clone()],
+                page_query_string,
+                Vec::new(),
+            )
+            .await;
+
+            if response.status() == StatusCode::NOT_FOUND {
+                diagnostics.record_skipped_response(&response);
+                if !route_succeeded {
+                    last_not_found = Some(response);
+                }
+                break;
+            }
+            if torii_response_has_reject_code(&response, "route_unavailable") {
+                diagnostics.record_skipped_response(&response);
+                if !route_succeeded {
+                    last_route_unavailable = Some(response);
+                }
+                break;
+            }
+
+            let payload = match torii_json_body_value(response).await {
+                Ok(payload) => payload,
+                Err(response) => {
+                    diagnostics.record_skipped_response(&response);
+                    return with_torii_fanout_headers(response, diagnostics);
+                }
+            };
+            let item_count = match list_items_from_payload(
+                &payload,
+                "expected account history JSON object with `items`",
+            ) {
+                Ok(items) => items.len(),
+                Err(response) => {
+                    diagnostics.record_skipped_response(&response);
+                    return with_torii_fanout_headers(response, diagnostics);
+                }
+            };
+            let has_more = account_history_payload_has_more(&payload, item_count, next_limit);
+            payloads.push(payload);
+            route_succeeded = true;
+            let item_count_u64 = u64::try_from(item_count).unwrap_or(u64::MAX);
+            route_items_seen = route_items_seen.saturating_add(item_count_u64);
+
+            if item_count == 0
+                || !has_more
+                || per_route_target.is_some_and(|target| route_items_seen >= target)
+            {
+                break;
+            }
+            route_offset = route_offset.saturating_add(item_count_u64);
+        }
+
+        if route_succeeded {
+            diagnostics.record_success();
+        }
+    }
+
+    if payloads.is_empty() {
+        let response = last_not_found.unwrap_or_else(|| {
+            last_route_unavailable.unwrap_or_else(|| {
+                torii_proxy_error_response(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "no dataspace returned a matching result",
+                )
+            })
+        });
+        return with_torii_fanout_headers(response, diagnostics);
+    }
+
+    merge_with_torii_fanout_headers(diagnostics, || {
+        merged_account_history_response(
+            payloads,
+            params.offset,
+            page_limit,
+            count_mode_label,
+            routed_by,
+        )
+    })
+}
+
+#[cfg(feature = "app_api")]
 async fn execute_torii_read_fanout_for_resolved_routes(
     app: &SharedAppState,
     routes: Vec<RoutingDecision>,
@@ -21328,6 +21639,15 @@ async fn execute_torii_read_fanout_for_resolved_routes(
                 routes,
                 canonical_account_id,
                 response_format_from_torii_proxy(response_format),
+            )
+            .await
+        }
+        ToriiReadFanoutMergeV1::AccountHistory => {
+            execute_torii_account_history_read_for_resolved_routes(
+                app,
+                routes,
+                path_args,
+                query_string,
             )
             .await
         }
@@ -21548,6 +21868,41 @@ async fn execute_torii_list_read_for_routes(
             path_args,
             query_string,
             body,
+            ToriiProxyResponseFormatV1::Json,
+        )
+        .await
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_torii_account_history_read_for_routes(
+    app: &SharedAppState,
+    routes: Vec<RoutingDecision>,
+    route_scope: ToriiFanoutRouteScopeV1,
+    path_args: Vec<String>,
+    query_string: Option<String>,
+) -> Response {
+    if routes.len() > 1 {
+        execute_torii_read_fanout_via_nexus(
+            app,
+            route_scope,
+            ToriiReadFanoutMergeV1::AccountHistory,
+            ToriiReadEndpointV1::AccountHistoryGet,
+            path_args,
+            query_string,
+            Vec::new(),
+            ToriiProxyResponseFormatV1::Json,
+        )
+        .await
+    } else {
+        execute_torii_read_fanout_for_resolved_routes(
+            app,
+            routes,
+            ToriiReadFanoutMergeV1::List,
+            ToriiReadEndpointV1::AccountHistoryGet,
+            path_args,
+            query_string,
+            Vec::new(),
             ToriiProxyResponseFormatV1::Json,
         )
         .await

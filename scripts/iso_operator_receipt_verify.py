@@ -2254,6 +2254,10 @@ def _receipt_metadata(path: Path, receipt: dict[str, Any]) -> dict[str, Any]:
     return metadata
 
 
+def _receipt_summary_entry_order_key(entry: dict[str, Any]) -> tuple[str, str, str]:
+    return (entry["receipt_kind"], entry["path"], entry["receipt_sha256"])
+
+
 def _receipt_endpoint_url(receipt: dict[str, Any]) -> str:
     if receipt["receipt_kind"] == "iso-audit-notary":
         return receipt["endpoint"]
@@ -2366,6 +2370,7 @@ def run(args: argparse.Namespace) -> int:
         receipt_entries.append(_receipt_metadata(path, receipt))
 
     _reject_unused_local_overrides(args, verified)
+    receipt_entries.sort(key=_receipt_summary_entry_order_key)
 
     summary = {
         "version": RECEIPT_SUMMARY_VERSION,

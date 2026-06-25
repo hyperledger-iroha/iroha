@@ -9,6 +9,7 @@ import base64
 import binascii
 import hashlib
 import json
+import os
 import re
 import sys
 from fnmatch import fnmatchcase
@@ -449,12 +450,32 @@ ADVERSARIAL_COVERAGE = {
                 "duplicate_initial_input_profile",
                 "overlapping_initial_output_profile",
                 "duplicate_append_output_profile",
+                "zero_accumulator_nullifier_digest.nullifier_digest =",
+                "zero_accumulator_output_commitment_digest.output_commitment_digest =",
+                "zero_accumulator_fold_digest.fold_digest =",
+                "zero_previous_accumulator_pi.previous_accumulator_public_inputs_hash =",
+                "zero_previous_recursive_proof_pi.previous_recursive_proof_public_inputs_hash =",
+                "zero_profile_resulting_nullifier_digest.resulting_nullifier_digest =",
+                "zero_profile_resulting_output_commitment_digest.resulting_output_commitment_digest =",
+                "zero_profile_resulting_fold_digest.resulting_fold_digest =",
+                "zero_profile_resulting_public_inputs_hash.resulting_public_inputs_hash =",
+                "assert_zero_legacy_compact_hash_rejected(",
+                "zero-prehash legacy compact digest must be rejected",
+                "assert_zero_recursive_compact_hash_rejected(",
+                "zero-prehash recursive compact digest must be rejected",
+                "fn is_zero_prehash_hash(hash: Hash) -> bool",
+                "is_zero_prehash_hash(preflight.current_hop_proof_hash)",
+                "is_zero_prehash_hash(boundary.current_hop_proof_hash)",
+                "is_zero_prehash_hash(boundary.resulting_public_inputs_hash)",
                 "fn assert_self_consistent_forged_boundary_rejected(",
                 "forged_boundary_cases",
                 "kagemusha_recursive_spend_accumulator_append_evidence_with_opening_preflight_contract",
                 "kagemusha_recursive_spend_append_boundary_free_public_inputs_hash",
                 "append_boundary.transition_profile_digest",
                 "append_boundary.transition_profile_binding_digest",
+                "zero_append_opening_preflight_current_hop_proof_hash.current_hop_proof_hash =",
+                "zero_current_hop_proof_hash.current_hop_proof_hash =",
+                "zero_resulting_public_inputs_hash.resulting_public_inputs_hash =",
                 "zero_chain_asset_boundary.chain_asset_binding_digest = [0u8; Hash::LENGTH];",
                 "zero_final_note_boundary.final_note_binding_digest = [0u8; Hash::LENGTH];",
                 "append_boundary.previous_recursive_proof_artifact_digest",
@@ -549,6 +570,27 @@ ADVERSARIAL_COVERAGE = {
         "kagemusha_non_native_vesta_ipa_verifier_shared_table_batch_preflight_rejects_h_generator_fold_splice",
         "kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_h_generator_fold_splice",
         "accumulator H fold mismatch",
+        "kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_accepts_identity_base",
+        "kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_omits_direct_mode_duplicate_witnesses",
+        "kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_synthesis_rejects_extra_direct_duplicate_witnesses",
+        "kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_synthesis_rejects_missing_direct_window_base",
+        "kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_scalar_bit_splice",
+        "kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_direct_selected_addend_tamper",
+        "kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_omits_direct_mode_duplicate_witnesses",
+        "kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_accepts_identity_base_term",
+        "kagemusha_non_native_vesta_ipa_verifier_shared_table_direct_one_bit_profile_uses_assigned_bases",
+        "kagemusha_non_native_vesta_ipa_verifier_shared_table_direct_one_bit_public_instances_use_assigned_bases",
+        "kagemusha_non_native_vesta_affine_native_scalar_mul_synthesis_rejects_extra_conditional_step",
+        "kagemusha_non_native_vesta_affine_native_scalar_msm_synthesis_rejects_truncated_term_shape",
+        "if !one_bit_direct_select {",
+        "kagemusha_vesta_affine_windowed_shared_table_term_base(term),",
+        "&term.window_base_doubles[0][0].p,",
+        "query_non_native_vesta_affine_windowed_shared_table_term_base::<",
+        "ensure_witness_vector_len(config.conditional_adds.len(), self.conditional_adds.len())?;",
+        "ensure_witness_vector_len(config.scalars.len(), witness.scalars.len())?;",
+        "ensure_witness_vector_len(config.tables.len(), witness.tables.len())?;",
+        "ensure_nested_witness_vector_lens(",
+        "scalar_bit.clone() * current_base.2.clone()",
         "decode_kagemusha_recursive_compact_pallas_open_envelopes",
         "failed to decode Kagemusha recursive compact Pallas open-envelope archive",
         "invalid Kagemusha recursive compact Pallas open-envelope archive",
@@ -2063,11 +2105,20 @@ CI_GUARD_PATHS = (
 )
 ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "docs/source/offline_kagemusha.md",
+    ".github/workflows/pr_kagemusha_payload_bench.yml",
     "crates/iroha_cli/src/zk.rs",
     "crates/iroha_data_model/src/offline/mod.rs",
     "crates/iroha_core/src/zk.rs",
+    "crates/iroha_core/src/tx.rs",
+    "crates/iroha_core/src/smartcontracts/isi/offline.rs",
+    "crates/iroha_data_model/src/isi/offline.rs",
     "crates/connect_norito_bridge/src/lib.rs",
+    "crates/iroha_js_host/src/lib.rs",
     "integration_tests/tests/zk_confidential_localnet.rs",
+    "crates/iroha_torii/src/offline_v2_issuer.rs",
+    "crates/iroha_torii/src/openapi.rs",
+    "crates/iroha_torii/src/zk_prover.rs",
+    "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs",
     "ci/check_kagemusha_production_readiness.sh",
     "ci/check_kagemusha_recursive_spend_jvm_sdk.sh",
     "ci/check_kagemusha_recursive_spend_js_sdk.sh",
@@ -2126,6 +2177,9 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchivesTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+    "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java",
+    "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+    "crates/iroha_data_model/benches/kagemusha_recursive_spend_payload.rs",
     "javascript/iroha_js/README.md",
     "javascript/iroha_js/src/crypto.browser.js",
     "javascript/iroha_js/src/crypto.js",
@@ -2139,6 +2193,119 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "python/iroha_python/src/iroha_python/kagemusha.py",
     "python/iroha_python/tests/kagemusha_test.py",
 )
+ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
+    "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+    "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/OfflineCashLifecycleTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift",
+    "crates/iroha_cli/src/main_shared.rs",
+    "crates/iroha_core/src/gas.rs",
+    "crates/iroha_core/src/queue/router.rs",
+    "crates/iroha_core/src/smartcontracts/isi/mod.rs",
+    "crates/iroha_core/src/smartcontracts/isi/world.rs",
+    "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+    "crates/iroha_data_model/src/isi/mod.rs",
+    "crates/iroha_data_model/src/isi/registry.rs",
+    "crates/iroha_data_model/src/proof.rs",
+    "crates/iroha_torii/src/lib.rs",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyBackendTag.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJsonParser.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineReadiness.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineV2Readiness.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/GradleHarnessTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/OfflineToriiClientTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtilsTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycleTest.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineJsonParserTest.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderTests.java",
+    "javascript/iroha_js/src/index.js",
+    "javascript/iroha_js/src/instructionBuilders.js",
+    "javascript/iroha_js/src/offlineCashLifecycle.js",
+    "javascript/iroha_js/src/toriiClient.js",
+    "javascript/iroha_js/src/transaction.js",
+    "javascript/iroha_js/test/crypto.browser.test.js",
+    "javascript/iroha_js/test/instructionBuilders.test.js",
+    "javascript/iroha_js/test/offlineCashLifecycle.test.js",
+    "javascript/iroha_js/test/privacyCatalogParity.test.js",
+    "javascript/iroha_js/test/privacyFfiContractParity.test.js",
+    "javascript/iroha_js/test/toriiClient.test.js",
+    "javascript/iroha_js/test/transactionBuilder.test.js",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTag.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineJsonParser.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineReadiness.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineV2Readiness.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientReadinessTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientV2ReadinessTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTagTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycleTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+    "python/iroha_python/src/iroha_python/__init__.py",
+    "python/iroha_python/src/iroha_python/_privacy_backends.py",
+    "python/iroha_python/src/iroha_python/offline_cash.py",
+    "python/iroha_python/src/iroha_python/tx.py",
+    "python/iroha_python/tests/client_ledger_helpers_test.py",
+    "python/iroha_python/tests/offline_cash_test.py",
+    "python/iroha_python/tests/privacy_catalog_test.py",
+)
+ACTIVE_KAGEMUSHA_TODO_SCAN_DISCOVERY_ROOTS = (
+    ".github/workflows",
+    "ci",
+    "crates",
+    "integration_tests/tests",
+    "scripts",
+    "IrohaSwift",
+    "java/iroha_android",
+    "kotlin",
+    "javascript/iroha_js",
+    "python/iroha_python",
+    "docs/source",
+)
+ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_DISCOVERY_ROOTS = (
+    "crates/iroha_cli/src",
+    "crates/iroha_core/src",
+    "crates/iroha_data_model/src",
+    "crates/iroha_torii/src",
+    "crates/iroha_js_host/src",
+    "crates/connect_norito_bridge/src",
+    "integration_tests/tests",
+    "IrohaSwift/Sources",
+    "IrohaSwift/Tests",
+    "java/iroha_android/src",
+    "kotlin",
+    "javascript/iroha_js/src",
+    "javascript/iroha_js/test",
+    "python/iroha_python/src",
+    "python/iroha_python/tests",
+)
+ACTIVE_KAGEMUSHA_TODO_SCAN_DISCOVERY_SUFFIXES = (
+    ".java",
+    ".js",
+    ".kt",
+    ".md",
+    ".py",
+    ".rs",
+    ".sh",
+    ".swift",
+    ".ts",
+    ".yaml",
+    ".yml",
+)
+ACTIVE_KAGEMUSHA_TODO_SCAN_DISCOVERY_DIR_EXCLUDES = {
+    ".build",
+    ".git",
+    ".gradle",
+    ".pytest_cache",
+    "build",
+    "node_modules",
+    "target",
+}
+ACTIVE_KAGEMUSHA_TODO_SCAN_DISCOVERY_ALLOWLIST = {
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    "ci/check_kagemusha_recursive_spend_csharp_sdk.sh",
+}
 PAYLOAD_BENCH_REQUIRED_PATHS = (
     "crates/iroha_data_model/Cargo.toml",
     "crates/iroha_data_model/benches/kagemusha_recursive_spend_payload.rs",
@@ -2390,6 +2557,10 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-self-consistent-boundary",
     ),
     (
+        "data-model zero-prehash Hash guard negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-zero-prehash-hash-guard",
+    ),
+    (
         "data-model transition-profile current-hop set negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-transition-profile-current-hop-sets",
     ),
@@ -2458,6 +2629,14 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo",
     ),
     (
+        "active non-C# TODO scan inventory negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-scan-inventory",
+    ),
+    (
+        "active non-C# TODO content scan inventory negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-content-scan-inventory",
+    ),
+    (
         "core append cap direct-prover negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-cap-boundary",
     ),
@@ -2488,6 +2667,22 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "core recursive spend fixed-window table-base accumulator negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-fixed-window-table-base-accumulator",
+    ),
+    (
+        "core shared-table identity-base selection negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-shared-table-identity-base-selection",
+    ),
+    (
+        "core shared-table direct-mode duplicate-witness negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-shared-table-direct-mode-duplicate-witnesses",
+    ),
+    (
+        "core shared-table witness-shape guard negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-shared-table-witness-shape-guards",
+    ),
+    (
+        "core shared-table direct-base helper negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-shared-table-direct-base-helper",
     ),
     (
         "core recursive spend append-boundary accumulator negative control",
@@ -3525,6 +3720,78 @@ def check_append_digest_helpers_are_checked():
             'field: "append_boundary.append_boundary_digest"',
         ),
     )
+
+
+def check_kagemusha_hash_zero_sentinel_guards():
+    data_model = read("crates/iroha_data_model/src/offline/mod.rs")
+    raw_zero_patterns = (
+        r"hash_bytes_from_hash\s*\([\s\S]{0,400}?\)\s*==\s*\[0u8;\s*Hash::LENGTH\]",
+        r"hash_bytes_from_hash\s*\([\s\S]{0,400}?\)\s*==\s*\[0;\s*Hash::LENGTH\]",
+        r"\[0u8;\s*Hash::LENGTH\]\s*==\s*hash_bytes_from_hash\s*\(",
+        r"\[0;\s*Hash::LENGTH\]\s*==\s*hash_bytes_from_hash\s*\(",
+    )
+    for pattern in raw_zero_patterns:
+        if re.search(pattern, data_model):
+            fail(
+                "Kagemusha Hash zero-sentinel guard must not compare Hash bytes to all-zero arrays; "
+                "use is_zero_prehash_hash for iroha_crypto::Hash fields"
+            )
+    require_ordered_needles(
+        data_model,
+        "Kagemusha Hash zero-prehash sentinel guard",
+        (
+            "fn is_zero_prehash_hash(hash: Hash) -> bool",
+            "hash == Hash::prehashed([0u8; Hash::LENGTH])",
+            "is_zero_prehash_hash(preflight.current_hop_proof_hash)",
+            "is_zero_prehash_hash(boundary.current_hop_proof_hash)",
+            "is_zero_prehash_hash(boundary.resulting_public_inputs_hash)",
+            "is_zero_prehash_hash(digest)",
+        ),
+    )
+    legacy_compact_context = source_window(
+        data_model,
+        "pub fn validate_supported_context(&self) -> Result<(), KagemushaFoldError> {",
+        "    /// Validate the reserved recursive compact-token public-input context.",
+        "legacy compact zero-prehash Hash validation",
+    )
+    require_ordered_needles(
+        legacy_compact_context,
+        "legacy compact zero-prehash Hash validation",
+        (
+            '("nullifier_digest", self.nullifier_digest)',
+            '("output_commitment_digest", self.output_commitment_digest)',
+            '("fold_digest", self.fold_digest)',
+            "if is_zero_prehash_hash(digest)",
+            "if self.aggregation_transcript_digest == [0u8; Hash::LENGTH]",
+            'field: "aggregation_transcript_digest"',
+        ),
+    )
+    if "hash_bytes_from_hash(self.nullifier_digest)" in legacy_compact_context:
+        fail(
+            "legacy compact zero-prehash Hash validation must not convert Hash digests to bytes before zero checks"
+        )
+    recursive_compact_context = source_window(
+        data_model,
+        "pub fn validate_recursive_compact_context(&self) -> Result<(), KagemushaFoldError> {",
+        "    /// Deterministic hash that the compact folded proof must expose as public inputs.",
+        "recursive compact zero-prehash Hash validation",
+    )
+    require_ordered_needles(
+        recursive_compact_context,
+        "recursive compact zero-prehash Hash validation",
+        (
+            '("nullifier_digest", self.nullifier_digest)',
+            '("output_commitment_digest", self.output_commitment_digest)',
+            '("fold_digest", self.fold_digest)',
+            "if is_zero_prehash_hash(digest)",
+            "if self.aggregation_transcript_digest == [0u8; Hash::LENGTH]",
+            'field: "aggregation_transcript_digest"',
+        ),
+    )
+    if "hash_bytes_from_hash(self.nullifier_digest)" in recursive_compact_context:
+        fail(
+            "recursive compact zero-prehash Hash validation must not convert Hash digests to bytes before zero checks"
+        )
 
 
 def check_append_boundary_profile_comparison_is_complete():
@@ -4653,11 +4920,84 @@ def check_payload_benchmark_source_coverage():
 
 
 TODO_MARKER_RE = re.compile(r"\b(?:TODO|FIXME|XXX|TBD)\b")
+KAGEMUSHA_CONTENT_RE = re.compile(r"kagemusha", re.IGNORECASE)
 ALLOWED_ROADMAP_CSHARP_TODO_RE = re.compile(r"TODO\(C# Windows\)|Windows-machine TODOs?")
-ROADMAP_ACTIVE_KAGEMUSHA_TODO_SCAN_LINE_LIMIT = 1400
+
+
+def iter_active_noncsharp_kagemusha_todo_discovery_candidates(discovery_roots):
+    for relative_root in discovery_roots:
+        search_root = root / relative_root
+        if not search_root.exists():
+            continue
+        if search_root.is_file():
+            candidates = [search_root]
+        else:
+            candidates = []
+            for dirpath, dirnames, filenames in os.walk(search_root):
+                dirnames[:] = [
+                    dirname
+                    for dirname in dirnames
+                    if dirname not in ACTIVE_KAGEMUSHA_TODO_SCAN_DISCOVERY_DIR_EXCLUDES
+                ]
+                for filename in filenames:
+                    candidates.append(Path(dirpath) / filename)
+        for candidate in candidates:
+            if candidate.suffix not in ACTIVE_KAGEMUSHA_TODO_SCAN_DISCOVERY_SUFFIXES:
+                continue
+            relative = candidate.relative_to(root).as_posix()
+            yield candidate, relative
+
+
+def discover_active_noncsharp_kagemusha_todo_scan_paths():
+    discovered = set()
+    for candidate, relative in iter_active_noncsharp_kagemusha_todo_discovery_candidates(
+        ACTIVE_KAGEMUSHA_TODO_SCAN_DISCOVERY_ROOTS
+    ):
+        if "kagemusha" not in relative.lower():
+            continue
+        discovered.add(relative)
+    return discovered
+
+
+def discover_active_noncsharp_kagemusha_todo_content_scan_paths():
+    discovered = set()
+    for _, relative in iter_active_noncsharp_kagemusha_todo_discovery_candidates(
+        ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_DISCOVERY_ROOTS
+    ):
+        if KAGEMUSHA_CONTENT_RE.search(read(relative)):
+            discovered.add(relative)
+    return discovered
+
+
+def check_active_noncsharp_kagemusha_todo_scan_inventory():
+    filename_scanned = set(ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS)
+    content_scanned = filename_scanned | set(ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS)
+    filename_missing = sorted(
+        discovered
+        for discovered in discover_active_noncsharp_kagemusha_todo_scan_paths()
+        if discovered not in filename_scanned
+        and discovered not in ACTIVE_KAGEMUSHA_TODO_SCAN_DISCOVERY_ALLOWLIST
+    )
+    if filename_missing:
+        fail(
+            "active non-C# Kagemusha TODO scan does not cover source-like Kagemusha path(s): "
+            + ", ".join(filename_missing)
+        )
+    content_missing = sorted(
+        discovered
+        for discovered in discover_active_noncsharp_kagemusha_todo_content_scan_paths()
+        if discovered not in content_scanned
+        and discovered not in ACTIVE_KAGEMUSHA_TODO_SCAN_DISCOVERY_ALLOWLIST
+    )
+    if content_missing:
+        fail(
+            "active non-C# Kagemusha TODO content scan does not cover content-bearing source path(s): "
+            + ", ".join(content_missing)
+        )
 
 
 def check_active_noncsharp_kagemusha_todos_closed():
+    check_active_noncsharp_kagemusha_todo_scan_inventory()
     for relative in ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS:
         for line_number, line in enumerate(read(relative).splitlines(), 1):
             if TODO_MARKER_RE.search(line):
@@ -4665,10 +5005,17 @@ def check_active_noncsharp_kagemusha_todos_closed():
                     f"{relative}:{line_number} has active non-C# Kagemusha TODO/FIXME marker: "
                     + line.strip()
                 )
+    for relative in ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS:
+        for line_number, line in enumerate(read(relative).splitlines(), 1):
+            if TODO_MARKER_RE.search(line) and KAGEMUSHA_CONTENT_RE.search(line):
+                fail(
+                    f"{relative}:{line_number} has active non-C# Kagemusha TODO/FIXME marker: "
+                    + line.strip()
+                )
 
     roadmap_lines = read("roadmap.md").splitlines()
     for line_number, line in enumerate(
-        roadmap_lines[:ROADMAP_ACTIVE_KAGEMUSHA_TODO_SCAN_LINE_LIMIT],
+        roadmap_lines,
         1,
     ):
         if TODO_MARKER_RE.search(line) and ALLOWED_ROADMAP_CSHARP_TODO_RE.search(line) is None:
@@ -4690,6 +5037,7 @@ def run_checks():
     check_rust_reserved_lineage_policy()
     check_checked_fold_public_input_preverification_order()
     check_append_digest_helpers_are_checked()
+    check_kagemusha_hash_zero_sentinel_guards()
     check_append_boundary_profile_comparison_is_complete()
     check_recursive_public_input_schema_order_and_indices()
     check_recursive_public_input_value_builder_order()
@@ -5491,6 +5839,46 @@ if mode == "--negative-control-data-model-self-consistent-boundary":
             "fn assert_self_consistent_forged_boundary_rejected(",
         ),
         (
+            "zero-prehash recursive compact digest must be rejected",
+            "zero-prehash recursive compact digest may pass",
+            "zero-prehash recursive compact digest must be rejected",
+        ),
+        (
+            "zero-prehash legacy compact digest must be rejected",
+            "zero-prehash legacy compact digest may pass",
+            "zero-prehash legacy compact digest must be rejected",
+        ),
+        (
+            "zero_accumulator_nullifier_digest.nullifier_digest =",
+            "zero_accumulator_nullifier_digest.nullifier_digest_unchecked =",
+            "zero_accumulator_nullifier_digest.nullifier_digest =",
+        ),
+        (
+            "zero_previous_accumulator_pi.previous_accumulator_public_inputs_hash =",
+            "zero_previous_accumulator_pi.previous_accumulator_public_inputs_hash_unchecked =",
+            "zero_previous_accumulator_pi.previous_accumulator_public_inputs_hash =",
+        ),
+        (
+            "zero_profile_resulting_public_inputs_hash.resulting_public_inputs_hash =",
+            "zero_profile_resulting_public_inputs_hash.resulting_public_inputs_hash_unchecked =",
+            "zero_profile_resulting_public_inputs_hash.resulting_public_inputs_hash =",
+        ),
+        (
+            "zero_append_opening_preflight_current_hop_proof_hash.current_hop_proof_hash =",
+            "zero_append_opening_preflight_current_hop_proof_hash.current_hop_proof_hash_unchecked =",
+            "zero_append_opening_preflight_current_hop_proof_hash.current_hop_proof_hash =",
+        ),
+        (
+            "zero_current_hop_proof_hash.current_hop_proof_hash =",
+            "zero_current_hop_proof_hash.current_hop_proof_hash_unchecked =",
+            "zero_current_hop_proof_hash.current_hop_proof_hash =",
+        ),
+        (
+            "zero_resulting_public_inputs_hash.resulting_public_inputs_hash =",
+            "zero_resulting_public_inputs_hash.resulting_public_inputs_hash_unchecked =",
+            "zero_resulting_public_inputs_hash.resulting_public_inputs_hash =",
+        ),
+        (
             "zero_chain_asset_boundary.chain_asset_binding_digest = [0u8; Hash::LENGTH];",
             "zero_chain_asset_boundary.chain_asset_binding_digest = fixed_hash(b\"unchecked-chain-asset\");",
             "zero_chain_asset_boundary.chain_asset_binding_digest = [0u8; Hash::LENGTH];",
@@ -5529,6 +5917,48 @@ if mode == "--negative-control-data-model-self-consistent-boundary":
     if first_message is None:
         raise SystemExit("negative control failed: self-consistent append-boundary drift was not detected")
     print("negative control rejected self-consistent append-boundary drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
+
+if mode == "--negative-control-data-model-zero-prehash-hash-guard":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    cases = (
+        (
+            "is_zero_prehash_hash(boundary.current_hop_proof_hash)",
+            "hash_bytes_from_hash(boundary.current_hop_proof_hash) == [0u8; Hash::LENGTH]",
+            "Kagemusha Hash zero-sentinel guard must not compare Hash bytes to all-zero arrays",
+        ),
+        (
+            "if is_zero_prehash_hash(digest) {\n                return Err(KagemushaFoldError::ZeroFoldedPublicInputDigest { field });",
+            "if hash_bytes_from_hash(digest) == [0u8; Hash::LENGTH] {\n                return Err(KagemushaFoldError::ZeroFoldedPublicInputDigest { field });",
+            "Kagemusha Hash zero-sentinel guard must not compare Hash bytes to all-zero arrays",
+        ),
+    )
+    first_message = None
+    for before, after, expected in cases:
+        source = read(target)
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
+            raise SystemExit("negative control failed: unable to mutate zero-prehash Hash guard")
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: zero-prehash Hash guard drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit("negative control failed: zero-prehash Hash guard drift was not detected")
+    if first_message is None:
+        raise SystemExit("negative control failed: zero-prehash Hash guard drift was not detected")
+    print("negative control rejected zero-prehash Hash guard drift")
     print(first_message.splitlines()[0])
     raise SystemExit(0)
 
@@ -5998,6 +6428,62 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":
 if mode == "--negative-control-active-noncsharp-todo":
     cases = (
         (
+            "crates/iroha_core/src/tx.rs",
+            "//! `Transaction`-related functionality of Iroha.",
+            "// TODO: bypass Kagemusha transaction admission review\n"
+            "//! `Transaction`-related functionality of Iroha.",
+            "core transaction admission active marker",
+        ),
+        (
+            "crates/iroha_core/src/smartcontracts/isi/offline.rs",
+            "//! Offline note instruction execution.",
+            "// TODO: bypass Kagemusha offline instruction admission review\n"
+            "//! Offline note instruction execution.",
+            "core offline ISI active marker",
+        ),
+        (
+            "crates/iroha_data_model/src/isi/offline.rs",
+            "use super::*;",
+            "// TODO: bypass Kagemusha instruction data-model review\n"
+            "use super::*;",
+            "data-model offline ISI active marker",
+        ),
+        (
+            "crates/iroha_js_host/src/lib.rs",
+            "//! Native bindings exposed to the JavaScript SDK.",
+            "// TODO: bypass Kagemusha JS host native binding review\n"
+            "//! Native bindings exposed to the JavaScript SDK.",
+            "JS host active marker",
+        ),
+        (
+            "crates/iroha_torii/src/offline_v2_issuer.rs",
+            "use std::{",
+            "// TODO: bypass Kagemusha Torii offline-v2 issuer review\n"
+            "use std::{",
+            "Torii offline-v2 issuer active marker",
+        ),
+        (
+            "crates/iroha_torii/src/openapi.rs",
+            "//! Helpers for serving Torii's OpenAPI description.",
+            "// TODO: bypass Kagemusha Torii OpenAPI review\n"
+            "//! Helpers for serving Torii's OpenAPI description.",
+            "Torii OpenAPI active marker",
+        ),
+        (
+            "crates/iroha_torii/src/zk_prover.rs",
+            "//! Background, non-consensus ZK prover worker tied to attachments.",
+            "// TODO: bypass Kagemusha Torii ZK prover review\n"
+            "//! Background, non-consensus ZK prover worker tied to attachments.",
+            "Torii ZK prover active marker",
+        ),
+        (
+            ".github/workflows/pr_kagemusha_payload_bench.yml",
+            "name: Kagemusha Payload Benchmark",
+            "# TODO: bypass Kagemusha payload benchmark workflow review\n"
+            "name: Kagemusha Payload Benchmark",
+            "payload workflow active marker",
+        ),
+        (
             "docs/source/offline_kagemusha.md",
             "Native bridge ABI 7 keeps the recursive compact-token entry point",
             "TODO: re-enable unchecked recursive compact admission\n"
@@ -6009,6 +6495,12 @@ if mode == "--negative-control-active-noncsharp-todo":
             "TODO(C# Windows): promote the C# preferred-mode selector",
             "TODO(non-C#): promote the C# preferred-mode selector",
             "roadmap C# handoff scope",
+        ),
+        (
+            "roadmap.md",
+            "TODO(C# Windows): certify matching exact C# native-output diagnostics on a",
+            "TODO(non-C#): certify matching exact C# native-output diagnostics on a",
+            "roadmap late C# handoff scope",
         ),
         (
             "scripts/kagemusha_release_bundle.py",
@@ -6023,6 +6515,41 @@ if mode == "--negative-control-active-noncsharp-todo":
             '"""Roll up Kagemusha production-readiness evidence into a strict summary."""\n'
             "# TODO: bypass Kagemusha production-readiness artifact validation",
             "production-readiness script active marker",
+        ),
+        (
+            "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs",
+            "//! Source-level smoke checks for the offline v2 Kagemusha redeem bridge.",
+            "// TODO: bypass offline-v2 Kagemusha redeem smoke\n"
+            "//! Source-level smoke checks for the offline v2 Kagemusha redeem bridge.",
+            "Torii offline-v2 smoke active marker",
+        ),
+        (
+            "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java",
+            "package org.hyperledger.iroha.android.offline;",
+            "// TODO: bypass Kagemusha physical device-lab artifact export policy\n"
+            "package org.hyperledger.iroha.android.offline;",
+            "Android device-lab instrumentation active marker",
+        ),
+        (
+            "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "package org.hyperledger.iroha.android.offline;",
+            "// TODO: bypass Kagemusha Android recursive spend instrumentation gates\n"
+            "package org.hyperledger.iroha.android.offline;",
+            "Android recursive spend instrumentation active marker",
+        ),
+        (
+            "crates/iroha_data_model/benches/kagemusha_recursive_spend_payload.rs",
+            "//! Kagemusha recursive spend D2D payload-size benchmarks.",
+            "// TODO: bypass Kagemusha payload benchmark source review\n"
+            "//! Kagemusha recursive spend D2D payload-size benchmarks.",
+            "payload benchmark active marker",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/offline_cash.py",
+            '"""Headless offline-cash lifecycle and transport helpers."""',
+            "# TODO: bypass Kagemusha Python offline-cash coverage\n"
+            '"""Headless offline-cash lifecycle and transport helpers."""',
+            "generic content Python SDK active marker",
         ),
     )
     first_message = None
@@ -6059,6 +6586,56 @@ if mode == "--negative-control-active-noncsharp-todo":
     print("negative control rejected active non-C# Kagemusha TODO drift")
     print(first_message.splitlines()[0])
     raise SystemExit(0)
+
+if mode == "--negative-control-active-noncsharp-todo-scan-inventory":
+    target = "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs"
+    ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = tuple(
+        path for path in ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS if path != target
+    )
+    try:
+        run_checks()
+    except PolicyError as error:
+        message = str(error)
+        expected = (
+            "active non-C# Kagemusha TODO scan does not cover source-like "
+            f"Kagemusha path(s): {target}"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: active non-C# TODO scan inventory drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected active non-C# Kagemusha TODO scan inventory drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: active non-C# Kagemusha TODO scan inventory drift was not detected"
+    )
+
+if mode == "--negative-control-active-noncsharp-todo-content-scan-inventory":
+    target = "python/iroha_python/src/iroha_python/offline_cash.py"
+    ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = tuple(
+        path for path in ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS if path != target
+    )
+    try:
+        run_checks()
+    except PolicyError as error:
+        message = str(error)
+        expected = (
+            "active non-C# Kagemusha TODO content scan does not cover "
+            f"content-bearing source path(s): {target}"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: active non-C# TODO content scan inventory drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected active non-C# Kagemusha TODO content scan inventory drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: active non-C# Kagemusha TODO content scan inventory drift was not detected"
+    )
 
 if mode == "--negative-control-core-append-cap-boundary":
     target = "crates/iroha_core/src/zk.rs"
@@ -6422,6 +6999,127 @@ if mode == "--negative-control-core-fixed-window-table-base-accumulator":
         print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: fixed-window table-base accumulator drift was not detected")
+
+if mode == "--negative-control-core-shared-table-identity-base-selection":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "\n                                    - scalar_bit.clone() * current_base.2.clone()),",
+        "),",
+        1,
+    )
+    if mutated == source or "scalar_bit.clone() * current_base.2.clone()" in mutated:
+        raise SystemExit("negative control failed: unable to mutate shared-table identity-base selection")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "scalar_bit.clone() * current_base.2.clone()"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: shared-table identity-base selection drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected shared-table identity-base selection drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: shared-table identity-base selection drift was not detected")
+
+if mode == "--negative-control-core-shared-table-direct-mode-duplicate-witnesses":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace("if !one_bit_direct_select {", "if true {", 1)
+    if mutated == source or "if !one_bit_direct_select {" in mutated:
+        raise SystemExit("negative control failed: unable to mutate shared-table direct-mode duplicate-witness guard")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "if !one_bit_direct_select {"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: shared-table direct-mode duplicate-witness drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected shared-table direct-mode duplicate-witness drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: shared-table direct-mode duplicate-witness drift was not detected")
+
+if mode == "--negative-control-core-shared-table-witness-shape-guards":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    guard = "ensure_witness_vector_len(config.tables.len(), witness.tables.len())?;"
+    mutated = source.replace(guard, "let _ = (config.tables.len(), witness.tables.len());")
+    if mutated == source or guard in mutated:
+        raise SystemExit("negative control failed: unable to mutate shared-table witness-shape guards")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "ensure_witness_vector_len(config.tables.len(), witness.tables.len())?;"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: shared-table witness-shape guard drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected shared-table witness-shape guard drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: shared-table witness-shape guard drift was not detected")
+
+if mode == "--negative-control-core-shared-table-direct-base-helper":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    replacements = (
+        (
+            "kagemusha_vesta_affine_windowed_shared_table_term_base(term),",
+            '&term.tables.first().expect("shared-table windowed MSM term has a first table").table[1],',
+        ),
+        (
+            "&term.window_base_doubles[0][0].p,",
+            "&term.tables[0].table[1],",
+        ),
+    )
+    mutated = source
+    for before, after in replacements:
+        mutated = mutated.replace(before, after, 1)
+    missing = [before for before, _ in replacements if before not in source or before in mutated]
+    if missing:
+        raise SystemExit(
+            "negative control failed: unable to mutate shared-table direct-base helper coverage: "
+            + ", ".join(missing)
+        )
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "kagemusha_vesta_affine_windowed_shared_table_term_base(term),"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: shared-table direct-base helper drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected shared-table direct-base helper drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: shared-table direct-base helper drift was not detected")
 
 if mode == "--negative-control-core-append-boundary-accumulator":
     target = "crates/iroha_data_model/src/offline/mod.rs"

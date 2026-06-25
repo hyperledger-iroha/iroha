@@ -221,8 +221,8 @@ function normalizeTransactionQueryEnvelope(options, context) {
   } else if (filters.length > 1) {
     envelope.filter = { op: "and", args: filters };
   }
-  if (opts.fetchSize !== undefined && opts.fetchSize !== null) {
-    envelope.fetch_size = normalizePositiveInteger(opts.fetchSize, "fetchSize", undefined);
+  if (opts.fetch_size !== undefined && opts.fetch_size !== null) {
+    envelope.fetch_size = normalizePositiveInteger(opts.fetch_size, "fetch_size", undefined);
   }
   const countMode = normalizeCountMode(opts.countMode ?? opts.count_mode, "countMode");
   if (countMode !== undefined) {

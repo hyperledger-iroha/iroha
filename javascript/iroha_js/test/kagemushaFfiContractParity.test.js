@@ -4396,6 +4396,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     );
     assert.ok(readiness.includes(`if mode == "${mode}":`), `production readiness guard must implement ${mode}`);
   }
+  assert.doesNotMatch(
+    readiness,
+    /^    raise SystemExit\(0\)\n    raise SystemExit\("negative control failed/gmu,
+    "production readiness negative controls must not pass at top level before their failure exit",
+  );
 
   const readinessBranch = (mode) => {
     const start = readiness.indexOf(`if mode == "${mode}":`);
@@ -9641,6 +9646,11 @@ test("recursive Kagemusha policy workflow and doc negative controls require exac
     "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
     "class PolicyError",
   );
+  assert.doesNotMatch(
+    policy,
+    /^    raise SystemExit\(0\)\n    raise SystemExit\("negative control failed/gmu,
+    "policy negative controls must not pass at top level before their failure exit",
+  );
   const policyBranch = (mode) => {
     const start = policy.indexOf(`if mode == "${mode}":`);
     assert.notEqual(start, -1, `missing policy branch ${mode}`);
@@ -9666,6 +9676,152 @@ test("recursive Kagemusha policy workflow and doc negative controls require exac
       `${mode} must not print unchecked PolicyError messages`,
     );
   }
+});
+
+test("recursive Kagemusha active marker scan covers workflow-backed non-C# test surfaces", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const activeTodoBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-active-noncsharp-todo":'),
+    guard.indexOf('if mode == "--negative-control-active-noncsharp-todo-scan-inventory":'),
+  );
+  const activeScanInventoryBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-active-noncsharp-todo-scan-inventory":'),
+    guard.indexOf('if mode == "--negative-control-active-noncsharp-todo-content-scan-inventory":'),
+  );
+  const activeContentScanInventoryBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-active-noncsharp-todo-content-scan-inventory":'),
+    guard.indexOf('if mode == "--negative-control-core-append-cap-boundary":'),
+  );
+  const markerName = "TO" + "DO";
+  const workflowBackedSurfaces = [
+    ".github/workflows/pr_kagemusha_payload_bench.yml",
+    "crates/iroha_core/src/tx.rs",
+    "crates/iroha_core/src/smartcontracts/isi/offline.rs",
+    "crates/iroha_data_model/src/isi/offline.rs",
+    "crates/iroha_js_host/src/lib.rs",
+    "crates/iroha_torii/src/offline_v2_issuer.rs",
+    "crates/iroha_torii/src/openapi.rs",
+    "crates/iroha_torii/src/zk_prover.rs",
+    "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs",
+    "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java",
+    "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+    "crates/iroha_data_model/benches/kagemusha_recursive_spend_payload.rs",
+  ];
+  const genericContentSurfaces = [
+    "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+    "crates/iroha_cli/src/main_shared.rs",
+    "crates/iroha_core/src/queue/router.rs",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java",
+    "javascript/iroha_js/src/toriiClient.js",
+    "javascript/iroha_js/test/privacyCatalogParity.test.js",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+    "python/iroha_python/src/iroha_python/offline_cash.py",
+  ];
+
+  assertContainsAll(
+    guard,
+    workflowBackedSurfaces,
+    "active non-C# Kagemusha marker scan must cover workflow-backed Torii and Android test surfaces",
+  );
+  assertContainsAll(
+    activeTodoBranch,
+    [
+      ...workflowBackedSurfaces,
+      "core offline ISI active marker",
+      "payload workflow active marker",
+      "Torii offline-v2 smoke active marker",
+      "Android device-lab instrumentation active marker",
+      "Android recursive spend instrumentation active marker",
+      "payload benchmark active marker",
+      "generic content Python SDK active marker",
+      "python/iroha_python/src/iroha_python/offline_cash.py",
+      "roadmap late C# handoff scope",
+    ],
+    "active non-C# marker negative control must mutate each workflow-backed test surface",
+  );
+  assert.ok(
+    activeTodoBranch.includes(
+      `${markerName}(non-C#): certify matching exact C# native-output diagnostics on a`,
+    ),
+    "active marker negative control must mutate a roadmap handoff past the old scan prefix",
+  );
+  assert.doesNotMatch(
+    guard,
+    new RegExp(`ROADMAP_ACTIVE_KAGEMUSHA_${markerName}_SCAN_LINE_LIMIT`, "u"),
+    "roadmap active marker scan must cover the full file",
+  );
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    [
+      "--negative-control-active-noncsharp-todo",
+      "--negative-control-active-noncsharp-todo-scan-inventory",
+      "--negative-control-active-noncsharp-todo-content-scan-inventory",
+    ],
+    "Kagemusha policy guard",
+  );
+  assert.match(
+    activeTodoBranch,
+    /for target, before, after, label in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)[\s\S]*?text_overrides\.pop\(target, None\)/u,
+    "active non-C# marker negative control must validate every mutated surface independently",
+  );
+  assertContainsAll(
+    guard,
+    [
+      `ACTIVE_KAGEMUSHA_${markerName}_SCAN_DISCOVERY_ROOTS`,
+      `ACTIVE_KAGEMUSHA_${markerName}_SCAN_DISCOVERY_ALLOWLIST`,
+      `ACTIVE_KAGEMUSHA_${markerName}_CONTENT_SCAN_PATHS`,
+      `ACTIVE_KAGEMUSHA_${markerName}_CONTENT_SCAN_DISCOVERY_ROOTS`,
+      "discover_active_noncsharp_kagemusha_todo_scan_paths",
+      "discover_active_noncsharp_kagemusha_todo_content_scan_paths",
+      `${markerName}_MARKER_RE.search(line) and KAGEMUSHA_CONTENT_RE.search(line)`,
+      "ci/check_kagemusha_recursive_spend_policy.sh",
+      "ci/check_kagemusha_recursive_spend_csharp_sdk.sh",
+    ],
+    "active marker scan inventory must discover source-like and content-bearing Kagemusha paths",
+  );
+  assertContainsAll(
+    guard,
+    genericContentSurfaces,
+    "active content marker scan must cover generic non-C# source files that mention Kagemusha",
+  );
+  assert.match(
+    guard,
+    new RegExp(
+      `active non-C# Kagemusha ${markerName} scan does not cover source-like Kagemusha path\\(s\\):`,
+      "u",
+    ),
+    "active marker scan inventory must fail on unscanned source-like Kagemusha paths",
+  );
+  assert.match(
+    guard,
+    new RegExp(
+      `active non-C# Kagemusha ${markerName} content scan does not cover content-bearing source path\\(s\\):`,
+      "u",
+    ),
+    "active marker content-scan inventory must fail on unscanned content-bearing Kagemusha paths",
+  );
+  assertContainsAll(
+    activeScanInventoryBranch,
+    [
+      "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs",
+      `ACTIVE_KAGEMUSHA_${markerName}_SCAN_PATHS = tuple(`,
+      "run_checks()",
+      `active non-C# Kagemusha ${markerName} scan inventory drift was not detected`,
+    ],
+    "active marker scan inventory negative control must remove a discovered source path",
+  );
+  assertContainsAll(
+    activeContentScanInventoryBranch,
+    [
+      "python/iroha_python/src/iroha_python/offline_cash.py",
+      `ACTIVE_KAGEMUSHA_${markerName}_CONTENT_SCAN_PATHS = tuple(`,
+      "run_checks()",
+      `active non-C# Kagemusha ${markerName} content scan inventory drift was not detected`,
+    ],
+    "active marker content-scan inventory negative control must remove a discovered generic content path",
+  );
 });
 
 test("recursive Kagemusha policy tail negative controls require exact diagnostics", () => {
@@ -10348,6 +10504,10 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     "--negative-control-core-lineage-profile-split",
     "--negative-control-core-proof-chain-accumulator",
     "--negative-control-core-fixed-window-table-base-accumulator",
+    "--negative-control-core-shared-table-identity-base-selection",
+    "--negative-control-core-shared-table-direct-mode-duplicate-witnesses",
+    "--negative-control-core-shared-table-witness-shape-guards",
+    "--negative-control-core-shared-table-direct-base-helper",
     "--negative-control-core-append-boundary-accumulator",
     "--negative-control-core-previous-accumulator-boundary",
     "--negative-control-core-append-boundary-opening-preflight-refresh",
@@ -10363,6 +10523,7 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     "--negative-control-core-append-boundary-profile-comparison",
     "--negative-control-data-model-append-cap-boundary",
     "--negative-control-data-model-self-consistent-boundary",
+    "--negative-control-data-model-zero-prehash-hash-guard",
     "--negative-control-data-model-transition-profile-current-hop-sets",
     "--negative-control-data-model-proof-public-input-circuit-binding",
     "--negative-control-data-model-semantic-proof-append-opening",
@@ -10417,14 +10578,30 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
 
   const selfConsistentBoundaryBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-data-model-self-consistent-boundary":'),
-    guard.indexOf('if mode == "--negative-control-data-model-transition-profile-current-hop-sets":'),
+    guard.indexOf('if mode == "--negative-control-data-model-zero-prehash-hash-guard":'),
   );
   assertContainsAll(
     selfConsistentBoundaryBranch,
     [
       "cases = (",
+      "zero-prehash recursive compact digest must be rejected",
+      "zero-prehash recursive compact digest may pass",
+      "zero-prehash legacy compact digest must be rejected",
+      "zero-prehash legacy compact digest may pass",
+      "zero_accumulator_nullifier_digest.nullifier_digest =",
+      "zero_accumulator_nullifier_digest.nullifier_digest_unchecked =",
+      "zero_previous_accumulator_pi.previous_accumulator_public_inputs_hash =",
+      "zero_previous_accumulator_pi.previous_accumulator_public_inputs_hash_unchecked =",
+      "zero_profile_resulting_public_inputs_hash.resulting_public_inputs_hash =",
+      "zero_profile_resulting_public_inputs_hash.resulting_public_inputs_hash_unchecked =",
       "fn assert_self_consistent_forged_boundary_rejected(",
       "fn assert_profile_bound_forged_boundary_rejected(",
+      "zero_append_opening_preflight_current_hop_proof_hash.current_hop_proof_hash =",
+      "zero_append_opening_preflight_current_hop_proof_hash.current_hop_proof_hash_unchecked =",
+      "zero_current_hop_proof_hash.current_hop_proof_hash =",
+      "zero_current_hop_proof_hash.current_hop_proof_hash_unchecked =",
+      "zero_resulting_public_inputs_hash.resulting_public_inputs_hash =",
+      "zero_resulting_public_inputs_hash.resulting_public_inputs_hash_unchecked =",
       "zero_chain_asset_boundary.chain_asset_binding_digest = [0u8; Hash::LENGTH];",
       "unchecked-chain-asset",
       "zero_final_note_boundary.final_note_binding_digest = [0u8; Hash::LENGTH];",
@@ -10448,6 +10625,72 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     selfConsistentBoundaryBranch,
     /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "data-model self-consistent boundary negative control must not unconditionally pass after run_checks",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "assert_zero_legacy_compact_hash_rejected(",
+      "zero-prehash legacy compact digest must be rejected",
+      "assert_zero_recursive_compact_hash_rejected(",
+      "zero-prehash recursive compact digest must be rejected",
+    ],
+    "data-model policy coverage must pin folded-input zero-prehash adversarial assertions",
+  );
+
+  const zeroPrehashHashGuardBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-data-model-zero-prehash-hash-guard":'),
+    guard.indexOf('if mode == "--negative-control-data-model-transition-profile-current-hop-sets":'),
+  );
+  assertContainsAll(
+    guard,
+    [
+      "def check_kagemusha_hash_zero_sentinel_guards():",
+      "fn is_zero_prehash_hash(hash: Hash) -> bool",
+      "hash == Hash::prehashed([0u8; Hash::LENGTH])",
+      "is_zero_prehash_hash(preflight.current_hop_proof_hash)",
+      "is_zero_prehash_hash(boundary.current_hop_proof_hash)",
+      "is_zero_prehash_hash(boundary.resulting_public_inputs_hash)",
+      "legacy compact zero-prehash Hash validation",
+      "recursive compact zero-prehash Hash validation",
+      '("nullifier_digest", self.nullifier_digest)',
+      '("output_commitment_digest", self.output_commitment_digest)',
+      '("fold_digest", self.fold_digest)',
+      "hash_bytes_from_hash(self.nullifier_digest)",
+      "legacy compact zero-prehash Hash validation must not convert Hash digests to bytes before zero checks",
+      "recursive compact zero-prehash Hash validation must not convert Hash digests to bytes before zero checks",
+      "Kagemusha Hash zero-sentinel guard must not compare Hash bytes to all-zero arrays",
+    ],
+    "data-model zero-prehash Hash guard must pin sentinel helper and diagnostic",
+  );
+  assert.match(
+    zeroPrehashHashGuardBranch,
+    /is_zero_prehash_hash\(boundary\.current_hop_proof_hash\)[\s\S]*?hash_bytes_from_hash\(boundary\.current_hop_proof_hash\) == \[0u8; Hash::LENGTH\]/u,
+    "zero-prehash Hash guard negative control must reintroduce the raw-byte zero comparison",
+  );
+  assert.match(
+    zeroPrehashHashGuardBranch,
+    /"if is_zero_prehash_hash\(digest\) \{\\n\s*return Err\(KagemushaFoldError::ZeroFoldedPublicInputDigest \{ field \}\);",[\s\S]*?"if hash_bytes_from_hash\(digest\) == \[0u8; Hash::LENGTH\] \{\\n\s*return Err\(KagemushaFoldError::ZeroFoldedPublicInputDigest \{ field \}\);"/u,
+    "zero-prehash Hash guard negative control must reintroduce a folded-input raw-byte zero comparison",
+  );
+  assert.match(
+    zeroPrehashHashGuardBranch,
+    /for before, after, expected in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)[\s\S]*?text_overrides\.pop\(target, None\)/u,
+    "zero-prehash Hash guard negative control must validate each mutated text snapshot",
+  );
+  assert.match(
+    zeroPrehashHashGuardBranch,
+    /if expected not in message:[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\("negative control failed: zero-prehash Hash guard drift was not detected"\)/u,
+    "zero-prehash Hash guard negative control must require the exact diagnostic",
+  );
+  assert.match(
+    zeroPrehashHashGuardBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?if first_message is None:[\s\S]*?continue[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\("negative control failed: zero-prehash Hash guard drift was not detected"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "zero-prehash Hash guard negative control must only pass after every injected drift is detected",
+  );
+  assert.doesNotMatch(
+    zeroPrehashHashGuardBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "zero-prehash Hash guard negative control must not unconditionally pass after run_checks",
   );
 
   const transitionProfileCurrentHopSetsBranch = guard.slice(
@@ -10721,7 +10964,7 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
 
   const tableBaseBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-core-fixed-window-table-base-accumulator":'),
-    guard.indexOf('if mode == "--negative-control-core-append-boundary-accumulator":'),
+    guard.indexOf('if mode == "--negative-control-core-shared-table-identity-base-selection":'),
   );
   assert.match(
     tableBaseBranch,
@@ -10742,6 +10985,122 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     tableBaseBranch,
     /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "fixed-window table-base accumulator negative control must not unconditionally pass after run_checks",
+  );
+
+  const sharedTableIdentityBaseBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-shared-table-identity-base-selection":'),
+    guard.indexOf('if mode == "--negative-control-core-shared-table-direct-mode-duplicate-witnesses":'),
+  );
+  assertContainsAll(
+    guard,
+    [
+      "kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_accepts_identity_base",
+      "kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_omits_direct_mode_duplicate_witnesses",
+      "kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_synthesis_rejects_extra_direct_duplicate_witnesses",
+      "kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_synthesis_rejects_missing_direct_window_base",
+      "kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_scalar_bit_splice",
+      "kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_direct_selected_addend_tamper",
+      "kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_omits_direct_mode_duplicate_witnesses",
+      "kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_accepts_identity_base_term",
+      "kagemusha_non_native_vesta_ipa_verifier_shared_table_direct_one_bit_profile_uses_assigned_bases",
+      "kagemusha_non_native_vesta_ipa_verifier_shared_table_direct_one_bit_public_instances_use_assigned_bases",
+      "kagemusha_non_native_vesta_affine_native_scalar_mul_synthesis_rejects_extra_conditional_step",
+      "kagemusha_non_native_vesta_affine_native_scalar_msm_synthesis_rejects_truncated_term_shape",
+      "if !one_bit_direct_select {",
+      "kagemusha_vesta_affine_windowed_shared_table_term_base(term),",
+      "&term.window_base_doubles[0][0].p,",
+      "query_non_native_vesta_affine_windowed_shared_table_term_base::<",
+      "ensure_witness_vector_len(config.conditional_adds.len(), self.conditional_adds.len())?;",
+      "ensure_witness_vector_len(config.scalars.len(), witness.scalars.len())?;",
+      "ensure_witness_vector_len(config.tables.len(), witness.tables.len())?;",
+      "ensure_nested_witness_vector_lens(",
+      "scalar_bit.clone() * current_base.2.clone()",
+    ],
+    "shared-table identity-base selection adversarial coverage",
+  );
+  assert.match(
+    sharedTableIdentityBaseBranch,
+    /scalar_bit\.clone\(\) \* current_base\.2\.clone\(\)[\s\S]*?unable to mutate shared-table identity-base selection/u,
+    "shared-table identity-base selection negative control must remove the identity-base correction term",
+  );
+  assert.match(
+    sharedTableIdentityBaseBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "shared-table identity-base selection negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sharedTableIdentityBaseBranch,
+    /is missing Reserved-lineage adversarial coverage:[\s\S]*?scalar_bit\.clone\(\) \* current_base\.2\.clone\(\)[\s\S]*?expected not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: shared-table identity-base selection drift was not detected"\)/u,
+    "shared-table identity-base selection negative control must only pass after detecting the exact adversarial coverage drift",
+  );
+  assert.doesNotMatch(
+    sharedTableIdentityBaseBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "shared-table identity-base selection negative control must not unconditionally pass after run_checks",
+  );
+
+  const sharedTableDirectModeBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-shared-table-direct-mode-duplicate-witnesses":'),
+    guard.indexOf('if mode == "--negative-control-core-shared-table-witness-shape-guards":'),
+  );
+  assert.match(
+    sharedTableDirectModeBranch,
+    /if !one_bit_direct_select \{[\s\S]*?if true \{/u,
+    "shared-table direct-mode duplicate-witness negative control must remove the builder guard",
+  );
+  assert.match(
+    sharedTableDirectModeBranch,
+    /is missing Reserved-lineage adversarial coverage:[\s\S]*?if !one_bit_direct_select \{[\s\S]*?expected not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: shared-table direct-mode duplicate-witness drift was not detected"\)/u,
+    "shared-table direct-mode duplicate-witness negative control must only pass after detecting the exact adversarial coverage drift",
+  );
+  assert.doesNotMatch(
+    sharedTableDirectModeBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "shared-table direct-mode duplicate-witness negative control must not unconditionally pass after run_checks",
+  );
+
+  const sharedTableWitnessShapeBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-shared-table-witness-shape-guards":'),
+    guard.indexOf('if mode == "--negative-control-core-shared-table-direct-base-helper":'),
+  );
+  assert.match(
+    sharedTableWitnessShapeBranch,
+    /ensure_witness_vector_len\(config\.tables\.len\(\), witness\.tables\.len\(\)\)\?;[\s\S]*?let _ = \(config\.tables\.len\(\), witness\.tables\.len\(\)\);/u,
+    "shared-table witness-shape negative control must remove the table-vector length guard",
+  );
+  assert.match(
+    sharedTableWitnessShapeBranch,
+    /is missing Reserved-lineage adversarial coverage:[\s\S]*?ensure_witness_vector_len\(config\.tables\.len\(\), witness\.tables\.len\(\)\)\?;[\s\S]*?expected not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: shared-table witness-shape guard drift was not detected"\)/u,
+    "shared-table witness-shape negative control must only pass after detecting the exact guard drift",
+  );
+  assert.doesNotMatch(
+    sharedTableWitnessShapeBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "shared-table witness-shape negative control must not unconditionally pass after run_checks",
+  );
+
+  const sharedTableDirectBaseBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-shared-table-direct-base-helper":'),
+    guard.indexOf('if mode == "--negative-control-core-append-boundary-accumulator":'),
+  );
+  assertContainsAll(
+    sharedTableDirectBaseBranch,
+    [
+      "kagemusha_vesta_affine_windowed_shared_table_term_base(term),",
+      "&term.window_base_doubles[0][0].p,",
+      "shared-table direct-base helper drift was rejected for the wrong reason",
+    ],
+    "shared-table direct-base helper negative control must mutate assigned-base helper coverage",
+  );
+  assert.match(
+    sharedTableDirectBaseBranch,
+    /is missing Reserved-lineage adversarial coverage:[\s\S]*?kagemusha_vesta_affine_windowed_shared_table_term_base\(term\),[\s\S]*?expected not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: shared-table direct-base helper drift was not detected"\)/u,
+    "shared-table direct-base helper negative control must only pass after detecting exact helper drift",
+  );
+  assert.doesNotMatch(
+    sharedTableDirectBaseBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "shared-table direct-base helper negative control must not unconditionally pass after run_checks",
   );
 
   const appendBoundaryBranch = guard.slice(
@@ -13017,6 +13376,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-android-device-lab-family-overmatch",
     "--negative-control-android-device-lab-family-override-binding",
     "--negative-control-android-device-lab-assembler-identity-fields",
+    "--negative-control-native-c-bridge-abi-version",
     "--negative-control-native-bridge-zero-envelope-pallas-guard",
     "--negative-control-native-bridge-recursive-compact-invalid-proof-isolation",
     "--negative-control-bridge-zk1-i10p-parser-exactness",
@@ -13299,6 +13659,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       `Kagemusha workflow must run SDK parity ${mode}`,
     );
   }
+  assert.doesNotMatch(
+    guard,
+    /^    raise SystemExit\(0\)\n    raise SystemExit\("negative control failed/gmu,
+    "SDK parity negative controls must not pass at top level before their failure exit",
+  );
   const genericSdkSurfaceBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control":'),
     guard.indexOf('if mode == "--negative-control-workflow":'),
@@ -14459,7 +14824,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const androidDeviceLabAssemblerIdentityBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-android-device-lab-assembler-identity-fields":'),
-    guard.indexOf('if mode == "--negative-control-native-bridge-zero-envelope-pallas-guard":'),
+    guard.indexOf('if mode == "--negative-control-native-c-bridge-abi-version":'),
   );
   assert.match(
     guard,
@@ -14475,6 +14840,35 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     androidDeviceLabAssemblerIdentityBranch,
     /Android slot assembler exact family matching[\s\S]*?Android device-lab assembler identity field drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Android device-lab assembler identity field drift was not detected"\)/u,
     "Android device-lab assembler identity negative control must only pass after detecting field drift",
+  );
+  assert.doesNotMatch(
+    androidDeviceLabAssemblerIdentityBranch,
+    /\n    raise\s+SystemExit\(0\)\n    raise\s+SystemExit\("negative control failed: Android device-lab assembler identity field drift was not detected"\)/u,
+    "Android device-lab assembler identity negative control must not pass unconditionally after run_checks",
+  );
+  const nativeCBridgeAbiVersionBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-native-c-bridge-abi-version":'),
+    guard.indexOf('if mode == "--negative-control-native-bridge-zero-envelope-pallas-guard":'),
+  );
+  assert.match(
+    guard,
+    /CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*10\\s\*;[\s\S]*?C native bridge ABI version/u,
+    "SDK parity guard must pin the native C bridge ABI-10 advertisement",
+  );
+  assert.match(
+    nativeCBridgeAbiVersionBranch,
+    /CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 10;[\s\S]*?CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 8;/u,
+    "native C bridge ABI negative control must mutate ABI 10 back to the stale ABI 8 value",
+  );
+  assert.match(
+    nativeCBridgeAbiVersionBranch,
+    /expected_labels\s*=\s*\([\s\S]*?C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*10\\s\*;[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "native C bridge ABI negative control must require the exact ABI-10 diagnostic",
+  );
+  assert.match(
+    nativeCBridgeAbiVersionBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: native C bridge ABI drift was not detected"\s*\)/u,
+    "native C bridge ABI negative control must only pass after detecting injected drift",
   );
   const nativeBridgeZeroEnvelopePallasGuardBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-native-bridge-zero-envelope-pallas-guard":'),

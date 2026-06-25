@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-24
+Last updated: 2026-06-25
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -70,7 +70,13 @@ recomputed SHA-256 values. Archived CRL/OCSP override DER drift diagnostics
 also report only the DER material role and mismatch class instead of printing
 the DER SHA-256 value. Trust-bundle verification and direct evidence replay
 also keep unsupported internal DER material kind diagnostics label-only instead
-of echoing the supplied kind string. Schema-critical integer
+of echoing the supplied kind string. Trust-bundle summaries now emit raw
+`bundles` entries in canonical `profile_id`/path/digest order and raw
+trust-anchor, revoked-certificate, CRL, OCSP, and profile-override DER material
+in SHA-256/byte-length order, with profile-override SHA-256 pin and
+certificate-policy OID lists sorted canonically as well; direct evidence replay
+rejects digest-correct raw trust summaries that reorder those arrays, and
+readiness replay blocks reordered compact trust DER proofs. Schema-critical integer
 metadata such as versions, receipt status codes, and notary record counts reject
 JSON boolean aliases before evidence can be archived. Receipt status codes are
 also bounded to the HTTP 100-599 range before success-policy checks, while live
@@ -94,6 +100,10 @@ evidence cannot be planned or replayed into release archives. Evidence and
 readiness replay also reject compact canary/trust summary paths reused as canary
 config paths, canary-stage receipt paths, direct receipt-verification paths, or
 trust-bundle paths, including across relabelled evidence summaries.
+Final readiness output now emits top-level XSD/evidence summary references,
+blockers/reviewed-gap warnings, and nested diagnostic entries in canonical order
+before computing the readiness summary digest, so diagnostic archives do not
+depend on input traversal order.
 Archived canary child commands now also must keep the runner-emitted shape:
 Python interpreter, expected stage script path, then supported flags and their
 values. Interpreter version suffixes are ASCII-only, so Unicode digit
@@ -102,7 +112,10 @@ interpreter/script paths use the same local-path smuggling preflight as other
 artifacts, and extra positional command tokens are rejected before evidence can
 be accepted. Unsupported archived command flags that carry secret-looking
 material or non-ASCII spellings fail with label-only diagnostics before the
-flag spelling can be echoed.
+flag spelling can be echoed. Repeatable canary child-command selectors are
+also canonicalized by the runner for notary `--endpoint` values and
+verify-stage `--receipt-dir` / `--receipt` values, and direct evidence replay
+rejects digest-correct archives that reorder those selectors.
 Direct ISO CLI path preflights now also treat missing, empty, following
 `--flag`, or `--path-flag=--flag` path values as missing before any file or
 network work.
@@ -4551,7 +4564,10 @@ redistributable schemas, and official trust/revocation bundles.
 	  offline production evidence gate for ISO operator archives. The verifier
 	  recomputes canary and trust summary digests, requires successful
 	  rail/notary/verify canary stages plus digest-bound receipt-verifier JSON with
-	  positive rail/notary receipt evidence, duplicate-free receipt-kind lists,
+	  positive rail/notary receipt evidence, canonical sorted duplicate-free
+	  receipt-kind lists and canonical compact receipt entry order by
+	  receipt kind, path, and digest, emits top-level canary and trust compact
+	  summaries in canonical path/digest order,
 	  unique canonical `*.receipt.json` receipt paths, unique per-receipt digests,
 	  per-receipt `ok=true` plus 2xx `status_code` success metadata, and
 	  kind-specific notary anchor/index/count or rail message/profile/payload
@@ -4667,12 +4683,15 @@ redistributable schemas, and official trust/revocation bundles.
   canary summaries at evidence-verification time and across distinct evidence
   summaries at readiness time, rejects rail receipt `source_path`,
   `payload_sha256`, or `rail_message_id` relabels within one compact receipt
-  summary while still allowing legitimate notary multi-endpoint publication of one anchor, duplicate
+  summary while still checking `source_path` and `payload_sha256` when
+  `rail_message_id` is null and still allowing legitimate notary multi-endpoint
+  publication of one anchor, duplicate
   archived trust profile IDs, copied
   compact trust profile JSON digests, all-zero trust bundle/profile JSON/pin/DER
   digests, profile JSON or bundle digests reused as compact trust material, and
   bundle digests across summaries with
-  label-only diagnostics, rejects non-canonical archived trust profile IDs or unknown
+  label-only diagnostics, emits compact trust profiles in canonical `profile_id`
+  order for final replay, rejects non-canonical archived trust profile IDs or unknown
   rail IDs, requires each canary rail receipt profile to have matching compact
   trust material for the same profile ID and environment, with same-rail binding
   for built-in rail-named profiles, and reports missing trust coverage without
@@ -4804,6 +4823,14 @@ redistributable schemas, and official trust/revocation bundles.
   URLs must use canonical raw `page=<nonzero decimal>` queries, and pending
   source message names must be unique and use canonical ISO-style CamelCase plus
   `VNN` suffixes that match the corresponding `message_def_id` version segment.
+  XSD fixture-summary emission now writes compact `schemas`, `fixtures`,
+  `blocked_schema_sources`, `pending_schema_sources`, `missing_schema_fixtures`,
+  and `schema_only_entries` in canonical order, emits nested profile-catalog
+  `versions`, `missing_schema_versions`, and `skipped_family_versions` in
+  canonical profile/message/direction/version order, and readiness rejects
+  digest-correct reordered compact schema, fixture, blocked-source,
+  pending-source, profile-catalog version, or skipped-family arrays during
+  replay.
   Blocked public XSD candidate evidence now must include at least one explicit
   redistribution or public-distribution restriction marker; a copyright-only
   marker list is rejected before manifest summary emission and again during
@@ -4863,10 +4890,12 @@ redistributable schemas, and official trust/revocation bundles.
 			  omitted, malformed, or release-weaker compact trust source freshness budgets,
 		  omitted or malformed compact trust source authority/version provenance,
 		  omitted, malformed, placeholder, overlong-url, or overlong-host compact trust source provenance, stale compact trust
-	  source retrieval timestamps, profile-emittable drift or emitted-but-not-emittable
+  source retrieval timestamps, profile-emittable drift or emitted-but-not-emittable
 	  contradictions against compact trust source policy, omitted canary
 	  explicit-policy proof, repeated or
-	  copied XSD/evidence summaries, missing or non-canonical compact canary
+	  copied XSD/evidence summaries, reordered compact XSD schema, fixture,
+	  blocked-source, pending-source, top-level evidence canary/trust, or
+	  receipt-entry arrays, missing or non-canonical compact canary
 	  runbook `config_path` values, compact canary/trust summary paths that do
 		  not point to `.json` files, canary
 		  config paths, and receipt paths with embedded whitespace, leading-dash

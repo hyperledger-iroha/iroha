@@ -970,6 +970,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-family-overmatch
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-family-override-binding
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-assembler-identity-fields
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-c-bridge-abi-version
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-zero-envelope-pallas-guard
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-recursive-compact-invalid-proof-isolation
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-bridge-zk1-i10p-parser-exactness
@@ -2155,6 +2156,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-shared-abi7-sdk-manifest-coverage
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-append-cap-boundary
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-self-consistent-boundary
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-zero-prehash-hash-guard
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-transition-profile-current-hop-sets
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-proof-public-input-circuit-binding
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-semantic-proof-append-opening
@@ -2172,11 +2174,17 @@ jobs:
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-auxiliary-fields
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-openapi
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-scan-inventory
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-content-scan-inventory
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-cap-boundary
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-lineage-key-package-binding
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-profile-split
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-proof-chain-accumulator
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-fixed-window-table-base-accumulator
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-shared-table-identity-base-selection
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-shared-table-direct-mode-duplicate-witnesses
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-shared-table-witness-shape-guards
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-shared-table-direct-base-helper
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-accumulator
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-previous-accumulator-boundary
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-opening-preflight-refresh

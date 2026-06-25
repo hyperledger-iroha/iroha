@@ -1203,6 +1203,37 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 VERIFIER.sha256_hex(VERIFIER._canonical_summary_json_bytes(body)),
             )
 
+            receipt_paths_by_kind = {
+                receipt["receipt_kind"]: receipt["path"]
+                for receipt in summary["receipts"]
+            }
+            rc, reordered_stdout, reordered_stderr = run_verify(
+                [
+                    "--receipt",
+                    receipt_paths_by_kind["iso-rail-gateway"],
+                    "--receipt",
+                    receipt_paths_by_kind["iso-audit-notary"],
+                    "--allow-insecure-http",
+                    "--require-source-files",
+                ]
+            )
+
+            self.assertEqual(rc, 0, reordered_stderr)
+            reordered_summary = json.loads(reordered_stdout)
+            order_keys = [
+                (
+                    receipt["receipt_kind"],
+                    receipt["path"],
+                    receipt["receipt_sha256"],
+                )
+                for receipt in reordered_summary["receipts"]
+            ]
+            self.assertEqual(order_keys, sorted(order_keys))
+            self.assertEqual(
+                [receipt["receipt_kind"] for receipt in reordered_summary["receipts"]],
+                ["iso-audit-notary", "iso-rail-gateway"],
+            )
+
     def test_unused_local_overrides_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
