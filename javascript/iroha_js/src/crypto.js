@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { blake3 } from "@noble/hashes/blake3";
 import {
   createPrivateKey,
   createPublicKey,
@@ -37,7 +38,9 @@ const ZK_ACE_PRODUCTION_DISABLED_MESSAGE =
   `${ZK_ACE_PRODUCTION_VK_REF}: ` +
   "Iroha production allowlist is not enabled for this audited row";
 const U64_MAX = (1n << 64n) - 1n;
+const U64_MAX_DECIMAL_DIGITS = U64_MAX.toString(10).length;
 const U128_MAX = (1n << 128n) - 1n;
+const U128_MAX_DECIMAL_DIGITS = U128_MAX.toString(10).length;
 const PRIVACY_NORITO_HEADER_BYTES = 40;
 const PRIVACY_NORITO_MAX_HEADER_PADDING_BYTES = 64;
 const PRIVACY_NORITO_SUPPORTED_FLAGS_MASK = 0x27;
@@ -62,6 +65,9 @@ const KAGEMUSHA_ZK1_TLV_IPAK = Buffer.from("IPAK", "ascii");
 const KAGEMUSHA_ZK1_TLV_H2VK = Buffer.from("H2VK", "ascii");
 const KAGEMUSHA_NORITO_COMPACT_LEN_FLAG = 0x02;
 const KAGEMUSHA_NORITO_PACKED_STRUCT_FLAG = 0x04;
+const KAGEMUSHA_ASSET_DEFINITION_ADDRESS_VERSION = 1;
+const KAGEMUSHA_ASSET_DEFINITION_BASE58_ALPHABET =
+  "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_VERSION_V1 = 1;
 const KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = Buffer.from(
   "c88489618a012c283ff3bb2ebabc7775",
@@ -1078,6 +1084,7 @@ export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 =
   "kagemusha-recursive-spend-lineage-append-v1";
 export const KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS = 64;
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64;
+const KAGEMUSHA_FOLD_STEP_MAX_INPUTS = 2;
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = true;
 export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1 = 1;
 export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES = 8 * 1024 * 1024;
@@ -1156,7 +1163,9 @@ export function preferredKagemushaOfflineSpendModeForCapabilities(
   recursiveCompactAvailable,
   recursiveSpendAvailable,
 ) {
-  void recursiveCompactAvailable;
+  if (recursiveCompactAvailable) {
+    return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1;
+  }
   if (recursiveSpendAvailable) {
     return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1;
   }
@@ -2288,6 +2297,9 @@ export function decodeKagemushaRecursiveSpendBundle(archive) {
   }
   const initialRoot = Buffer.from(accumulator.initialRoot);
   const finalRoot = Buffer.from(accumulator.finalRoot);
+  const topupAnchorNullifiers = accumulator.topupAnchorNullifiers.map((value) =>
+    Buffer.from(value),
+  );
   return Object.freeze({
     hopCount: accumulator.hopCount,
     hop_count: accumulator.hopCount,
@@ -2307,6 +2319,12 @@ export function decodeKagemushaRecursiveSpendBundle(archive) {
     },
     get final_root() {
       return Buffer.from(finalRoot);
+    },
+    get topupAnchorNullifiers() {
+      return topupAnchorNullifiers.map((value) => Buffer.from(value));
+    },
+    get topup_anchor_nullifiers() {
+      return topupAnchorNullifiers.map((value) => Buffer.from(value));
     },
     currentNote: accumulator.currentNote,
     current_note: accumulator.currentNote,
@@ -3444,6 +3462,9 @@ function kagemushaNormalizeRedeemRequest(request) {
     bundleSummary.currentNote.amount,
     changeOutput !== null,
   );
+  if (changeOutput !== null) {
+    kagemushaRequireRedeemChangeOutputNotReserved(changeOutput, bundleSummary);
+  }
   const lineageWitness =
     lineageWitnessValue === undefined || lineageWitnessValue === null
       ? null
@@ -3451,10 +3472,18 @@ function kagemushaNormalizeRedeemRequest(request) {
   const finalIsLineage = isKagemushaRecursiveSpendLineageProofCircuitId(
     bundleSummary.proofCircuitId,
   );
-  const witnessHasReservedPrevious =
-    lineageWitness !== null
-      ? kagemushaLineageWitnessHasReservedPreviousProof(lineageWitness)
-      : false;
+  let witnessHasReservedPrevious = false;
+  if (lineageWitness !== null) {
+    try {
+      witnessHasReservedPrevious =
+        kagemushaLineageWitnessHasReservedPreviousProof(lineageWitness);
+    } catch (error) {
+      if (error instanceof KagemushaRecursiveSpendRequestCodecError) {
+        throw error;
+      }
+      throw kagemushaArchiveCodecError("lineageWitness", error.message);
+    }
+  }
   if (!finalIsLineage) {
     if (witnessHasReservedPrevious && !redeemLineageVerifierRecordSupplied) {
       throw kagemushaFieldCodecError(
@@ -3574,11 +3603,15 @@ function kagemushaNormalizeVerifierRecordRef(input, field) {
     ["recordBytes", "record_bytes"],
     `${field}.recordBytes`,
   );
-  kagemushaCompactPayloadForRequest(
-    recordBytes,
-    KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME,
-    field,
-  );
+  try {
+    kagemushaCompactPayloadForRequest(
+      recordBytes,
+      KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME,
+      field,
+    );
+  } catch (error) {
+    throw kagemushaArchiveCodecError(field, error.message);
+  }
   const storedRecord = Buffer.from(recordBytes);
   return Object.freeze({
     verifierKeyId,
@@ -3993,6 +4026,10 @@ function kagemushaReadPallasIpaProof(payload, flags, n, field) {
 }
 
 function kagemushaReadFixed32SequenceCount(payload, flags, field) {
+  return kagemushaReadFixed32Sequence(payload, flags, field).length;
+}
+
+function kagemushaReadFixed32Sequence(payload, flags, field) {
   if (payload.length < 8) {
     throw kagemushaArchiveCodecError(field, `${field} count is truncated`);
   }
@@ -4002,15 +4039,16 @@ function kagemushaReadFixed32SequenceCount(payload, flags, field) {
   }
   const count = Number(countBig);
   let cursor = 8;
+  const values = [];
   for (let index = 0; index < count; index += 1) {
     const item = kagemushaReadNoritoField(payload, cursor, flags, `${field}[${index}]`);
-    kagemushaReadFixedBytesPayload(item.payload, 32, `${field}[${index}]`);
+    values.push(kagemushaReadFixedBytesFlexible(item.payload, flags, 32, `${field}[${index}]`));
     cursor = item.offset;
   }
   if (cursor !== payload.length) {
     throw kagemushaArchiveCodecError(field, `${field} has trailing bytes`);
   }
-  return count;
+  return values;
 }
 
 function kagemushaReadRequiredMetadataOption(payload, flags, field) {
@@ -4018,8 +4056,11 @@ function kagemushaReadRequiredMetadataOption(payload, flags, field) {
     throw kagemushaArchiveCodecError(field, `${field} option tag is truncated`);
   }
   const tag = payload[0];
-  if (tag !== 1) {
+  if (tag === 0) {
     throw kagemushaArchiveCodecError(field, `${field} is required`);
+  }
+  if (tag !== 1) {
+    throw kagemushaArchiveCodecError(field, `${field} option tag must be 0 or 1`);
   }
   const length = kagemushaReadNoritoLength(payload, 1, flags, `${field}.length`);
   const end = length.offset + length.value;
@@ -4188,17 +4229,32 @@ function kagemushaReadAccumulatorSummary(payload, flags) {
   offset = field.offset;
   field = kagemushaReadNoritoField(payload, offset, flags, "accumulator.asset");
   const assetBytes = kagemushaReadFixedBytesFlexible(field.payload, flags, 16, "asset");
-  const asset = `hex:${assetBytes.toString("hex")}`;
+  const asset = kagemushaAssetDefinitionFromBytes(assetBytes);
   offset = field.offset;
   field = kagemushaReadNoritoField(payload, offset, flags, "accumulator.initialRoot");
   const initialRoot = kagemushaReadFixedBytesFlexible(field.payload, flags, 32, "initialRoot");
   offset = field.offset;
   field = kagemushaReadNoritoField(payload, offset, flags, "accumulator.finalRoot");
   const finalRoot = kagemushaReadFixedBytesFlexible(field.payload, flags, 32, "finalRoot");
+  kagemushaRequireRecursiveSpendAccumulatorRoots(initialRoot, finalRoot);
   offset = field.offset;
-  offset = kagemushaSkipFields(payload, offset, flags, 1, "accumulator");
+  field = kagemushaReadNoritoField(
+    payload,
+    offset,
+    flags,
+    "accumulator.topupAnchorNullifiers",
+  );
+  const topupAnchorNullifiers = kagemushaReadFixed32Sequence(
+    field.payload,
+    flags,
+    "bundle.accumulator.topup_anchor_nullifiers",
+  );
+  offset = field.offset;
   field = kagemushaReadNoritoField(payload, offset, flags, "accumulator.hopCount");
-  const hopCount = kagemushaReadU32Payload(field.payload);
+  const hopCount = kagemushaReadU32Payload(
+    field.payload,
+    "bundle.accumulator.hop_count",
+  );
   if (
     hopCount < 1 ||
     hopCount > KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
@@ -4209,14 +4265,71 @@ function kagemushaReadAccumulatorSummary(payload, flags) {
     );
   }
   offset = field.offset;
-  offset = kagemushaSkipFields(payload, offset, flags, 15, "accumulator");
+  offset = kagemushaRequireRecursiveSpendAccumulatorCorridor(
+    payload,
+    offset,
+    flags,
+    hopCount,
+  );
   field = kagemushaReadNoritoField(payload, offset, flags, "accumulator.currentNote");
   const currentNote = kagemushaReadSpendableNotePayload(field.payload, flags);
+  kagemushaRequireRecursiveSpendTopupAnchorNullifiers(topupAnchorNullifiers, currentNote);
   offset = field.offset;
   if (offset !== payload.length) {
     throw kagemushaArchiveCodecError("bundle", "accumulator has trailing bytes");
   }
-  return { chainId, asset, initialRoot, finalRoot, hopCount, currentNote };
+  return {
+    chainId,
+    asset,
+    initialRoot,
+    finalRoot,
+    topupAnchorNullifiers,
+    hopCount,
+    currentNote,
+  };
+}
+
+function kagemushaAssetDefinitionFromBytes(bytes) {
+  if (!kagemushaIsUuidV4Bytes(bytes)) {
+    return `hex:${bytes.toString("hex")}`;
+  }
+  const body = Buffer.concat([
+    Buffer.from([KAGEMUSHA_ASSET_DEFINITION_ADDRESS_VERSION]),
+    bytes,
+  ]);
+  const checksum = Buffer.from(blake3(body)).subarray(0, 4);
+  return kagemushaEncodeBase58(Buffer.concat([body, checksum]));
+}
+
+function kagemushaIsUuidV4Bytes(bytes) {
+  return (
+    bytes.length === 16 &&
+    (bytes[6] & 0xf0) === 0x40 &&
+    (bytes[8] & 0xc0) === 0x80
+  );
+}
+
+function kagemushaEncodeBase58(bytes) {
+  let number = 0n;
+  for (const byte of bytes) {
+    number = (number << 8n) | BigInt(byte);
+  }
+
+  const encoded = [];
+  while (number > 0n) {
+    const remainder = Number(number % 58n);
+    encoded.push(KAGEMUSHA_ASSET_DEFINITION_BASE58_ALPHABET[remainder]);
+    number /= 58n;
+  }
+
+  for (const byte of bytes) {
+    if (byte !== 0) {
+      break;
+    }
+    encoded.push(KAGEMUSHA_ASSET_DEFINITION_BASE58_ALPHABET[0]);
+  }
+
+  return encoded.reverse().join("") || KAGEMUSHA_ASSET_DEFINITION_BASE58_ALPHABET[0];
 }
 
 function kagemushaReadChainIdPayload(payload, flags) {
@@ -4232,11 +4345,13 @@ function kagemushaReadChainIdPayload(payload, flags) {
       "bundle.accumulator.chain_id has trailing bytes",
     );
   }
-  return kagemushaReadStringPayload(
+  const chainId = kagemushaReadStringPayload(
     field.payload,
     flags,
     "bundle.accumulator.chain_id",
   );
+  kagemushaRequirePortableId(chainId, "bundle.accumulator.chain_id");
+  return chainId;
 }
 
 function kagemushaIrohaHash(data) {
@@ -4246,6 +4361,21 @@ function kagemushaIrohaHash(data) {
 }
 
 function kagemushaReadRecursiveProofCircuitId(payload, flags) {
+  return kagemushaReadRecursiveProofCircuitIdWithContext(payload, flags, {
+    trailingField: "bundle",
+    trailingMessage: "recursiveProof has trailing bytes",
+    verifierTrailingField: "bundle",
+    verifierTrailingMessage: "verifierKeyId has trailing bytes",
+    verifierBackendField: "verifierKeyId.backend",
+    verifierNameField: "verifierKeyId",
+    proofPublicInputsField: "bundle.proof_public_inputs",
+    proofPublicInputsHashField: "bundle.proof_public_inputs_hash",
+    proofBackendField: "bundle.proof_backend",
+    proofBytesField: "bundle.proof_bytes",
+  });
+}
+
+function kagemushaReadRecursiveProofCircuitIdWithContext(payload, flags, context) {
   let offset = 0;
   let field = kagemushaReadNoritoField(
     payload,
@@ -4259,8 +4389,8 @@ function kagemushaReadRecursiveProofCircuitId(payload, flags) {
   const publicInputsPayload = field.payload;
   if (publicInputsPayload.length === 0) {
     throw kagemushaArchiveCodecError(
-      "bundle.proof_public_inputs",
-      "bundle.proof_public_inputs empty",
+      context.proofPublicInputsField,
+      `${context.proofPublicInputsField} empty`,
     );
   }
   offset = field.offset;
@@ -4269,12 +4399,12 @@ function kagemushaReadRecursiveProofCircuitId(payload, flags) {
     field.payload,
     flags,
     32,
-    "proof.publicInputsHash",
+    context.proofPublicInputsHashField,
   );
   if (publicInputsHash.every((byte) => byte === 0)) {
     throw kagemushaArchiveCodecError(
-      "bundle.proof_public_inputs_hash",
-      "bundle.proof_public_inputs_hash empty",
+      context.proofPublicInputsHashField,
+      `${context.proofPublicInputsHashField} empty`,
     );
   }
   const publicInputsArchive = kagemushaNoritoArchiveForType(
@@ -4283,21 +4413,26 @@ function kagemushaReadRecursiveProofCircuitId(payload, flags) {
   );
   if (!publicInputsHash.equals(kagemushaIrohaHash(publicInputsArchive))) {
     throw kagemushaArchiveCodecError(
-      "bundle.proof_public_inputs_hash",
-      "bundle.proof_public_inputs_hash mismatch",
+      context.proofPublicInputsHashField,
+      `${context.proofPublicInputsHashField} mismatch`,
     );
   }
   offset = field.offset;
   field = kagemushaReadNoritoField(payload, offset, flags, "recursiveProof.proof");
-  const proofBackend = kagemushaReadProofBoxBackend(field.payload, flags);
+  const proofBackend = kagemushaReadProofBoxBackend(field.payload, flags, {
+    trailingField: context.trailingField,
+    trailingMessage: "proof has trailing bytes",
+    proofBackendField: context.proofBackendField,
+    proofBytesField: context.proofBytesField,
+  });
   offset = field.offset;
   if (offset !== payload.length) {
-    throw kagemushaArchiveCodecError("bundle", "recursiveProof has trailing bytes");
+    throw kagemushaArchiveCodecError(context.trailingField, context.trailingMessage);
   }
   if (proofBackend !== KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND) {
     throw kagemushaArchiveCodecError(
-      "bundle.proof_backend",
-      `bundle.proof_backend unsupported recursive proof backend: ${proofBackend}`,
+      context.proofBackendField,
+      `${context.proofBackendField} unsupported recursive proof backend: ${proofBackend}`,
     );
   }
   let verifierOffset = 0;
@@ -4307,7 +4442,11 @@ function kagemushaReadRecursiveProofCircuitId(payload, flags) {
     flags,
     "verifierKeyId.backend",
   );
-  const backend = kagemushaReadStringPayload(field.payload, flags, "verifierKeyId.backend");
+  const backend = kagemushaReadStringPayload(
+    field.payload,
+    flags,
+    context.verifierBackendField,
+  );
   verifierOffset = field.offset;
   field = kagemushaReadNoritoField(
     verifierPayload,
@@ -4315,25 +4454,28 @@ function kagemushaReadRecursiveProofCircuitId(payload, flags) {
     flags,
     "verifierKeyId.name",
   );
-  const name = kagemushaReadStringPayload(field.payload, flags, "verifierKeyId.name");
+  const name = kagemushaReadStringPayload(field.payload, flags, context.verifierNameField);
   verifierOffset = field.offset;
   if (verifierOffset !== verifierPayload.length) {
-    throw kagemushaArchiveCodecError("bundle", "verifierKeyId has trailing bytes");
+    throw kagemushaArchiveCodecError(
+      context.verifierTrailingField,
+      context.verifierTrailingMessage,
+    );
   }
-  kagemushaRequirePortableId(backend, "verifierKeyId.backend");
+  kagemushaRequirePortableId(backend, context.verifierBackendField);
   if (backend !== KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND) {
     throw kagemushaArchiveCodecError(
-      "bundle.proof_backend",
-      `bundle.proof_backend unsupported recursive proof backend: ${backend}`,
+      context.proofBackendField,
+      `${context.proofBackendField} unsupported recursive proof backend: ${backend}`,
     );
   }
   if (proofBackend !== backend) {
     throw kagemushaArchiveCodecError(
-      "bundle.proof_backend",
-      `bundle.proof_backend recursive proof backend mismatch: ${proofBackend}`,
+      context.proofBackendField,
+      `${context.proofBackendField} recursive proof backend mismatch: ${proofBackend}`,
     );
   }
-  kagemushaRequirePortableId(name, "verifierKeyId");
+  kagemushaRequirePortableId(name, context.verifierNameField);
   return name;
 }
 
@@ -4384,67 +4526,21 @@ function kagemushaLineageWitnessHasReservedPreviousProof(archive) {
 }
 
 function kagemushaReadPreviousRecursiveProofCircuitId(payload, flags) {
-  let offset = 0;
-  let field = kagemushaReadNoritoField(
+  const name = kagemushaReadRecursiveProofCircuitIdWithContext(
     payload,
-    offset,
     flags,
-    "lineageWitness.previousRecursiveProofs.verifierKeyId",
-  );
-  const verifierPayload = field.payload;
-  offset = field.offset;
-  offset = kagemushaSkipFields(
-    payload,
-    offset,
-    flags,
-    3,
-    "lineageWitness.previousRecursiveProofs",
-  );
-  if (offset !== payload.length) {
-    throw kagemushaArchiveCodecError("lineageWitness.previousRecursiveProofs");
-  }
-  let verifierOffset = 0;
-  field = kagemushaReadNoritoField(
-    verifierPayload,
-    verifierOffset,
-    flags,
-    "lineageWitness.previousRecursiveProofs.verifierKeyId.backend",
-  );
-  const backend = kagemushaReadStringPayload(
-    field.payload,
-    flags,
-    "lineageWitness.previousRecursiveProofs.verifierKeyId.backend",
-  );
-  verifierOffset = field.offset;
-  field = kagemushaReadNoritoField(
-    verifierPayload,
-    verifierOffset,
-    flags,
-    "lineageWitness.previousRecursiveProofs.verifierKeyId.name",
-  );
-  const name = kagemushaReadStringPayload(
-    field.payload,
-    flags,
-    "lineageWitness.previousRecursiveProofs.verifierKeyId.name",
-  );
-  verifierOffset = field.offset;
-  if (verifierOffset !== verifierPayload.length) {
-    throw kagemushaArchiveCodecError(
-      "lineageWitness.previousRecursiveProofs.verifierKeyId",
-    );
-  }
-  kagemushaRequirePortableId(
-    backend,
-    "lineageWitness.previousRecursiveProofs.verifierKeyId.backend",
-  );
-  if (backend !== KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND) {
-    throw kagemushaArchiveCodecError(
-      "lineageWitness.previousRecursiveProofs.verifierKeyId.backend",
-    );
-  }
-  kagemushaRequirePortableId(
-    name,
-    "lineageWitness.previousRecursiveProofs.verifierKeyId.name",
+    {
+      trailingField: "lineageWitness.previousRecursiveProofs",
+      trailingMessage: "lineageWitness.previousRecursiveProofs has trailing bytes",
+      verifierTrailingField: "lineageWitness.previousRecursiveProofs.verifierKeyId",
+      verifierTrailingMessage: "lineageWitness.previousRecursiveProofs.verifierKeyId has trailing bytes",
+      verifierBackendField: "lineageWitness.previousRecursiveProofs.verifierKeyId.backend",
+      verifierNameField: "lineageWitness.previousRecursiveProofs.verifierKeyId.name",
+      proofPublicInputsField: "lineageWitness.previousRecursiveProofs.proof_public_inputs",
+      proofPublicInputsHashField: "lineageWitness.previousRecursiveProofs.proof_public_inputs_hash",
+      proofBackendField: "lineageWitness.previousRecursiveProofs.proof_backend",
+      proofBytesField: "lineageWitness.previousRecursiveProofs.proof_bytes",
+    },
   );
   if (!isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(name)) {
     throw kagemushaArchiveCodecError(
@@ -4454,7 +4550,12 @@ function kagemushaReadPreviousRecursiveProofCircuitId(payload, flags) {
   return name;
 }
 
-function kagemushaReadProofBoxBackend(payload, flags) {
+function kagemushaReadProofBoxBackend(payload, flags, context = {
+  trailingField: "bundle",
+  trailingMessage: "proof has trailing bytes",
+  proofBackendField: "bundle.proof_backend",
+  proofBytesField: "bundle.proof_bytes",
+}) {
   let offset = 0;
   let field = kagemushaReadNoritoField(payload, offset, flags, "proof.backend");
   const backend = kagemushaReadStringPayload(field.payload, flags, "proof.backend");
@@ -4463,11 +4564,20 @@ function kagemushaReadProofBoxBackend(payload, flags) {
   const proofBytes = kagemushaReadBytesVecPayload(field.payload, "proof.bytes");
   offset = field.offset;
   if (offset !== payload.length) {
-    throw kagemushaArchiveCodecError("bundle", "proof has trailing bytes");
+    throw kagemushaArchiveCodecError(context.trailingField, context.trailingMessage);
   }
   kagemushaRequirePortableId(backend, "proof.backend");
+  if (backend !== KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND) {
+    throw kagemushaArchiveCodecError(
+      context.proofBackendField,
+      `${context.proofBackendField} unsupported recursive proof backend: ${backend}`,
+    );
+  }
   if (proofBytes.length === 0) {
-    throw kagemushaArchiveCodecError("bundle.proof_bytes", "bundle.proof_bytes empty");
+    throw kagemushaArchiveCodecError(
+      context.proofBytesField,
+      `${context.proofBytesField} empty`,
+    );
   }
   return backend;
 }
@@ -4518,18 +4628,7 @@ function kagemushaReadFixedBytesFlexible(payload, flags, expectedSize, field) {
   if (payload.length === expectedSize) {
     return Buffer.from(payload);
   }
-  try {
-    return kagemushaReadConstVecPayload(payload, flags, 0, expectedSize, field);
-  } catch {
-    if (payload.length < 8) {
-      throw kagemushaArchiveCodecError(field);
-    }
-    const count = payload.readBigUInt64LE(0);
-    if (count !== BigInt(expectedSize)) {
-      throw kagemushaArchiveCodecError(field);
-    }
-    return kagemushaReadConstVecPayload(payload, flags, 8, expectedSize, field);
-  }
+  return kagemushaReadConstVecPayload(payload, flags, 0, expectedSize, field);
 }
 
 function kagemushaReadConstVecPayload(payload, flags, start, expectedSize, field) {
@@ -4600,9 +4699,9 @@ function kagemushaReadBoolPayload(payload) {
   throw kagemushaFieldCodecError("bool");
 }
 
-function kagemushaReadU32Payload(payload) {
+function kagemushaReadU32Payload(payload, context = "u32") {
   if (payload.length !== 4) {
-    throw kagemushaArchiveCodecError("u32");
+    throw kagemushaArchiveCodecError(context);
   }
   return payload.readUInt32LE(0);
 }
@@ -4706,6 +4805,9 @@ function kagemushaCanonicalU128BigInt(value, field) {
     if (!/^\d+$/.test(value) || (value.length > 1 && value.startsWith("0"))) {
       throw kagemushaFieldCodecError(field, `${field} must be a canonical decimal u128`);
     }
+    if (value.length > U128_MAX_DECIMAL_DIGITS) {
+      throw kagemushaFieldCodecError(field, `${field} must fit in u128`);
+    }
     integer = BigInt(value);
   } else {
     throw kagemushaFieldCodecError(field, `${field} must be a canonical decimal u128`);
@@ -4737,6 +4839,9 @@ function kagemushaNormalizeBlockHeight(value, field) {
         field,
         `${field} must be a canonical unsigned decimal u64`,
       );
+    }
+    if (value.length > U64_MAX_DECIMAL_DIGITS) {
+      throw kagemushaFieldCodecError(field, `${field} must fit in u64`);
     }
     height = BigInt(value);
   } else {
@@ -4861,9 +4966,17 @@ function fixed32Buffer(value, name) {
 }
 
 function kagemushaNormalizeNonZeroFixed32(value, name) {
-  const bytes = fixed32Buffer(value, name);
+  let bytes;
+  try {
+    bytes = fixed32Buffer(value, name);
+  } catch (error) {
+    if (error instanceof KagemushaRecursiveSpendRequestCodecError) {
+      throw error;
+    }
+    throw kagemushaFieldCodecError(name, error.message);
+  }
   if (bytes.every((byte) => byte === 0)) {
-    throw new Error(`${name} must be non-zero`);
+    throw kagemushaFieldCodecError(name, `${name} must be non-zero`);
   }
   return bytes;
 }
@@ -4872,13 +4985,173 @@ function kagemushaRequireRedeemChangeBinding(publicAmount, currentAmount, hasCha
   const comparison = kagemushaCompareCanonicalDecimal(publicAmount, currentAmount);
   if (hasChangeOutput) {
     if (comparison >= 0) {
-      throw new Error("publicAmount must be less than current note amount when changeOutput is present");
+      throw kagemushaFieldCodecError(
+        "publicAmount",
+        "publicAmount must be less than current note amount when changeOutput is present",
+      );
     }
   } else if (comparison < 0) {
-    throw new Error("changeOutput is required when publicAmount is less than current note amount");
+    throw kagemushaFieldCodecError(
+      "changeOutput",
+      "changeOutput is required when publicAmount is less than current note amount",
+    );
   } else if (comparison > 0) {
-    throw new Error("publicAmount must not exceed current note amount");
+    throw kagemushaFieldCodecError(
+      "publicAmount",
+      "publicAmount must not exceed current note amount",
+    );
   }
+}
+
+function kagemushaRequireRedeemChangeOutputNotReserved(changeOutput, bundleSummary) {
+  const reserved = [
+    bundleSummary.currentNote.noteCommitment,
+    bundleSummary.currentNote.spendNullifier,
+    ...bundleSummary.topupAnchorNullifiers,
+  ];
+  if (reserved.some((value) => Buffer.from(changeOutput).equals(value))) {
+    throw kagemushaFieldCodecError(
+      "changeOutput",
+      "changeOutput must not reuse the current note commitment, redeem nullifier, or top-up anchor nullifier",
+    );
+  }
+}
+
+function kagemushaRequireRecursiveSpendTopupAnchorNullifiers(topupAnchorNullifiers, currentNote) {
+  if (
+    topupAnchorNullifiers.length === 0 ||
+    topupAnchorNullifiers.length > KAGEMUSHA_FOLD_STEP_MAX_INPUTS
+  ) {
+    throw kagemushaArchiveCodecError(
+      "bundle.accumulator.topup_anchor_nullifiers",
+      "bundle.accumulator.topup_anchor_nullifiers count is out of range",
+    );
+  }
+  for (let index = 0; index < topupAnchorNullifiers.length; index += 1) {
+    const nullifier = topupAnchorNullifiers[index];
+    if (nullifier.every((byte) => byte === 0)) {
+      throw kagemushaArchiveCodecError(
+        "bundle.accumulator.topup_anchor_nullifiers",
+        "bundle.accumulator.topup_anchor_nullifiers must not contain zero values",
+      );
+    }
+    if (index > 0 && Buffer.compare(topupAnchorNullifiers[index - 1], nullifier) >= 0) {
+      throw kagemushaArchiveCodecError(
+        "bundle.accumulator.topup_anchor_nullifiers",
+        "bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique",
+      );
+    }
+  }
+  if (
+    topupAnchorNullifiers.some(
+      (nullifier) =>
+        nullifier.equals(currentNote.noteCommitment) ||
+        nullifier.equals(currentNote.spendNullifier),
+    )
+  ) {
+    throw kagemushaArchiveCodecError(
+      "bundle.accumulator.topup_anchor_nullifiers",
+      "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material",
+    );
+  }
+}
+
+function kagemushaRequireRecursiveSpendAccumulatorRoots(initialRoot, finalRoot) {
+  if (initialRoot.every((byte) => byte === 0)) {
+    throw kagemushaArchiveCodecError(
+      "bundle.accumulator.initial_root",
+      "bundle.accumulator.initial_root must be non-zero",
+    );
+  }
+  if (finalRoot.every((byte) => byte === 0) || finalRoot.equals(initialRoot)) {
+    throw kagemushaArchiveCodecError(
+      "bundle.accumulator.final_root",
+      "bundle.accumulator.final_root must be non-zero and differ from initial_root",
+    );
+  }
+}
+
+function kagemushaRequireRecursiveSpendAccumulatorCorridor(payload, offset, flags, hopCount) {
+  let currentOffset = offset;
+  const readFixed32 = (field) => {
+    const item = kagemushaReadNoritoField(
+      payload,
+      currentOffset,
+      flags,
+      `accumulator.${field}`,
+    );
+    currentOffset = item.offset;
+    return kagemushaReadFixedBytesFlexible(
+      item.payload,
+      flags,
+      32,
+      `bundle.accumulator.${field}`,
+    );
+  };
+  const requireNonzero = (field) => {
+    const value = readFixed32(field);
+    if (value.every((byte) => byte === 0)) {
+      throw kagemushaArchiveCodecError(`bundle.accumulator.${field}`);
+    }
+    return value;
+  };
+
+  const lineageDigest = requireNonzero("lineage_digest");
+  const aggregationTranscriptDigest = readFixed32("aggregation_transcript_digest");
+  if (
+    aggregationTranscriptDigest.every((byte) => byte === 0) ||
+    !aggregationTranscriptDigest.equals(lineageDigest)
+  ) {
+    throw kagemushaArchiveCodecError("bundle.accumulator.aggregation_transcript_digest");
+  }
+  for (const field of [
+    "nullifier_digest",
+    "output_commitment_digest",
+    "fold_digest",
+    "recursive_proof_chain_digest",
+    "transition_profile_binding_digest",
+  ]) {
+    requireNonzero(field);
+  }
+  const appendOpeningPreflightDigest = readFixed32("append_opening_preflight_digest");
+  if (
+    !appendOpeningPreflightDigest.every((byte) => byte === 0) &&
+    hopCount <= 1
+  ) {
+    throw kagemushaArchiveCodecError("bundle.accumulator.append_opening_preflight_digest");
+  }
+  const appendBoundaryDigest = readFixed32("append_boundary_digest");
+  if (
+    !appendBoundaryDigest.every((byte) => byte === 0) &&
+    (appendOpeningPreflightDigest.every((byte) => byte === 0) || hopCount <= 1)
+  ) {
+    throw kagemushaArchiveCodecError("bundle.accumulator.append_boundary_digest");
+  }
+  for (const field of [
+    "verifier_params_fingerprint",
+    "fixed_window_table_schedule_digest",
+    "fixed_window_shared_table_manifest_digest",
+    "fixed_window_table_base_digest",
+    "verifier_witness_batch_digest",
+  ]) {
+    requireNonzero(field);
+  }
+  const verifierOpeningLenField = kagemushaReadNoritoField(
+    payload,
+    currentOffset,
+    flags,
+    "accumulator.verifierOpeningLen",
+  );
+  let verifierOpeningLen;
+  try {
+    verifierOpeningLen = kagemushaReadU32Payload(verifierOpeningLenField.payload);
+  } catch (error) {
+    throw kagemushaArchiveCodecError("bundle.accumulator.verifier_opening_len");
+  }
+  if (!isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(verifierOpeningLen)) {
+    throw kagemushaArchiveCodecError("bundle.accumulator.verifier_opening_len");
+  }
+  return verifierOpeningLenField.offset;
 }
 
 function kagemushaCompareCanonicalDecimal(left, right) {

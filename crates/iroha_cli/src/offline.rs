@@ -16,10 +16,7 @@ use iroha::data_model::petal_stream::{
 };
 use norito::derive::JsonSerialize;
 
-use crate::{
-    Run, RunContext,
-    cli_output::print_with_optional_text,
-};
+use crate::{Run, RunContext, cli_output::print_with_optional_text};
 
 const SCORE_STYLES_SCHEMA: &str = "iroha.offline.petal.score_styles.v1";
 const ENCODE_SCHEMA: &str = "iroha.offline.petal.encode.v1";
@@ -585,8 +582,10 @@ impl EncodeArgs {
     }
 
     fn effective_katakana_preset(&self) -> Option<PetalKatakanaPresetArg> {
-        (self.channel == PetalEncodeChannelArg::KatakanaBase94)
-            .then_some(self.katakana_preset.unwrap_or(PetalKatakanaPresetArg::Balanced))
+        (self.channel == PetalEncodeChannelArg::KatakanaBase94).then_some(
+            self.katakana_preset
+                .unwrap_or(PetalKatakanaPresetArg::Balanced),
+        )
     }
 }
 
@@ -748,10 +747,7 @@ impl SimulateRealtimeArgs {
             };
             let text = format!(
                 "wrote Petal realtime report to {} (decoded={} attempts={}/{})",
-                summary.report_path,
-                summary.decoded,
-                summary.attempts,
-                summary.planned_attempts
+                summary.report_path, summary.decoded, summary.attempts, summary.planned_attempts
             );
             print_with_optional_text(context, Some(text), &summary)
         } else {
@@ -787,11 +783,8 @@ impl SimulateRealtimeArgs {
         };
         let capture = self.capture.active(self.profile)?;
         let attempts_per_frame = capture.map_or(1, |active| active.profile.attempts);
-        let planned_attempts = planned_realtime_attempts(
-            input.frames.len(),
-            self.realtime_loops,
-            attempts_per_frame,
-        )?;
+        let planned_attempts =
+            planned_realtime_attempts(input.frames.len(), self.realtime_loops, attempts_per_frame)?;
         let mut attempts = 0u32;
         let mut decoded_payload: Option<Vec<u8>> = None;
         let mut first_success_loop_index = None;
@@ -933,11 +926,7 @@ impl ScoreStylesArgs {
             effective_payload_bytes_per_second.saturating_mul(8);
         let styles = self
             .style_set
-            .style_candidates(
-                self.channel,
-                self.effective_katakana_preset(),
-                base_profile,
-            )
+            .style_candidates(self.channel, self.effective_katakana_preset(), base_profile)
             .into_iter()
             .map(|candidate| {
                 score_style(
@@ -955,7 +944,12 @@ impl ScoreStylesArgs {
 
         let recommended = styles
             .iter()
-            .max_by_key(|style| (style.overall_score_bps, std::cmp::Reverse(style.style.clone())))
+            .max_by_key(|style| {
+                (
+                    style.overall_score_bps,
+                    std::cmp::Reverse(style.style.clone()),
+                )
+            })
             .ok_or_else(|| eyre!("style set produced no candidates"))?;
         let recommended_style = recommended.style.clone();
         let recommended_overall_score_bps = recommended.overall_score_bps;
@@ -1020,8 +1014,10 @@ impl ScoreStylesArgs {
     }
 
     fn effective_katakana_preset(&self) -> Option<PetalKatakanaPresetArg> {
-        (self.channel == PetalEncodeChannelArg::KatakanaBase94)
-            .then_some(self.katakana_preset.unwrap_or(PetalKatakanaPresetArg::Balanced))
+        (self.channel == PetalEncodeChannelArg::KatakanaBase94).then_some(
+            self.katakana_preset
+                .unwrap_or(PetalKatakanaPresetArg::Balanced),
+        )
     }
 
     fn capture_profile(&self) -> PetalStreamCaptureProfile {
@@ -1116,7 +1112,10 @@ impl CapturePerturbationArgs {
         Ok(())
     }
 
-    fn active(&self, profile_arg: PetalCaptureProfileArg) -> Result<Option<ActiveCapturePerturbation>> {
+    fn active(
+        &self,
+        profile_arg: PetalCaptureProfileArg,
+    ) -> Result<Option<ActiveCapturePerturbation>> {
         self.validate(profile_arg)?;
         Ok(self.perturb_capture.then(|| ActiveCapturePerturbation {
             profile: self.profile(profile_arg),
@@ -1154,7 +1153,9 @@ fn validate_capture_profile_for_cli(profile: PetalStreamCaptureProfile) -> Resul
         return Err(eyre!("capture attempts must be > 0"));
     }
     if profile.dark_luma >= profile.light_luma {
-        return Err(eyre!("capture dark luminance must be lower than light luminance"));
+        return Err(eyre!(
+            "capture dark luminance must be lower than light luminance"
+        ));
     }
     Ok(())
 }
@@ -1181,8 +1182,10 @@ fn resolve_katakana_preset_options(
     Err(eyre!(
         "failed to resolve Katakana preset '{}' grid geometry: {}",
         preset,
-        last_error
-            .map_or_else(|| "no candidate grid sizes".to_string(), |err| err.to_string())
+        last_error.map_or_else(
+            || "no candidate grid sizes".to_string(),
+            |err| err.to_string()
+        )
     ))
 }
 
@@ -1254,13 +1257,9 @@ fn score_style(
     effective_payload_bits_per_second: u64,
     target_effective_bps: u64,
 ) -> Result<StyleScoreReport> {
-    let score = score_petal_capture_profile_with_seed(
-        payload,
-        options,
-        candidate.capture_profile,
-        seed,
-    )
-    .map_err(|err| eyre!("failed to score style '{}': {err}", candidate.name))?;
+    let score =
+        score_petal_capture_profile_with_seed(payload, options, candidate.capture_profile, seed)
+            .map_err(|err| eyre!("failed to score style '{}': {err}", candidate.name))?;
     let capture_success_ratio_bps = score.success_ratio_bps();
     let capture_gate_passed = score
         .meets_min_success_ratio_bps(min_success_ratio_bps)
@@ -1278,9 +1277,7 @@ fn score_style(
     Ok(StyleScoreReport {
         style: candidate.name.to_string(),
         channel: candidate.channel.to_string(),
-        katakana_preset: candidate
-            .katakana_preset
-            .map(|preset| preset.to_string()),
+        katakana_preset: candidate.katakana_preset.map(|preset| preset.to_string()),
         capture_profile: CaptureProfileReport::from(candidate.capture_profile),
         capture_attempts: score.attempts,
         capture_successes: score.successes,
@@ -1412,11 +1409,7 @@ impl EvalCaptureSourceFrame {
 
     fn report_path(&self) -> String {
         if self.format == PetalEncodeFormatArg::Gif {
-            format!(
-                "{}#frame_{}",
-                self.path.display(),
-                self.encoded_frame_index
-            )
+            format!("{}#frame_{}", self.path.display(), self.encoded_frame_index)
         } else {
             self.path.display().to_string()
         }
@@ -1503,7 +1496,9 @@ fn resolve_eval_capture_manifest_input(
         border: json_u8_field(grid_value, "border")?,
         anchor_size: json_u8_field(grid_value, "anchor_size")?,
     };
-    let payload_bytes = value.get("payload_bytes").and_then(norito::json::Value::as_u64);
+    let payload_bytes = value
+        .get("payload_bytes")
+        .and_then(norito::json::Value::as_u64);
     let frames_value = value
         .get("frames")
         .and_then(norito::json::Value::as_array)
@@ -1516,9 +1511,12 @@ fn resolve_eval_capture_manifest_input(
             .and_then(norito::json::Value::as_str)
             .ok_or_else(|| eyre!("manifest frame {idx} missing path"))?;
         let path = resolve_manifest_frame_path(manifest_parent, path);
-        let encoded_frame_count = optional_json_u16_field(frame, "encoded_frame_count")?.unwrap_or(1);
+        let encoded_frame_count =
+            optional_json_u16_field(frame, "encoded_frame_count")?.unwrap_or(1);
         if encoded_frame_count == 0 {
-            return Err(eyre!("manifest frame {idx} encoded_frame_count must be > 0"));
+            return Err(eyre!(
+                "manifest frame {idx} encoded_frame_count must be > 0"
+            ));
         }
         match format {
             PetalEncodeFormatArg::Png => {
@@ -2101,8 +2099,7 @@ fn render_katakana_base94_rgb(
         let y1 = (u32::from(cell_y) + 1).saturating_mul(dimension) / u32::from(grid.grid_size);
         for cell_x in 0..grid.grid_size {
             let x0 = u32::from(cell_x).saturating_mul(dimension) / u32::from(grid.grid_size);
-            let x1 =
-                (u32::from(cell_x) + 1).saturating_mul(dimension) / u32::from(grid.grid_size);
+            let x1 = (u32::from(cell_x) + 1).saturating_mul(dimension) / u32::from(grid.grid_size);
             let cell = grid
                 .get(cell_x, cell_y)
                 .ok_or_else(|| eyre!("failed to sample Petal grid cell"))?;
@@ -2133,12 +2130,7 @@ fn render_katakana_base94_rgb(
     Ok(pixels)
 }
 
-fn is_petal_calibration_cell(
-    x: u16,
-    y: u16,
-    grid_size: u16,
-    options: PetalStreamOptions,
-) -> bool {
+fn is_petal_calibration_cell(x: u16, y: u16, grid_size: u16, options: PetalStreamOptions) -> bool {
     let border = u16::from(options.border);
     let anchor = u16::from(options.anchor_size);
     if x < border
@@ -2156,12 +2148,7 @@ fn is_petal_calibration_cell(
     (near_left || near_right) && (near_top || near_bottom)
 }
 
-fn katakana_base94_symbol_index(
-    grid: &PetalStreamGrid,
-    x: u16,
-    y: u16,
-    frame_index: u16,
-) -> u8 {
+fn katakana_base94_symbol_index(grid: &PetalStreamGrid, x: u16, y: u16, frame_index: u16) -> u8 {
     let mut mixed = u32::from(frame_index)
         .wrapping_mul(97)
         .wrapping_add(u32::from(x).wrapping_mul(17))
@@ -2202,18 +2189,12 @@ fn katakana_tile_stroke(symbol: u8, local_x: u8, local_y: u8) -> bool {
         || ((bits & 0b0000_1000_00) != 0 && local_x == local_y && (2..=6).contains(&local_y))
         || ((bits & 0b0001_0000_00) != 0 && local_y == 3 && (2..=6).contains(&local_x))
         || ((bits & 0b0010_0000_00) != 0 && local_x == 6 && (2..=6).contains(&local_y))
-        || ((bits & 0b0100_0000_00) != 0
-            && (local_x == 4 || local_x == 5)
-            && local_y == 2)
+        || ((bits & 0b0100_0000_00) != 0 && (local_x == 4 || local_x == 5) && local_y == 2)
         || ((bits & 0b1000_0000_00) != 0 && local_y == 6 && (3..=6).contains(&local_x))
 }
 
 fn katakana_base_rgb(cell: bool) -> [u8; 3] {
-    if cell {
-        [24, 26, 32]
-    } else {
-        [238, 236, 224]
-    }
+    if cell { [24, 26, 32] } else { [238, 236, 224] }
 }
 
 fn katakana_accent_rgb(cell: bool, symbol: u8) -> [u8; 3] {
@@ -2832,13 +2813,19 @@ mod tests {
         args.run(&mut ctx).expect("run encode");
 
         let output: Value = norito::json::from_str(&ctx.printed[0]).expect("encode JSON");
-        assert_eq!(output.get("schema").and_then(Value::as_str), Some(ENCODE_SCHEMA));
+        assert_eq!(
+            output.get("schema").and_then(Value::as_str),
+            Some(ENCODE_SCHEMA)
+        );
         assert_eq!(
             output.get("animation_frames").and_then(Value::as_u64),
             Some(1)
         );
         assert_eq!(output["grid"]["resolved_grid_size"], Value::from(33u64));
-        assert_eq!(output["frames"][0]["path"], Value::from("png/frame_0000.png"));
+        assert_eq!(
+            output["frames"][0]["path"],
+            Value::from("png/frame_0000.png")
+        );
         let frame_path = tempdir.path().join("png/frame_0000.png");
         let png = std::fs::read(&frame_path).expect("read PNG");
         assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
@@ -2851,8 +2838,14 @@ mod tests {
             manifest.get("schema").and_then(Value::as_str),
             Some(ENCODE_SCHEMA)
         );
-        assert_eq!(manifest["frames"][0]["path"], Value::from("png/frame_0000.png"));
-        assert_eq!(manifest["frames"][0]["encoded_frame_count"], Value::from(1u64));
+        assert_eq!(
+            manifest["frames"][0]["path"],
+            Value::from("png/frame_0000.png")
+        );
+        assert_eq!(
+            manifest["frames"][0]["encoded_frame_count"],
+            Value::from(1u64)
+        );
     }
 
     #[test]
@@ -2871,18 +2864,25 @@ mod tests {
             let frame_path = tempdir.path().join(format!("png/frame_{index:04}.png"));
             assert!(frame_path.exists(), "expected {}", frame_path.display());
             assert_eq!(report.frames[index].index, index as u16);
-            assert_eq!(report.frames[index].path, format!("png/frame_{index:04}.png"));
+            assert_eq!(
+                report.frames[index].path,
+                format!("png/frame_{index:04}.png")
+            );
             assert_eq!(report.frames[index].encoded_frame_count, 1);
         }
-        let manifest: Value =
-            norito::json::from_slice(&std::fs::read(tempdir.path().join("manifest.json")).expect("read manifest"))
-                .expect("manifest JSON");
+        let manifest: Value = norito::json::from_slice(
+            &std::fs::read(tempdir.path().join("manifest.json")).expect("read manifest"),
+        )
+        .expect("manifest JSON");
         assert_eq!(manifest["animation_frames"], Value::from(3u64));
         assert_eq!(
             manifest["frames"].as_array().expect("frames array").len(),
             3
         );
-        assert_eq!(manifest["frames"][2]["path"], Value::from("png/frame_0002.png"));
+        assert_eq!(
+            manifest["frames"][2]["path"],
+            Value::from("png/frame_0002.png")
+        );
     }
 
     #[test]
@@ -2902,9 +2902,10 @@ mod tests {
         let frame_path = tempdir.path().join("png/frame_0000.png");
         assert_eq!(decoded_png_color_type(&frame_path), png::ColorType::Rgb);
         assert_eq!(decode_encoded_frame(&frame_path, report.grid), payload);
-        let manifest: Value =
-            norito::json::from_slice(&std::fs::read(tempdir.path().join("manifest.json")).expect("read manifest"))
-                .expect("manifest JSON");
+        let manifest: Value = norito::json::from_slice(
+            &std::fs::read(tempdir.path().join("manifest.json")).expect("read manifest"),
+        )
+        .expect("manifest JSON");
         assert_eq!(
             manifest.get("channel").and_then(Value::as_str),
             Some("katakana-base94")
@@ -3033,11 +3034,15 @@ mod tests {
         assert_eq!(report.animation_frames, 1);
         assert_eq!(report.frames[0].path, "gif/frame_0000.gif");
         assert_eq!(report.frames[0].encoded_frame_count, 1);
-        let manifest: Value =
-            norito::json::from_slice(&std::fs::read(tempdir.path().join("manifest.json")).expect("read manifest"))
-                .expect("manifest JSON");
+        let manifest: Value = norito::json::from_slice(
+            &std::fs::read(tempdir.path().join("manifest.json")).expect("read manifest"),
+        )
+        .expect("manifest JSON");
         assert_eq!(manifest.get("format").and_then(Value::as_str), Some("gif"));
-        assert_eq!(manifest["frames"][0]["path"], Value::from("gif/frame_0000.gif"));
+        assert_eq!(
+            manifest["frames"][0]["path"],
+            Value::from("gif/frame_0000.gif")
+        );
     }
 
     #[cfg(feature = "offline-visual-codecs")]
@@ -3064,12 +3069,19 @@ mod tests {
             .collect_frames()
             .expect("collect GIF frames");
         assert_eq!(frames.len(), 4);
-        let manifest: Value =
-            norito::json::from_slice(&std::fs::read(tempdir.path().join("manifest.json")).expect("read manifest"))
-                .expect("manifest JSON");
+        let manifest: Value = norito::json::from_slice(
+            &std::fs::read(tempdir.path().join("manifest.json")).expect("read manifest"),
+        )
+        .expect("manifest JSON");
         assert_eq!(manifest["animation_frames"], Value::from(4u64));
-        assert_eq!(manifest["frames"][0]["path"], Value::from("gif/frame_0000.gif"));
-        assert_eq!(manifest["frames"][0]["encoded_frame_count"], Value::from(4u64));
+        assert_eq!(
+            manifest["frames"][0]["path"],
+            Value::from("gif/frame_0000.gif")
+        );
+        assert_eq!(
+            manifest["frames"][0]["encoded_frame_count"],
+            Value::from(4u64)
+        );
     }
 
     #[cfg(feature = "offline-visual-codecs")]
@@ -3103,9 +3115,10 @@ mod tests {
             .expect("collect GIF frames");
         assert_eq!(frames.len(), 3);
         assert_ne!(frames[0].buffer().as_raw(), frames[1].buffer().as_raw());
-        let manifest: Value =
-            norito::json::from_slice(&std::fs::read(tempdir.path().join("manifest.json")).expect("read manifest"))
-                .expect("manifest JSON");
+        let manifest: Value = norito::json::from_slice(
+            &std::fs::read(tempdir.path().join("manifest.json")).expect("read manifest"),
+        )
+        .expect("manifest JSON");
         assert_eq!(manifest.get("format").and_then(Value::as_str), Some("gif"));
         assert_eq!(
             manifest.get("channel").and_then(Value::as_str),
@@ -3115,7 +3128,10 @@ mod tests {
             manifest.get("style").and_then(Value::as_str),
             Some(KATAKANA_STYLE_NAME)
         );
-        assert_eq!(manifest["frames"][0]["encoded_frame_count"], Value::from(3u64));
+        assert_eq!(
+            manifest["frames"][0]["encoded_frame_count"],
+            Value::from(3u64)
+        );
     }
 
     #[test]
@@ -3175,7 +3191,10 @@ mod tests {
             output.get("schema").and_then(Value::as_str),
             Some(EVAL_CAPTURE_SCHEMA)
         );
-        assert_eq!(output.get("gate_passed").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            output.get("gate_passed").and_then(Value::as_bool),
+            Some(true)
+        );
         assert_eq!(
             output.get("success_ratio_bps").and_then(Value::as_u64),
             Some(u64::from(PETAL_CAPTURE_RATIO_BPS_SCALE))
@@ -3347,7 +3366,9 @@ mod tests {
 
     #[test]
     fn capture_sample_models_are_exact_and_deterministic() {
-        let samples = vec![0, 64, 128, 255, 32, 96, 160, 224, 16, 80, 144, 208, 48, 112, 176, 240];
+        let samples = vec![
+            0, 64, 128, 255, 32, 96, 160, 224, 16, 80, 144, 208, 48, 112, 176, 240,
+        ];
 
         assert_eq!(
             downscale_sample_cells(&samples, 4, 2).expect("downscale"),
@@ -3421,7 +3442,10 @@ mod tests {
         let report: Value =
             norito::json::from_slice(&std::fs::read(&report_path).expect("read report"))
                 .expect("report JSON");
-        assert_eq!(report.get("gate_passed").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            report.get("gate_passed").and_then(Value::as_bool),
+            Some(true)
+        );
         let summary: Value = norito::json::from_str(&ctx.printed[0]).expect("summary JSON");
         assert_eq!(
             summary.get("report_path").and_then(Value::as_str),
@@ -3483,8 +3507,7 @@ mod tests {
     fn eval_capture_rejects_malformed_manifest_encoded_frame_counts() {
         let tempdir = tempfile::tempdir().expect("temp dir");
         std::fs::create_dir_all(tempdir.path().join("png")).expect("png dir");
-        std::fs::write(tempdir.path().join("png/frame_0000.png"), b"not a png")
-            .expect("write png");
+        std::fs::write(tempdir.path().join("png/frame_0000.png"), b"not a png").expect("write png");
         std::fs::write(
             tempdir.path().join("manifest.json"),
             r#"{
@@ -3654,16 +3677,24 @@ mod tests {
 
         args.run(&mut ctx).expect("simulate realtime");
 
-        assert_eq!(std::fs::read(&output_payload).expect("read payload"), payload);
+        assert_eq!(
+            std::fs::read(&output_payload).expect("read payload"),
+            payload
+        );
         let report: Value = norito::json::from_str(&ctx.printed[0]).expect("realtime JSON");
         assert_eq!(
             report.get("schema").and_then(Value::as_str),
             Some(SIMULATE_REALTIME_SCHEMA)
         );
         assert_eq!(report.get("decoded").and_then(Value::as_bool), Some(true));
-        assert_eq!(report.get("planned_attempts").and_then(Value::as_u64), Some(3));
         assert_eq!(
-            report.get("first_success_loop_index").and_then(Value::as_u64),
+            report.get("planned_attempts").and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            report
+                .get("first_success_loop_index")
+                .and_then(Value::as_u64),
             Some(0)
         );
         assert_eq!(report["frames"][2]["loop_index"], Value::from(2u64));
@@ -3684,7 +3715,10 @@ mod tests {
 
         let report = args.simulate().expect("simulate katakana realtime");
 
-        assert_eq!(std::fs::read(&output_payload).expect("read payload"), payload);
+        assert_eq!(
+            std::fs::read(&output_payload).expect("read payload"),
+            payload
+        );
         assert_eq!(report.channel, "katakana-base94");
         assert!(report.decoded);
         assert_eq!(report.planned_attempts, 1);
@@ -3711,7 +3745,10 @@ mod tests {
 
         let report = args.simulate().expect("simulate gif realtime");
 
-        assert_eq!(std::fs::read(&output_payload).expect("read payload"), payload);
+        assert_eq!(
+            std::fs::read(&output_payload).expect("read payload"),
+            payload
+        );
         assert_eq!(report.channel, "katakana-base94");
         assert!(report.decoded);
         assert_eq!(report.planned_attempts, 4);
@@ -3822,15 +3859,21 @@ mod tests {
         let tempdir = tempfile::tempdir().expect("temp dir");
         let mut args = simulate_realtime_args(tempdir.path());
         args.simulate_fps = 0;
-        assert!(args.simulate().expect_err("zero fps").to_string().contains("simulate-fps"));
+        assert!(
+            args.simulate()
+                .expect_err("zero fps")
+                .to_string()
+                .contains("simulate-fps")
+        );
 
         let mut args = simulate_realtime_args(tempdir.path());
         args.realtime_loops = 0;
-        assert!(args
-            .simulate()
-            .expect_err("zero loops")
-            .to_string()
-            .contains("realtime-loops"));
+        assert!(
+            args.simulate()
+                .expect_err("zero loops")
+                .to_string()
+                .contains("realtime-loops")
+        );
     }
 
     #[test]
@@ -3873,7 +3916,10 @@ mod tests {
         let style = &report.styles[0];
         assert_eq!(style.capture_attempts, 12);
         assert_eq!(style.capture_successes, 12);
-        assert_eq!(style.capture_success_ratio_bps, PETAL_CAPTURE_RATIO_BPS_SCALE);
+        assert_eq!(
+            style.capture_success_ratio_bps,
+            PETAL_CAPTURE_RATIO_BPS_SCALE
+        );
         assert_eq!(report.grid.requested_grid_size, 0);
         assert_eq!(report.grid.resolved_grid_size, 33);
         assert!(style.capture_gate_passed);
@@ -3981,7 +4027,10 @@ mod tests {
         assert_eq!(style.katakana_preset.as_deref(), Some("balanced"));
         assert_eq!(style.capture_attempts, 12);
         assert_eq!(style.capture_successes, 12);
-        assert_eq!(style.capture_success_ratio_bps, PETAL_CAPTURE_RATIO_BPS_SCALE);
+        assert_eq!(
+            style.capture_success_ratio_bps,
+            PETAL_CAPTURE_RATIO_BPS_SCALE
+        );
     }
 
     #[test]
@@ -4134,7 +4183,10 @@ mod tests {
             summary.get("report_path").and_then(Value::as_str),
             Some(report_path.display().to_string().as_str())
         );
-        assert_eq!(summary.get("gate_passed").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            summary.get("gate_passed").and_then(Value::as_bool),
+            Some(true)
+        );
     }
 
     #[test]

@@ -51,6 +51,11 @@ on:
       - "crates/iroha_cli/src/zk.rs"
       - "crates/iroha_core/src/zk.rs"
       - "crates/iroha_core/src/smartcontracts/isi/offline.rs"
+      - "crates/iroha_torii/Cargo.toml"
+      - "crates/iroha_torii/src/openapi.rs"
+      - "crates/iroha_torii/src/offline_v2_issuer.rs"
+      - "crates/iroha_torii/tests/grouped/nexus_sorafs.rs"
+      - "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs"
       - "crates/connect_norito_bridge/Cargo.toml"
       - "crates/connect_norito_bridge/include/**"
       - "crates/connect_norito_bridge/src/lib.rs"
@@ -58,6 +63,7 @@ on:
       - "crates/iroha_js_host/src/lib.rs"
       - "IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift"
       - "IrohaSwift/Sources/IrohaSwift/Crypto.swift"
+      - "IrohaSwift/Sources/IrohaSwift/AssetDefinitionAddress.swift"
       - "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
       - "IrohaSwift/Sources/IrohaSwift/ConnectAsyncSequence.swift"
       - "IrohaSwift/Sources/IrohaSwift/ConnectClient.swift"
@@ -676,6 +682,8 @@ on:
       - "python/iroha_torii_client/__init__.py"
       - "python/iroha_torii_client/client.py"
       - "python/iroha_torii_client/tests/test_client.py"
+      - "docs/portal/static/openapi/torii.json"
+      - "docs/portal/static/openapi/versions/current/torii.json"
       - "docs/source/offline_kagemusha.md"
       - "roadmap.md"
       - "status.md"
@@ -853,12 +861,17 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-pallas-builder-input-guards
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-builder-input-guards
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-builder-native-output-guards
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-metadata-option-shape
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-android-pallas-transcript-label-byte-limit
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-pallas-transcript-label-byte-limit
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-python-pallas-transcript-label-byte-limit
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-lineage-readonly-declarations
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-archive-input-copy
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-lineage-proving-key-copy
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-helper-surface
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-boundary
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-proof-chain-accumulator
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-native-material-aliases
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-pallas-builder-surface
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-native-owned-accumulator-boundary
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-localnet-lifecycle-release-evidence
@@ -871,6 +884,8 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-field-length-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-hop-count-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-chain-id-shape
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-asset-address-vectors
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-asset-uuid-boundary-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-summary-trailing-field-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-verify-result-trailing-field-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-verify-lineage-record-preflight
@@ -882,10 +897,13 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-proof-trailing-field-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-proof-bytes-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-proof-public-input-vectors
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-proof-metadata-exact-diagnostics
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-current-note-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-domain-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-redeem-change-output-fixed32-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-redeem-change-output-relationships
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-redeem-change-output-reserved-collisions
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-topup-anchor-nullifier-invariants
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-redeem-lineage-preflight
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-redeem-lineage-witness-shape
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-init-lineage-key-auto-preflight
@@ -929,10 +947,13 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-recursive-compact-root-export
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-spend-compact-projection-surface
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-compact-projection-block-height-validation
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-source-compact-projection-invalid-archives
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-compact-projection-block-height-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-recursive-spend-compact-projection-root-export
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-compact-projection-hardening
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-compact-projection-unsigned-block-height
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-compact-projection-block-height-vectors
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-android-compact-projection-archive-preflight
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-android-compact-projection-native-output-guards
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-android-compact-projection-availability-split
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-claim-identifier-account-binding-test
@@ -949,7 +970,9 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-family-overmatch
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-family-override-binding
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-assembler-identity-fields
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-c-bridge-abi-version
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-zero-envelope-pallas-guard
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-recursive-compact-invalid-proof-isolation
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-bridge-zk1-i10p-parser-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kagemusha-abi-probe-bounds
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-recursive-spend-partial-abi6
@@ -1051,6 +1074,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-confidential-witness-codecs
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-readiness-coverage
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-cash-settlement-coverage
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-cash-issuer-key-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-offline-transfer-persistence-coverage
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-transaction-norito-runner-coverage
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-norito-framing-runner-coverage
@@ -1065,6 +1089,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-note-v2-canonical-instruction-wire-names
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-note-v2-decoder-placeholder
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-note-v2-instruction-decoder
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-proof-platform-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-android-harness-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-direct-javac-harness-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-test-order-workflow
@@ -1127,6 +1152,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-node-setup-order-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-install-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-native-build-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-native-prepare-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-test-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-transaction-builder-filter-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-privacy-native-filter-script
@@ -2026,6 +2052,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-supervisor-output-pipe
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-supervisor-output-pipe
           ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-relative-repo-root-child-path
+          ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-iroha-bin-validation
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-heartbeat
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-heartbeat
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-execution-log-sha256
@@ -2130,6 +2157,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-shared-abi7-sdk-manifest-coverage
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-append-cap-boundary
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-self-consistent-boundary
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-zero-prehash-hash-guard
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-transition-profile-current-hop-sets
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-proof-public-input-circuit-binding
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-semantic-proof-append-opening
@@ -2139,11 +2167,25 @@ jobs:
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-previous-proof-opening-bundle-binding
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-previous-proof-field-binding
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-previous-proof-stale-hash-fixture
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-recursive-compact-constructor-binding
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-redeem
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-exact-fields
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-archive-field-shape
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-legacy-fields
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-auxiliary-fields
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-openapi
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-scan-inventory
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-content-scan-inventory
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-cap-boundary
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-lineage-key-package-binding
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-profile-split
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-proof-chain-accumulator
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-fixed-window-table-base-accumulator
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-shared-table-identity-base-selection
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-shared-table-direct-mode-duplicate-witnesses
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-shared-table-witness-shape-guards
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-shared-table-direct-base-helper
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-accumulator
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-previous-accumulator-boundary
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-opening-preflight-refresh

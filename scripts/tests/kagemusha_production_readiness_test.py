@@ -998,12 +998,35 @@ def copy_slot_binding(
         harness["challenge_hex"] = source_harness["challenge_hex"]
         write_json(harness_path, harness)
 
-    transcript_path = target / "handoff" / "d2d-payment.json"
-    transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
-    if key in transcript:
-        transcript[key] = copied
-        write_json(transcript_path, transcript)
-        slot_helpers.refresh_d2d_payment_transcript_hash(target, signer)
+    d2d_transcripts = metadata.get("d2d_payment_transcripts")
+    if isinstance(d2d_transcripts, dict):
+        transcript_updated = False
+        for binding in d2d_transcripts.values():
+            if not isinstance(binding, dict):
+                continue
+            transcript_relative = binding.get("path")
+            if not isinstance(transcript_relative, str):
+                continue
+            transcript_path = target / transcript_relative
+            transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+            if key not in transcript:
+                continue
+            transcript[key] = copied
+            write_json(transcript_path, transcript)
+            digest = hashlib.sha256(transcript_path.read_bytes()).hexdigest()
+            binding["sha256"] = digest
+            if transcript_relative == metadata.get("d2d_payment_transcript_path"):
+                metadata["d2d_payment_transcript_sha256"] = digest
+            transcript_updated = True
+        if transcript_updated:
+            write_json(metadata_path, metadata)
+    else:
+        transcript_path = target / "handoff" / "d2d-payment.json"
+        transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+        if key in transcript:
+            transcript[key] = copied
+            write_json(transcript_path, transcript)
+            slot_helpers.refresh_d2d_payment_transcript_hash(target, signer)
 
     wallet_transcript_path = target / "wallet" / "integrity.json"
     wallet_transcript = json.loads(wallet_transcript_path.read_text(encoding="utf-8"))
@@ -1016,6 +1039,11 @@ def copy_slot_binding(
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     if key in evidence:
         evidence[key] = copied
+    if isinstance(metadata.get("d2d_payment_transcripts"), dict):
+        evidence["d2d_payment_transcripts"] = metadata["d2d_payment_transcripts"]
+        evidence["d2d_payment_transcript_sha256"] = metadata[
+            "d2d_payment_transcript_sha256"
+        ]
     evidence["artifact_digests"] = slot_helpers.required_artifact_digests(target)
     write_json(evidence_path, slot_helpers.sign_evidence(evidence, signer))
     slot_helpers.refresh_signed_evidence_hash(target)
@@ -1855,6 +1883,188 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             summary["android_device_lab"]["signed_evidence"],
             expected_android_signed_evidence,
         )
+
+    def test_repeatable_android_roots_aggregate_signed_matrix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            first_root = temp_path / "pixel-roots"
+            second_root = temp_path / "samsung-roots"
+            summary_path = temp_path / "summary.json"
+            lineage_evidence = create_lineage_proof_evidence(temp_path / "lineage")
+            compact_key_evidence = create_compact_key_evidence(lineage_evidence.parent)
+            signer = slot_helpers.create_test_signer(temp_path / "keys")
+            transports = tuple(sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS))
+            for index, family in enumerate(
+                slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+            ):
+                root = first_root if index % 2 == 0 else second_root
+                slot_helpers.create_slot(
+                    root,
+                    f"slot-{index}",
+                    family,
+                    signer,
+                    d2d_payment_transport=transports[0],
+                    d2d_payment_transports=transports,
+                )
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = readiness.main(
+                    [
+                        "--repo-root",
+                        str(REPO_ROOT),
+                        "--device-lab-root",
+                        str(first_root),
+                        "--device-lab-root",
+                        str(second_root),
+                        "--lineage-proof-evidence",
+                        str(lineage_evidence),
+                        "--compact-key-evidence",
+                        str(compact_key_evidence),
+                        "--trusted-signer-public-key",
+                        str(signer["public_key"]),
+                        "--summary-out",
+                        str(summary_path),
+                    ]
+                )
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            rendered = json.dumps(summary, sort_keys=True)
+            android = summary["android_device_lab"]
+
+        self.assertEqual(status, 0)
+        self.assertTrue(summary["ready"], summary["blockers"])
+        self.assertEqual(
+            android["root"],
+            readiness.ANDROID_DEVICE_LAB_ROOT_SUMMARY_LABEL,
+        )
+        self.assertEqual(
+            android["covered_device_families"],
+            list(slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
+        )
+        self.assertEqual(android["missing_device_families"], [])
+        self.assertEqual(
+            android["covered_d2d_payment_transports"],
+            list(readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
+        )
+        self.assertEqual(android["missing_d2d_payment_transports"], [])
+        self.assertEqual(android["missing_d2d_payment_transport_pairs"], [])
+        self.assertEqual(
+            set(android["signed_evidence"]),
+            {
+                f"slot-{index}"
+                for index in range(
+                    len(slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES)
+                )
+            },
+        )
+        self.assertNotIn(str(first_root), rendered)
+        self.assertNotIn(str(second_root), rendered)
+
+    def test_release_bundle_accepts_repeatable_android_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            bundle_root = temp_path / "bundle"
+            first_root = bundle_root / "artifacts" / "android" / "device_lab_pixels"
+            second_root = bundle_root / "artifacts" / "android" / "device_lab_samsung"
+            lineage_evidence = create_lineage_proof_evidence(
+                bundle_root / "artifacts" / "kagemusha"
+            )
+            compact_key_evidence = (
+                lineage_evidence.parent / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+            )
+            localnet_lifecycle_evidence = (
+                lineage_evidence.parent
+                / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            )
+            signer = slot_helpers.create_test_signer(temp_path / "keys")
+            transports = tuple(sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS))
+            for index, family in enumerate(
+                slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+            ):
+                root = first_root if index % 2 == 0 else second_root
+                slot_helpers.create_slot(
+                    root,
+                    f"slot-{index}",
+                    family,
+                    signer,
+                    d2d_payment_transport=transports[0],
+                    d2d_payment_transports=transports,
+                )
+            trusted, signer_errors = (
+                slot_helpers.device_lab.load_trusted_signer_public_keys(
+                    [str(signer["public_key"])]
+                )
+            )
+            self.assertEqual(signer_errors, [])
+            summary = readiness.build_summary(
+                repo_root=REPO_ROOT,
+                device_lab_root=[first_root, second_root],
+                lineage_proof_evidence_path=lineage_evidence,
+                compact_key_evidence_path=compact_key_evidence,
+                localnet_lifecycle_evidence_path=localnet_lifecycle_evidence,
+                trusted_signer_public_keys=trusted,
+                min_signed_at=readiness.parse_utc_timestamp(
+                    readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                    "fixture min signed_at",
+                )[0],
+                min_lineage_proof_evidence_at=readiness.parse_utc_timestamp(
+                    readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                    "fixture min lineage evidence",
+                )[0],
+                min_compact_key_evidence_at=readiness.parse_utc_timestamp(
+                    readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                    "fixture min compact evidence",
+                )[0],
+                min_localnet_lifecycle_evidence_at=readiness.parse_utc_timestamp(
+                    readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                    "fixture min localnet evidence",
+                )[0],
+            )
+            self.assertTrue(summary["ready"], summary["blockers"])
+            summary_path = bundle_root / "dist" / "kagemusha-production-readiness.json"
+            write_json(summary_path, summary)
+            out_path = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(
+                    [
+                        "--repo-root",
+                        str(REPO_ROOT),
+                        "--bundle-root",
+                        str(bundle_root),
+                        "--readiness-summary",
+                        "dist/kagemusha-production-readiness.json",
+                        "--lineage-proof-evidence",
+                        (
+                            "artifacts/kagemusha/"
+                            f"{readiness.LINEAGE_PROOF_EVIDENCE_FILENAME}"
+                        ),
+                        "--compact-key-evidence",
+                        (
+                            "artifacts/kagemusha/"
+                            f"{readiness.COMPACT_KEY_EVIDENCE_FILENAME}"
+                        ),
+                        "--localnet-lifecycle-evidence",
+                        (
+                            "artifacts/kagemusha/"
+                            f"{readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME}"
+                        ),
+                        "--device-lab-root",
+                        "artifacts/android/device_lab_pixels",
+                        "--device-lab-root",
+                        "artifacts/android/device_lab_samsung",
+                        "--trusted-signer-public-key",
+                        str(signer["public_key"]),
+                        "--out",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+            manifest = json.loads(out_path.read_text(encoding="utf-8"))
+            manifest_text = json.dumps(manifest, sort_keys=True)
+
+        self.assertEqual(status, 0)
+        self.assertTrue(manifest["ready"], manifest["blockers"])
+        self.assertIn("artifacts/android/device_lab_pixels/slot-0/", manifest_text)
+        self.assertIn("artifacts/android/device_lab_samsung/slot-1/", manifest_text)
 
     def test_localnet_lifecycle_evidence_accepts_valid_four_peer_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -5873,8 +6083,8 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(
             observed_dynamic_d2d_artifacts,
             {
-                release_bundle._android_d2d_transcript_artifact_kind("nfc_hce"),
-                release_bundle._android_d2d_transcript_artifact_kind("qr"),
+                release_bundle._android_d2d_transcript_artifact_kind(transport)
+                for transport in readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS
             },
         )
 
@@ -5902,6 +6112,159 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("kagemusha_release_summary_android_list_shape", rendered)
         self.assertIn("kagemusha_release_summary_android_signer_sha256", rendered)
         self.assertNotIn("Traceback", rendered)
+
+    def test_kagemusha_release_bundle_rejects_android_d2d_family_map_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            android = summary["android_device_lab"]
+            first_family = slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
+            android["covered_d2d_payment_transports_by_family"][first_family] = android[
+                "covered_d2d_payment_transports_by_family"
+            ][first_family][:-1]
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_slots_d2d_transport_family_inventory",
+            rendered,
+        )
+        self.assertIn("kagemusha_release_summary_android_d2d_transports", rendered)
+        self.assertNotIn("Traceback", rendered)
+
+    def test_kagemusha_release_bundle_rejects_android_d2d_missing_pair_inventory_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            android = summary["android_device_lab"]
+            first_family = slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
+            android["covered_d2d_payment_transports_by_family"][first_family] = android[
+                "covered_d2d_payment_transports_by_family"
+            ][first_family][:-1]
+            android["missing_d2d_payment_transport_pairs"] = []
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_d2d_transport_pair_inventory",
+            rendered,
+        )
+        self.assertNotIn("Traceback", rendered)
+
+    def test_kagemusha_release_bundle_rejects_android_d2d_duplicate_missing_pair_shape(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            family = slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
+            transport = sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS)[0]
+            duplicate_pair = {"device_family": family, "transport": transport}
+            summary["android_device_lab"]["missing_d2d_payment_transport_pairs"] = [
+                duplicate_pair,
+                dict(duplicate_pair),
+            ]
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_d2d_transport_pair_shape",
+            rendered,
+        )
+        self.assertNotIn("Traceback", rendered)
+
+    def test_kagemusha_release_bundle_manifest_rejects_android_d2d_missing_pair_inventory_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle, build_blockers = build_release_bundle_from_fixture(fixture)
+            self.assertEqual(build_blockers, [])
+            android = bundle["android_device_lab"]
+            assert isinstance(android, dict)
+            first_family = slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
+            covered_by_family = android["covered_d2d_payment_transports_by_family"]
+            assert isinstance(covered_by_family, dict)
+            covered_by_family[first_family] = covered_by_family[first_family][:-1]
+            android["missing_d2d_payment_transport_pairs"] = []
+
+            blockers = release_bundle._check_release_bundle_manifest_shape(bundle)
+
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_d2d_transport_pair_inventory",
+            {item["code"] for item in blockers},
+        )
+
+    def test_kagemusha_release_bundle_manifest_rejects_android_d2d_duplicate_missing_pair_shape(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle, build_blockers = build_release_bundle_from_fixture(fixture)
+            self.assertEqual(build_blockers, [])
+            android = bundle["android_device_lab"]
+            assert isinstance(android, dict)
+            family = slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
+            transport = sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS)[0]
+            duplicate_pair = {"device_family": family, "transport": transport}
+            android["missing_d2d_payment_transport_pairs"] = [
+                duplicate_pair,
+                dict(duplicate_pair),
+            ]
+
+            blockers = release_bundle._check_release_bundle_manifest_shape(bundle)
+
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_d2d_transport_pair_shape",
+            {item["code"] for item in blockers},
+        )
+
+    def test_kagemusha_release_bundle_manifest_rejects_android_d2d_extra_missing_pair_inventory(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle, build_blockers = build_release_bundle_from_fixture(fixture)
+            self.assertEqual(build_blockers, [])
+            android = bundle["android_device_lab"]
+            assert isinstance(android, dict)
+            family = slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
+            transport = sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS)[0]
+            android["missing_d2d_payment_transport_pairs"] = [
+                {"device_family": family, "transport": transport}
+            ]
+
+            blockers = release_bundle._check_release_bundle_manifest_shape(bundle)
+
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_d2d_transport_pair_inventory",
+            {item["code"] for item in blockers},
+        )
 
     def test_kagemusha_release_bundle_rejects_malformed_android_ready_summary_list_without_leak(
         self,
@@ -12562,6 +12925,80 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(verify_status, 1)
         self.assertIn(
             "kagemusha_release_bundle_manifest_android_d2d_transports",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_android_d2d_missing_pair_inventory_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            android = manifest["android_device_lab"]
+            first_family = slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
+            android["covered_d2d_payment_transports_by_family"][first_family] = android[
+                "covered_d2d_payment_transports_by_family"
+            ][first_family][:-1]
+            android["missing_d2d_payment_transport_pairs"] = []
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_d2d_transport_pair_inventory",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_android_d2d_extra_missing_pair_inventory(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            android = manifest["android_device_lab"]
+            family = slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
+            transport = sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS)[0]
+            android["missing_d2d_payment_transport_pairs"] = [
+                {"device_family": family, "transport": transport}
+            ]
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_d2d_transport_pair_inventory",
             stderr.getvalue(),
         )
 
@@ -19805,6 +20242,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 trusted_signer_public_keys=trusted,
             )
 
+        expected_missing_pairs = [
+            {"device_family": family, "transport": transport}
+            for family in slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+            for transport in sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS)
+            if transport != "nfc_hce"
+        ]
         self.assertFalse(summary["ready"])
         self.assertEqual(
             summary["android_device_lab"]["covered_d2d_payment_transports"],
@@ -19814,9 +20257,13 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "android_device_lab_d2d_transport_matrix_missing",
             {item["code"] for item in summary["blockers"]},
         )
-        self.assertGreater(
-            len(summary["android_device_lab"]["missing_d2d_payment_transports"]),
-            0,
+        self.assertEqual(
+            summary["android_device_lab"]["missing_d2d_payment_transports"],
+            ["nearby_offline", "qr"],
+        )
+        self.assertEqual(
+            summary["android_device_lab"]["missing_d2d_payment_transport_pairs"],
+            expected_missing_pairs,
         )
 
     def test_multi_transport_d2d_slot_satisfies_transport_rollup(self) -> None:
@@ -19845,6 +20292,11 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 trusted_signer_public_keys=trusted,
             )
 
+        expected_missing_pairs = [
+            {"device_family": family, "transport": transport}
+            for family in slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[1:]
+            for transport in transports
+        ]
         self.assertEqual(
             summary["android_device_lab"]["covered_d2d_payment_transports"],
             list(readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
@@ -19857,9 +20309,9 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "android_device_lab_d2d_transport_matrix_missing",
             {item["code"] for item in summary["blockers"]},
         )
-        self.assertGreater(
-            len(summary["android_device_lab"]["missing_d2d_payment_transport_pairs"]),
-            0,
+        self.assertEqual(
+            summary["android_device_lab"]["missing_d2d_payment_transport_pairs"],
+            expected_missing_pairs,
         )
 
     def test_aggregate_d2d_transport_coverage_without_family_pairs_blocks_rollup(
@@ -19892,6 +20344,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 trusted_signer_public_keys=trusted,
             )
 
+        expected_missing_pairs = [
+            {"device_family": family, "transport": transport}
+            for index, family in enumerate(
+                slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+            )
+            for transport in transports
+            if transport != transports[index % len(transports)]
+        ]
         self.assertFalse(summary["ready"])
         self.assertEqual(
             summary["android_device_lab"]["covered_device_families"],
@@ -19909,9 +20369,9 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "android_device_lab_d2d_transport_matrix_missing",
             {item["code"] for item in summary["blockers"]},
         )
-        self.assertGreater(
-            len(summary["android_device_lab"]["missing_d2d_payment_transport_pairs"]),
-            0,
+        self.assertEqual(
+            summary["android_device_lab"]["missing_d2d_payment_transport_pairs"],
+            expected_missing_pairs,
         )
 
     def test_direct_d2d_transport_rollup_requires_transcript_map_for_declared_list(
@@ -20221,6 +20681,11 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             finally:
                 readiness._slot_reports = original_slot_reports
 
+        expected_missing_pairs = [
+            {"device_family": family, "transport": transport}
+            for family in slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[1:]
+            for transport in transports
+        ]
         self.assertEqual(
             summary["covered_d2d_payment_transports"],
             list(readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
@@ -20230,7 +20695,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "android_device_lab_d2d_transport_matrix_missing",
             {item["code"] for item in summary["blockers"]},
         )
-        self.assertGreater(len(summary["missing_d2d_payment_transport_pairs"]), 0)
+        self.assertEqual(
+            summary["missing_d2d_payment_transport_pairs"],
+            expected_missing_pairs,
+        )
 
     def test_direct_d2d_transport_rollup_rejects_reused_cross_slot_transcript_digest(
         self,
@@ -28589,6 +29057,15 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     / compact_key_staged_runner.EXECUTION_REPORT_FILENAME
                 ).read_text(encoding="utf-8")
             )
+            run_report = json.loads(
+                (
+                    staged_artifact_dir / compact_key_staged_runner.RUN_REPORT_FILENAME
+                ).read_text(encoding="utf-8")
+            )
+            generator_log = (
+                staged_artifact_dir / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+            )
+            generator_log_size = generator_log.stat().st_size
 
         self.assertEqual(status, 0)
         self.assertEqual(errors, [])
@@ -28910,6 +29387,72 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             write_compact_key_execution_report(staged_artifact_dir, exit_code=143)
             write_compact_key_staged_run_report(staged_artifact_dir, exit_code=143)
             exit_file.write_text("143\n", encoding="utf-8")
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                    "--resume-keygen",
+                ]
+            )
+            calls: list[list[str]] = []
+
+            def fake_runner(command: list[str], cwd: Path, log_path: Path) -> int:
+                calls.append(command)
+                self.assertEqual(cwd, staged_artifact_dir.parent.parent)
+                artifact_root = cwd / "artifacts" / "kagemusha"
+                create_compact_key_artifact_files_without_log(artifact_root)
+                write_compact_key_generator_log_to(artifact_root, log_path)
+                return 0
+
+            status, errors = compact_key_staged_runner.run_staged_keygen(
+                args,
+                runner=fake_runner,
+            )
+            exit_text = exit_file.read_text(encoding="utf-8")
+            execution_report = json.loads(
+                (
+                    staged_artifact_dir
+                    / compact_key_staged_runner.EXECUTION_REPORT_FILENAME
+                ).read_text(encoding="utf-8")
+            )
+            run_report = json.loads(
+                (
+                    staged_artifact_dir / compact_key_staged_runner.RUN_REPORT_FILENAME
+                ).read_text(encoding="utf-8")
+            )
+            generator_log_size = (
+                staged_artifact_dir / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+            ).stat().st_size
+
+        self.assertEqual(status, 0)
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            calls,
+            [
+                compact_key_staged_runner.shlex.split(
+                    compact_key_staged_runner.DEFAULT_COMPACT_KEY_COMMAND
+                )
+            ],
+        )
+        self.assertEqual(exit_text, "0\n")
+        self.assertEqual(execution_report["exit_code"], 0)
+        self.assertEqual(run_report["exit_code"], 0)
+        self.assertEqual(
+            run_report["generator_log_size_bytes"],
+            generator_log_size,
+        )
+
+    def test_compact_key_staged_runner_resume_replaces_killed_keygen(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            exit_file = root / "staged.exit"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            write_compact_key_execution_report(staged_artifact_dir, exit_code=-9)
+            write_compact_key_staged_run_report(staged_artifact_dir, exit_code=-9)
+            exit_file.write_text("-9\n", encoding="utf-8")
             args = compact_key_staged_runner.parse_args(
                 [
                     "--staged-artifact-dir",
@@ -29969,6 +30512,238 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
         self.assertEqual(status, 17)
         self.assertEqual(log_text, "compact local iroha probe\n")
+
+    def test_compact_key_staged_runner_explicit_iroha_bin_precedes_stale_release(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo_root = root / "repo"
+            stale_bin = repo_root / "target" / "release"
+            current_bin = root / "current"
+            stale_bin.mkdir(parents=True)
+            current_bin.mkdir()
+            stale_iroha = stale_bin / "iroha"
+            stale_iroha.write_text(
+                "#!/bin/sh\nprintf 'stale compact iroha %s\\n' \"$1\"\nexit 43\n",
+                encoding="utf-8",
+            )
+            stale_iroha.chmod(0o700)
+            current_iroha = current_bin / "iroha"
+            current_iroha.write_text(
+                "#!/bin/sh\nprintf 'current compact iroha %s\\n' \"$1\"\nexit 17\n",
+                encoding="utf-8",
+            )
+            current_iroha.chmod(0o700)
+            log_path = root / "compact-keygen.log"
+
+            with mock.patch.dict(os.environ, {"PATH": ""}):
+                status = compact_key_staged_runner._run_command_to_log(
+                    ["iroha", "probe"],
+                    repo_root,
+                    log_path,
+                    executable_repo_root=repo_root,
+                    iroha_bin=current_iroha,
+                )
+            log_text = log_path.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 17)
+        self.assertEqual(log_text, "current compact iroha probe\n")
+
+    def test_compact_key_staged_runner_rejects_symlinked_iroha_bin(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            real_bin = root / "real" / "iroha"
+            link_bin = root / "link" / "iroha"
+            real_bin.parent.mkdir()
+            link_bin.parent.mkdir()
+            real_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            real_bin.chmod(0o700)
+            link_bin.write_text("placeholder\n", encoding="utf-8")
+            slot_helpers.replace_with_symlink(self, link_bin, real_bin)
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--iroha-bin",
+                    str(link_bin),
+                    "--staged-artifact-dir",
+                    str(root / "staged" / "artifacts" / "kagemusha"),
+                    "--exit-file",
+                    str(root / "compact.exit"),
+                ]
+            )
+
+            def forbidden_runner(_command: list[str], _cwd: Path, _log_path: Path) -> int:
+                raise AssertionError("runner must not run with symlinked --iroha-bin")
+
+            status, errors = compact_key_staged_runner.run_staged_keygen(
+                args,
+                runner=forbidden_runner,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIn("--iroha-bin must not be a symlink", errors)
+
+    def _assert_staged_runner_rejects_unsafe_iroha_bin_variants(
+        self,
+        runner_module: Any,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            wrong_name = root / "wrong-name" / "iroha-current"
+            wrong_name.parent.mkdir()
+            wrong_name.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            wrong_name.chmod(0o700)
+
+            missing = root / "missing" / "iroha"
+
+            directory_bin = root / "directory" / "iroha"
+            directory_bin.mkdir(parents=True)
+
+            non_executable = root / "non-executable" / "iroha"
+            non_executable.parent.mkdir()
+            non_executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            non_executable.chmod(0o600)
+
+            real_parent = root / "real-parent"
+            symlink_parent = root / "symlink-parent"
+            real_parent.mkdir()
+            slot_helpers.create_dir_symlink(self, symlink_parent, real_parent)
+
+            path_shape_cases = (
+                (
+                    root / "private_key" / "iroha",
+                    ["--iroha-bin must not contain secret-looking material"],
+                ),
+                (
+                    root / "parent" / ".." / "iroha",
+                    ["--iroha-bin must be canonical"],
+                ),
+                (
+                    root / "control\nparent" / "iroha",
+                    ["--iroha-bin must not contain control characters"],
+                ),
+                (
+                    root / " padded " / "iroha",
+                    ["--iroha-bin must not contain surrounding whitespace"],
+                ),
+                (
+                    root / "back\\slash" / "iroha",
+                    ["--iroha-bin must not contain backslashes"],
+                ),
+            )
+
+            for path, expected_errors in path_shape_cases:
+                with self.subTest(path=str(path)):
+                    self.assertEqual(
+                        runner_module.validate_iroha_bin_path(path),
+                        expected_errors,
+                    )
+
+            cases = (
+                (wrong_name, ["--iroha-bin must point to a binary named iroha"]),
+                (missing, ["--iroha-bin is missing"]),
+                (directory_bin, ["--iroha-bin must be a regular file"]),
+                (non_executable, ["--iroha-bin must be executable"]),
+                (
+                    symlink_parent / "iroha",
+                    ["--iroha-bin ancestor directory must not be a symlink"],
+                ),
+            )
+
+            for path, expected_errors in cases:
+                with self.subTest(path=str(path)):
+                    self.assertEqual(
+                        runner_module.validate_iroha_bin_path(path),
+                        expected_errors,
+                    )
+
+    def test_compact_key_staged_runner_rejects_unsafe_iroha_bin_variants(
+        self,
+    ) -> None:
+        self._assert_staged_runner_rejects_unsafe_iroha_bin_variants(
+            compact_key_staged_runner
+        )
+
+    def _assert_staged_runner_rejects_unsafe_iroha_bin_before_launch(
+        self,
+        runner_module: Any,
+        *,
+        lineage: bool,
+    ) -> None:
+        cases = (
+            (
+                Path("private_key") / "iroha",
+                "--iroha-bin must not contain secret-looking material",
+            ),
+            (Path("parent") / ".." / "iroha", "--iroha-bin must be canonical"),
+            (
+                Path("control\nparent") / "iroha",
+                "--iroha-bin must not contain control characters",
+            ),
+            (
+                Path(" padded ") / "iroha",
+                "--iroha-bin must not contain surrounding whitespace",
+            ),
+            (Path("back\\slash") / "iroha", "--iroha-bin must not contain backslashes"),
+        )
+        for relative_path, expected_error in cases:
+            with self.subTest(path=str(relative_path), lineage=lineage):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp)
+                    staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+                    exit_file = root / "staged.exit"
+                    elapsed_file = root / "staged.elapsed"
+                    args_list = [
+                        "--iroha-bin",
+                        str(root / relative_path),
+                        "--staged-artifact-dir",
+                        str(staged_artifact_dir),
+                        "--exit-file",
+                        str(exit_file),
+                    ]
+                    if lineage:
+                        args_list.extend(
+                            [
+                                "--elapsed-seconds-file",
+                                str(elapsed_file),
+                            ]
+                        )
+                    args = runner_module.parse_args(args_list)
+
+                    def forbidden_runner(
+                        _command: list[str],
+                        _cwd: Path,
+                        _log_path: Path,
+                    ) -> int:
+                        raise AssertionError(
+                            "runner must not launch with unsafe --iroha-bin"
+                        )
+
+                    if lineage:
+                        status, errors = runner_module.run_staged_lineage_proof(
+                            args,
+                            runner=forbidden_runner,
+                        )
+                    else:
+                        status, errors = runner_module.run_staged_keygen(
+                            args,
+                            runner=forbidden_runner,
+                        )
+
+                self.assertEqual(status, 1)
+                self.assertIn(expected_error, errors)
+                self.assertFalse(staged_artifact_dir.exists())
+                self.assertFalse(exit_file.exists())
+                self.assertFalse(elapsed_file.exists())
+
+    def test_compact_key_staged_runner_rejects_unsafe_iroha_bin_before_launch(
+        self,
+    ) -> None:
+        self._assert_staged_runner_rejects_unsafe_iroha_bin_before_launch(
+            compact_key_staged_runner,
+            lineage=False,
+        )
 
     def test_compact_key_staged_runner_resolves_relative_repo_root_for_child_path(
         self,
@@ -32822,6 +33597,98 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     / lineage_staged_runner.LINEAGE_EXECUTION_REPORT_FILENAMES["append"]
                 ).read_text(encoding="utf-8")
             )
+            run_report = json.loads(
+                (staged_artifact_dir / lineage_staged_runner.RUN_REPORT_FILENAME).read_text(
+                    encoding="utf-8"
+                )
+            )
+            exit_text = exit_file.read_text(encoding="utf-8")
+            append_log_text = (
+                staged_artifact_dir
+                / lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES["append"]
+            ).read_text(encoding="utf-8")
+
+        self.assertEqual(status, 0)
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            calls,
+            [
+                lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["append"]
+                ),
+                lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND
+                ),
+            ],
+        )
+        self.assertEqual(append_execution_report["exit_code"], 0)
+        self.assertEqual(run_report["exit_code"], 0)
+        self.assertEqual(exit_text, "0\n")
+        self.assertEqual(append_log_text, "regenerated append lineage keys\n")
+
+    def test_lineage_proof_staged_runner_resume_replaces_killed_append_phase(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            exit_file = root / "staged.exit"
+            elapsed_file = root / "staged.elapsed"
+            create_lineage_artifact_files_for_profile(staged_artifact_dir, "init")
+            (
+                staged_artifact_dir
+                / lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES["init"]
+            ).write_text("generated init lineage keys\n", encoding="utf-8")
+            write_lineage_execution_report(staged_artifact_dir, "init")
+            (
+                staged_artifact_dir
+                / lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES["append"]
+            ).write_text("killed append lineage keys\n", encoding="utf-8")
+            write_lineage_execution_report(
+                staged_artifact_dir,
+                "append",
+                exit_code=-9,
+            )
+            exit_file.write_text("-9\n", encoding="utf-8")
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                    "--elapsed-seconds-file",
+                    str(elapsed_file),
+                    "--resume-key-artifacts",
+                ]
+            )
+            calls: list[list[str]] = []
+
+            def fake_runner(command: list[str], cwd: Path, log_path: Path) -> int:
+                calls.append(command)
+                append_command = lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["append"]
+                )
+                if command == append_command:
+                    self.assertEqual(cwd, root / "staged")
+                    create_lineage_artifact_files_for_profile(staged_artifact_dir, "append")
+                    log_path.write_text("regenerated append lineage keys\n", encoding="utf-8")
+                    return 0
+                write_passing_lineage_proof_log(log_path)
+                return 0
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=fake_runner,
+                monotonic=mock.Mock(side_effect=[1.0, 2.0]),
+            )
+            append_execution_report = json.loads(
+                (
+                    staged_artifact_dir
+                    / lineage_staged_runner.LINEAGE_EXECUTION_REPORT_FILENAMES["append"]
+                ).read_text(encoding="utf-8")
+            )
 
         self.assertEqual(status, 0)
         self.assertEqual(errors, [])
@@ -34289,6 +35156,93 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
         self.assertEqual(status, 19)
         self.assertEqual(log_text, "lineage local iroha probe\n")
+
+    def test_lineage_proof_staged_runner_explicit_iroha_bin_precedes_stale_release(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo_root = root / "repo"
+            stale_bin = repo_root / "target" / "release"
+            current_bin = root / "current"
+            stale_bin.mkdir(parents=True)
+            current_bin.mkdir()
+            stale_iroha = stale_bin / "iroha"
+            stale_iroha.write_text(
+                "#!/bin/sh\nprintf 'stale lineage iroha %s\\n' \"$1\"\nexit 41\n",
+                encoding="utf-8",
+            )
+            stale_iroha.chmod(0o700)
+            current_iroha = current_bin / "iroha"
+            current_iroha.write_text(
+                "#!/bin/sh\nprintf 'current lineage iroha %s\\n' \"$1\"\nexit 19\n",
+                encoding="utf-8",
+            )
+            current_iroha.chmod(0o700)
+            log_path = root / "lineage-proof.log"
+
+            with mock.patch.dict(os.environ, {"PATH": ""}):
+                status = lineage_staged_runner._run_command_to_log(
+                    ["iroha", "probe"],
+                    repo_root,
+                    log_path,
+                    executable_repo_root=repo_root,
+                    iroha_bin=current_iroha,
+                )
+            log_text = log_path.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 19)
+        self.assertEqual(log_text, "current lineage iroha probe\n")
+
+    def test_lineage_proof_staged_runner_rejects_symlinked_iroha_bin(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            real_bin = root / "real" / "iroha"
+            link_bin = root / "link" / "iroha"
+            real_bin.parent.mkdir()
+            link_bin.parent.mkdir()
+            real_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            real_bin.chmod(0o700)
+            link_bin.write_text("placeholder\n", encoding="utf-8")
+            slot_helpers.replace_with_symlink(self, link_bin, real_bin)
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--iroha-bin",
+                    str(link_bin),
+                    "--staged-artifact-dir",
+                    str(root / "staged" / "artifacts" / "kagemusha"),
+                    "--exit-file",
+                    str(root / "lineage.exit"),
+                    "--elapsed-seconds-file",
+                    str(root / "lineage.elapsed"),
+                ]
+            )
+
+            def forbidden_runner(_command: list[str], _cwd: Path, _log_path: Path) -> int:
+                raise AssertionError("runner must not run with symlinked --iroha-bin")
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=forbidden_runner,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIn("--iroha-bin must not be a symlink", errors)
+
+    def test_lineage_proof_staged_runner_rejects_unsafe_iroha_bin_variants(
+        self,
+    ) -> None:
+        self._assert_staged_runner_rejects_unsafe_iroha_bin_variants(
+            lineage_staged_runner
+        )
+
+    def test_lineage_proof_staged_runner_rejects_unsafe_iroha_bin_before_launch(
+        self,
+    ) -> None:
+        self._assert_staged_runner_rejects_unsafe_iroha_bin_before_launch(
+            lineage_staged_runner,
+            lineage=True,
+        )
 
     def test_lineage_proof_staged_runner_resolves_relative_repo_root_for_child_path(
         self,

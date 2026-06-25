@@ -2522,6 +2522,45 @@ test("BscTestnetSccp rejects percent-encoded native prover artifact paths", () =
   );
 });
 
+test("BscTestnetSccp rejects query and fragment native prover artifact paths", () => {
+  const fixture = sampleVerifiedBscTestnetNativeEvmProverFixture();
+
+  for (const suffix of ["?sha256=abc", "#sha256"]) {
+    assert.throws(
+      () =>
+        validateBscTestnetNativeEvmProverBundle(
+          {
+            ...fixture.bundle,
+            proof_artifact: `artifacts/bsc-testnet/proof-artifact.r1cs${suffix}`,
+          },
+          { destinationBinding: fixture.destinationBinding },
+        ),
+      /proofArtifact must not contain query strings or fragments/u,
+    );
+
+    assert.throws(
+      () =>
+        validateBscTestnetNativeEvmProverBundle(
+          {
+            ...fixture.bundle,
+            native_sdk_artifacts: fixture.bundle.native_sdk_artifacts.map(
+              (artifact) =>
+                artifact.sdk === "javascript"
+                  ? {
+                      ...artifact,
+                      implementation_artifact:
+                        `artifacts/bsc-testnet/javascript-implementation.bin${suffix}`,
+                    }
+                  : artifact,
+            ),
+          },
+          { destinationBinding: fixture.destinationBinding },
+        ),
+      /nativeSdkArtifacts\[0\]\.implementationArtifact must not contain query strings or fragments/u,
+    );
+  }
+});
+
 test("BscTestnetSccp rejects accessor-backed native prover evidence without invoking accessors", () => {
   const fixture = sampleVerifiedBscTestnetNativeEvmProverFixture();
 

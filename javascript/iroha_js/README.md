@@ -29,6 +29,33 @@ mismatched, SDK startup fails. Run `npm run build:native` explicitly after
 installing the Rust toolchain. Set `IROHA_JS_NATIVE_DIR` only in test harnesses
 that need to point at an alternate `native/` folder.
 
+## Native SoraFS Reference Validation
+
+SoraFS orderbook validation is available from the package root and from
+`@iroha/iroha-js/sorafs`. Use `validateOrderbookPayload(kind, bytes, options)`
+with Norito-encoded orderbook bytes and a kind such as `order-request`,
+`settlement-receipt`, or `runtime-snapshot`; it returns the canonical
+`ValidationOutcomeV1` JSON shape from the Rust reference validator.
+Use `signOrderbookPayload(kind, bytes, privateKey)` to sign already encoded
+`order-request`, `order-cancel`, or `settlement-receipt` bytes with a runtime
+Ed25519 private key before submitting them to Torii orderbook routes.
+Use `buildSignedOrderbookOrderRequest(fields, privateKey)`,
+`buildSignedOrderbookOrderCancel(fields, privateKey)`, or
+`buildSignedOrderbookSettlementReceipt(fields, privateKey)` when callers have
+field values instead of pre-encoded Norito payload bytes. The builders accept
+camelCase or snake_case field names, encode canonical Norito bytes, attach the
+Ed25519 payload signature, and return bytes ready for validation or Torii
+submission.
+`SORAFS_ORDERBOOK_PAYLOAD_KINDS` exports the stable kind labels for callers that
+prefer constants over string literals.
+
+PDP reference validation uses the same native bridge. Use
+`validatePdpPayload(kind, bytes, options)` for one commitment, challenge, or
+proof, `validatePdpCommitmentChallenge(...)` or
+`validatePdpChallengeProof(...)` for pair binding, and
+`validatePdpBundle(...)` for the full commitment/challenge/proof set.
+`SORAFS_PDP_PAYLOAD_KINDS` exports stable kind labels.
+
 ## Native Recursive Kagemusha Spend
 
 Native builds expose ABI-6 recursive Kagemusha spend helpers from the crypto
@@ -119,6 +146,12 @@ lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base
 verifier-witness batch, transition-profile, append-opening-preflight,
 append-boundary, scalar-projection, and previous/resulting accumulator digests);
 SDK code must not derive, supply, or patch accumulator state.
+generic proof-state (`proofState`, `ProofState`, `proof_state`),
+recursive/lineage proof-state, aggregation-transcript, fixed-window
+table-schedule/shared-manifest/table-base, verifier-witness batch,
+transition-profile binding, append-opening preflight, recursive verifier
+scalar-projection, and previous/resulting accumulator aliases are native-owned
+material, not JavaScript or TypeScript request fields.
 Production init requests and Reserved-lineage append-output requests must also
 include packaged lineage key artifacts in the raw Norito request:
 `lineage_verifier_key` and `lineage_proving_key_archive`. Missing artifacts are
@@ -1740,6 +1773,37 @@ console.log(`doc namespace aliases=${aliases.returned_count}`);
 const replication = await torii.listSorafsReplicationOrders({ status: "pending" });
 console.log(`pending replication orders=${replication.total_count}`);
 
+const orderbook = await torii.getSorafsOrderbook();
+console.log(`open local orderbook orders=${orderbook.open_order_count}`);
+const orderbookEvents = await torii.listSorafsOrderbookEvents({ since: 0, limit: 25 });
+console.log(`local orderbook events=${orderbookEvents?.count ?? 0}`);
+for await (const event of torii.streamSorafsOrderbookEvents({ since: orderbookEvents?.next_since ?? 0 })) {
+  console.log("orderbook event", event.event, event.data);
+  break;
+}
+for await (const event of torii.streamSorafsOrderbookEventsWebSocket({
+  since: orderbookEvents?.next_since ?? 0,
+  WebSocketImpl: WebSocket,
+})) {
+  console.log("orderbook websocket event", event.event, event.data);
+  break;
+}
+const orderResult = await torii.submitSorafsOrderbookOrder(orderRequestNoritoBytes, {
+  canonicalAuth: {
+    accountId: "<canonical_i105_account_id>",
+    privateKey: requestEnvelopePrivateKey,
+  },
+});
+console.log("local orderbook order status", orderResult.status);
+// Cancel and receipt helpers use the same envelope auth. The Norito payload
+// bytes must already include their embedded orderbook payload signature.
+await torii.submitSorafsOrderbookCancel(orderCancelNoritoBytes, {
+  canonicalAuth: { accountId: "<canonical_i105_account_id>", privateKey: requestEnvelopePrivateKey },
+});
+await torii.submitSorafsOrderbookReceipt(settlementReceiptNoritoBytes, {
+  canonicalAuth: { accountId: "<canonical_i105_account_id>", privateKey: requestEnvelopePrivateKey },
+});
+
 for await (const manifest of torii.iterateSorafsPinManifests({ pageSize: 25 })) {
   console.log("manifest digest", manifest.digest_hex);
 }
@@ -3132,7 +3196,7 @@ plain object. Passing primitives, arrays, or class instances throws a
 `TypeError` before any HTTP call, keeping the JS-04 validation guarantees aligned
 with the Rust/Python SDKs.
 
-All pagination knobs (`limit`, `offset`, `pageSize`, `maxItems`, `fetchSize`) accept the
+All pagination knobs (`limit`, `offset`, `pageSize`, `maxItems`, `fetch_size`) accept the
 `NumericLike` inputs used across the transaction builders (`number`, `string`, or `bigint`).
 They are normalised via the same unsigned-integer validators before any request fires
 (integers only, up to `Number.MAX_SAFE_INTEGER`), so passing `"25"` or `10n` behaves
@@ -3160,7 +3224,7 @@ for await (const assetDef of torii.iterateAssetDefinitions({
 const defs = await torii.queryAssetDefinitions({
   filter: { Eq: ["metadata.display_name", "Ticket"] },
   sort: [{ key: "metadata.display_name", order: "desc" }],
-  fetchSize: 100,
+  fetch_size: 100,
 });
 console.log("filtered definitions", defs.items);
 

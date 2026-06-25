@@ -799,6 +799,12 @@ lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base
 verifier-witness batch, transition-profile, append-opening-preflight,
 append-boundary, scalar-projection, and previous/resulting accumulator digests);
 SDK code must not derive, supply, or patch accumulator state.
+generic proof-state (`proofState`, `ProofState`, `proof_state`),
+recursive/lineage proof-state, aggregation-transcript, fixed-window
+table-schedule/shared-manifest/table-base, verifier-witness batch,
+transition-profile binding, append-opening preflight, recursive verifier
+scalar-projection, and previous/resulting accumulator aliases are native-owned
+material, not Swift request fields.
 Verify request archives must pass the
 same public-binding preflight before the native bridge returns a
 `KagemushaRecursiveSpendVerifyResultV1`: Reserved-lineage bundles require a

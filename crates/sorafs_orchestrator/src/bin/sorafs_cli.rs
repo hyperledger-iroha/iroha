@@ -8,9 +8,11 @@ use std::{
     fmt::Write as FmtWrite,
     fs::{self, File},
     io::{self, BufRead, BufReader, BufWriter, Cursor, Read, Write},
+    net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process,
     str::FromStr,
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -33,7 +35,10 @@ use iroha_data_model::{
     name::Name,
     prelude::ExposedPrivateKey,
     sorafs::{
-        moderation::{AdversarialCorpusManifestV1, ModerationReproManifestV1},
+        moderation::{
+            AdversarialCorpusManifestV1, ModerationModelFingerprintV1, ModerationReproManifestV1,
+            ModerationThresholdsV1,
+        },
         pin_registry::{
             ChunkerProfileHandle, PinPolicy as RegistryPinPolicy,
             StorageClass as RegistryStorageClass,
@@ -113,6 +118,17 @@ const CHALLENGE_AUTH_TOKEN_VERSION_V1: u8 = 1;
 const CONTEXT_APPEAL_QUOTE: &str = "sorafs_cli appeal quote";
 const CONTEXT_APPEAL_SETTLE: &str = "sorafs_cli appeal settle";
 const CONTEXT_APPEAL_DISBURSE: &str = "sorafs_cli appeal disburse";
+const MODERATION_LOCAL_RUNNER_MODEL_SCORE_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.local-runner.model-score.v1";
+const MODERATION_LOCAL_RUNNER_POLICY_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.local-runner.policy-digest.v1";
+const MODERATION_LOCAL_RUNNER_EVIDENCE_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.local-runner.evidence-digest.v1";
+const MODERATION_RUNNER_DEFAULT_LISTEN: &str = "127.0.0.1:9194";
+const MODERATION_RUNNER_GRPC_DEFAULT_LISTEN: &str = "127.0.0.1:9199";
+const MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
+const MODERATION_COMMITTEE_DEFAULT_LISTEN: &str = "127.0.0.1:9196";
+const MODERATION_REGISTRY_DEFAULT_LISTEN: &str = "127.0.0.1:9198";
 
 fn parse_u32_arg(flag: &str, raw: &str, context: &str) -> Result<u32, String> {
     raw.trim()
@@ -610,6 +626,16 @@ fn run() -> Result<(), String> {
             match sub.as_str() {
                 "validate-repro" => moderation_validate_repro(args.collect()),
                 "validate-corpus" => moderation_validate_corpus(args.collect()),
+                "registry-serve" => moderation_registry_serve(args.collect()),
+                "run-local" => moderation_run_local(args.collect()),
+                "runner-serve" => moderation_runner_serve(args.collect()),
+                "runner-grpc-serve" => moderation_runner_grpc_serve(args.collect()),
+                "runner-bundle" => moderation_runner_bundle(args.collect()),
+                "runner-canary" => moderation_runner_canary(args.collect()),
+                "committee-run" => moderation_committee_run(args.collect()),
+                "committee-serve" => moderation_committee_serve(args.collect()),
+                "committee-bundle" => moderation_committee_bundle(args.collect()),
+                "committee-canary" => moderation_committee_canary(args.collect()),
                 "honey-audit" => moderation_honey_audit(args.collect()),
                 _ => Err(moderation_usage()),
             }
@@ -3164,6 +3190,16 @@ fn usage() -> String {
   sorafs_cli taikai bundle --payload=PATH --car-out=PATH --envelope-out=PATH --event-id=NAME --stream-id=NAME --rendition-id=NAME --track-kind=video|audio|data --codec=CODEC --bitrate-kbps=KBPS --segment-sequence=N --segment-start-pts=N --segment-duration=N --wallclock-unix-ms=N --manifest-hash=HEX --storage-ticket=HEX [--indexes-out=PATH] [--ingest-metadata-out=PATH] [--summary-out=PATH] [--resolution=WxH] [--audio-layout=mono|stereo|5.1|7.1|custom:<label>] [--ingest-latency-ms=N] [--live-edge-drift-ms=N] [--ingest-node-id=ID] [--metadata-json=PATH]
   sorafs_cli moderation validate-repro --manifest=PATH [--format=json|norito]
   sorafs_cli moderation validate-corpus --manifest=PATH [--format=json|norito]
+  sorafs_cli moderation registry-serve --state=PATH [--listen=HOST:PORT] [--max-body-bytes=N] [--snapshot-limit=N]
+  sorafs_cli moderation run-local --manifest=PATH [--format=json|norito] --payload=PATH --subject=ID --screened-at=UNIX_SECS [--notes=TEXT] [--json-out=PATH]
+  sorafs_cli moderation runner-serve --manifest=PATH [--format=json|norito] [--listen=HOST:PORT] [--max-body-bytes=N]
+  sorafs_cli moderation runner-grpc-serve --manifest=PATH [--format=json|norito] [--listen=HOST:PORT] [--max-body-bytes=N]
+  sorafs_cli moderation runner-bundle --manifest=PATH [--format=json|norito] --bundle-out=DIR [--listen=HOST:PORT] [--max-body-bytes=N] [--binary=PATH] [--service-name=NAME] [--service-user=USER] [--service-group=GROUP]
+  sorafs_cli moderation runner-canary --manifest=PATH [--format=json|norito] --runner-url=URL --payload=PATH --subject=ID --screened-at=UNIX_SECS [--checked-at=UNIX_SECS] [--notes=TEXT] [--timeout-ms=N] [--json-out=PATH]
+  sorafs_cli moderation committee-run --manifest=PATH [--format=json|norito] --quorum=N --result=PATH [--result=PATH...] [--notes=TEXT] [--json-out=PATH]
+  sorafs_cli moderation committee-serve --manifest=PATH [--format=json|norito] --quorum=N [--listen=HOST:PORT] [--max-body-bytes=N]
+  sorafs_cli moderation committee-bundle --manifest=PATH [--format=json|norito] --quorum=N --bundle-out=DIR [--listen=HOST:PORT] [--max-body-bytes=N] [--binary=PATH] [--service-name=NAME] [--service-user=USER] [--service-group=GROUP]
+  sorafs_cli moderation committee-canary --manifest=PATH [--format=json|norito] --committee-url=URL --quorum=N --result=PATH [--result=PATH...] [--checked-at=UNIX_SECS] [--notes=TEXT] [--timeout-ms=N] [--json-out=PATH]
   sorafs_cli moderation honey-audit --manifest-id=HEX --honey=HEX [--honey=HEX...] --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [...] [--chunker-handle=HANDLE] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] [--require-proof] [--json-out=PATH] [--markdown-out=PATH]
   sorafs_cli appeal quote --class=content|access|fraud|other [--backlog=N] [--evidence-mb=N] [--urgency=normal|high] [--panel-size=N] [--format=table|json] [--config=PATH|-]
   sorafs_cli governance dag list --root=DIR [--format=table|json] [--summary-out=PATH]
@@ -3454,9 +3490,19 @@ fn moderation_usage() -> String {
     "Usage:
   sorafs_cli moderation validate-repro --manifest=PATH [--format=json|norito]
   sorafs_cli moderation validate-corpus --manifest=PATH [--format=json|norito]
+  sorafs_cli moderation registry-serve --state=PATH [--listen=HOST:PORT] [--max-body-bytes=N] [--snapshot-limit=N]
+  sorafs_cli moderation run-local --manifest=PATH [--format=json|norito] --payload=PATH --subject=ID --screened-at=UNIX_SECS [--notes=TEXT] [--json-out=PATH]
+  sorafs_cli moderation runner-serve --manifest=PATH [--format=json|norito] [--listen=HOST:PORT] [--max-body-bytes=N]
+  sorafs_cli moderation runner-grpc-serve --manifest=PATH [--format=json|norito] [--listen=HOST:PORT] [--max-body-bytes=N]
+  sorafs_cli moderation runner-bundle --manifest=PATH [--format=json|norito] --bundle-out=DIR [--listen=HOST:PORT] [--max-body-bytes=N] [--binary=PATH] [--service-name=NAME] [--service-user=USER] [--service-group=GROUP]
+  sorafs_cli moderation runner-canary --manifest=PATH [--format=json|norito] --runner-url=URL --payload=PATH --subject=ID --screened-at=UNIX_SECS [--checked-at=UNIX_SECS] [--notes=TEXT] [--timeout-ms=N] [--json-out=PATH]
+  sorafs_cli moderation committee-run --manifest=PATH [--format=json|norito] --quorum=N --result=PATH [--result=PATH...] [--notes=TEXT] [--json-out=PATH]
+  sorafs_cli moderation committee-serve --manifest=PATH [--format=json|norito] --quorum=N [--listen=HOST:PORT] [--max-body-bytes=N]
+  sorafs_cli moderation committee-bundle --manifest=PATH [--format=json|norito] --quorum=N --bundle-out=DIR [--listen=HOST:PORT] [--max-body-bytes=N] [--binary=PATH] [--service-name=NAME] [--service-user=USER] [--service-group=GROUP]
+  sorafs_cli moderation committee-canary --manifest=PATH [--format=json|norito] --committee-url=URL --quorum=N --result=PATH [--result=PATH...] [--checked-at=UNIX_SECS] [--notes=TEXT] [--timeout-ms=N] [--json-out=PATH]
   sorafs_cli moderation honey-audit --manifest-id=HEX --honey=HEX [--honey=HEX...] --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [...] [--chunker-handle=HANDLE] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] [--require-proof] [--json-out=PATH] [--markdown-out=PATH]
 
-Validates governance-signed AI moderation reproducibility manifests and adversarial corpus registries before gateways adopt them. Use `honey-audit` to probe gateways with denylisted digests and emit JSON/Markdown evidence for policy enforcement."
+Validates governance-signed AI moderation reproducibility manifests and adversarial corpus registries before gateways adopt them. Use `registry-serve` to run a persistent standalone model-registry service, `run-local` to produce deterministic local screening-result JSON for Torii admission, `runner-serve` to expose the same locked-manifest deterministic runner over local HTTP, `runner-grpc-serve` to expose the production unary gRPC runner service, `runner-bundle` to generate supervised deployment artifacts for that runner, `runner-canary` to capture payload-free rollout evidence from a deployed runner, `committee-run` to aggregate payload-free runner results under a quorum, `committee-serve` to expose that aggregation as a locked-manifest service, `committee-bundle` and `committee-canary` to package and verify that committee service, and `honey-audit` to probe gateways with denylisted digests and emit JSON/Markdown evidence for policy enforcement."
         .to_string()
 }
 
@@ -4386,6 +4432,4425 @@ fn moderation_validate_corpus(raw_args: Vec<String>) -> Result<(), String> {
     );
 
     Ok(())
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct ModerationRegistryPersistedSnapshot {
+    schema_version: u16,
+    repro_manifests: Vec<ModerationRegistryReproRecord>,
+    adversarial_corpora: Vec<ModerationRegistryCorpusRecord>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct ModerationRegistryReproRecord {
+    manifest_id: [u8; 16],
+    manifest_digest: [u8; 32],
+    runner_hash: [u8; 32],
+    runtime_version: String,
+    issued_at_unix: u64,
+    model_count: u32,
+    signer_count: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct ModerationRegistryCorpusRecord {
+    corpus_digest: [u8; 32],
+    issued_at_unix: u64,
+    cohort_label: Option<String>,
+    family_count: u32,
+    variant_count: u32,
+}
+
+struct ModerationRegistryService {
+    state_path: PathBuf,
+    state: Mutex<ModerationRegistryPersistedSnapshot>,
+    max_body_bytes: usize,
+    snapshot_limit: usize,
+}
+
+fn moderation_registry_serve(raw_args: Vec<String>) -> Result<(), String> {
+    let mut state_path: Option<PathBuf> = None;
+    let mut listen = String::from(MODERATION_REGISTRY_DEFAULT_LISTEN);
+    let mut max_body_bytes = MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES;
+    let mut snapshot_limit = 500_usize;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(moderation_usage());
+        }
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--state" => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    return Err("`--state` must not be empty".to_string());
+                }
+                state_path = Some(PathBuf::from(trimmed));
+            }
+            "--listen" => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    return Err("`--listen` must not be empty".to_string());
+                }
+                listen = trimmed.to_string();
+            }
+            "--max-body-bytes" => {
+                let parsed = parse_u64_arg(
+                    "--max-body-bytes",
+                    value,
+                    "sorafs_cli moderation registry-serve",
+                )?;
+                max_body_bytes = usize::try_from(parsed).map_err(|_| {
+                    "`--max-body-bytes` does not fit into this platform's usize".to_string()
+                })?;
+                if max_body_bytes == 0 {
+                    return Err("`--max-body-bytes` must be greater than zero".to_string());
+                }
+            }
+            "--snapshot-limit" => {
+                let parsed = parse_u64_arg(
+                    "--snapshot-limit",
+                    value,
+                    "sorafs_cli moderation registry-serve",
+                )?;
+                snapshot_limit = usize::try_from(parsed).map_err(|_| {
+                    "`--snapshot-limit` does not fit into this platform's usize".to_string()
+                })?;
+                if snapshot_limit == 0 {
+                    return Err("`--snapshot-limit` must be greater than zero".to_string());
+                }
+            }
+            _ => {
+                return Err(format!(
+                    "unrecognised option `{key}` for `sorafs_cli moderation registry-serve`"
+                ));
+            }
+        }
+    }
+
+    let state_path = state_path.ok_or_else(|| {
+        "missing required `--state=PATH` for `sorafs_cli moderation registry-serve`".to_string()
+    })?;
+    let state = moderation_registry_load_state(&state_path)?;
+    moderation_registry_save_state(&state_path, &state)?;
+
+    let listener = TcpListener::bind(&listen).map_err(|err| {
+        format!("failed to bind moderation model registry service at `{listen}`: {err}")
+    })?;
+    let local_addr = listener
+        .local_addr()
+        .map(|addr| addr.to_string())
+        .unwrap_or_else(|_| listen.clone());
+    let service = Arc::new(ModerationRegistryService {
+        state_path,
+        state: Mutex::new(state),
+        max_body_bytes,
+        snapshot_limit,
+    });
+    let status = moderation_registry_status_json(&service, "listening", Some(&local_addr))?;
+    let rendered = to_string_pretty(&status)
+        .map_err(|err| format!("failed to render model registry service status JSON: {err}"))?;
+    println!("{rendered}");
+
+    for incoming in listener.incoming() {
+        match incoming {
+            Ok(stream) => {
+                let service = Arc::clone(&service);
+                thread::spawn(move || {
+                    if let Err(err) =
+                        moderation_registry_handle_stream(stream, &service, max_body_bytes)
+                    {
+                        eprintln!("sorafs moderation model registry connection failed: {err}");
+                    }
+                });
+            }
+            Err(err) => eprintln!("sorafs moderation model registry accept failed: {err}"),
+        }
+    }
+
+    Ok(())
+}
+
+fn moderation_registry_load_state(
+    path: &Path,
+) -> Result<ModerationRegistryPersistedSnapshot, String> {
+    if !path.exists() {
+        return Ok(ModerationRegistryPersistedSnapshot {
+            schema_version: 1,
+            ..Default::default()
+        });
+    }
+    let bytes = fs::read(path).map_err(|err| {
+        format!(
+            "failed to read model registry state `{}`: {err}",
+            path.display()
+        )
+    })?;
+    if bytes.is_empty() {
+        return Ok(ModerationRegistryPersistedSnapshot {
+            schema_version: 1,
+            ..Default::default()
+        });
+    }
+    let mut snapshot =
+        decode_from_bytes::<ModerationRegistryPersistedSnapshot>(&bytes).map_err(|err| {
+            format!(
+                "failed to decode Norito model registry state `{}`: {err}",
+                path.display()
+            )
+        })?;
+    moderation_registry_normalize_snapshot(&mut snapshot)?;
+    Ok(snapshot)
+}
+
+fn moderation_registry_save_state(
+    path: &Path,
+    state: &ModerationRegistryPersistedSnapshot,
+) -> Result<(), String> {
+    ensure_parent_dir(path)?;
+    let mut normalized = state.clone();
+    moderation_registry_normalize_snapshot(&mut normalized)?;
+    let bytes = to_bytes(&normalized)
+        .map_err(|err| format!("failed to encode model registry state as Norito: {err}"))?;
+    let tmp_path = path.with_extension("tmp");
+    fs::write(&tmp_path, &bytes)
+        .map_err(|err| format!("failed to write `{}`: {err}", tmp_path.display()))?;
+    fs::rename(&tmp_path, path).map_err(|err| {
+        format!(
+            "failed to replace model registry state `{}` with `{}`: {err}",
+            path.display(),
+            tmp_path.display()
+        )
+    })
+}
+
+fn moderation_registry_normalize_snapshot(
+    snapshot: &mut ModerationRegistryPersistedSnapshot,
+) -> Result<(), String> {
+    if snapshot.schema_version == 0 {
+        snapshot.schema_version = 1;
+    }
+    if snapshot.schema_version != 1 {
+        return Err(format!(
+            "unsupported model registry snapshot version {}",
+            snapshot.schema_version
+        ));
+    }
+    snapshot
+        .repro_manifests
+        .sort_by_key(|record| record.manifest_id);
+    snapshot
+        .adversarial_corpora
+        .sort_by_key(|record| record.corpus_digest);
+    let mut seen_repro = BTreeSet::new();
+    for record in &snapshot.repro_manifests {
+        if !seen_repro.insert(record.manifest_id) {
+            return Err(
+                "duplicate reproducibility manifest id in model registry state".to_string(),
+            );
+        }
+        if record.runtime_version.trim().is_empty() {
+            return Err(format!(
+                "reproducibility manifest `{}` has an empty runtime version",
+                hex_encode(record.manifest_id)
+            ));
+        }
+        if record.model_count == 0 {
+            return Err(format!(
+                "reproducibility manifest `{}` has no model fingerprints",
+                hex_encode(record.manifest_id)
+            ));
+        }
+        if record.signer_count == 0 {
+            return Err(format!(
+                "reproducibility manifest `{}` has no governance signers",
+                hex_encode(record.manifest_id)
+            ));
+        }
+    }
+    let mut seen_corpus = BTreeSet::new();
+    for record in &snapshot.adversarial_corpora {
+        if !seen_corpus.insert(record.corpus_digest) {
+            return Err("duplicate adversarial corpus digest in model registry state".to_string());
+        }
+        if record.family_count == 0 {
+            return Err(format!(
+                "adversarial corpus `{}` has no perceptual families",
+                hex_encode(record.corpus_digest)
+            ));
+        }
+        if record.variant_count == 0 {
+            return Err(format!(
+                "adversarial corpus `{}` has no variants",
+                hex_encode(record.corpus_digest)
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn moderation_registry_handle_stream(
+    mut stream: TcpStream,
+    service: &ModerationRegistryService,
+    max_body_bytes: usize,
+) -> io::Result<()> {
+    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let count = stream.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..count]);
+        if request.len() > max_body_bytes.saturating_add(8192) {
+            break;
+        }
+        if let Some((header_len, content_len)) = moderation_runner_request_lengths(&request) {
+            if content_len > max_body_bytes || request.len() >= header_len + content_len {
+                break;
+            }
+        }
+    }
+    let response = moderation_registry_http_response(service, &request, max_body_bytes);
+    stream.write_all(&response)?;
+    stream.flush()
+}
+
+fn moderation_registry_http_response(
+    service: &ModerationRegistryService,
+    request: &[u8],
+    max_body_bytes: usize,
+) -> Vec<u8> {
+    match moderation_runner_parse_http_request(request, max_body_bytes) {
+        Ok(parsed) => moderation_registry_route_request(service, &parsed),
+        Err(response) => response,
+    }
+}
+
+fn moderation_registry_route_request(
+    service: &ModerationRegistryService,
+    request: &ModerationRunnerHttpRequest<'_>,
+) -> Vec<u8> {
+    match (request.method, request.path) {
+        ("GET", "/healthz") | ("GET", "/v1/sorafs/moderation/model-registry/status") => {
+            match moderation_registry_status_json(service, "ready", None) {
+                Ok(value) => moderation_registry_json_response(200, "OK", &value),
+                Err(message) => {
+                    moderation_registry_error_response(500, "Internal Server Error", &message)
+                }
+            }
+        }
+        ("GET", "/v1/sorafs/moderation/model-registry") => {
+            match moderation_registry_snapshot_response_json(service) {
+                Ok(value) => moderation_registry_json_response(200, "OK", &value),
+                Err(message) => {
+                    moderation_registry_error_response(500, "Internal Server Error", &message)
+                }
+            }
+        }
+        ("POST", "/v1/sorafs/moderation/model-registry/repro-manifests") => {
+            match moderation_registry_admit_repro_request_json(service, request.body) {
+                Ok(value) => moderation_registry_json_response(200, "OK", &value),
+                Err(message) => moderation_registry_error_response(400, "Bad Request", &message),
+            }
+        }
+        ("POST", "/v1/sorafs/moderation/model-registry/corpora") => {
+            match moderation_registry_admit_corpus_request_json(service, request.body) {
+                Ok(value) => moderation_registry_json_response(200, "OK", &value),
+                Err(message) => moderation_registry_error_response(400, "Bad Request", &message),
+            }
+        }
+        ("GET", _) | ("POST", _) => moderation_registry_error_response(
+            404,
+            "Not Found",
+            "unknown SoraFS moderation model registry endpoint",
+        ),
+        _ => moderation_registry_error_response(
+            405,
+            "Method Not Allowed",
+            "SoraFS moderation model registry supports GET and POST only",
+        ),
+    }
+}
+
+fn moderation_registry_admit_repro_request_json(
+    service: &ModerationRegistryService,
+    body: &[u8],
+) -> Result<Value, String> {
+    let bytes = moderation_registry_manifest_bytes_from_request(
+        body,
+        "moderation model registry reproducibility manifest admission",
+    )?;
+    let manifest = decode_from_bytes::<ModerationReproManifestV1>(&bytes)
+        .map_err(|err| format!("failed to decode Norito reproducibility manifest: {err}"))?;
+    let record = moderation_registry_repro_record_from_manifest(&manifest)?;
+    let (record, created) = moderation_registry_insert_repro(service, record)?;
+    Ok(moderation_registry_repro_admission_json(&record, created))
+}
+
+fn moderation_registry_admit_corpus_request_json(
+    service: &ModerationRegistryService,
+    body: &[u8],
+) -> Result<Value, String> {
+    let bytes = moderation_registry_manifest_bytes_from_request(
+        body,
+        "moderation model registry adversarial corpus admission",
+    )?;
+    let manifest = decode_from_bytes::<AdversarialCorpusManifestV1>(&bytes)
+        .map_err(|err| format!("failed to decode Norito adversarial corpus manifest: {err}"))?;
+    let record = moderation_registry_corpus_record_from_manifest(&manifest)?;
+    let (record, created) = moderation_registry_insert_corpus(service, record)?;
+    Ok(moderation_registry_corpus_admission_json(&record, created))
+}
+
+fn moderation_registry_manifest_bytes_from_request(
+    body: &[u8],
+    context: &str,
+) -> Result<Vec<u8>, String> {
+    if body.is_empty() {
+        return Err(format!("{context} body must not be empty"));
+    }
+    let value: Value =
+        from_slice(body).map_err(|err| format!("failed to parse {context} JSON: {err}"))?;
+    if json_contains_key(&value, "payload_b64") {
+        return Err(format!("{context} must not contain `payload_b64`"));
+    }
+    let fields = value
+        .as_object()
+        .ok_or_else(|| format!("{context} body must be a JSON object"))?;
+    let manifest_b64 = required_json_string(fields, "manifest_b64", context)?;
+    let bytes = BASE64_STANDARD
+        .decode(manifest_b64)
+        .map_err(|err| format!("{context} `manifest_b64` is not valid base64: {err}"))?;
+    if bytes.is_empty() {
+        return Err(format!("{context} `manifest_b64` decoded to empty bytes"));
+    }
+    Ok(bytes)
+}
+
+fn moderation_registry_repro_record_from_manifest(
+    manifest: &ModerationReproManifestV1,
+) -> Result<ModerationRegistryReproRecord, String> {
+    let summary = manifest
+        .validate()
+        .map_err(|err| format!("reproducibility manifest validation failed: {err}"))?;
+    Ok(ModerationRegistryReproRecord {
+        manifest_id: summary.manifest_id,
+        manifest_digest: manifest.body.manifest_digest,
+        runner_hash: manifest.body.runner_hash,
+        runtime_version: manifest.body.runtime_version.clone(),
+        issued_at_unix: summary.issued_at_unix,
+        model_count: summary.model_count,
+        signer_count: summary.signer_count,
+    })
+}
+
+fn moderation_registry_corpus_record_from_manifest(
+    manifest: &AdversarialCorpusManifestV1,
+) -> Result<ModerationRegistryCorpusRecord, String> {
+    manifest
+        .validate()
+        .map_err(|err| format!("adversarial corpus manifest validation failed: {err}"))?;
+    let encoded = to_bytes(manifest)
+        .map_err(|err| format!("failed to encode adversarial corpus manifest: {err}"))?;
+    let family_count = manifest.families.len().min(u32::MAX as usize) as u32;
+    let variant_count = manifest
+        .families
+        .iter()
+        .map(|family| family.variants.len())
+        .sum::<usize>()
+        .min(u32::MAX as usize) as u32;
+    Ok(ModerationRegistryCorpusRecord {
+        corpus_digest: *blake3_hash(&encoded).as_bytes(),
+        issued_at_unix: manifest.issued_at_unix,
+        cohort_label: manifest.cohort_label.clone(),
+        family_count,
+        variant_count,
+    })
+}
+
+fn moderation_registry_insert_repro(
+    service: &ModerationRegistryService,
+    record: ModerationRegistryReproRecord,
+) -> Result<(ModerationRegistryReproRecord, bool), String> {
+    let mut state = service
+        .state
+        .lock()
+        .map_err(|_| "moderation model registry state lock poisoned".to_string())?;
+    match state
+        .repro_manifests
+        .iter()
+        .position(|existing| existing.manifest_id == record.manifest_id)
+    {
+        Some(index) if state.repro_manifests[index] != record => Err(format!(
+            "moderation reproducibility manifest `{}` conflicts with registry",
+            hex_encode(record.manifest_id)
+        )),
+        Some(index) => Ok((state.repro_manifests[index].clone(), false)),
+        None => {
+            state.repro_manifests.push(record.clone());
+            moderation_registry_normalize_snapshot(&mut state)?;
+            moderation_registry_save_state(&service.state_path, &state)?;
+            Ok((record, true))
+        }
+    }
+}
+
+fn moderation_registry_insert_corpus(
+    service: &ModerationRegistryService,
+    record: ModerationRegistryCorpusRecord,
+) -> Result<(ModerationRegistryCorpusRecord, bool), String> {
+    let mut state = service
+        .state
+        .lock()
+        .map_err(|_| "moderation model registry state lock poisoned".to_string())?;
+    match state
+        .adversarial_corpora
+        .iter()
+        .position(|existing| existing.corpus_digest == record.corpus_digest)
+    {
+        Some(index) => Ok((state.adversarial_corpora[index].clone(), false)),
+        None => {
+            state.adversarial_corpora.push(record.clone());
+            moderation_registry_normalize_snapshot(&mut state)?;
+            moderation_registry_save_state(&service.state_path, &state)?;
+            Ok((record, true))
+        }
+    }
+}
+
+fn moderation_registry_status_json(
+    service: &ModerationRegistryService,
+    status: &str,
+    listen: Option<&str>,
+) -> Result<Value, String> {
+    let state = service
+        .state
+        .lock()
+        .map_err(|_| "moderation model registry state lock poisoned".to_string())?;
+    let mut output = Map::new();
+    output.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.model_registry.service_status.v1"),
+    );
+    output.insert("status".into(), Value::from(status.to_string()));
+    output.insert("source".into(), Value::from("sorafs_cli"));
+    output.insert(
+        "state_path".into(),
+        Value::from(service.state_path.display().to_string()),
+    );
+    output.insert(
+        "state_digest_hex".into(),
+        Value::from(moderation_registry_state_digest_hex(&state)?),
+    );
+    output.insert(
+        "repro_manifest_count".into(),
+        Value::from(state.repro_manifests.len() as u64),
+    );
+    output.insert(
+        "corpus_count".into(),
+        Value::from(state.adversarial_corpora.len() as u64),
+    );
+    output.insert(
+        "max_body_bytes".into(),
+        Value::from(service.max_body_bytes as u64),
+    );
+    output.insert(
+        "snapshot_limit".into(),
+        Value::from(service.snapshot_limit as u64),
+    );
+    output.insert("outbound_network".into(), Value::from("disabled"));
+    output.insert(
+        "listen".into(),
+        listen
+            .map(|value| Value::from(value.to_string()))
+            .unwrap_or(Value::Null),
+    );
+    Ok(Value::Object(output))
+}
+
+fn moderation_registry_snapshot_response_json(
+    service: &ModerationRegistryService,
+) -> Result<Value, String> {
+    let state = service
+        .state
+        .lock()
+        .map_err(|_| "moderation model registry state lock poisoned".to_string())?;
+    Ok(moderation_registry_snapshot_json(
+        &state,
+        service.snapshot_limit,
+    )?)
+}
+
+fn moderation_registry_state_digest_hex(
+    state: &ModerationRegistryPersistedSnapshot,
+) -> Result<String, String> {
+    let bytes = to_bytes(state)
+        .map_err(|err| format!("failed to encode model registry state for digest: {err}"))?;
+    Ok(hex_encode(blake3_hash(&bytes).as_bytes()))
+}
+
+fn moderation_registry_snapshot_json(
+    state: &ModerationRegistryPersistedSnapshot,
+    limit: usize,
+) -> Result<Value, String> {
+    let repro_count = state.repro_manifests.len();
+    let corpus_count = state.adversarial_corpora.len();
+    let repro_manifests = state
+        .repro_manifests
+        .iter()
+        .take(limit)
+        .map(moderation_registry_repro_record_json)
+        .collect::<Vec<_>>();
+    let adversarial_corpora = state
+        .adversarial_corpora
+        .iter()
+        .take(limit)
+        .map(moderation_registry_corpus_record_json)
+        .collect::<Vec<_>>();
+    let mut output = Map::new();
+    output.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.model_registry.snapshot.v1"),
+    );
+    output.insert("source".into(), Value::from("sorafs_cli"));
+    output.insert(
+        "state_digest_hex".into(),
+        Value::from(moderation_registry_state_digest_hex(state)?),
+    );
+    output.insert(
+        "repro_manifest_count".into(),
+        Value::from(repro_count as u64),
+    );
+    output.insert(
+        "returned_repro_manifest_count".into(),
+        Value::from(repro_manifests.len() as u64),
+    );
+    output.insert(
+        "truncated_repro_manifests".into(),
+        Value::from(repro_count > limit),
+    );
+    output.insert("corpus_count".into(), Value::from(corpus_count as u64));
+    output.insert(
+        "returned_corpus_count".into(),
+        Value::from(adversarial_corpora.len() as u64),
+    );
+    output.insert(
+        "truncated_corpora".into(),
+        Value::from(corpus_count > limit),
+    );
+    output.insert("limit".into(), Value::from(limit as u64));
+    output.insert("repro_manifests".into(), Value::Array(repro_manifests));
+    output.insert(
+        "adversarial_corpora".into(),
+        Value::Array(adversarial_corpora),
+    );
+    Ok(Value::Object(output))
+}
+
+fn moderation_registry_repro_admission_json(
+    record: &ModerationRegistryReproRecord,
+    created: bool,
+) -> Value {
+    let mut output = Map::new();
+    output.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.model_registry.repro_manifest_admission.v1"),
+    );
+    output.insert("status".into(), Value::from("accepted"));
+    output.insert("created".into(), Value::from(created));
+    output.insert(
+        "record".into(),
+        moderation_registry_repro_record_json(record),
+    );
+    Value::Object(output)
+}
+
+fn moderation_registry_corpus_admission_json(
+    record: &ModerationRegistryCorpusRecord,
+    created: bool,
+) -> Value {
+    let mut output = Map::new();
+    output.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.model_registry.corpus_manifest_admission.v1"),
+    );
+    output.insert("status".into(), Value::from("accepted"));
+    output.insert("created".into(), Value::from(created));
+    output.insert(
+        "record".into(),
+        moderation_registry_corpus_record_json(record),
+    );
+    Value::Object(output)
+}
+
+fn moderation_registry_repro_record_json(record: &ModerationRegistryReproRecord) -> Value {
+    let mut output = Map::new();
+    output.insert(
+        "manifest_id_hex".into(),
+        Value::from(hex_encode(record.manifest_id)),
+    );
+    output.insert(
+        "manifest_digest_hex".into(),
+        Value::from(hex_encode(record.manifest_digest)),
+    );
+    output.insert(
+        "runner_hash_hex".into(),
+        Value::from(hex_encode(record.runner_hash)),
+    );
+    output.insert(
+        "runtime_version".into(),
+        Value::from(record.runtime_version.clone()),
+    );
+    output.insert("issued_at_unix".into(), Value::from(record.issued_at_unix));
+    output.insert(
+        "model_count".into(),
+        Value::from(u64::from(record.model_count)),
+    );
+    output.insert(
+        "signer_count".into(),
+        Value::from(u64::from(record.signer_count)),
+    );
+    Value::Object(output)
+}
+
+fn moderation_registry_corpus_record_json(record: &ModerationRegistryCorpusRecord) -> Value {
+    let mut output = Map::new();
+    output.insert(
+        "corpus_digest_hex".into(),
+        Value::from(hex_encode(record.corpus_digest)),
+    );
+    output.insert("issued_at_unix".into(), Value::from(record.issued_at_unix));
+    output.insert(
+        "cohort_label".into(),
+        record
+            .cohort_label
+            .as_deref()
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+    );
+    output.insert(
+        "family_count".into(),
+        Value::from(u64::from(record.family_count)),
+    );
+    output.insert(
+        "variant_count".into(),
+        Value::from(u64::from(record.variant_count)),
+    );
+    Value::Object(output)
+}
+
+fn moderation_registry_json_response(status: u16, reason: &str, value: &Value) -> Vec<u8> {
+    let body = to_vec(value).unwrap_or_else(|_| b"{\"error\":\"json_render_failed\"}".to_vec());
+    moderation_runner_http_response_bytes(status, reason, "application/json", &body)
+}
+
+fn moderation_registry_error_response(status: u16, reason: &str, message: &str) -> Vec<u8> {
+    let mut body = Map::new();
+    body.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.model_registry.error.v1"),
+    );
+    body.insert("status".into(), Value::from("error"));
+    body.insert("message".into(), Value::from(message.to_string()));
+    moderation_registry_json_response(status, reason, &Value::Object(body))
+}
+
+fn moderation_run_local(raw_args: Vec<String>) -> Result<(), String> {
+    if raw_args.is_empty() {
+        return Err(moderation_usage());
+    }
+
+    let mut manifest_path: Option<PathBuf> = None;
+    let mut format = String::from("json");
+    let mut payload_path: Option<PathBuf> = None;
+    let mut subject: Option<String> = None;
+    let mut screened_at_unix: Option<u64> = None;
+    let mut notes: Option<String> = None;
+    let mut json_out: Option<PathBuf> = None;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(moderation_usage());
+        }
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--manifest" => manifest_path = Some(PathBuf::from(value)),
+            "--format" => format = value.to_ascii_lowercase(),
+            "--payload" => payload_path = Some(PathBuf::from(value)),
+            "--subject" => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    return Err("`--subject` must not be empty".to_string());
+                }
+                subject = Some(trimmed.to_string());
+            }
+            "--screened-at" => {
+                screened_at_unix = Some(parse_u64_arg(
+                    "--screened-at",
+                    value,
+                    "sorafs_cli moderation run-local",
+                )?);
+            }
+            "--notes" => {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    notes = Some(trimmed.to_string());
+                }
+            }
+            "--json-out" => json_out = Some(PathBuf::from(value)),
+            _ => {
+                return Err(format!(
+                    "unrecognised option `{key}` for `sorafs_cli moderation run-local`"
+                ));
+            }
+        }
+    }
+
+    let manifest_path = manifest_path.ok_or_else(|| {
+        "missing required `--manifest=PATH` for `sorafs_cli moderation run-local`".to_string()
+    })?;
+    let payload_path = payload_path.ok_or_else(|| {
+        "missing required `--payload=PATH` for `sorafs_cli moderation run-local`".to_string()
+    })?;
+    let subject = subject.ok_or_else(|| {
+        "missing required `--subject=ID` for `sorafs_cli moderation run-local`".to_string()
+    })?;
+    let screened_at_unix = screened_at_unix.ok_or_else(|| {
+        "missing required `--screened-at=UNIX_SECS` for `sorafs_cli moderation run-local`"
+            .to_string()
+    })?;
+
+    let manifest =
+        load_moderation_repro_manifest(&manifest_path, &format, "sorafs_cli moderation run-local")?;
+    manifest
+        .validate()
+        .map_err(|err| format!("manifest validation failed: {err}"))?;
+    validate_moderation_local_runner_manifest(&manifest)?;
+
+    let payload = fs::read(&payload_path)
+        .map_err(|err| format!("failed to read `{}`: {err}", payload_path.display()))?;
+    if payload.is_empty() {
+        return Err("`--payload` file must not be empty".to_string());
+    }
+
+    let output = moderation_local_runner_screening_json(
+        &manifest,
+        &payload,
+        &subject,
+        screened_at_unix,
+        notes.as_deref(),
+    )?;
+    let rendered = to_string_pretty(&output)
+        .map_err(|err| format!("failed to render local runner JSON: {err}"))?;
+
+    if let Some(path) = json_out {
+        write_text(&path, format!("{rendered}\n").as_bytes())?;
+    } else {
+        println!("{rendered}");
+    }
+
+    Ok(())
+}
+
+fn moderation_runner_serve(raw_args: Vec<String>) -> Result<(), String> {
+    let mut manifest_path: Option<PathBuf> = None;
+    let mut format = String::from("json");
+    let mut listen = String::from(MODERATION_RUNNER_DEFAULT_LISTEN);
+    let mut max_body_bytes = MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(moderation_usage());
+        }
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--manifest" => manifest_path = Some(PathBuf::from(value)),
+            "--format" => format = value.to_ascii_lowercase(),
+            "--listen" => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    return Err("`--listen` must not be empty".to_string());
+                }
+                listen = trimmed.to_string();
+            }
+            "--max-body-bytes" => {
+                let parsed = parse_u64_arg(
+                    "--max-body-bytes",
+                    value,
+                    "sorafs_cli moderation runner-serve",
+                )?;
+                max_body_bytes = usize::try_from(parsed).map_err(|_| {
+                    "`--max-body-bytes` does not fit into this platform's usize".to_string()
+                })?;
+                if max_body_bytes == 0 {
+                    return Err("`--max-body-bytes` must be greater than zero".to_string());
+                }
+            }
+            _ => {
+                return Err(format!(
+                    "unrecognised option `{key}` for `sorafs_cli moderation runner-serve`"
+                ));
+            }
+        }
+    }
+
+    let manifest_path = manifest_path.ok_or_else(|| {
+        "missing required `--manifest=PATH` for `sorafs_cli moderation runner-serve`".to_string()
+    })?;
+    let manifest = load_moderation_repro_manifest(
+        &manifest_path,
+        &format,
+        "sorafs_cli moderation runner-serve",
+    )?;
+    manifest
+        .validate()
+        .map_err(|err| format!("manifest validation failed: {err}"))?;
+    validate_moderation_local_runner_manifest(&manifest)?;
+
+    let listener = TcpListener::bind(&listen)
+        .map_err(|err| format!("failed to bind moderation runner service at `{listen}`: {err}"))?;
+    let local_addr = listener
+        .local_addr()
+        .map(|addr| addr.to_string())
+        .unwrap_or_else(|_| listen.clone());
+    let service = Arc::new(ModerationRunnerService {
+        manifest,
+        manifest_source: manifest_path.display().to_string(),
+        max_body_bytes,
+    });
+    let status = moderation_runner_status_json(&service, "listening", Some(&local_addr));
+    let rendered = to_string_pretty(&status)
+        .map_err(|err| format!("failed to render runner service status JSON: {err}"))?;
+    println!("{rendered}");
+
+    for incoming in listener.incoming() {
+        match incoming {
+            Ok(stream) => {
+                let service = Arc::clone(&service);
+                thread::spawn(move || {
+                    if let Err(err) =
+                        moderation_runner_handle_stream(stream, &service, max_body_bytes)
+                    {
+                        eprintln!("sorafs moderation runner connection failed: {err}");
+                    }
+                });
+            }
+            Err(err) => eprintln!("sorafs moderation runner accept failed: {err}"),
+        }
+    }
+
+    Ok(())
+}
+
+fn moderation_runner_grpc_serve(raw_args: Vec<String>) -> Result<(), String> {
+    let mut manifest_path: Option<PathBuf> = None;
+    let mut format = String::from("json");
+    let mut listen = String::from(MODERATION_RUNNER_GRPC_DEFAULT_LISTEN);
+    let mut max_body_bytes = MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(moderation_usage());
+        }
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--manifest" => manifest_path = Some(PathBuf::from(value)),
+            "--format" => format = value.to_ascii_lowercase(),
+            "--listen" => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    return Err("`--listen` must not be empty".to_string());
+                }
+                listen = trimmed.to_string();
+            }
+            "--max-body-bytes" => {
+                let parsed = parse_u64_arg(
+                    "--max-body-bytes",
+                    value,
+                    "sorafs_cli moderation runner-grpc-serve",
+                )?;
+                max_body_bytes = usize::try_from(parsed).map_err(|_| {
+                    "`--max-body-bytes` does not fit into this platform's usize".to_string()
+                })?;
+                if max_body_bytes == 0 {
+                    return Err("`--max-body-bytes` must be greater than zero".to_string());
+                }
+            }
+            _ => {
+                return Err(format!(
+                    "unrecognised option `{key}` for `sorafs_cli moderation runner-grpc-serve`"
+                ));
+            }
+        }
+    }
+
+    let manifest_path = manifest_path.ok_or_else(|| {
+        "missing required `--manifest=PATH` for `sorafs_cli moderation runner-grpc-serve`"
+            .to_string()
+    })?;
+    let manifest = load_moderation_repro_manifest(
+        &manifest_path,
+        &format,
+        "sorafs_cli moderation runner-grpc-serve",
+    )?;
+    manifest
+        .validate()
+        .map_err(|err| format!("manifest validation failed: {err}"))?;
+    validate_moderation_local_runner_manifest(&manifest)?;
+    let addr = listen.parse::<SocketAddr>().map_err(|err| {
+        format!("`--listen={listen}` is not a valid socket address for runner gRPC: {err}")
+    })?;
+
+    let service = Arc::new(ModerationRunnerService {
+        manifest,
+        manifest_source: manifest_path.display().to_string(),
+        max_body_bytes,
+    });
+    let status = moderation_runner_status_json(&service, "listening", Some(&listen));
+    let rendered = to_string_pretty(&status)
+        .map_err(|err| format!("failed to render runner gRPC service status JSON: {err}"))?;
+    println!("{rendered}");
+
+    let handler = ModerationRunnerGrpcHandler {
+        service,
+        listen: listen.clone(),
+    };
+    let grpc_service = moderation_runner_grpc::runner_server::RunnerServer::new(handler)
+        .max_decoding_message_size(max_body_bytes.saturating_add(4096));
+    Runtime::new()
+        .map_err(|err| format!("failed to start Tokio runtime for runner gRPC: {err}"))?
+        .block_on(async move {
+            tonic::transport::Server::builder()
+                .add_service(grpc_service)
+                .serve(addr)
+                .await
+                .map_err(|err| format!("runner gRPC service failed: {err}"))
+        })
+}
+
+fn moderation_runner_bundle(raw_args: Vec<String>) -> Result<(), String> {
+    if raw_args.is_empty() {
+        return Err(moderation_usage());
+    }
+
+    let mut manifest_path: Option<PathBuf> = None;
+    let mut format = String::from("json");
+    let mut bundle_out: Option<PathBuf> = None;
+    let mut listen = String::from(MODERATION_RUNNER_DEFAULT_LISTEN);
+    let mut max_body_bytes = MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES;
+    let mut binary = String::from("sorafs_cli");
+    let mut service_name = String::from("sorafs-moderation-runner");
+    let mut service_user = String::from("sorafs");
+    let mut service_group = String::from("sorafs");
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(moderation_usage());
+        }
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--manifest" => manifest_path = Some(PathBuf::from(value)),
+            "--format" => format = value.to_ascii_lowercase(),
+            "--bundle-out" => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    return Err("`--bundle-out` must not be empty".to_string());
+                }
+                bundle_out = Some(PathBuf::from(trimmed));
+            }
+            "--listen" => {
+                let trimmed = validate_runner_bundle_value("--listen", value)?;
+                listen = trimmed.to_string();
+            }
+            "--max-body-bytes" => {
+                let parsed = parse_u64_arg(
+                    "--max-body-bytes",
+                    value,
+                    "sorafs_cli moderation runner-bundle",
+                )?;
+                max_body_bytes = usize::try_from(parsed).map_err(|_| {
+                    "`--max-body-bytes` does not fit into this platform's usize".to_string()
+                })?;
+                if max_body_bytes == 0 {
+                    return Err("`--max-body-bytes` must be greater than zero".to_string());
+                }
+            }
+            "--binary" => {
+                let trimmed = validate_runner_bundle_value("--binary", value)?;
+                binary = trimmed.to_string();
+            }
+            "--service-name" => {
+                let trimmed = validate_runner_bundle_value("--service-name", value)?;
+                validate_runner_bundle_service_name(trimmed)?;
+                service_name = trimmed.to_string();
+            }
+            "--service-user" => {
+                let trimmed = validate_runner_bundle_value("--service-user", value)?;
+                service_user = trimmed.to_string();
+            }
+            "--service-group" => {
+                let trimmed = validate_runner_bundle_value("--service-group", value)?;
+                service_group = trimmed.to_string();
+            }
+            _ => {
+                return Err(format!(
+                    "unrecognised option `{key}` for `sorafs_cli moderation runner-bundle`"
+                ));
+            }
+        }
+    }
+
+    validate_runner_bundle_service_name(&service_name)?;
+    let manifest_path = manifest_path.ok_or_else(|| {
+        "missing required `--manifest=PATH` for `sorafs_cli moderation runner-bundle`".to_string()
+    })?;
+    let bundle_out = bundle_out.ok_or_else(|| {
+        "missing required `--bundle-out=DIR` for `sorafs_cli moderation runner-bundle`".to_string()
+    })?;
+    let manifest = load_moderation_repro_manifest(
+        &manifest_path,
+        &format,
+        "sorafs_cli moderation runner-bundle",
+    )?;
+    manifest
+        .validate()
+        .map_err(|err| format!("manifest validation failed: {err}"))?;
+    validate_moderation_local_runner_manifest(&manifest)?;
+
+    write_moderation_runner_bundle(ModerationRunnerBundleSpec {
+        manifest,
+        manifest_source: manifest_path,
+        manifest_format: format,
+        bundle_out,
+        listen,
+        max_body_bytes,
+        binary,
+        service_name,
+        service_user,
+        service_group,
+    })
+}
+
+struct ModerationRunnerBundleSpec {
+    manifest: ModerationReproManifestV1,
+    manifest_source: PathBuf,
+    manifest_format: String,
+    bundle_out: PathBuf,
+    listen: String,
+    max_body_bytes: usize,
+    binary: String,
+    service_name: String,
+    service_user: String,
+    service_group: String,
+}
+
+fn write_moderation_runner_bundle(spec: ModerationRunnerBundleSpec) -> Result<(), String> {
+    fs::create_dir_all(&spec.bundle_out).map_err(|err| {
+        format!(
+            "failed to create runner bundle directory `{}`: {err}",
+            spec.bundle_out.display()
+        )
+    })?;
+    let bundle_dir = spec
+        .bundle_out
+        .canonicalize()
+        .unwrap_or_else(|_| spec.bundle_out.clone());
+    let manifest_copy_name = match spec.manifest_format.as_str() {
+        "json" => "manifest.json",
+        "norito" => "manifest.to",
+        other => {
+            return Err(format!(
+                "unsupported `--format={other}` for `sorafs_cli moderation runner-bundle` (expected `json` or `norito`)"
+            ));
+        }
+    };
+    let manifest_copy_path = bundle_dir.join(manifest_copy_name);
+    fs::copy(&spec.manifest_source, &manifest_copy_path).map_err(|err| {
+        format!(
+            "failed to copy runner manifest `{}` into `{}`: {err}",
+            spec.manifest_source.display(),
+            manifest_copy_path.display()
+        )
+    })?;
+
+    let env_path = bundle_dir.join("runner.env");
+    let run_path = bundle_dir.join("run.sh");
+    let systemd_unit_name = format!("{}.service", spec.service_name);
+    let systemd_path = bundle_dir.join(&systemd_unit_name);
+    let launchd_plist_name = format!("{}.plist", spec.service_name);
+    let launchd_path = bundle_dir.join(&launchd_plist_name);
+    let metadata_path = bundle_dir.join("bundle.json");
+    let readme_path = bundle_dir.join("README.md");
+
+    let env = moderation_runner_bundle_env(&spec);
+    write_text(&env_path, env.as_bytes())?;
+    let run_script = moderation_runner_bundle_run_script(manifest_copy_name, &spec.manifest_format);
+    write_text(&run_path, run_script.as_bytes())?;
+    set_executable_if_supported(&run_path)?;
+    let systemd = moderation_runner_bundle_systemd_unit(&spec, &bundle_dir, &run_path, &env_path);
+    write_text(&systemd_path, systemd.as_bytes())?;
+    let launchd = moderation_runner_bundle_launchd_plist(&spec, &bundle_dir, &run_path);
+    write_text(&launchd_path, launchd.as_bytes())?;
+    let readme = moderation_runner_bundle_readme(
+        &spec,
+        manifest_copy_name,
+        &systemd_unit_name,
+        &launchd_plist_name,
+    );
+    write_text(&readme_path, readme.as_bytes())?;
+
+    let summary = moderation_runner_bundle_summary_json(
+        &spec,
+        &bundle_dir,
+        manifest_copy_name,
+        &[
+            manifest_copy_name,
+            "runner.env",
+            "run.sh",
+            &systemd_unit_name,
+            &launchd_plist_name,
+            "bundle.json",
+            "README.md",
+        ],
+    );
+    let rendered = to_string_pretty(&summary)
+        .map_err(|err| format!("failed to render runner bundle summary JSON: {err}"))?;
+    write_text(&metadata_path, format!("{rendered}\n").as_bytes())?;
+    println!("{rendered}");
+    Ok(())
+}
+
+fn moderation_runner_bundle_env(spec: &ModerationRunnerBundleSpec) -> String {
+    format!(
+        "SORAFS_CLI={}\nSORAFS_RUNNER_LISTEN={}\nSORAFS_RUNNER_MAX_BODY_BYTES={}\n",
+        shell_single_quote(&spec.binary),
+        shell_single_quote(&spec.listen),
+        shell_single_quote(&spec.max_body_bytes.to_string())
+    )
+}
+
+fn moderation_runner_bundle_run_script(manifest_copy_name: &str, format: &str) -> String {
+    format!(
+        "#!/usr/bin/env sh\nset -eu\nSCRIPT_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nif [ -f \"$SCRIPT_DIR/runner.env\" ]; then\n  . \"$SCRIPT_DIR/runner.env\"\nfi\n: \"${{SORAFS_CLI:=sorafs_cli}}\"\n: \"${{SORAFS_RUNNER_LISTEN:={}}}\"\n: \"${{SORAFS_RUNNER_MAX_BODY_BYTES:={}}}\"\nexec \"$SORAFS_CLI\" moderation runner-serve \\\n  --manifest=\"$SCRIPT_DIR/{}\" \\\n  --format={} \\\n  --listen=\"$SORAFS_RUNNER_LISTEN\" \\\n  --max-body-bytes=\"$SORAFS_RUNNER_MAX_BODY_BYTES\"\n",
+        MODERATION_RUNNER_DEFAULT_LISTEN,
+        MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES,
+        manifest_copy_name,
+        format
+    )
+}
+
+fn moderation_runner_bundle_systemd_unit(
+    spec: &ModerationRunnerBundleSpec,
+    bundle_dir: &Path,
+    run_path: &Path,
+    env_path: &Path,
+) -> String {
+    format!(
+        "[Unit]\nDescription=SoraFS moderation runner ({})\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nType=simple\nUser={}\nGroup={}\nWorkingDirectory={}\nEnvironmentFile={}\nExecStart={}\nRestart=on-failure\nRestartSec=5s\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=true\nReadOnlyPaths={}\n\n[Install]\nWantedBy=multi-user.target\n",
+        spec.service_name,
+        spec.service_user,
+        spec.service_group,
+        systemd_quote(&bundle_dir.display().to_string()),
+        systemd_quote(&env_path.display().to_string()),
+        systemd_quote(&run_path.display().to_string()),
+        systemd_quote(&bundle_dir.display().to_string())
+    )
+}
+
+fn moderation_runner_bundle_launchd_plist(
+    spec: &ModerationRunnerBundleSpec,
+    bundle_dir: &Path,
+    run_path: &Path,
+) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>{}</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>{}</string>\n  </array>\n  <key>WorkingDirectory</key>\n  <string>{}</string>\n  <key>RunAtLoad</key>\n  <true/>\n  <key>KeepAlive</key>\n  <true/>\n  <key>StandardOutPath</key>\n  <string>{}</string>\n  <key>StandardErrorPath</key>\n  <string>{}</string>\n</dict>\n</plist>\n",
+        xml_escape(&spec.service_name),
+        xml_escape(&run_path.display().to_string()),
+        xml_escape(&bundle_dir.display().to_string()),
+        xml_escape(&bundle_dir.join("runner.out.log").display().to_string()),
+        xml_escape(&bundle_dir.join("runner.err.log").display().to_string())
+    )
+}
+
+fn moderation_runner_bundle_readme(
+    spec: &ModerationRunnerBundleSpec,
+    manifest_copy_name: &str,
+    systemd_unit_name: &str,
+    launchd_plist_name: &str,
+) -> String {
+    format!(
+        "# SoraFS Moderation Runner Bundle\n\nThis bundle starts a locked-manifest SoraFS moderation runner with outbound network disabled by the runner implementation.\n\n- Manifest copy: `{}`\n- Manifest id: `{}`\n- Runner hash: `{}`\n- Listen address: `{}`\n- Maximum body bytes: `{}`\n\nRun directly:\n\n```sh\n./run.sh\n```\n\nInstall with systemd:\n\n```sh\nsudo cp {} /etc/systemd/system/\nsudo systemctl daemon-reload\nsudo systemctl enable --now {}\n```\n\nInstall with launchd:\n\n```sh\ncp {} ~/Library/LaunchAgents/\nlaunchctl load ~/Library/LaunchAgents/{}\n```\n\nKeep `runner.env`, `run.sh`, and the manifest copy together. Replace the `SORAFS_CLI` value in `runner.env` with the absolute path to the audited `sorafs_cli` binary on the target host before installing.\n",
+        manifest_copy_name,
+        hex_encode(spec.manifest.body.manifest_id),
+        hex_encode(spec.manifest.body.runner_hash),
+        spec.listen,
+        spec.max_body_bytes,
+        systemd_unit_name,
+        systemd_unit_name,
+        launchd_plist_name,
+        launchd_plist_name
+    )
+}
+
+fn moderation_runner_bundle_summary_json(
+    spec: &ModerationRunnerBundleSpec,
+    bundle_dir: &Path,
+    manifest_copy_name: &str,
+    files: &[&str],
+) -> Value {
+    let mut summary = Map::new();
+    summary.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.runner.bundle.v1"),
+    );
+    summary.insert("source".into(), Value::from("sorafs_cli"));
+    summary.insert(
+        "bundle_dir".into(),
+        Value::from(bundle_dir.display().to_string()),
+    );
+    summary.insert(
+        "manifest_source".into(),
+        Value::from(spec.manifest_source.display().to_string()),
+    );
+    summary.insert("manifest_copy".into(), Value::from(manifest_copy_name));
+    summary.insert(
+        "manifest_format".into(),
+        Value::from(spec.manifest_format.clone()),
+    );
+    summary.insert(
+        "manifest_id_hex".into(),
+        Value::from(hex_encode(spec.manifest.body.manifest_id)),
+    );
+    summary.insert(
+        "manifest_digest_hex".into(),
+        Value::from(hex_encode(spec.manifest.body.manifest_digest)),
+    );
+    summary.insert(
+        "runner_hash_hex".into(),
+        Value::from(hex_encode(spec.manifest.body.runner_hash)),
+    );
+    summary.insert(
+        "runtime_version".into(),
+        Value::from(spec.manifest.body.runtime_version.clone()),
+    );
+    summary.insert("listen".into(), Value::from(spec.listen.clone()));
+    summary.insert(
+        "max_body_bytes".into(),
+        Value::from(spec.max_body_bytes as u64),
+    );
+    summary.insert("binary".into(), Value::from(spec.binary.clone()));
+    summary.insert(
+        "service_name".into(),
+        Value::from(spec.service_name.clone()),
+    );
+    summary.insert(
+        "service_user".into(),
+        Value::from(spec.service_user.clone()),
+    );
+    summary.insert(
+        "service_group".into(),
+        Value::from(spec.service_group.clone()),
+    );
+    summary.insert("outbound_network".into(), Value::from("disabled"));
+    summary.insert(
+        "files".into(),
+        Value::Array(files.iter().map(|file| Value::from(*file)).collect()),
+    );
+    Value::Object(summary)
+}
+
+fn moderation_committee_bundle(raw_args: Vec<String>) -> Result<(), String> {
+    if raw_args.is_empty() {
+        return Err(moderation_usage());
+    }
+
+    let mut manifest_path: Option<PathBuf> = None;
+    let mut format = String::from("json");
+    let mut quorum: Option<usize> = None;
+    let mut bundle_out: Option<PathBuf> = None;
+    let mut listen = String::from(MODERATION_COMMITTEE_DEFAULT_LISTEN);
+    let mut max_body_bytes = MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES;
+    let mut binary = String::from("sorafs_cli");
+    let mut service_name = String::from("sorafs-moderation-committee");
+    let mut service_user = String::from("sorafs");
+    let mut service_group = String::from("sorafs");
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(moderation_usage());
+        }
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--manifest" => manifest_path = Some(PathBuf::from(value)),
+            "--format" => format = value.to_ascii_lowercase(),
+            "--quorum" => {
+                let parsed =
+                    parse_u64_arg("--quorum", value, "sorafs_cli moderation committee-bundle")?;
+                let parsed = usize::try_from(parsed).map_err(|_| {
+                    "`--quorum` does not fit into this platform's usize".to_string()
+                })?;
+                if parsed == 0 {
+                    return Err("`--quorum` must be greater than zero".to_string());
+                }
+                quorum = Some(parsed);
+            }
+            "--bundle-out" => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    return Err("`--bundle-out` must not be empty".to_string());
+                }
+                bundle_out = Some(PathBuf::from(trimmed));
+            }
+            "--listen" => {
+                let trimmed = validate_runner_bundle_value("--listen", value)?;
+                listen = trimmed.to_string();
+            }
+            "--max-body-bytes" => {
+                let parsed = parse_u64_arg(
+                    "--max-body-bytes",
+                    value,
+                    "sorafs_cli moderation committee-bundle",
+                )?;
+                max_body_bytes = usize::try_from(parsed).map_err(|_| {
+                    "`--max-body-bytes` does not fit into this platform's usize".to_string()
+                })?;
+                if max_body_bytes == 0 {
+                    return Err("`--max-body-bytes` must be greater than zero".to_string());
+                }
+            }
+            "--binary" => {
+                let trimmed = validate_runner_bundle_value("--binary", value)?;
+                binary = trimmed.to_string();
+            }
+            "--service-name" => {
+                let trimmed = validate_runner_bundle_value("--service-name", value)?;
+                validate_runner_bundle_service_name(trimmed)?;
+                service_name = trimmed.to_string();
+            }
+            "--service-user" => {
+                let trimmed = validate_runner_bundle_value("--service-user", value)?;
+                service_user = trimmed.to_string();
+            }
+            "--service-group" => {
+                let trimmed = validate_runner_bundle_value("--service-group", value)?;
+                service_group = trimmed.to_string();
+            }
+            _ => {
+                return Err(format!(
+                    "unrecognised option `{key}` for `sorafs_cli moderation committee-bundle`"
+                ));
+            }
+        }
+    }
+
+    validate_runner_bundle_service_name(&service_name)?;
+    let manifest_path = manifest_path.ok_or_else(|| {
+        "missing required `--manifest=PATH` for `sorafs_cli moderation committee-bundle`"
+            .to_string()
+    })?;
+    let quorum = quorum.ok_or_else(|| {
+        "missing required `--quorum=N` for `sorafs_cli moderation committee-bundle`".to_string()
+    })?;
+    let bundle_out = bundle_out.ok_or_else(|| {
+        "missing required `--bundle-out=DIR` for `sorafs_cli moderation committee-bundle`"
+            .to_string()
+    })?;
+    let manifest = load_moderation_repro_manifest(
+        &manifest_path,
+        &format,
+        "sorafs_cli moderation committee-bundle",
+    )?;
+    manifest
+        .validate()
+        .map_err(|err| format!("manifest validation failed: {err}"))?;
+    validate_moderation_local_runner_manifest(&manifest)?;
+
+    write_moderation_committee_bundle(ModerationCommitteeBundleSpec {
+        manifest,
+        manifest_source: manifest_path,
+        manifest_format: format,
+        quorum,
+        bundle_out,
+        listen,
+        max_body_bytes,
+        binary,
+        service_name,
+        service_user,
+        service_group,
+    })
+}
+
+struct ModerationCommitteeBundleSpec {
+    manifest: ModerationReproManifestV1,
+    manifest_source: PathBuf,
+    manifest_format: String,
+    quorum: usize,
+    bundle_out: PathBuf,
+    listen: String,
+    max_body_bytes: usize,
+    binary: String,
+    service_name: String,
+    service_user: String,
+    service_group: String,
+}
+
+fn write_moderation_committee_bundle(spec: ModerationCommitteeBundleSpec) -> Result<(), String> {
+    fs::create_dir_all(&spec.bundle_out).map_err(|err| {
+        format!(
+            "failed to create committee bundle directory `{}`: {err}",
+            spec.bundle_out.display()
+        )
+    })?;
+    let bundle_dir = spec
+        .bundle_out
+        .canonicalize()
+        .unwrap_or_else(|_| spec.bundle_out.clone());
+    let manifest_copy_name = match spec.manifest_format.as_str() {
+        "json" => "manifest.json",
+        "norito" => "manifest.to",
+        other => {
+            return Err(format!(
+                "unsupported `--format={other}` for `sorafs_cli moderation committee-bundle` (expected `json` or `norito`)"
+            ));
+        }
+    };
+    let manifest_copy_path = bundle_dir.join(manifest_copy_name);
+    fs::copy(&spec.manifest_source, &manifest_copy_path).map_err(|err| {
+        format!(
+            "failed to copy committee manifest `{}` into `{}`: {err}",
+            spec.manifest_source.display(),
+            manifest_copy_path.display()
+        )
+    })?;
+
+    let env_path = bundle_dir.join("committee.env");
+    let run_path = bundle_dir.join("run.sh");
+    let systemd_unit_name = format!("{}.service", spec.service_name);
+    let systemd_path = bundle_dir.join(&systemd_unit_name);
+    let launchd_plist_name = format!("{}.plist", spec.service_name);
+    let launchd_path = bundle_dir.join(&launchd_plist_name);
+    let metadata_path = bundle_dir.join("bundle.json");
+    let readme_path = bundle_dir.join("README.md");
+
+    let env = moderation_committee_bundle_env(&spec);
+    write_text(&env_path, env.as_bytes())?;
+    let run_script =
+        moderation_committee_bundle_run_script(manifest_copy_name, &spec.manifest_format);
+    write_text(&run_path, run_script.as_bytes())?;
+    set_executable_if_supported(&run_path)?;
+    let systemd =
+        moderation_committee_bundle_systemd_unit(&spec, &bundle_dir, &run_path, &env_path);
+    write_text(&systemd_path, systemd.as_bytes())?;
+    let launchd = moderation_committee_bundle_launchd_plist(&spec, &bundle_dir, &run_path);
+    write_text(&launchd_path, launchd.as_bytes())?;
+    let readme = moderation_committee_bundle_readme(
+        &spec,
+        manifest_copy_name,
+        &systemd_unit_name,
+        &launchd_plist_name,
+    );
+    write_text(&readme_path, readme.as_bytes())?;
+
+    let summary = moderation_committee_bundle_summary_json(
+        &spec,
+        &bundle_dir,
+        manifest_copy_name,
+        &[
+            manifest_copy_name,
+            "committee.env",
+            "run.sh",
+            &systemd_unit_name,
+            &launchd_plist_name,
+            "bundle.json",
+            "README.md",
+        ],
+    );
+    let rendered = to_string_pretty(&summary)
+        .map_err(|err| format!("failed to render committee bundle summary JSON: {err}"))?;
+    write_text(&metadata_path, format!("{rendered}\n").as_bytes())?;
+    println!("{rendered}");
+    Ok(())
+}
+
+fn moderation_committee_bundle_env(spec: &ModerationCommitteeBundleSpec) -> String {
+    format!(
+        "SORAFS_CLI={}\nSORAFS_COMMITTEE_LISTEN={}\nSORAFS_COMMITTEE_QUORUM={}\nSORAFS_COMMITTEE_MAX_BODY_BYTES={}\n",
+        shell_single_quote(&spec.binary),
+        shell_single_quote(&spec.listen),
+        shell_single_quote(&spec.quorum.to_string()),
+        shell_single_quote(&spec.max_body_bytes.to_string())
+    )
+}
+
+fn moderation_committee_bundle_run_script(manifest_copy_name: &str, format: &str) -> String {
+    format!(
+        "#!/usr/bin/env sh\nset -eu\nSCRIPT_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nif [ -f \"$SCRIPT_DIR/committee.env\" ]; then\n  . \"$SCRIPT_DIR/committee.env\"\nfi\n: \"${{SORAFS_CLI:=sorafs_cli}}\"\n: \"${{SORAFS_COMMITTEE_LISTEN:={}}}\"\n: \"${{SORAFS_COMMITTEE_QUORUM:=1}}\"\n: \"${{SORAFS_COMMITTEE_MAX_BODY_BYTES:={}}}\"\nexec \"$SORAFS_CLI\" moderation committee-serve \\\n  --manifest=\"$SCRIPT_DIR/{}\" \\\n  --format={} \\\n  --quorum=\"$SORAFS_COMMITTEE_QUORUM\" \\\n  --listen=\"$SORAFS_COMMITTEE_LISTEN\" \\\n  --max-body-bytes=\"$SORAFS_COMMITTEE_MAX_BODY_BYTES\"\n",
+        MODERATION_COMMITTEE_DEFAULT_LISTEN,
+        MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES,
+        manifest_copy_name,
+        format
+    )
+}
+
+fn moderation_committee_bundle_systemd_unit(
+    spec: &ModerationCommitteeBundleSpec,
+    bundle_dir: &Path,
+    run_path: &Path,
+    env_path: &Path,
+) -> String {
+    format!(
+        "[Unit]\nDescription=SoraFS moderation committee ({})\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nType=simple\nUser={}\nGroup={}\nWorkingDirectory={}\nEnvironmentFile={}\nExecStart={}\nRestart=on-failure\nRestartSec=5s\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=true\nReadOnlyPaths={}\n\n[Install]\nWantedBy=multi-user.target\n",
+        spec.service_name,
+        spec.service_user,
+        spec.service_group,
+        systemd_quote(&bundle_dir.display().to_string()),
+        systemd_quote(&env_path.display().to_string()),
+        systemd_quote(&run_path.display().to_string()),
+        systemd_quote(&bundle_dir.display().to_string())
+    )
+}
+
+fn moderation_committee_bundle_launchd_plist(
+    spec: &ModerationCommitteeBundleSpec,
+    bundle_dir: &Path,
+    run_path: &Path,
+) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>{}</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>{}</string>\n  </array>\n  <key>WorkingDirectory</key>\n  <string>{}</string>\n  <key>RunAtLoad</key>\n  <true/>\n  <key>KeepAlive</key>\n  <true/>\n  <key>StandardOutPath</key>\n  <string>{}</string>\n  <key>StandardErrorPath</key>\n  <string>{}</string>\n</dict>\n</plist>\n",
+        xml_escape(&spec.service_name),
+        xml_escape(&run_path.display().to_string()),
+        xml_escape(&bundle_dir.display().to_string()),
+        xml_escape(&bundle_dir.join("committee.out.log").display().to_string()),
+        xml_escape(&bundle_dir.join("committee.err.log").display().to_string())
+    )
+}
+
+fn moderation_committee_bundle_readme(
+    spec: &ModerationCommitteeBundleSpec,
+    manifest_copy_name: &str,
+    systemd_unit_name: &str,
+    launchd_plist_name: &str,
+) -> String {
+    format!(
+        "# SoraFS Moderation Committee Bundle\n\nThis bundle starts a locked-manifest SoraFS moderation committee service with outbound network disabled by the service implementation. It accepts payload-free runner result JSON and returns deterministic median-score quorum aggregates.\n\n- Manifest copy: `{}`\n- Manifest id: `{}`\n- Runner hash: `{}`\n- Quorum: `{}`\n- Listen address: `{}`\n- Maximum body bytes: `{}`\n\nRun directly:\n\n```sh\n./run.sh\n```\n\nInstall with systemd:\n\n```sh\nsudo cp {} /etc/systemd/system/\nsudo systemctl daemon-reload\nsudo systemctl enable --now {}\n```\n\nInstall with launchd:\n\n```sh\ncp {} ~/Library/LaunchAgents/\nlaunchctl load ~/Library/LaunchAgents/{}\n```\n\nKeep `committee.env`, `run.sh`, and the manifest copy together. Replace the `SORAFS_CLI` value in `committee.env` with the absolute path to the audited `sorafs_cli` binary on the target host before installing.\n",
+        manifest_copy_name,
+        hex_encode(spec.manifest.body.manifest_id),
+        hex_encode(spec.manifest.body.runner_hash),
+        spec.quorum,
+        spec.listen,
+        spec.max_body_bytes,
+        systemd_unit_name,
+        systemd_unit_name,
+        launchd_plist_name,
+        launchd_plist_name
+    )
+}
+
+fn moderation_committee_bundle_summary_json(
+    spec: &ModerationCommitteeBundleSpec,
+    bundle_dir: &Path,
+    manifest_copy_name: &str,
+    files: &[&str],
+) -> Value {
+    let mut summary = Map::new();
+    summary.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.committee.bundle.v1"),
+    );
+    summary.insert("source".into(), Value::from("sorafs_cli"));
+    summary.insert(
+        "bundle_dir".into(),
+        Value::from(bundle_dir.display().to_string()),
+    );
+    summary.insert(
+        "manifest_source".into(),
+        Value::from(spec.manifest_source.display().to_string()),
+    );
+    summary.insert("manifest_copy".into(), Value::from(manifest_copy_name));
+    summary.insert(
+        "manifest_format".into(),
+        Value::from(spec.manifest_format.clone()),
+    );
+    summary.insert(
+        "manifest_id_hex".into(),
+        Value::from(hex_encode(spec.manifest.body.manifest_id)),
+    );
+    summary.insert(
+        "manifest_digest_hex".into(),
+        Value::from(hex_encode(spec.manifest.body.manifest_digest)),
+    );
+    summary.insert(
+        "runner_hash_hex".into(),
+        Value::from(hex_encode(spec.manifest.body.runner_hash)),
+    );
+    summary.insert(
+        "runtime_version".into(),
+        Value::from(spec.manifest.body.runtime_version.clone()),
+    );
+    summary.insert("quorum".into(), Value::from(spec.quorum as u64));
+    summary.insert("aggregation".into(), Value::from("median_score_bps"));
+    summary.insert("listen".into(), Value::from(spec.listen.clone()));
+    summary.insert(
+        "max_body_bytes".into(),
+        Value::from(spec.max_body_bytes as u64),
+    );
+    summary.insert("binary".into(), Value::from(spec.binary.clone()));
+    summary.insert(
+        "service_name".into(),
+        Value::from(spec.service_name.clone()),
+    );
+    summary.insert(
+        "service_user".into(),
+        Value::from(spec.service_user.clone()),
+    );
+    summary.insert(
+        "service_group".into(),
+        Value::from(spec.service_group.clone()),
+    );
+    summary.insert("outbound_network".into(), Value::from("disabled"));
+    summary.insert(
+        "files".into(),
+        Value::Array(files.iter().map(|file| Value::from(*file)).collect()),
+    );
+    Value::Object(summary)
+}
+
+fn validate_runner_bundle_value<'a>(flag: &str, raw: &'a str) -> Result<&'a str, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(format!("`{flag}` must not be empty"));
+    }
+    if trimmed.chars().any(|ch| matches!(ch, '\n' | '\r' | '\0')) {
+        return Err(format!("`{flag}` must not contain control line separators"));
+    }
+    Ok(trimmed)
+}
+
+fn validate_runner_bundle_service_name(value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || !value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '@'))
+    {
+        return Err(
+            "`--service-name` may only contain ASCII letters, digits, '.', '_', '-', or '@'"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn shell_single_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn systemd_quote(value: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn xml_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn set_executable_if_supported(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut permissions = fs::metadata(path)
+            .map_err(|err| format!("failed to stat `{}`: {err}", path.display()))?
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions)
+            .map_err(|err| format!("failed to chmod `{}`: {err}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn moderation_runner_canary(raw_args: Vec<String>) -> Result<(), String> {
+    if raw_args.is_empty() {
+        return Err(moderation_usage());
+    }
+
+    let mut manifest_path: Option<PathBuf> = None;
+    let mut format = String::from("json");
+    let mut runner_url: Option<String> = None;
+    let mut payload_path: Option<PathBuf> = None;
+    let mut subject: Option<String> = None;
+    let mut screened_at_unix: Option<u64> = None;
+    let mut checked_at_unix: Option<u64> = None;
+    let mut notes: Option<String> = None;
+    let mut timeout_ms = 30_000_u64;
+    let mut json_out: Option<PathBuf> = None;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(moderation_usage());
+        }
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--manifest" => manifest_path = Some(PathBuf::from(value)),
+            "--format" => format = value.to_ascii_lowercase(),
+            "--runner-url" => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    return Err("`--runner-url` must not be empty".to_string());
+                }
+                runner_url = Some(trimmed.to_string());
+            }
+            "--payload" => payload_path = Some(PathBuf::from(value)),
+            "--subject" => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    return Err("`--subject` must not be empty".to_string());
+                }
+                subject = Some(trimmed.to_string());
+            }
+            "--screened-at" => {
+                screened_at_unix = Some(parse_u64_arg(
+                    "--screened-at",
+                    value,
+                    "sorafs_cli moderation runner-canary",
+                )?);
+            }
+            "--checked-at" => {
+                checked_at_unix = Some(parse_u64_arg(
+                    "--checked-at",
+                    value,
+                    "sorafs_cli moderation runner-canary",
+                )?);
+            }
+            "--notes" => {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    notes = Some(trimmed.to_string());
+                }
+            }
+            "--timeout-ms" => {
+                timeout_ms =
+                    parse_u64_arg("--timeout-ms", value, "sorafs_cli moderation runner-canary")?;
+                if timeout_ms == 0 {
+                    return Err("`--timeout-ms` must be greater than zero".to_string());
+                }
+            }
+            "--json-out" => json_out = Some(PathBuf::from(value)),
+            _ => {
+                return Err(format!(
+                    "unrecognised option `{key}` for `sorafs_cli moderation runner-canary`"
+                ));
+            }
+        }
+    }
+
+    let manifest_path = manifest_path.ok_or_else(|| {
+        "missing required `--manifest=PATH` for `sorafs_cli moderation runner-canary`".to_string()
+    })?;
+    let runner_url = runner_url.ok_or_else(|| {
+        "missing required `--runner-url=URL` for `sorafs_cli moderation runner-canary`".to_string()
+    })?;
+    let payload_path = payload_path.ok_or_else(|| {
+        "missing required `--payload=PATH` for `sorafs_cli moderation runner-canary`".to_string()
+    })?;
+    let subject = subject.ok_or_else(|| {
+        "missing required `--subject=ID` for `sorafs_cli moderation runner-canary`".to_string()
+    })?;
+    let screened_at_unix = screened_at_unix.ok_or_else(|| {
+        "missing required `--screened-at=UNIX_SECS` for `sorafs_cli moderation runner-canary`"
+            .to_string()
+    })?;
+    let checked_at_unix = checked_at_unix.unwrap_or_else(moderation_runner_canary_now_unix);
+    let manifest = load_moderation_repro_manifest(
+        &manifest_path,
+        &format,
+        "sorafs_cli moderation runner-canary",
+    )?;
+    manifest
+        .validate()
+        .map_err(|err| format!("manifest validation failed: {err}"))?;
+    validate_moderation_local_runner_manifest(&manifest)?;
+    let payload = fs::read(&payload_path)
+        .map_err(|err| format!("failed to read `{}`: {err}", payload_path.display()))?;
+    if payload.is_empty() {
+        return Err("`--payload` file must not be empty".to_string());
+    }
+
+    let client = HttpClient::builder()
+        .timeout(Duration::from_millis(timeout_ms))
+        .build()
+        .map_err(|err| format!("failed to construct runner canary HTTP client: {err}"))?;
+    let base_url = Url::parse(&runner_url)
+        .map_err(|err| format!("invalid `--runner-url` `{runner_url}`: {err}"))?;
+    let status_url =
+        moderation_runner_canary_endpoint(&base_url, "/v1/sorafs/moderation/runner/status")?;
+    let screen_url =
+        moderation_runner_canary_endpoint(&base_url, "/v1/sorafs/moderation/runner/screen")?;
+    let status_response = moderation_runner_canary_get_json(&client, &status_url)?;
+    let screen_request = moderation_runner_canary_screen_request_json(
+        &payload,
+        &subject,
+        screened_at_unix,
+        notes.as_deref(),
+    );
+    let screening_response =
+        moderation_runner_canary_post_json(&client, &screen_url, &screen_request)?;
+    let evidence = moderation_runner_canary_evidence_json(ModerationRunnerCanaryEvidenceInput {
+        manifest: &manifest,
+        runner_url: base_url.as_str(),
+        status_url: status_url.as_str(),
+        screen_url: screen_url.as_str(),
+        subject: &subject,
+        payload: &payload,
+        screened_at_unix,
+        checked_at_unix,
+        notes: notes.as_deref(),
+        status_response,
+        screening_response,
+    })?;
+    let rendered = to_string_pretty(&evidence)
+        .map_err(|err| format!("failed to render runner canary evidence JSON: {err}"))?;
+    if let Some(path) = json_out {
+        write_text(&path, format!("{rendered}\n").as_bytes())?;
+    } else {
+        println!("{rendered}");
+    }
+    Ok(())
+}
+
+struct ModerationRunnerCanaryEvidenceInput<'a> {
+    manifest: &'a ModerationReproManifestV1,
+    runner_url: &'a str,
+    status_url: &'a str,
+    screen_url: &'a str,
+    subject: &'a str,
+    payload: &'a [u8],
+    screened_at_unix: u64,
+    checked_at_unix: u64,
+    notes: Option<&'a str>,
+    status_response: Value,
+    screening_response: Value,
+}
+
+fn moderation_runner_canary_now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_else(|_| Duration::from_secs(0))
+        .as_secs()
+}
+
+fn moderation_runner_canary_endpoint(base_url: &Url, path: &str) -> Result<Url, String> {
+    let mut endpoint = base_url.as_str().trim_end_matches('/').to_string();
+    endpoint.push_str(path);
+    Url::parse(&endpoint)
+        .map_err(|err| format!("failed to build runner endpoint `{endpoint}`: {err}"))
+}
+
+fn moderation_runner_canary_get_json(client: &HttpClient, url: &Url) -> Result<Value, String> {
+    let response = client
+        .get(url.as_str())
+        .send()
+        .map_err(|err| format!("runner canary GET `{url}` failed: {err}"))?;
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .map_err(|err| format!("runner canary GET `{url}` failed to read body: {err}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "runner canary GET `{url}` returned HTTP {status}: {}",
+            body_snippet(bytes.as_ref())
+        ));
+    }
+    from_slice(bytes.as_ref())
+        .map_err(|err| format!("runner canary GET `{url}` returned invalid JSON: {err}"))
+}
+
+fn moderation_runner_canary_post_json(
+    client: &HttpClient,
+    url: &Url,
+    value: &Value,
+) -> Result<Value, String> {
+    let body = to_vec(value)
+        .map_err(|err| format!("failed to encode runner canary request JSON: {err}"))?;
+    let response = client
+        .post(url.as_str())
+        .header(CONTENT_TYPE, "application/json")
+        .body(body)
+        .send()
+        .map_err(|err| format!("runner canary POST `{url}` failed: {err}"))?;
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .map_err(|err| format!("runner canary POST `{url}` failed to read body: {err}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "runner canary POST `{url}` returned HTTP {status}: {}",
+            body_snippet(bytes.as_ref())
+        ));
+    }
+    from_slice(bytes.as_ref())
+        .map_err(|err| format!("runner canary POST `{url}` returned invalid JSON: {err}"))
+}
+
+fn moderation_runner_canary_screen_request_json(
+    payload: &[u8],
+    subject: &str,
+    screened_at_unix: u64,
+    notes: Option<&str>,
+) -> Value {
+    let mut request = Map::new();
+    request.insert("subject".into(), Value::from(subject.to_string()));
+    request.insert(
+        "payload_b64".into(),
+        Value::from(BASE64_STANDARD.encode(payload)),
+    );
+    request.insert("screened_at_unix".into(), Value::from(screened_at_unix));
+    request.insert(
+        "notes".into(),
+        notes
+            .map(|value| Value::from(value.to_string()))
+            .unwrap_or(Value::Null),
+    );
+    Value::Object(request)
+}
+
+fn moderation_runner_canary_evidence_json(
+    input: ModerationRunnerCanaryEvidenceInput<'_>,
+) -> Result<Value, String> {
+    validate_moderation_runner_status_response(input.manifest, &input.status_response)?;
+    let subject_digest = *blake3_hash(input.payload).as_bytes();
+    let screening = validate_moderation_runner_screening_response(
+        input.manifest,
+        input.subject,
+        &subject_digest,
+        &input.screening_response,
+    )?;
+    if json_contains_key(&input.status_response, "payload_b64")
+        || json_contains_key(&input.screening_response, "payload_b64")
+    {
+        return Err("runner canary evidence responses must not contain `payload_b64`".to_string());
+    }
+
+    let mut output = Map::new();
+    output.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.runner.rollout_evidence.v1"),
+    );
+    output.insert("status".into(), Value::from("verified"));
+    output.insert("source".into(), Value::from("sorafs_cli"));
+    output.insert(
+        "runner_url".into(),
+        Value::from(input.runner_url.to_string()),
+    );
+    output.insert(
+        "status_url".into(),
+        Value::from(input.status_url.to_string()),
+    );
+    output.insert(
+        "screen_url".into(),
+        Value::from(input.screen_url.to_string()),
+    );
+    output.insert(
+        "manifest_id_hex".into(),
+        Value::from(hex_encode(input.manifest.body.manifest_id)),
+    );
+    output.insert(
+        "runner_hash_hex".into(),
+        Value::from(hex_encode(input.manifest.body.runner_hash)),
+    );
+    output.insert("subject".into(), Value::from(input.subject.to_string()));
+    output.insert(
+        "subject_digest_hex".into(),
+        Value::from(hex_encode(subject_digest)),
+    );
+    output.insert(
+        "screened_at_unix".into(),
+        Value::from(input.screened_at_unix),
+    );
+    output.insert("checked_at_unix".into(), Value::from(input.checked_at_unix));
+    output.insert(
+        "combined_score_bps".into(),
+        Value::from(u64::from(screening.combined_score_bps)),
+    );
+    output.insert("verdict".into(), Value::from(screening.verdict));
+    output.insert(
+        "evidence_digest_hex".into(),
+        screening
+            .evidence_digest
+            .map(hex_encode)
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+    );
+    output.insert(
+        "policy_digest_hex".into(),
+        screening
+            .policy_digest
+            .map(hex_encode)
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+    );
+    output.insert(
+        "notes".into(),
+        input
+            .notes
+            .map(|value| Value::from(value.to_string()))
+            .unwrap_or(Value::Null),
+    );
+    output.insert("runner_status".into(), input.status_response);
+    output.insert("screening_result".into(), input.screening_response);
+    Ok(Value::Object(output))
+}
+
+struct ModerationRunnerCanaryScreening {
+    combined_score_bps: u16,
+    verdict: String,
+    evidence_digest: Option<[u8; 32]>,
+    policy_digest: Option<[u8; 32]>,
+}
+
+fn validate_moderation_runner_status_response(
+    manifest: &ModerationReproManifestV1,
+    value: &Value,
+) -> Result<(), String> {
+    let fields = value
+        .as_object()
+        .ok_or_else(|| "runner status response must be a JSON object".to_string())?;
+    let context = "runner status response";
+    let schema = required_json_string(fields, "schema", context)?;
+    if schema != "sorafs.moderation.runner.status.v1" {
+        return Err(format!("{context} has unexpected schema `{schema}`"));
+    }
+    let manifest_id = parse_fixed_hex::<16>(
+        required_json_string(fields, "manifest_id_hex", context)?,
+        "manifest_id_hex",
+        context,
+    )?;
+    if manifest_id != manifest.body.manifest_id {
+        return Err(format!(
+            "{context} manifest id {} does not match locked manifest {}",
+            hex_encode(manifest_id),
+            hex_encode(manifest.body.manifest_id)
+        ));
+    }
+    let runner_hash = parse_fixed_hex::<32>(
+        required_json_string(fields, "runner_hash_hex", context)?,
+        "runner_hash_hex",
+        context,
+    )?;
+    if runner_hash != manifest.body.runner_hash {
+        return Err(format!(
+            "{context} runner hash {} does not match locked runner {}",
+            hex_encode(runner_hash),
+            hex_encode(manifest.body.runner_hash)
+        ));
+    }
+    let outbound = required_json_string(fields, "outbound_network", context)?;
+    if outbound != "disabled" {
+        return Err(format!(
+            "{context} outbound_network `{outbound}` is not `disabled`"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_moderation_runner_screening_response(
+    manifest: &ModerationReproManifestV1,
+    subject: &str,
+    subject_digest: &[u8; 32],
+    value: &Value,
+) -> Result<ModerationRunnerCanaryScreening, String> {
+    let fields = value
+        .as_object()
+        .ok_or_else(|| "runner screening response must be a JSON object".to_string())?;
+    let context = "runner screening response";
+    let actual_subject = required_json_string(fields, "subject", context)?;
+    if actual_subject != subject {
+        return Err(format!(
+            "{context} subject `{actual_subject}` does not match `{subject}`"
+        ));
+    }
+    let actual_digest = parse_fixed_hex::<32>(
+        required_json_string(fields, "subject_digest_hex", context)?,
+        "subject_digest_hex",
+        context,
+    )?;
+    if &actual_digest != subject_digest {
+        return Err(format!(
+            "{context} subject digest does not match payload digest"
+        ));
+    }
+    let manifest_id = parse_fixed_hex::<16>(
+        required_json_string(fields, "manifest_id_hex", context)?,
+        "manifest_id_hex",
+        context,
+    )?;
+    if manifest_id != manifest.body.manifest_id {
+        return Err(format!(
+            "{context} manifest id {} does not match locked manifest {}",
+            hex_encode(manifest_id),
+            hex_encode(manifest.body.manifest_id)
+        ));
+    }
+    let runner_hash = parse_fixed_hex::<32>(
+        required_json_string(fields, "runner_hash_hex", context)?,
+        "runner_hash_hex",
+        context,
+    )?;
+    if runner_hash != manifest.body.runner_hash {
+        return Err(format!(
+            "{context} runner hash {} does not match locked runner {}",
+            hex_encode(runner_hash),
+            hex_encode(manifest.body.runner_hash)
+        ));
+    }
+    let score = fields
+        .get("combined_score_bps")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("{context} requires numeric `combined_score_bps`"))?;
+    if score > 10_000 {
+        return Err(format!(
+            "{context} combined_score_bps {score} exceeds 10000 bps"
+        ));
+    }
+    let combined_score_bps =
+        u16::try_from(score).map_err(|_| format!("{context} combined_score_bps overflowed u16"))?;
+    let verdict = required_json_string(fields, "verdict", context)?.to_string();
+    let expected_verdict = moderation_score_verdict(combined_score_bps, manifest.body.thresholds);
+    if verdict != expected_verdict {
+        return Err(format!(
+            "{context} verdict `{verdict}` does not match score-derived verdict `{expected_verdict}`"
+        ));
+    }
+    Ok(ModerationRunnerCanaryScreening {
+        combined_score_bps,
+        verdict,
+        evidence_digest: optional_json_fixed_hex::<32>(fields, "evidence_digest_hex", context)?,
+        policy_digest: optional_json_fixed_hex::<32>(fields, "policy_digest_hex", context)?,
+    })
+}
+
+fn json_contains_key(value: &Value, key: &str) -> bool {
+    match value {
+        Value::Object(fields) => fields
+            .iter()
+            .any(|(field, nested)| field == key || json_contains_key(nested, key)),
+        Value::Array(values) => values.iter().any(|nested| json_contains_key(nested, key)),
+        _ => false,
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ModerationCommitteeInput {
+    source_path: PathBuf,
+    subject: String,
+    subject_digest: [u8; 32],
+    manifest_id: [u8; 16],
+    runner_hash: [u8; 32],
+    combined_score_bps: u16,
+    verdict: String,
+    screened_at_unix: Option<u64>,
+    evidence_digest: Option<[u8; 32]>,
+    policy_digest: Option<[u8; 32]>,
+    notes: Option<String>,
+}
+
+fn moderation_committee_run(raw_args: Vec<String>) -> Result<(), String> {
+    if raw_args.is_empty() {
+        return Err(moderation_usage());
+    }
+
+    let mut manifest_path: Option<PathBuf> = None;
+    let mut format = String::from("json");
+    let mut quorum: Option<usize> = None;
+    let mut result_paths: Vec<PathBuf> = Vec::new();
+    let mut notes: Option<String> = None;
+    let mut json_out: Option<PathBuf> = None;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(moderation_usage());
+        }
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--manifest" => manifest_path = Some(PathBuf::from(value)),
+            "--format" => format = value.to_ascii_lowercase(),
+            "--quorum" => {
+                let parsed =
+                    parse_u64_arg("--quorum", value, "sorafs_cli moderation committee-run")?;
+                let parsed = usize::try_from(parsed).map_err(|_| {
+                    "`--quorum` does not fit into this platform's usize".to_string()
+                })?;
+                if parsed == 0 {
+                    return Err("`--quorum` must be greater than zero".to_string());
+                }
+                quorum = Some(parsed);
+            }
+            "--result" => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    return Err("`--result` path must not be empty".to_string());
+                }
+                result_paths.push(PathBuf::from(trimmed));
+            }
+            "--notes" => {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    notes = Some(trimmed.to_string());
+                }
+            }
+            "--json-out" => json_out = Some(PathBuf::from(value)),
+            _ => {
+                return Err(format!(
+                    "unrecognised option `{key}` for `sorafs_cli moderation committee-run`"
+                ));
+            }
+        }
+    }
+
+    let manifest_path = manifest_path.ok_or_else(|| {
+        "missing required `--manifest=PATH` for `sorafs_cli moderation committee-run`".to_string()
+    })?;
+    let quorum = quorum.ok_or_else(|| {
+        "missing required `--quorum=N` for `sorafs_cli moderation committee-run`".to_string()
+    })?;
+    if result_paths.is_empty() {
+        return Err("provide at least one `--result=PATH` for committee aggregation".to_string());
+    }
+    if quorum > result_paths.len() {
+        return Err(format!(
+            "committee aggregation requires quorum {quorum} but only {} result file(s) were provided",
+            result_paths.len()
+        ));
+    }
+
+    let manifest = load_moderation_repro_manifest(
+        &manifest_path,
+        &format,
+        "sorafs_cli moderation committee-run",
+    )?;
+    manifest
+        .validate()
+        .map_err(|err| format!("manifest validation failed: {err}"))?;
+    validate_moderation_local_runner_manifest(&manifest)?;
+
+    let mut inputs = Vec::with_capacity(result_paths.len());
+    for path in &result_paths {
+        inputs.push(load_moderation_committee_input(path, &manifest)?);
+    }
+    inputs.sort_by_key(|input| input.source_path.display().to_string());
+
+    let output = moderation_committee_aggregate_json(&manifest, &inputs, quorum, notes.as_deref())?;
+    let rendered = to_string_pretty(&output)
+        .map_err(|err| format!("failed to render committee aggregate JSON: {err}"))?;
+
+    if let Some(path) = json_out {
+        write_text(&path, format!("{rendered}\n").as_bytes())?;
+    } else {
+        println!("{rendered}");
+    }
+
+    Ok(())
+}
+
+fn load_moderation_committee_input(
+    path: &Path,
+    manifest: &ModerationReproManifestV1,
+) -> Result<ModerationCommitteeInput, String> {
+    let bytes =
+        fs::read(path).map_err(|err| format!("failed to read `{}`: {err}", path.display()))?;
+    let value: Value = from_slice(&bytes).map_err(|err| {
+        format!(
+            "failed to parse committee result JSON `{}`: {err}",
+            path.display()
+        )
+    })?;
+    parse_moderation_committee_input_value(&path.display().to_string(), &value, manifest)
+}
+
+fn parse_moderation_committee_input_value(
+    source_label: &str,
+    value: &Value,
+    manifest: &ModerationReproManifestV1,
+) -> Result<ModerationCommitteeInput, String> {
+    let fields = value
+        .as_object()
+        .ok_or_else(|| format!("committee result `{source_label}` must be a JSON object"))?;
+    let context = format!("committee result `{source_label}`");
+    if json_contains_key(value, "payload_b64") {
+        return Err(format!(
+            "{context} must be payload-free screening-result JSON, found `payload_b64`"
+        ));
+    }
+
+    let subject = required_json_string(fields, "subject", &context)?.to_string();
+    let subject_digest_hex = required_json_string(fields, "subject_digest_hex", &context)?;
+    let subject_digest = parse_fixed_hex::<32>(subject_digest_hex, "subject_digest_hex", &context)?;
+    let manifest_id_hex = required_json_string(fields, "manifest_id_hex", &context)?;
+    let manifest_id = parse_fixed_hex::<16>(manifest_id_hex, "manifest_id_hex", &context)?;
+    if manifest_id != manifest.body.manifest_id {
+        return Err(format!(
+            "{context} `manifest_id_hex` {} does not match locked manifest {}",
+            hex_encode(manifest_id),
+            hex_encode(manifest.body.manifest_id)
+        ));
+    }
+    let runner_hash_hex = required_json_string(fields, "runner_hash_hex", &context)?;
+    let runner_hash = parse_fixed_hex::<32>(runner_hash_hex, "runner_hash_hex", &context)?;
+    if runner_hash != manifest.body.runner_hash {
+        return Err(format!(
+            "{context} `runner_hash_hex` {} does not match locked runner {}",
+            hex_encode(runner_hash),
+            hex_encode(manifest.body.runner_hash)
+        ));
+    }
+    let combined_score = fields
+        .get("combined_score_bps")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("{context} requires numeric `combined_score_bps`"))?;
+    if combined_score > 10_000 {
+        return Err(format!(
+            "{context} `combined_score_bps` {combined_score} exceeds 10000 bps"
+        ));
+    }
+    let combined_score_bps = u16::try_from(combined_score)
+        .map_err(|_| format!("{context} `combined_score_bps` overflowed u16"))?;
+    let verdict = required_json_string(fields, "verdict", &context)?.to_string();
+    if !matches!(verdict.as_str(), "pass" | "quarantine" | "escalate") {
+        return Err(format!("{context} has unsupported verdict `{verdict}`"));
+    }
+    let expected_verdict = moderation_score_verdict(combined_score_bps, manifest.body.thresholds);
+    if verdict != expected_verdict {
+        return Err(format!(
+            "{context} verdict `{verdict}` does not match score-derived verdict `{expected_verdict}`"
+        ));
+    }
+
+    Ok(ModerationCommitteeInput {
+        source_path: PathBuf::from(source_label),
+        subject,
+        subject_digest,
+        manifest_id,
+        runner_hash,
+        combined_score_bps,
+        verdict,
+        screened_at_unix: optional_json_u64(fields, "screened_at_unix", &context)?,
+        evidence_digest: optional_json_fixed_hex::<32>(fields, "evidence_digest_hex", &context)?,
+        policy_digest: optional_json_fixed_hex::<32>(fields, "policy_digest_hex", &context)?,
+        notes: optional_json_string(fields, "notes", &context)?.map(ToOwned::to_owned),
+    })
+}
+
+fn moderation_committee_aggregate_json(
+    manifest: &ModerationReproManifestV1,
+    inputs: &[ModerationCommitteeInput],
+    quorum: usize,
+    notes: Option<&str>,
+) -> Result<Value, String> {
+    if inputs.is_empty() {
+        return Err("committee aggregation requires at least one result".to_string());
+    }
+    if quorum == 0 {
+        return Err("committee aggregation quorum must be greater than zero".to_string());
+    }
+    if inputs.len() < quorum {
+        return Err(format!(
+            "committee aggregation requires quorum {quorum} but only {} result file(s) were provided",
+            inputs.len()
+        ));
+    }
+
+    let first = &inputs[0];
+    for input in inputs.iter().skip(1) {
+        if input.subject != first.subject {
+            return Err(format!(
+                "committee result `{}` subject `{}` does not match `{}`",
+                input.source_path.display(),
+                input.subject,
+                first.subject
+            ));
+        }
+        if input.subject_digest != first.subject_digest {
+            return Err(format!(
+                "committee result `{}` subject digest does not match the first result",
+                input.source_path.display()
+            ));
+        }
+        if input.manifest_id != manifest.body.manifest_id {
+            return Err(format!(
+                "committee result `{}` manifest id does not match the locked manifest",
+                input.source_path.display()
+            ));
+        }
+        if input.runner_hash != manifest.body.runner_hash {
+            return Err(format!(
+                "committee result `{}` runner hash does not match the locked manifest",
+                input.source_path.display()
+            ));
+        }
+    }
+
+    let median_score_bps = moderation_committee_median_score(
+        inputs
+            .iter()
+            .map(|input| input.combined_score_bps)
+            .collect(),
+    );
+    let verdict = moderation_score_verdict(median_score_bps, manifest.body.thresholds);
+    let screened_min = inputs
+        .iter()
+        .filter_map(|input| input.screened_at_unix)
+        .min();
+    let screened_max = inputs
+        .iter()
+        .filter_map(|input| input.screened_at_unix)
+        .max();
+    let member_results = inputs
+        .iter()
+        .map(moderation_committee_member_result_json)
+        .collect();
+
+    let mut output = Map::new();
+    output.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.committee.aggregate.v1"),
+    );
+    output.insert("status".into(), Value::from("quorum_satisfied"));
+    output.insert("source".into(), Value::from("sorafs_cli"));
+    output.insert(
+        "manifest_id_hex".into(),
+        Value::from(hex_encode(manifest.body.manifest_id)),
+    );
+    output.insert(
+        "runner_hash_hex".into(),
+        Value::from(hex_encode(manifest.body.runner_hash)),
+    );
+    output.insert("subject".into(), Value::from(first.subject.clone()));
+    output.insert(
+        "subject_digest_hex".into(),
+        Value::from(hex_encode(first.subject_digest)),
+    );
+    output.insert("result_count".into(), Value::from(inputs.len() as u64));
+    output.insert("quorum".into(), Value::from(quorum as u64));
+    output.insert("aggregation".into(), Value::from("median_score_bps"));
+    output.insert(
+        "aggregated_score_bps".into(),
+        Value::from(u64::from(median_score_bps)),
+    );
+    output.insert("verdict".into(), Value::from(verdict));
+    output.insert(
+        "screened_at_unix_min".into(),
+        screened_min.map(Value::from).unwrap_or(Value::Null),
+    );
+    output.insert(
+        "screened_at_unix_max".into(),
+        screened_max.map(Value::from).unwrap_or(Value::Null),
+    );
+    output.insert(
+        "notes".into(),
+        notes
+            .map(|value| Value::from(value.to_string()))
+            .unwrap_or(Value::Null),
+    );
+    output.insert("member_results".into(), Value::Array(member_results));
+
+    Ok(Value::Object(output))
+}
+
+fn moderation_committee_median_score(mut scores: Vec<u16>) -> u16 {
+    debug_assert!(!scores.is_empty());
+    scores.sort_unstable();
+    let mid = scores.len() / 2;
+    if scores.len() % 2 == 1 {
+        scores[mid]
+    } else {
+        ((u32::from(scores[mid - 1]) + u32::from(scores[mid]) + 1) / 2) as u16
+    }
+}
+
+fn moderation_committee_member_result_json(input: &ModerationCommitteeInput) -> Value {
+    let mut result = Map::new();
+    result.insert(
+        "source_path".into(),
+        Value::from(input.source_path.display().to_string()),
+    );
+    result.insert(
+        "combined_score_bps".into(),
+        Value::from(u64::from(input.combined_score_bps)),
+    );
+    result.insert("verdict".into(), Value::from(input.verdict.clone()));
+    result.insert(
+        "screened_at_unix".into(),
+        input
+            .screened_at_unix
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+    );
+    result.insert(
+        "evidence_digest_hex".into(),
+        input
+            .evidence_digest
+            .map(hex_encode)
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+    );
+    result.insert(
+        "policy_digest_hex".into(),
+        input
+            .policy_digest
+            .map(hex_encode)
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+    );
+    result.insert(
+        "notes".into(),
+        input
+            .notes
+            .as_ref()
+            .map(|value| Value::from(value.clone()))
+            .unwrap_or(Value::Null),
+    );
+    Value::Object(result)
+}
+
+fn moderation_committee_serve(raw_args: Vec<String>) -> Result<(), String> {
+    if raw_args.is_empty() {
+        return Err(moderation_usage());
+    }
+
+    let mut manifest_path: Option<PathBuf> = None;
+    let mut format = String::from("json");
+    let mut quorum: Option<usize> = None;
+    let mut listen = String::from(MODERATION_COMMITTEE_DEFAULT_LISTEN);
+    let mut max_body_bytes = MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(moderation_usage());
+        }
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--manifest" => manifest_path = Some(PathBuf::from(value)),
+            "--format" => format = value.to_ascii_lowercase(),
+            "--quorum" => {
+                let parsed =
+                    parse_u64_arg("--quorum", value, "sorafs_cli moderation committee-serve")?;
+                let parsed = usize::try_from(parsed).map_err(|_| {
+                    "`--quorum` does not fit into this platform's usize".to_string()
+                })?;
+                if parsed == 0 {
+                    return Err("`--quorum` must be greater than zero".to_string());
+                }
+                quorum = Some(parsed);
+            }
+            "--listen" => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    return Err("`--listen` must not be empty".to_string());
+                }
+                listen = trimmed.to_string();
+            }
+            "--max-body-bytes" => {
+                let parsed = parse_u64_arg(
+                    "--max-body-bytes",
+                    value,
+                    "sorafs_cli moderation committee-serve",
+                )?;
+                max_body_bytes = usize::try_from(parsed).map_err(|_| {
+                    "`--max-body-bytes` does not fit into this platform's usize".to_string()
+                })?;
+                if max_body_bytes == 0 {
+                    return Err("`--max-body-bytes` must be greater than zero".to_string());
+                }
+            }
+            _ => {
+                return Err(format!(
+                    "unrecognised option `{key}` for `sorafs_cli moderation committee-serve`"
+                ));
+            }
+        }
+    }
+
+    let manifest_path = manifest_path.ok_or_else(|| {
+        "missing required `--manifest=PATH` for `sorafs_cli moderation committee-serve`".to_string()
+    })?;
+    let quorum = quorum.ok_or_else(|| {
+        "missing required `--quorum=N` for `sorafs_cli moderation committee-serve`".to_string()
+    })?;
+    let manifest = load_moderation_repro_manifest(
+        &manifest_path,
+        &format,
+        "sorafs_cli moderation committee-serve",
+    )?;
+    manifest
+        .validate()
+        .map_err(|err| format!("manifest validation failed: {err}"))?;
+    validate_moderation_local_runner_manifest(&manifest)?;
+
+    let listener = TcpListener::bind(&listen).map_err(|err| {
+        format!("failed to bind moderation committee service at `{listen}`: {err}")
+    })?;
+    let local_addr = listener
+        .local_addr()
+        .map(|addr| addr.to_string())
+        .unwrap_or_else(|_| listen.clone());
+    let service = Arc::new(ModerationCommitteeService {
+        manifest,
+        manifest_source: manifest_path.display().to_string(),
+        quorum,
+        max_body_bytes,
+    });
+    let status = moderation_committee_status_json(&service, "listening", Some(&local_addr));
+    let rendered = to_string_pretty(&status)
+        .map_err(|err| format!("failed to render committee service status JSON: {err}"))?;
+    println!("{rendered}");
+
+    for incoming in listener.incoming() {
+        match incoming {
+            Ok(stream) => {
+                let service = Arc::clone(&service);
+                thread::spawn(move || {
+                    if let Err(err) =
+                        moderation_committee_handle_stream(stream, &service, max_body_bytes)
+                    {
+                        eprintln!("sorafs moderation committee connection failed: {err}");
+                    }
+                });
+            }
+            Err(err) => eprintln!("sorafs moderation committee accept failed: {err}"),
+        }
+    }
+
+    Ok(())
+}
+
+struct ModerationCommitteeService {
+    manifest: ModerationReproManifestV1,
+    manifest_source: String,
+    quorum: usize,
+    max_body_bytes: usize,
+}
+
+fn moderation_committee_handle_stream(
+    mut stream: TcpStream,
+    service: &ModerationCommitteeService,
+    max_body_bytes: usize,
+) -> io::Result<()> {
+    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let count = stream.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..count]);
+        if request.len() > max_body_bytes.saturating_add(8192) {
+            break;
+        }
+        if let Some((header_len, content_len)) = moderation_runner_request_lengths(&request) {
+            if content_len > max_body_bytes || request.len() >= header_len + content_len {
+                break;
+            }
+        }
+    }
+    let response = moderation_committee_http_response(service, &request, max_body_bytes);
+    stream.write_all(&response)?;
+    stream.flush()
+}
+
+fn moderation_committee_http_response(
+    service: &ModerationCommitteeService,
+    request: &[u8],
+    max_body_bytes: usize,
+) -> Vec<u8> {
+    match moderation_runner_parse_http_request(request, max_body_bytes) {
+        Ok(parsed) => moderation_committee_route_request(service, &parsed),
+        Err(response) => response,
+    }
+}
+
+fn moderation_committee_route_request(
+    service: &ModerationCommitteeService,
+    request: &ModerationRunnerHttpRequest<'_>,
+) -> Vec<u8> {
+    match (request.method, request.path) {
+        ("GET", "/healthz") | ("GET", "/v1/sorafs/moderation/committee/status") => {
+            moderation_committee_json_response(
+                200,
+                "OK",
+                &moderation_committee_status_json(service, "ready", None),
+            )
+        }
+        ("POST", "/v1/sorafs/moderation/committee/aggregate") => {
+            match moderation_committee_aggregate_request_json(service, request.body) {
+                Ok(value) => moderation_committee_json_response(200, "OK", &value),
+                Err(message) => moderation_committee_error_response(400, "Bad Request", &message),
+            }
+        }
+        ("GET", _) | ("POST", _) => moderation_committee_error_response(
+            404,
+            "Not Found",
+            "unknown SoraFS moderation committee endpoint",
+        ),
+        _ => moderation_committee_error_response(
+            405,
+            "Method Not Allowed",
+            "SoraFS moderation committee supports GET and POST only",
+        ),
+    }
+}
+
+fn moderation_committee_aggregate_request_json(
+    service: &ModerationCommitteeService,
+    body: &[u8],
+) -> Result<Value, String> {
+    if body.is_empty() {
+        return Err("moderation committee aggregate request body must not be empty".to_string());
+    }
+    let value: Value = from_slice(body).map_err(|err| {
+        format!("failed to parse moderation committee aggregate request JSON: {err}")
+    })?;
+    if json_contains_key(&value, "payload_b64") {
+        return Err(
+            "moderation committee aggregate request must be payload-free; found `payload_b64`"
+                .to_string(),
+        );
+    }
+    let fields = value.as_object().ok_or_else(|| {
+        "moderation committee aggregate request must be a JSON object".to_string()
+    })?;
+    let results = fields
+        .get("results")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            "moderation committee aggregate request requires array `results`".to_string()
+        })?;
+    if results.is_empty() {
+        return Err(
+            "moderation committee aggregate request `results` must not be empty".to_string(),
+        );
+    }
+    let notes = optional_json_string(fields, "notes", "moderation committee aggregate request")?;
+    let mut inputs = Vec::with_capacity(results.len());
+    for (idx, result) in results.iter().enumerate() {
+        inputs.push(parse_moderation_committee_input_value(
+            &format!("request.results[{idx}]"),
+            result,
+            &service.manifest,
+        )?);
+    }
+    inputs.sort_by_key(|input| input.source_path.display().to_string());
+    moderation_committee_aggregate_json(&service.manifest, &inputs, service.quorum, notes)
+}
+
+fn moderation_committee_status_json(
+    service: &ModerationCommitteeService,
+    status: &str,
+    listen: Option<&str>,
+) -> Value {
+    let mut output = Map::new();
+    output.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.committee.status.v1"),
+    );
+    output.insert("status".into(), Value::from(status.to_string()));
+    output.insert("source".into(), Value::from("sorafs_cli"));
+    output.insert(
+        "manifest_source".into(),
+        Value::from(service.manifest_source.clone()),
+    );
+    output.insert(
+        "manifest_id_hex".into(),
+        Value::from(hex_encode(service.manifest.body.manifest_id)),
+    );
+    output.insert(
+        "runner_hash_hex".into(),
+        Value::from(hex_encode(service.manifest.body.runner_hash)),
+    );
+    output.insert("quorum".into(), Value::from(service.quorum as u64));
+    output.insert("aggregation".into(), Value::from("median_score_bps"));
+    output.insert(
+        "model_count".into(),
+        Value::from(service.manifest.body.models.len() as u64),
+    );
+    output.insert(
+        "max_body_bytes".into(),
+        Value::from(service.max_body_bytes as u64),
+    );
+    output.insert("outbound_network".into(), Value::from("disabled"));
+    output.insert(
+        "listen".into(),
+        listen
+            .map(|value| Value::from(value.to_string()))
+            .unwrap_or(Value::Null),
+    );
+    Value::Object(output)
+}
+
+fn moderation_committee_json_response(status: u16, reason: &str, value: &Value) -> Vec<u8> {
+    let body = to_vec(value).unwrap_or_else(|_| b"{\"error\":\"json_render_failed\"}".to_vec());
+    moderation_runner_http_response_bytes(status, reason, "application/json", &body)
+}
+
+fn moderation_committee_error_response(status: u16, reason: &str, message: &str) -> Vec<u8> {
+    let mut body = Map::new();
+    body.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.committee.error.v1"),
+    );
+    body.insert("status".into(), Value::from("error"));
+    body.insert("message".into(), Value::from(message.to_string()));
+    moderation_committee_json_response(status, reason, &Value::Object(body))
+}
+
+fn moderation_committee_canary(raw_args: Vec<String>) -> Result<(), String> {
+    if raw_args.is_empty() {
+        return Err(moderation_usage());
+    }
+
+    let mut manifest_path: Option<PathBuf> = None;
+    let mut format = String::from("json");
+    let mut committee_url: Option<String> = None;
+    let mut quorum: Option<usize> = None;
+    let mut result_paths: Vec<PathBuf> = Vec::new();
+    let mut checked_at_unix: Option<u64> = None;
+    let mut notes: Option<String> = None;
+    let mut timeout_ms = 30_000_u64;
+    let mut json_out: Option<PathBuf> = None;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(moderation_usage());
+        }
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--manifest" => manifest_path = Some(PathBuf::from(value)),
+            "--format" => format = value.to_ascii_lowercase(),
+            "--committee-url" => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    return Err("`--committee-url` must not be empty".to_string());
+                }
+                committee_url = Some(trimmed.to_string());
+            }
+            "--quorum" => {
+                let parsed =
+                    parse_u64_arg("--quorum", value, "sorafs_cli moderation committee-canary")?;
+                let parsed = usize::try_from(parsed).map_err(|_| {
+                    "`--quorum` does not fit into this platform's usize".to_string()
+                })?;
+                if parsed == 0 {
+                    return Err("`--quorum` must be greater than zero".to_string());
+                }
+                quorum = Some(parsed);
+            }
+            "--result" => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    return Err("`--result` path must not be empty".to_string());
+                }
+                result_paths.push(PathBuf::from(trimmed));
+            }
+            "--checked-at" => {
+                checked_at_unix = Some(parse_u64_arg(
+                    "--checked-at",
+                    value,
+                    "sorafs_cli moderation committee-canary",
+                )?);
+            }
+            "--notes" => {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    notes = Some(trimmed.to_string());
+                }
+            }
+            "--timeout-ms" => {
+                timeout_ms = parse_u64_arg(
+                    "--timeout-ms",
+                    value,
+                    "sorafs_cli moderation committee-canary",
+                )?;
+                if timeout_ms == 0 {
+                    return Err("`--timeout-ms` must be greater than zero".to_string());
+                }
+            }
+            "--json-out" => json_out = Some(PathBuf::from(value)),
+            _ => {
+                return Err(format!(
+                    "unrecognised option `{key}` for `sorafs_cli moderation committee-canary`"
+                ));
+            }
+        }
+    }
+
+    let manifest_path = manifest_path.ok_or_else(|| {
+        "missing required `--manifest=PATH` for `sorafs_cli moderation committee-canary`"
+            .to_string()
+    })?;
+    let committee_url = committee_url.ok_or_else(|| {
+        "missing required `--committee-url=URL` for `sorafs_cli moderation committee-canary`"
+            .to_string()
+    })?;
+    let quorum = quorum.ok_or_else(|| {
+        "missing required `--quorum=N` for `sorafs_cli moderation committee-canary`".to_string()
+    })?;
+    if result_paths.is_empty() {
+        return Err("provide at least one `--result=PATH` for committee canary".to_string());
+    }
+    if quorum > result_paths.len() {
+        return Err(format!(
+            "committee canary requires quorum {quorum} but only {} result file(s) were provided",
+            result_paths.len()
+        ));
+    }
+    let checked_at_unix = checked_at_unix.unwrap_or_else(moderation_runner_canary_now_unix);
+    let manifest = load_moderation_repro_manifest(
+        &manifest_path,
+        &format,
+        "sorafs_cli moderation committee-canary",
+    )?;
+    manifest
+        .validate()
+        .map_err(|err| format!("manifest validation failed: {err}"))?;
+    validate_moderation_local_runner_manifest(&manifest)?;
+
+    let mut result_values = Vec::with_capacity(result_paths.len());
+    let mut result_sources = Vec::with_capacity(result_paths.len());
+    for path in &result_paths {
+        let value = load_moderation_committee_result_value(path, &manifest)?;
+        result_sources.push(path.display().to_string());
+        result_values.push(value);
+    }
+
+    let expected_aggregate = moderation_committee_expected_aggregate_from_values(
+        &manifest,
+        &result_values,
+        quorum,
+        notes.as_deref(),
+    )?;
+    let request =
+        moderation_committee_canary_aggregate_request_json(&result_values, notes.as_deref());
+
+    let client = HttpClient::builder()
+        .timeout(Duration::from_millis(timeout_ms))
+        .build()
+        .map_err(|err| format!("failed to construct committee canary HTTP client: {err}"))?;
+    let base_url = Url::parse(&committee_url)
+        .map_err(|err| format!("invalid `--committee-url` `{committee_url}`: {err}"))?;
+    let status_url =
+        moderation_runner_canary_endpoint(&base_url, "/v1/sorafs/moderation/committee/status")?;
+    let aggregate_url =
+        moderation_runner_canary_endpoint(&base_url, "/v1/sorafs/moderation/committee/aggregate")?;
+    let status_response = moderation_committee_canary_get_json(&client, &status_url)?;
+    let aggregate_response =
+        moderation_committee_canary_post_json(&client, &aggregate_url, &request)?;
+    let evidence =
+        moderation_committee_canary_evidence_json(ModerationCommitteeCanaryEvidenceInput {
+            manifest: &manifest,
+            committee_url: base_url.as_str(),
+            status_url: status_url.as_str(),
+            aggregate_url: aggregate_url.as_str(),
+            quorum,
+            checked_at_unix,
+            notes: notes.as_deref(),
+            result_sources,
+            expected_aggregate,
+            status_response,
+            aggregate_response,
+        })?;
+    let rendered = to_string_pretty(&evidence)
+        .map_err(|err| format!("failed to render committee canary evidence JSON: {err}"))?;
+    if let Some(path) = json_out {
+        write_text(&path, format!("{rendered}\n").as_bytes())?;
+    } else {
+        println!("{rendered}");
+    }
+    Ok(())
+}
+
+struct ModerationCommitteeCanaryEvidenceInput<'a> {
+    manifest: &'a ModerationReproManifestV1,
+    committee_url: &'a str,
+    status_url: &'a str,
+    aggregate_url: &'a str,
+    quorum: usize,
+    checked_at_unix: u64,
+    notes: Option<&'a str>,
+    result_sources: Vec<String>,
+    expected_aggregate: Value,
+    status_response: Value,
+    aggregate_response: Value,
+}
+
+fn load_moderation_committee_result_value(
+    path: &Path,
+    manifest: &ModerationReproManifestV1,
+) -> Result<Value, String> {
+    let bytes =
+        fs::read(path).map_err(|err| format!("failed to read `{}`: {err}", path.display()))?;
+    let value: Value = from_slice(&bytes).map_err(|err| {
+        format!(
+            "failed to parse committee result JSON `{}`: {err}",
+            path.display()
+        )
+    })?;
+    if json_contains_key(&value, "payload_b64") {
+        return Err(format!(
+            "committee canary result `{}` must be payload-free; found `payload_b64`",
+            path.display()
+        ));
+    }
+    parse_moderation_committee_input_value(&path.display().to_string(), &value, manifest)?;
+    Ok(value)
+}
+
+fn moderation_committee_expected_aggregate_from_values(
+    manifest: &ModerationReproManifestV1,
+    result_values: &[Value],
+    quorum: usize,
+    notes: Option<&str>,
+) -> Result<Value, String> {
+    let mut inputs = Vec::with_capacity(result_values.len());
+    for (idx, value) in result_values.iter().enumerate() {
+        inputs.push(parse_moderation_committee_input_value(
+            &format!("request.results[{idx}]"),
+            value,
+            manifest,
+        )?);
+    }
+    inputs.sort_by_key(|input| input.source_path.display().to_string());
+    moderation_committee_aggregate_json(manifest, &inputs, quorum, notes)
+}
+
+fn moderation_committee_canary_aggregate_request_json(
+    result_values: &[Value],
+    notes: Option<&str>,
+) -> Value {
+    let mut request = Map::new();
+    request.insert("results".into(), Value::Array(result_values.to_vec()));
+    request.insert(
+        "notes".into(),
+        notes
+            .map(|value| Value::from(value.to_string()))
+            .unwrap_or(Value::Null),
+    );
+    Value::Object(request)
+}
+
+fn moderation_committee_canary_get_json(client: &HttpClient, url: &Url) -> Result<Value, String> {
+    let response = client
+        .get(url.as_str())
+        .send()
+        .map_err(|err| format!("committee canary GET `{url}` failed: {err}"))?;
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .map_err(|err| format!("committee canary GET `{url}` failed to read body: {err}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "committee canary GET `{url}` returned HTTP {status}: {}",
+            body_snippet(bytes.as_ref())
+        ));
+    }
+    from_slice(bytes.as_ref())
+        .map_err(|err| format!("committee canary GET `{url}` returned invalid JSON: {err}"))
+}
+
+fn moderation_committee_canary_post_json(
+    client: &HttpClient,
+    url: &Url,
+    value: &Value,
+) -> Result<Value, String> {
+    let body = to_vec(value)
+        .map_err(|err| format!("failed to encode committee canary request JSON: {err}"))?;
+    let response = client
+        .post(url.as_str())
+        .header(CONTENT_TYPE, "application/json")
+        .body(body)
+        .send()
+        .map_err(|err| format!("committee canary POST `{url}` failed: {err}"))?;
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .map_err(|err| format!("committee canary POST `{url}` failed to read body: {err}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "committee canary POST `{url}` returned HTTP {status}: {}",
+            body_snippet(bytes.as_ref())
+        ));
+    }
+    from_slice(bytes.as_ref())
+        .map_err(|err| format!("committee canary POST `{url}` returned invalid JSON: {err}"))
+}
+
+fn moderation_committee_canary_evidence_json(
+    input: ModerationCommitteeCanaryEvidenceInput<'_>,
+) -> Result<Value, String> {
+    validate_moderation_committee_status_response(
+        input.manifest,
+        input.quorum,
+        &input.status_response,
+    )?;
+    validate_moderation_committee_aggregate_response(
+        input.manifest,
+        input.quorum,
+        &input.expected_aggregate,
+        &input.aggregate_response,
+    )?;
+    if json_contains_key(&input.status_response, "payload_b64")
+        || json_contains_key(&input.aggregate_response, "payload_b64")
+    {
+        return Err(
+            "committee canary evidence responses must not contain `payload_b64`".to_string(),
+        );
+    }
+
+    let aggregate = input
+        .aggregate_response
+        .as_object()
+        .ok_or_else(|| "committee aggregate response must be a JSON object".to_string())?;
+    let subject = required_json_string(aggregate, "subject", "committee aggregate response")?;
+    let subject_digest_hex = required_json_string(
+        aggregate,
+        "subject_digest_hex",
+        "committee aggregate response",
+    )?;
+    let score = aggregate
+        .get("aggregated_score_bps")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            "committee aggregate response requires numeric `aggregated_score_bps`".to_string()
+        })?;
+    let verdict = required_json_string(aggregate, "verdict", "committee aggregate response")?;
+    let result_count = aggregate
+        .get("result_count")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            "committee aggregate response requires numeric `result_count`".to_string()
+        })?;
+
+    let mut output = Map::new();
+    output.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.committee.rollout_evidence.v1"),
+    );
+    output.insert("status".into(), Value::from("verified"));
+    output.insert("source".into(), Value::from("sorafs_cli"));
+    output.insert(
+        "committee_url".into(),
+        Value::from(input.committee_url.to_string()),
+    );
+    output.insert(
+        "status_url".into(),
+        Value::from(input.status_url.to_string()),
+    );
+    output.insert(
+        "aggregate_url".into(),
+        Value::from(input.aggregate_url.to_string()),
+    );
+    output.insert(
+        "manifest_id_hex".into(),
+        Value::from(hex_encode(input.manifest.body.manifest_id)),
+    );
+    output.insert(
+        "runner_hash_hex".into(),
+        Value::from(hex_encode(input.manifest.body.runner_hash)),
+    );
+    output.insert("quorum".into(), Value::from(input.quorum as u64));
+    output.insert("aggregation".into(), Value::from("median_score_bps"));
+    output.insert("result_count".into(), Value::from(result_count));
+    output.insert("subject".into(), Value::from(subject.to_string()));
+    output.insert(
+        "subject_digest_hex".into(),
+        Value::from(subject_digest_hex.to_string()),
+    );
+    output.insert("aggregated_score_bps".into(), Value::from(score));
+    output.insert("verdict".into(), Value::from(verdict.to_string()));
+    output.insert("checked_at_unix".into(), Value::from(input.checked_at_unix));
+    output.insert(
+        "notes".into(),
+        input
+            .notes
+            .map(|value| Value::from(value.to_string()))
+            .unwrap_or(Value::Null),
+    );
+    output.insert(
+        "result_sources".into(),
+        Value::Array(input.result_sources.into_iter().map(Value::from).collect()),
+    );
+    output.insert("committee_status".into(), input.status_response);
+    output.insert("committee_aggregate".into(), input.aggregate_response);
+    Ok(Value::Object(output))
+}
+
+fn validate_moderation_committee_status_response(
+    manifest: &ModerationReproManifestV1,
+    quorum: usize,
+    value: &Value,
+) -> Result<(), String> {
+    let fields = value
+        .as_object()
+        .ok_or_else(|| "committee status response must be a JSON object".to_string())?;
+    let context = "committee status response";
+    let schema = required_json_string(fields, "schema", context)?;
+    if schema != "sorafs.moderation.committee.status.v1" {
+        return Err(format!("{context} has unexpected schema `{schema}`"));
+    }
+    let manifest_id = parse_fixed_hex::<16>(
+        required_json_string(fields, "manifest_id_hex", context)?,
+        "manifest_id_hex",
+        context,
+    )?;
+    if manifest_id != manifest.body.manifest_id {
+        return Err(format!(
+            "{context} manifest id {} does not match locked manifest {}",
+            hex_encode(manifest_id),
+            hex_encode(manifest.body.manifest_id)
+        ));
+    }
+    let runner_hash = parse_fixed_hex::<32>(
+        required_json_string(fields, "runner_hash_hex", context)?,
+        "runner_hash_hex",
+        context,
+    )?;
+    if runner_hash != manifest.body.runner_hash {
+        return Err(format!(
+            "{context} runner hash {} does not match locked runner {}",
+            hex_encode(runner_hash),
+            hex_encode(manifest.body.runner_hash)
+        ));
+    }
+    let actual_quorum = fields
+        .get("quorum")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("{context} requires numeric `quorum`"))?;
+    if actual_quorum != quorum as u64 {
+        return Err(format!(
+            "{context} quorum {actual_quorum} does not match expected quorum {quorum}"
+        ));
+    }
+    let aggregation = required_json_string(fields, "aggregation", context)?;
+    if aggregation != "median_score_bps" {
+        return Err(format!(
+            "{context} aggregation `{aggregation}` is not `median_score_bps`"
+        ));
+    }
+    let outbound = required_json_string(fields, "outbound_network", context)?;
+    if outbound != "disabled" {
+        return Err(format!(
+            "{context} outbound_network `{outbound}` is not `disabled`"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_moderation_committee_aggregate_response(
+    manifest: &ModerationReproManifestV1,
+    quorum: usize,
+    expected: &Value,
+    value: &Value,
+) -> Result<(), String> {
+    if value != expected {
+        return Err(
+            "committee aggregate response does not match deterministic local aggregation"
+                .to_string(),
+        );
+    }
+    let fields = value
+        .as_object()
+        .ok_or_else(|| "committee aggregate response must be a JSON object".to_string())?;
+    let context = "committee aggregate response";
+    let schema = required_json_string(fields, "schema", context)?;
+    if schema != "sorafs.moderation.committee.aggregate.v1" {
+        return Err(format!("{context} has unexpected schema `{schema}`"));
+    }
+    let status = required_json_string(fields, "status", context)?;
+    if status != "quorum_satisfied" {
+        return Err(format!(
+            "{context} status `{status}` is not `quorum_satisfied`"
+        ));
+    }
+    let manifest_id = parse_fixed_hex::<16>(
+        required_json_string(fields, "manifest_id_hex", context)?,
+        "manifest_id_hex",
+        context,
+    )?;
+    if manifest_id != manifest.body.manifest_id {
+        return Err(format!(
+            "{context} manifest id {} does not match locked manifest {}",
+            hex_encode(manifest_id),
+            hex_encode(manifest.body.manifest_id)
+        ));
+    }
+    let runner_hash = parse_fixed_hex::<32>(
+        required_json_string(fields, "runner_hash_hex", context)?,
+        "runner_hash_hex",
+        context,
+    )?;
+    if runner_hash != manifest.body.runner_hash {
+        return Err(format!(
+            "{context} runner hash {} does not match locked runner {}",
+            hex_encode(runner_hash),
+            hex_encode(manifest.body.runner_hash)
+        ));
+    }
+    let actual_quorum = fields
+        .get("quorum")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("{context} requires numeric `quorum`"))?;
+    if actual_quorum != quorum as u64 {
+        return Err(format!(
+            "{context} quorum {actual_quorum} does not match expected quorum {quorum}"
+        ));
+    }
+    let aggregation = required_json_string(fields, "aggregation", context)?;
+    if aggregation != "median_score_bps" {
+        return Err(format!(
+            "{context} aggregation `{aggregation}` is not `median_score_bps`"
+        ));
+    }
+    let score = fields
+        .get("aggregated_score_bps")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("{context} requires numeric `aggregated_score_bps`"))?;
+    if score > 10_000 {
+        return Err(format!(
+            "{context} aggregated_score_bps {score} exceeds 10000 bps"
+        ));
+    }
+    let score = u16::try_from(score)
+        .map_err(|_| format!("{context} `aggregated_score_bps` overflowed u16"))?;
+    let verdict = required_json_string(fields, "verdict", context)?;
+    let expected_verdict = moderation_score_verdict(score, manifest.body.thresholds);
+    if verdict != expected_verdict {
+        return Err(format!(
+            "{context} verdict `{verdict}` does not match score-derived verdict `{expected_verdict}`"
+        ));
+    }
+    Ok(())
+}
+
+struct ModerationRunnerService {
+    manifest: ModerationReproManifestV1,
+    manifest_source: String,
+    max_body_bytes: usize,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct ModerationRunnerStatusRequest {}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct ModerationRunnerStatusResponse {
+    #[prost(string, tag = "1")]
+    schema: String,
+    #[prost(string, tag = "2")]
+    status: String,
+    #[prost(string, tag = "3")]
+    source: String,
+    #[prost(string, tag = "4")]
+    manifest_source: String,
+    #[prost(string, tag = "5")]
+    manifest_id_hex: String,
+    #[prost(string, tag = "6")]
+    manifest_digest_hex: String,
+    #[prost(string, tag = "7")]
+    runner_hash_hex: String,
+    #[prost(string, tag = "8")]
+    runtime_version: String,
+    #[prost(uint64, tag = "9")]
+    model_count: u64,
+    #[prost(uint64, tag = "10")]
+    max_body_bytes: u64,
+    #[prost(string, tag = "11")]
+    outbound_network: String,
+    #[prost(string, tag = "12")]
+    listen: String,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct ModerationRunnerScreenRequest {
+    #[prost(string, tag = "1")]
+    subject: String,
+    #[prost(bytes = "vec", tag = "2")]
+    payload: Vec<u8>,
+    #[prost(uint64, tag = "3")]
+    screened_at_unix: u64,
+    #[prost(string, optional, tag = "4")]
+    notes: Option<String>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct ModerationRunnerScreenResponse {
+    #[prost(string, tag = "1")]
+    subject: String,
+    #[prost(string, tag = "2")]
+    subject_digest_hex: String,
+    #[prost(string, tag = "3")]
+    manifest_id_hex: String,
+    #[prost(string, tag = "4")]
+    runner_hash_hex: String,
+    #[prost(uint32, tag = "5")]
+    combined_score_bps: u32,
+    #[prost(string, tag = "6")]
+    verdict: String,
+    #[prost(uint64, tag = "7")]
+    screened_at_unix: u64,
+    #[prost(string, tag = "8")]
+    evidence_digest_hex: String,
+    #[prost(string, tag = "9")]
+    policy_digest_hex: String,
+    #[prost(string, optional, tag = "10")]
+    notes: Option<String>,
+}
+
+#[derive(Clone)]
+struct ModerationRunnerGrpcHandler {
+    service: Arc<ModerationRunnerService>,
+    listen: String,
+}
+
+#[tonic::async_trait]
+impl moderation_runner_grpc::runner_server::Runner for ModerationRunnerGrpcHandler {
+    async fn status(
+        &self,
+        _request: tonic::Request<ModerationRunnerStatusRequest>,
+    ) -> Result<tonic::Response<ModerationRunnerStatusResponse>, tonic::Status> {
+        Ok(tonic::Response::new(moderation_runner_status_proto(
+            &self.service,
+            "ready",
+            Some(&self.listen),
+        )))
+    }
+
+    async fn screen(
+        &self,
+        request: tonic::Request<ModerationRunnerScreenRequest>,
+    ) -> Result<tonic::Response<ModerationRunnerScreenResponse>, tonic::Status> {
+        moderation_runner_screen_request_proto(&self.service, request.into_inner())
+            .map(tonic::Response::new)
+            .map_err(|message| tonic::Status::invalid_argument(message))
+    }
+}
+
+mod moderation_runner_grpc {
+    use std::{convert::Infallible, sync::Arc, task::Poll};
+
+    use tonic::codegen::*;
+
+    use super::{
+        ModerationRunnerScreenRequest, ModerationRunnerScreenResponse,
+        ModerationRunnerStatusRequest, ModerationRunnerStatusResponse,
+    };
+
+    pub mod runner_server {
+        use super::*;
+
+        #[tonic::async_trait]
+        pub trait Runner: Send + Sync + 'static {
+            async fn status(
+                &self,
+                request: tonic::Request<ModerationRunnerStatusRequest>,
+            ) -> Result<tonic::Response<ModerationRunnerStatusResponse>, tonic::Status>;
+
+            async fn screen(
+                &self,
+                request: tonic::Request<ModerationRunnerScreenRequest>,
+            ) -> Result<tonic::Response<ModerationRunnerScreenResponse>, tonic::Status>;
+        }
+
+        #[derive(Debug)]
+        pub struct RunnerServer<T> {
+            inner: Arc<T>,
+            max_decoding_message_size: Option<usize>,
+            max_encoding_message_size: Option<usize>,
+        }
+
+        impl<T> RunnerServer<T> {
+            pub fn new(inner: T) -> Self {
+                Self {
+                    inner: Arc::new(inner),
+                    max_decoding_message_size: None,
+                    max_encoding_message_size: None,
+                }
+            }
+
+            pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+                self.max_decoding_message_size = Some(limit);
+                self
+            }
+        }
+
+        impl<T: Runner> Clone for RunnerServer<T> {
+            fn clone(&self) -> Self {
+                Self {
+                    inner: Arc::clone(&self.inner),
+                    max_decoding_message_size: self.max_decoding_message_size,
+                    max_encoding_message_size: self.max_encoding_message_size,
+                }
+            }
+        }
+
+        impl<T, B> Service<http::Request<B>> for RunnerServer<T>
+        where
+            T: Runner,
+            B: Body + Send + 'static,
+            B::Error: Into<StdError> + Send + 'static,
+        {
+            type Response = http::Response<tonic::body::Body>;
+            type Error = Infallible;
+            type Future = BoxFuture<Self::Response, Self::Error>;
+
+            fn poll_ready(
+                &mut self,
+                _cx: &mut std::task::Context<'_>,
+            ) -> Poll<Result<(), Self::Error>> {
+                Poll::Ready(Ok(()))
+            }
+
+            fn call(&mut self, req: http::Request<B>) -> Self::Future {
+                match req.uri().path() {
+                    "/sorafs.moderation.runner.v1.Runner/Status" => {
+                        #[allow(non_camel_case_types)]
+                        struct StatusSvc<T: Runner>(pub Arc<T>);
+
+                        impl<T: Runner> tonic::server::UnaryService<ModerationRunnerStatusRequest> for StatusSvc<T> {
+                            type Response = ModerationRunnerStatusResponse;
+                            type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+
+                            fn call(
+                                &mut self,
+                                request: tonic::Request<ModerationRunnerStatusRequest>,
+                            ) -> Self::Future {
+                                let inner = Arc::clone(&self.0);
+                                let fut = async move { (*inner).status(request).await };
+                                Box::pin(fut)
+                            }
+                        }
+
+                        let inner = Arc::clone(&self.inner);
+                        let max_decoding_message_size = self.max_decoding_message_size;
+                        let max_encoding_message_size = self.max_encoding_message_size;
+                        let fut = async move {
+                            let method = StatusSvc(inner);
+                            let codec = tonic_prost::ProstCodec::default();
+                            let mut grpc = tonic::server::Grpc::new(codec);
+                            if let Some(limit) = max_decoding_message_size {
+                                grpc = grpc.max_decoding_message_size(limit);
+                            }
+                            if let Some(limit) = max_encoding_message_size {
+                                grpc = grpc.max_encoding_message_size(limit);
+                            }
+                            let response = grpc.unary(method, req).await;
+                            Ok(response)
+                        };
+                        Box::pin(fut)
+                    }
+                    "/sorafs.moderation.runner.v1.Runner/Screen" => {
+                        #[allow(non_camel_case_types)]
+                        struct ScreenSvc<T: Runner>(pub Arc<T>);
+
+                        impl<T: Runner> tonic::server::UnaryService<ModerationRunnerScreenRequest> for ScreenSvc<T> {
+                            type Response = ModerationRunnerScreenResponse;
+                            type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+
+                            fn call(
+                                &mut self,
+                                request: tonic::Request<ModerationRunnerScreenRequest>,
+                            ) -> Self::Future {
+                                let inner = Arc::clone(&self.0);
+                                let fut = async move { (*inner).screen(request).await };
+                                Box::pin(fut)
+                            }
+                        }
+
+                        let inner = Arc::clone(&self.inner);
+                        let max_decoding_message_size = self.max_decoding_message_size;
+                        let max_encoding_message_size = self.max_encoding_message_size;
+                        let fut = async move {
+                            let method = ScreenSvc(inner);
+                            let codec = tonic_prost::ProstCodec::default();
+                            let mut grpc = tonic::server::Grpc::new(codec);
+                            if let Some(limit) = max_decoding_message_size {
+                                grpc = grpc.max_decoding_message_size(limit);
+                            }
+                            if let Some(limit) = max_encoding_message_size {
+                                grpc = grpc.max_encoding_message_size(limit);
+                            }
+                            let response = grpc.unary(method, req).await;
+                            Ok(response)
+                        };
+                        Box::pin(fut)
+                    }
+                    _ => Box::pin(async move {
+                        Ok(http::Response::builder()
+                            .status(200)
+                            .header("grpc-status", "12")
+                            .header("content-type", "application/grpc")
+                            .body(tonic::body::Body::empty())
+                            .expect("valid unimplemented gRPC response"))
+                    }),
+                }
+            }
+        }
+
+        impl<T: Runner> tonic::server::NamedService for RunnerServer<T> {
+            const NAME: &'static str = "sorafs.moderation.runner.v1.Runner";
+        }
+    }
+}
+
+fn moderation_runner_handle_stream(
+    mut stream: TcpStream,
+    service: &ModerationRunnerService,
+    max_body_bytes: usize,
+) -> io::Result<()> {
+    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let count = stream.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..count]);
+        if request.len() > max_body_bytes.saturating_add(8192) {
+            break;
+        }
+        if let Some((header_len, content_len)) = moderation_runner_request_lengths(&request) {
+            if content_len > max_body_bytes || request.len() >= header_len + content_len {
+                break;
+            }
+        }
+    }
+    let response = moderation_runner_http_response(service, &request, max_body_bytes);
+    stream.write_all(&response)?;
+    stream.flush()
+}
+
+fn moderation_runner_http_response(
+    service: &ModerationRunnerService,
+    request: &[u8],
+    max_body_bytes: usize,
+) -> Vec<u8> {
+    match moderation_runner_parse_http_request(request, max_body_bytes) {
+        Ok(parsed) => moderation_runner_route_request(service, &parsed),
+        Err(response) => response,
+    }
+}
+
+struct ModerationRunnerHttpRequest<'a> {
+    method: &'a str,
+    path: &'a str,
+    body: &'a [u8],
+}
+
+fn moderation_runner_parse_http_request<'a>(
+    request: &'a [u8],
+    max_body_bytes: usize,
+) -> Result<ModerationRunnerHttpRequest<'a>, Vec<u8>> {
+    let Some(header_end) = find_http_header_end(request) else {
+        return Err(moderation_runner_error_response(
+            400,
+            "Bad Request",
+            "missing HTTP header terminator",
+        ));
+    };
+    let header_text = match std::str::from_utf8(&request[..header_end]) {
+        Ok(text) => text,
+        Err(_) => {
+            return Err(moderation_runner_error_response(
+                400,
+                "Bad Request",
+                "HTTP headers must be UTF-8",
+            ));
+        }
+    };
+    let mut lines = header_text.split("\r\n");
+    let request_line = lines.next().unwrap_or_default();
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default();
+    let raw_path = parts.next().unwrap_or_default();
+    let version = parts.next().unwrap_or_default();
+    if method.is_empty() || raw_path.is_empty() || !version.starts_with("HTTP/") {
+        return Err(moderation_runner_error_response(
+            400,
+            "Bad Request",
+            "malformed HTTP request line",
+        ));
+    }
+    let mut content_length = 0_usize;
+    for line in lines {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case("content-length") {
+            content_length = value.trim().parse::<usize>().map_err(|err| {
+                moderation_runner_error_response(
+                    400,
+                    "Bad Request",
+                    &format!("invalid Content-Length header: {err}"),
+                )
+            })?;
+        }
+    }
+    if content_length > max_body_bytes {
+        return Err(moderation_runner_error_response(
+            413,
+            "Payload Too Large",
+            "moderation runner request body exceeds configured maximum",
+        ));
+    }
+    let body_start = header_end + 4;
+    if request.len() < body_start + content_length {
+        return Err(moderation_runner_error_response(
+            400,
+            "Bad Request",
+            "incomplete HTTP request body",
+        ));
+    }
+    let path = raw_path.split('?').next().unwrap_or(raw_path);
+    Ok(ModerationRunnerHttpRequest {
+        method,
+        path,
+        body: &request[body_start..body_start + content_length],
+    })
+}
+
+fn moderation_runner_request_lengths(request: &[u8]) -> Option<(usize, usize)> {
+    let header_end = find_http_header_end(request)?;
+    let header_text = std::str::from_utf8(&request[..header_end]).ok()?;
+    let mut content_length = 0_usize;
+    for line in header_text.split("\r\n").skip(1) {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case("content-length") {
+            content_length = value.trim().parse().ok()?;
+        }
+    }
+    Some((header_end + 4, content_length))
+}
+
+fn find_http_header_end(request: &[u8]) -> Option<usize> {
+    request.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn moderation_runner_route_request(
+    service: &ModerationRunnerService,
+    request: &ModerationRunnerHttpRequest<'_>,
+) -> Vec<u8> {
+    match (request.method, request.path) {
+        ("GET", "/healthz") | ("GET", "/v1/sorafs/moderation/runner/status") => {
+            moderation_runner_json_response(
+                200,
+                "OK",
+                &moderation_runner_status_json(service, "ready", None),
+            )
+        }
+        ("POST", "/v1/sorafs/moderation/runner/screen") => {
+            match moderation_runner_screen_request_json(service, request.body) {
+                Ok(value) => moderation_runner_json_response(200, "OK", &value),
+                Err(message) => moderation_runner_error_response(400, "Bad Request", &message),
+            }
+        }
+        ("GET", _) | ("POST", _) => moderation_runner_error_response(
+            404,
+            "Not Found",
+            "unknown SoraFS moderation runner endpoint",
+        ),
+        _ => moderation_runner_error_response(
+            405,
+            "Method Not Allowed",
+            "SoraFS moderation runner supports GET and POST only",
+        ),
+    }
+}
+
+fn moderation_runner_screen_request_json(
+    service: &ModerationRunnerService,
+    body: &[u8],
+) -> Result<Value, String> {
+    if body.is_empty() {
+        return Err("moderation runner screen request body must not be empty".to_string());
+    }
+    let value: Value = from_slice(body)
+        .map_err(|err| format!("failed to parse moderation runner screen request JSON: {err}"))?;
+    let fields = value
+        .as_object()
+        .ok_or_else(|| "moderation runner screen request must be a JSON object".to_string())?;
+    let subject = required_json_string(fields, "subject", "moderation runner screen request")?;
+    let payload_b64 =
+        required_json_string(fields, "payload_b64", "moderation runner screen request")?;
+    let screened_at_unix = fields
+        .get("screened_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            "moderation runner screen request requires numeric `screened_at_unix`".to_string()
+        })?;
+    let notes = optional_json_string(fields, "notes", "moderation runner screen request")?;
+    let payload = BASE64_STANDARD
+        .decode(payload_b64)
+        .map_err(|err| format!("invalid moderation runner `payload_b64`: {err}"))?;
+    if payload.is_empty() {
+        return Err("moderation runner `payload_b64` must decode to non-empty bytes".to_string());
+    }
+    moderation_local_runner_screening_json(
+        &service.manifest,
+        &payload,
+        subject,
+        screened_at_unix,
+        notes,
+    )
+}
+
+fn moderation_runner_screen_request_proto(
+    service: &ModerationRunnerService,
+    request: ModerationRunnerScreenRequest,
+) -> Result<ModerationRunnerScreenResponse, String> {
+    let subject = request.subject.trim();
+    if subject.is_empty() {
+        return Err(
+            "moderation runner gRPC screen request `subject` must not be empty".to_string(),
+        );
+    }
+    if request.payload.is_empty() {
+        return Err(
+            "moderation runner gRPC screen request `payload` must not be empty".to_string(),
+        );
+    }
+    if request.payload.len() > service.max_body_bytes {
+        return Err(
+            "moderation runner gRPC screen request payload exceeds configured maximum".to_string(),
+        );
+    }
+    let notes = match request.notes.as_deref() {
+        None => None,
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Err(
+                    "moderation runner gRPC screen request `notes` must not be empty".to_string(),
+                );
+            }
+            Some(trimmed)
+        }
+    };
+    let value = moderation_local_runner_screening_json(
+        &service.manifest,
+        &request.payload,
+        subject,
+        request.screened_at_unix,
+        notes,
+    )?;
+    moderation_runner_screen_proto_from_json(&value)
+}
+
+fn moderation_runner_status_json(
+    service: &ModerationRunnerService,
+    status: &str,
+    listen: Option<&str>,
+) -> Value {
+    let mut output = Map::new();
+    output.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.runner.status.v1"),
+    );
+    output.insert("status".into(), Value::from(status.to_string()));
+    output.insert("source".into(), Value::from("sorafs_cli"));
+    output.insert(
+        "manifest_source".into(),
+        Value::from(service.manifest_source.clone()),
+    );
+    output.insert(
+        "manifest_id_hex".into(),
+        Value::from(hex_encode(service.manifest.body.manifest_id)),
+    );
+    output.insert(
+        "manifest_digest_hex".into(),
+        Value::from(hex_encode(service.manifest.body.manifest_digest)),
+    );
+    output.insert(
+        "runner_hash_hex".into(),
+        Value::from(hex_encode(service.manifest.body.runner_hash)),
+    );
+    output.insert(
+        "runtime_version".into(),
+        Value::from(service.manifest.body.runtime_version.clone()),
+    );
+    output.insert(
+        "model_count".into(),
+        Value::from(service.manifest.body.models.len() as u64),
+    );
+    output.insert(
+        "max_body_bytes".into(),
+        Value::from(service.max_body_bytes as u64),
+    );
+    output.insert("outbound_network".into(), Value::from("disabled"));
+    output.insert(
+        "listen".into(),
+        listen
+            .map(|value| Value::from(value.to_string()))
+            .unwrap_or(Value::Null),
+    );
+    Value::Object(output)
+}
+
+fn moderation_runner_status_proto(
+    service: &ModerationRunnerService,
+    status: &str,
+    listen: Option<&str>,
+) -> ModerationRunnerStatusResponse {
+    ModerationRunnerStatusResponse {
+        schema: "sorafs.moderation.runner.status.v1".to_string(),
+        status: status.to_string(),
+        source: "sorafs_cli".to_string(),
+        manifest_source: service.manifest_source.clone(),
+        manifest_id_hex: hex_encode(service.manifest.body.manifest_id),
+        manifest_digest_hex: hex_encode(service.manifest.body.manifest_digest),
+        runner_hash_hex: hex_encode(service.manifest.body.runner_hash),
+        runtime_version: service.manifest.body.runtime_version.clone(),
+        model_count: service.manifest.body.models.len() as u64,
+        max_body_bytes: service.max_body_bytes as u64,
+        outbound_network: "disabled".to_string(),
+        listen: listen.unwrap_or_default().to_string(),
+    }
+}
+
+fn moderation_runner_screen_proto_from_json(
+    value: &Value,
+) -> Result<ModerationRunnerScreenResponse, String> {
+    let fields = value
+        .as_object()
+        .ok_or_else(|| "runner screening result was not a JSON object".to_string())?;
+    let combined_score_bps = fields
+        .get("combined_score_bps")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "runner screening result is missing `combined_score_bps`".to_string())?;
+    let notes = match fields.get("notes") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(value.clone()),
+        Some(_) => {
+            return Err("runner screening result `notes` field is not a string".to_string());
+        }
+    };
+    Ok(ModerationRunnerScreenResponse {
+        subject: required_json_string(fields, "subject", "runner screening result")?.to_string(),
+        subject_digest_hex: required_json_string(
+            fields,
+            "subject_digest_hex",
+            "runner screening result",
+        )?
+        .to_string(),
+        manifest_id_hex: required_json_string(
+            fields,
+            "manifest_id_hex",
+            "runner screening result",
+        )?
+        .to_string(),
+        runner_hash_hex: required_json_string(
+            fields,
+            "runner_hash_hex",
+            "runner screening result",
+        )?
+        .to_string(),
+        combined_score_bps: u32::try_from(combined_score_bps)
+            .map_err(|_| "runner screening result score does not fit into u32".to_string())?,
+        verdict: required_json_string(fields, "verdict", "runner screening result")?.to_string(),
+        screened_at_unix: fields
+            .get("screened_at_unix")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "runner screening result is missing `screened_at_unix`".to_string())?,
+        evidence_digest_hex: required_json_string(
+            fields,
+            "evidence_digest_hex",
+            "runner screening result",
+        )?
+        .to_string(),
+        policy_digest_hex: required_json_string(
+            fields,
+            "policy_digest_hex",
+            "runner screening result",
+        )?
+        .to_string(),
+        notes,
+    })
+}
+
+fn moderation_runner_json_response(status: u16, reason: &str, value: &Value) -> Vec<u8> {
+    let body = to_vec(value).unwrap_or_else(|_| b"{\"error\":\"json_render_failed\"}".to_vec());
+    moderation_runner_http_response_bytes(status, reason, "application/json", &body)
+}
+
+fn moderation_runner_error_response(status: u16, reason: &str, message: &str) -> Vec<u8> {
+    let mut body = Map::new();
+    body.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.runner.error.v1"),
+    );
+    body.insert("status".into(), Value::from("error"));
+    body.insert("message".into(), Value::from(message.to_string()));
+    moderation_runner_json_response(status, reason, &Value::Object(body))
+}
+
+fn moderation_runner_http_response_bytes(
+    status: u16,
+    reason: &str,
+    content_type: &str,
+    body: &[u8],
+) -> Vec<u8> {
+    let header = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let mut response = Vec::with_capacity(header.len() + body.len());
+    response.extend_from_slice(header.as_bytes());
+    response.extend_from_slice(body);
+    response
+}
+
+fn required_json_string<'a>(fields: &'a Map, key: &str, context: &str) -> Result<&'a str, String> {
+    let value = fields
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{context} requires string `{key}`"))?
+        .trim();
+    if value.is_empty() {
+        return Err(format!("{context} string `{key}` must not be empty"));
+    }
+    Ok(value)
+}
+
+fn optional_json_string<'a>(
+    fields: &'a Map,
+    key: &str,
+    context: &str,
+) -> Result<Option<&'a str>, String> {
+    match fields.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Err(format!("{context} string `{key}` must not be empty"));
+            }
+            Ok(Some(trimmed))
+        }
+        Some(_) => Err(format!("{context} optional `{key}` must be a string")),
+    }
+}
+
+fn optional_json_u64(fields: &Map, key: &str, context: &str) -> Result<Option<u64>, String> {
+    match fields.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .ok_or_else(|| format!("{context} optional `{key}` must be numeric"))
+            .map(Some),
+    }
+}
+
+fn optional_json_fixed_hex<const N: usize>(
+    fields: &Map,
+    key: &str,
+    context: &str,
+) -> Result<Option<[u8; N]>, String> {
+    match fields.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => parse_fixed_hex::<N>(value, key, context).map(Some),
+        Some(_) => Err(format!("{context} optional `{key}` must be a string")),
+    }
+}
+
+fn parse_fixed_hex<const N: usize>(
+    raw: &str,
+    label: &str,
+    context: &str,
+) -> Result<[u8; N], String> {
+    let trimmed = raw.trim();
+    let stripped = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed);
+    let bytes = parse_hex_vec(stripped)
+        .map_err(|err| format!("{context} has invalid `{label}` hex: {err}"))?;
+    if bytes.len() != N {
+        return Err(format!(
+            "{context} `{label}` must decode to {N} bytes, found {} bytes",
+            bytes.len()
+        ));
+    }
+    let mut out = [0_u8; N];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
+fn load_moderation_repro_manifest(
+    manifest_path: &Path,
+    format: &str,
+    context: &str,
+) -> Result<ModerationReproManifestV1, String> {
+    let bytes = fs::read(manifest_path)
+        .map_err(|err| format!("failed to read `{}`: {err}", manifest_path.display()))?;
+
+    match format {
+        "json" => norito::json::from_slice(&bytes).map_err(|err| {
+            format!(
+                "failed to parse JSON reproducibility manifest `{}` for `{context}`: {err}",
+                manifest_path.display()
+            )
+        }),
+        "norito" => decode_from_bytes(&bytes).map_err(|err| {
+            format!(
+                "failed to decode Norito reproducibility manifest `{}` for `{context}`: {err}",
+                manifest_path.display()
+            )
+        }),
+        other => Err(format!(
+            "unsupported `--format={other}` for `{context}` (expected `json` or `norito`)"
+        )),
+    }
+}
+
+fn validate_moderation_local_runner_manifest(
+    manifest: &ModerationReproManifestV1,
+) -> Result<(), String> {
+    let thresholds = manifest.body.thresholds;
+    if thresholds.quarantine > 10_000 {
+        return Err(format!(
+            "manifest quarantine threshold {} exceeds 10000 bps",
+            thresholds.quarantine
+        ));
+    }
+    if thresholds.escalate > 10_000 {
+        return Err(format!(
+            "manifest escalate threshold {} exceeds 10000 bps",
+            thresholds.escalate
+        ));
+    }
+    if thresholds.quarantine > thresholds.escalate {
+        return Err(format!(
+            "manifest quarantine threshold {} exceeds escalate threshold {}",
+            thresholds.quarantine, thresholds.escalate
+        ));
+    }
+
+    let mut has_positive_weight = false;
+    for model in &manifest.body.models {
+        let weight = model.weight.unwrap_or(10_000);
+        if weight > 10_000 {
+            return Err(format!(
+                "model {} has weight {} above 10000 bps",
+                hex_encode(model.model_id),
+                weight
+            ));
+        }
+        has_positive_weight |= weight > 0;
+    }
+    if !has_positive_weight {
+        return Err("manifest must include at least one positive model weight".to_string());
+    }
+
+    Ok(())
+}
+
+fn moderation_local_runner_screening_json(
+    manifest: &ModerationReproManifestV1,
+    payload: &[u8],
+    subject: &str,
+    screened_at_unix: u64,
+    notes: Option<&str>,
+) -> Result<Value, String> {
+    let subject_digest = *blake3_hash(payload).as_bytes();
+    let score = moderation_local_runner_combined_score(manifest, &subject_digest, payload)?;
+    let verdict = moderation_score_verdict(score, manifest.body.thresholds);
+    let policy_digest = moderation_local_runner_policy_digest(manifest)?;
+    let evidence_digest = moderation_local_runner_evidence_digest(
+        manifest,
+        subject,
+        &subject_digest,
+        score,
+        verdict,
+        screened_at_unix,
+        &policy_digest,
+    );
+
+    let mut output = Map::new();
+    output.insert("subject".into(), Value::from(subject.to_string()));
+    output.insert(
+        "subject_digest_hex".into(),
+        Value::from(hex_encode(subject_digest)),
+    );
+    output.insert(
+        "manifest_id_hex".into(),
+        Value::from(hex_encode(manifest.body.manifest_id)),
+    );
+    output.insert(
+        "runner_hash_hex".into(),
+        Value::from(hex_encode(manifest.body.runner_hash)),
+    );
+    output.insert("combined_score_bps".into(), Value::from(u64::from(score)));
+    output.insert("verdict".into(), Value::from(verdict.to_string()));
+    output.insert("screened_at_unix".into(), Value::from(screened_at_unix));
+    output.insert(
+        "evidence_digest_hex".into(),
+        Value::from(hex_encode(evidence_digest)),
+    );
+    output.insert(
+        "policy_digest_hex".into(),
+        Value::from(hex_encode(policy_digest)),
+    );
+    output.insert(
+        "notes".into(),
+        notes
+            .map(|value| Value::from(value.to_string()))
+            .unwrap_or(Value::Null),
+    );
+
+    Ok(Value::Object(output))
+}
+
+fn moderation_local_runner_combined_score(
+    manifest: &ModerationReproManifestV1,
+    subject_digest: &[u8; 32],
+    payload: &[u8],
+) -> Result<u16, String> {
+    let payload_len = u64::try_from(payload.len())
+        .map_err(|_| "payload length does not fit into u64".to_string())?;
+    let mut weighted_sum = 0_u128;
+    let mut total_weight = 0_u128;
+
+    for model in &manifest.body.models {
+        let weight = model.weight.unwrap_or(10_000);
+        if weight == 0 {
+            continue;
+        }
+        let score = moderation_local_model_score_bps(manifest, model, subject_digest, payload_len);
+        weighted_sum = weighted_sum.saturating_add(u128::from(score) * u128::from(weight));
+        total_weight = total_weight.saturating_add(u128::from(weight));
+    }
+
+    if total_weight == 0 {
+        return Err("manifest must include at least one positive model weight".to_string());
+    }
+    let rounded = (weighted_sum + (total_weight / 2)) / total_weight;
+    u16::try_from(rounded).map_err(|_| "combined local runner score overflowed u16".to_string())
+}
+
+fn moderation_local_model_score_bps(
+    manifest: &ModerationReproManifestV1,
+    model: &ModerationModelFingerprintV1,
+    subject_digest: &[u8; 32],
+    payload_len: u64,
+) -> u16 {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(MODERATION_LOCAL_RUNNER_MODEL_SCORE_DOMAIN_V1);
+    hasher.update(&manifest.body.manifest_id);
+    hasher.update(&manifest.body.runner_hash);
+    update_hash_string(&mut hasher, &manifest.body.seed_material.domain_tag);
+    hasher.update(&manifest.body.seed_material.seed_version.to_le_bytes());
+    hasher.update(&manifest.body.seed_material.run_nonce);
+    hasher.update(&model.model_id);
+    hasher.update(&model.artifact_digest);
+    hasher.update(&model.weights_digest);
+    hasher.update(&model.opset.to_le_bytes());
+    hasher.update(subject_digest);
+    hasher.update(&payload_len.to_le_bytes());
+    let digest = hasher.finalize();
+    let mut first = [0_u8; 8];
+    first.copy_from_slice(&digest.as_bytes()[..8]);
+    (u64::from_le_bytes(first) % 10_001) as u16
+}
+
+fn moderation_score_verdict(score: u16, thresholds: ModerationThresholdsV1) -> &'static str {
+    if score >= thresholds.escalate {
+        "escalate"
+    } else if score >= thresholds.quarantine {
+        "quarantine"
+    } else {
+        "pass"
+    }
+}
+
+fn moderation_local_runner_policy_digest(
+    manifest: &ModerationReproManifestV1,
+) -> Result<[u8; 32], String> {
+    let body_bytes = to_bytes(&manifest.body)
+        .map_err(|err| format!("failed to encode reproducibility manifest body: {err}"))?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(MODERATION_LOCAL_RUNNER_POLICY_DOMAIN_V1);
+    hasher.update(&body_bytes);
+    Ok(*hasher.finalize().as_bytes())
+}
+
+fn moderation_local_runner_evidence_digest(
+    manifest: &ModerationReproManifestV1,
+    subject: &str,
+    subject_digest: &[u8; 32],
+    score: u16,
+    verdict: &str,
+    screened_at_unix: u64,
+    policy_digest: &[u8; 32],
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(MODERATION_LOCAL_RUNNER_EVIDENCE_DOMAIN_V1);
+    hasher.update(&manifest.body.manifest_id);
+    hasher.update(&manifest.body.runner_hash);
+    update_hash_string(&mut hasher, subject);
+    hasher.update(subject_digest);
+    hasher.update(&score.to_le_bytes());
+    update_hash_string(&mut hasher, verdict);
+    hasher.update(&screened_at_unix.to_le_bytes());
+    hasher.update(policy_digest);
+    *hasher.finalize().as_bytes()
+}
+
+fn update_hash_string(hasher: &mut blake3::Hasher, value: &str) {
+    hasher.update(&(value.len() as u64).to_le_bytes());
+    hasher.update(value.as_bytes());
 }
 
 fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
@@ -5490,12 +9955,23 @@ mod manifest_tests {
 
     #[test]
     fn moderation_validate_corpus_accepts_valid_manifest() {
+        let manifest = adversarial_corpus_manifest_fixture();
+        let temp = TempDir::new().expect("tempdir");
+        let manifest_path = temp.path().join("corpus.json");
+        let manifest_json = norito::json::to_json_pretty(&manifest).expect("render manifest json");
+        fs::write(&manifest_path, manifest_json).expect("write manifest json");
+
+        moderation_validate_corpus(vec![format!("--manifest={}", manifest_path.display())])
+            .expect("corpus manifest validated");
+    }
+
+    fn adversarial_corpus_manifest_fixture() -> AdversarialCorpusManifestV1 {
         use iroha_data_model::sorafs::moderation::{
-            ADVERSARIAL_CORPUS_VERSION_V1, AdversarialCorpusManifestV1,
-            AdversarialPerceptualFamilyV1, AdversarialPerceptualVariantV1,
+            ADVERSARIAL_CORPUS_VERSION_V1, AdversarialPerceptualFamilyV1,
+            AdversarialPerceptualVariantV1,
         };
 
-        let manifest = AdversarialCorpusManifestV1 {
+        AdversarialCorpusManifestV1 {
             schema_version: ADVERSARIAL_CORPUS_VERSION_V1,
             issued_at_unix: 1_740_000_000,
             cohort_label: Some("test-cohort".to_string()),
@@ -5512,15 +9988,1336 @@ mod manifest_tests {
                     notes: Some("sample variant".to_string()),
                 }],
             }],
+        }
+    }
+
+    fn signed_moderation_repro_manifest_fixture() -> ModerationReproManifestV1 {
+        use iroha_data_model::sorafs::moderation::{
+            MODERATION_REPRO_MANIFEST_VERSION_V1, ModerationReproBodyV1,
+            ModerationReproSignatureV1, ModerationSeedMaterialV1,
         };
 
-        let temp = TempDir::new().expect("tempdir");
-        let manifest_path = temp.path().join("corpus.json");
-        let manifest_json = norito::json::to_json_pretty(&manifest).expect("render manifest json");
-        fs::write(&manifest_path, manifest_json).expect("write manifest json");
+        let body = ModerationReproBodyV1 {
+            schema_version: MODERATION_REPRO_MANIFEST_VERSION_V1,
+            manifest_id: [0xA1; 16],
+            manifest_digest: [0xB2; 32],
+            runner_hash: [0xC3; 32],
+            runtime_version: "sorafs-ai-runner local-test".to_string(),
+            issued_at_unix: 1_800_000_000,
+            seed_material: ModerationSeedMaterialV1 {
+                domain_tag: "sfm4a:test".to_string(),
+                seed_version: 1,
+                run_nonce: [0xD4; 32],
+            },
+            thresholds: ModerationThresholdsV1 {
+                quarantine: 6_000,
+                escalate: 8_500,
+            },
+            models: vec![
+                ModerationModelFingerprintV1 {
+                    model_id: [0x11; 16],
+                    artifact_digest: [0x22; 32],
+                    weights_digest: [0x33; 32],
+                    opset: 17,
+                    weight: Some(7_000),
+                },
+                ModerationModelFingerprintV1 {
+                    model_id: [0x44; 16],
+                    artifact_digest: [0x55; 32],
+                    weights_digest: [0x66; 32],
+                    opset: 17,
+                    weight: Some(3_000),
+                },
+            ],
+            notes: Some("local runner fixture".to_string()),
+        };
+        let keypair = iroha_crypto::KeyPair::try_from_seed(vec![0xE5; 32], Algorithm::Ed25519)
+            .expect("derive moderation fixture keypair");
+        let signature = iroha_crypto::SignatureOf::try_new(keypair.private_key(), &body)
+            .expect("sign moderation fixture body");
+        ModerationReproManifestV1 {
+            body,
+            signatures: vec![ModerationReproSignatureV1 {
+                role: "council".to_string(),
+                public_key: keypair.public_key().clone(),
+                signature,
+            }],
+        }
+    }
 
-        moderation_validate_corpus(vec![format!("--manifest={}", manifest_path.display())])
-            .expect("corpus manifest validated");
+    fn resign_moderation_repro_manifest(manifest: &mut ModerationReproManifestV1) {
+        let keypair = iroha_crypto::KeyPair::try_from_seed(vec![0xE5; 32], Algorithm::Ed25519)
+            .expect("derive moderation fixture keypair");
+        let signature = iroha_crypto::SignatureOf::try_new(keypair.private_key(), &manifest.body)
+            .expect("re-sign moderation fixture body");
+        manifest.signatures[0].signature = signature;
+    }
+
+    fn moderation_registry_fixture_service(state_path: &Path) -> ModerationRegistryService {
+        let state = moderation_registry_load_state(state_path).expect("load registry state");
+        ModerationRegistryService {
+            state_path: state_path.to_path_buf(),
+            state: Mutex::new(state),
+            max_body_bytes: 8192,
+            snapshot_limit: 25,
+        }
+    }
+
+    fn moderation_registry_manifest_request<T: norito::core::NoritoSerialize>(
+        manifest: &T,
+    ) -> Vec<u8> {
+        let manifest_bytes = to_bytes(manifest).expect("encode manifest as Norito");
+        norito::json::to_vec(&norito::json!({
+            "manifest_b64": (BASE64_STANDARD.encode(manifest_bytes))
+        }))
+        .expect("registry request JSON")
+    }
+
+    #[test]
+    fn moderation_run_local_emits_torii_screening_request_json() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let temp = TempDir::new().expect("tempdir");
+        let manifest_path = temp.path().join("repro.json");
+        let payload_path = temp.path().join("payload.bin");
+        let out_path = temp.path().join("screening.json");
+        let payload = b"moderation payload bytes";
+        fs::write(
+            &manifest_path,
+            norito::json::to_json_pretty(&manifest).expect("render manifest json"),
+        )
+        .expect("write manifest");
+        fs::write(&payload_path, payload).expect("write payload");
+
+        moderation_run_local(vec![
+            format!("--manifest={}", manifest_path.display()),
+            format!("--payload={}", payload_path.display()),
+            "--subject=cid:bafy-local-runner".to_string(),
+            "--screened-at=1800001234".to_string(),
+            "--notes=local deterministic run".to_string(),
+            format!("--json-out={}", out_path.display()),
+        ])
+        .expect("local runner succeeds");
+
+        let rendered = fs::read_to_string(&out_path).expect("read runner output");
+        let value: Value = norito::json::from_str(&rendered).expect("parse runner output");
+        let expected = moderation_local_runner_screening_json(
+            &manifest,
+            payload,
+            "cid:bafy-local-runner",
+            1_800_001_234,
+            Some("local deterministic run"),
+        )
+        .expect("direct local runner output");
+        assert_eq!(value, expected);
+
+        let object = value.as_object().expect("runner output object");
+        assert_eq!(
+            object.get("subject").and_then(Value::as_str),
+            Some("cid:bafy-local-runner")
+        );
+        assert_eq!(
+            object.get("subject_digest_hex").and_then(Value::as_str),
+            Some(hex_encode(blake3_hash(payload).as_bytes()).as_str())
+        );
+        assert_eq!(
+            object.get("manifest_id_hex").and_then(Value::as_str),
+            Some(hex_encode(manifest.body.manifest_id).as_str())
+        );
+        assert_eq!(
+            object.get("runner_hash_hex").and_then(Value::as_str),
+            Some(hex_encode(manifest.body.runner_hash).as_str())
+        );
+        let score = object
+            .get("combined_score_bps")
+            .and_then(Value::as_u64)
+            .expect("score present");
+        assert!(score <= 10_000);
+        assert!(matches!(
+            object.get("verdict").and_then(Value::as_str),
+            Some("pass" | "quarantine" | "escalate")
+        ));
+        assert_eq!(
+            object
+                .get("policy_digest_hex")
+                .and_then(Value::as_str)
+                .expect("policy digest")
+                .len(),
+            64
+        );
+        assert_eq!(
+            object
+                .get("evidence_digest_hex")
+                .and_then(Value::as_str)
+                .expect("evidence digest")
+                .len(),
+            64
+        );
+    }
+
+    fn moderation_runner_fixture_service(
+        manifest: ModerationReproManifestV1,
+    ) -> ModerationRunnerService {
+        ModerationRunnerService {
+            manifest,
+            manifest_source: "fixture-repro.json".to_string(),
+            max_body_bytes: 4096,
+        }
+    }
+
+    fn moderation_runner_http_request(method: &str, path: &str, body: &[u8]) -> Vec<u8> {
+        let mut request = format!(
+            "{method} {path} HTTP/1.1\r\nHost: runner.local\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        request.extend_from_slice(body);
+        request
+    }
+
+    fn moderation_runner_response_parts(response: &[u8]) -> (&str, Value) {
+        let header_end = find_http_header_end(response).expect("response header terminator");
+        let header = std::str::from_utf8(&response[..header_end]).expect("response headers");
+        let body = &response[header_end + 4..];
+        let json: Value = norito::json::from_slice(body).expect("response body JSON");
+        (header, json)
+    }
+
+    #[test]
+    fn moderation_registry_service_admits_and_persists_manifests() {
+        let repro_manifest = signed_moderation_repro_manifest_fixture();
+        let corpus_manifest = adversarial_corpus_manifest_fixture();
+        let temp = TempDir::new().expect("tempdir");
+        let state_path = temp.path().join("registry-state.to");
+        let service = moderation_registry_fixture_service(&state_path);
+        moderation_registry_save_state(
+            &state_path,
+            &service.state.lock().expect("registry lock").clone(),
+        )
+        .expect("write empty registry state");
+
+        let repro_body = moderation_registry_manifest_request(&repro_manifest);
+        let repro_request = moderation_runner_http_request(
+            "POST",
+            "/v1/sorafs/moderation/model-registry/repro-manifests",
+            &repro_body,
+        );
+        let repro_response =
+            moderation_registry_http_response(&service, &repro_request, service.max_body_bytes);
+        let (header, repro_json) = moderation_runner_response_parts(&repro_response);
+        assert!(header.starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(
+            repro_json.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.model_registry.repro_manifest_admission.v1")
+        );
+        assert_eq!(
+            repro_json.get("created").and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let corpus_body = moderation_registry_manifest_request(&corpus_manifest);
+        let corpus_request = moderation_runner_http_request(
+            "POST",
+            "/v1/sorafs/moderation/model-registry/corpora",
+            &corpus_body,
+        );
+        let corpus_response =
+            moderation_registry_http_response(&service, &corpus_request, service.max_body_bytes);
+        let (header, corpus_json) = moderation_runner_response_parts(&corpus_response);
+        assert!(header.starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(
+            corpus_json.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.model_registry.corpus_manifest_admission.v1")
+        );
+        assert_eq!(
+            corpus_json.get("created").and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let snapshot_request =
+            moderation_runner_http_request("GET", "/v1/sorafs/moderation/model-registry", &[]);
+        let snapshot_response =
+            moderation_registry_http_response(&service, &snapshot_request, service.max_body_bytes);
+        let (header, snapshot) = moderation_runner_response_parts(&snapshot_response);
+        assert!(header.starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(
+            snapshot.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.model_registry.snapshot.v1")
+        );
+        assert_eq!(
+            snapshot.get("repro_manifest_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            snapshot.get("corpus_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert!(state_path.exists(), "registry service should persist state");
+
+        let reloaded = moderation_registry_fixture_service(&state_path);
+        let reloaded_response = moderation_registry_http_response(
+            &reloaded,
+            &snapshot_request,
+            reloaded.max_body_bytes,
+        );
+        let (_, reloaded_snapshot) = moderation_runner_response_parts(&reloaded_response);
+        assert_eq!(
+            reloaded_snapshot
+                .get("repro_manifest_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            reloaded_snapshot
+                .get("corpus_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn moderation_registry_service_rejects_conflicting_manifest_id() {
+        let repro_manifest = signed_moderation_repro_manifest_fixture();
+        let mut conflicting_manifest = repro_manifest.clone();
+        conflicting_manifest.body.manifest_digest = [0xFA; 32];
+        resign_moderation_repro_manifest(&mut conflicting_manifest);
+        let temp = TempDir::new().expect("tempdir");
+        let state_path = temp.path().join("registry-state.to");
+        let service = moderation_registry_fixture_service(&state_path);
+
+        let original_body = moderation_registry_manifest_request(&repro_manifest);
+        let original_request = moderation_runner_http_request(
+            "POST",
+            "/v1/sorafs/moderation/model-registry/repro-manifests",
+            &original_body,
+        );
+        let original_response =
+            moderation_registry_http_response(&service, &original_request, service.max_body_bytes);
+        let (header, _) = moderation_runner_response_parts(&original_response);
+        assert!(header.starts_with("HTTP/1.1 200 OK"));
+
+        let conflict_body = moderation_registry_manifest_request(&conflicting_manifest);
+        let conflict_request = moderation_runner_http_request(
+            "POST",
+            "/v1/sorafs/moderation/model-registry/repro-manifests",
+            &conflict_body,
+        );
+        let conflict_response =
+            moderation_registry_http_response(&service, &conflict_request, service.max_body_bytes);
+        let (header, body) = moderation_runner_response_parts(&conflict_response);
+        assert!(header.starts_with("HTTP/1.1 400 Bad Request"));
+        assert!(
+            body.get("message")
+                .and_then(Value::as_str)
+                .expect("error message")
+                .contains("conflicts with registry")
+        );
+    }
+
+    fn moderation_committee_fixture_service(
+        manifest: ModerationReproManifestV1,
+        quorum: usize,
+    ) -> ModerationCommitteeService {
+        ModerationCommitteeService {
+            manifest,
+            manifest_source: "fixture-repro.json".to_string(),
+            quorum,
+            max_body_bytes: 4096,
+        }
+    }
+
+    fn moderation_runner_canary_fixture_server(
+        manifest: ModerationReproManifestV1,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind runner canary fixture");
+        let addr = listener.local_addr().expect("runner canary fixture addr");
+        let service = moderation_runner_fixture_service(manifest);
+        let handle = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().expect("accept runner canary request");
+                moderation_runner_handle_stream(stream, &service, service.max_body_bytes)
+                    .expect("handle runner canary request");
+            }
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    fn moderation_committee_canary_fixture_server(
+        manifest: ModerationReproManifestV1,
+        quorum: usize,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind committee canary fixture");
+        let addr = listener
+            .local_addr()
+            .expect("committee canary fixture addr");
+        let service = moderation_committee_fixture_service(manifest, quorum);
+        let handle = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().expect("accept committee canary request");
+                moderation_committee_handle_stream(stream, &service, service.max_body_bytes)
+                    .expect("handle committee canary request");
+            }
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    fn moderation_committee_result_fixture(
+        manifest: &ModerationReproManifestV1,
+        payload: &[u8],
+        subject: &str,
+        score: u16,
+        screened_at_unix: u64,
+    ) -> Value {
+        let verdict = moderation_score_verdict(score, manifest.body.thresholds);
+        let subject_digest = *blake3_hash(payload).as_bytes();
+        let policy_digest = moderation_local_runner_policy_digest(manifest).expect("policy digest");
+        let evidence_digest = moderation_local_runner_evidence_digest(
+            manifest,
+            subject,
+            &subject_digest,
+            score,
+            verdict,
+            screened_at_unix,
+            &policy_digest,
+        );
+        let mut value = moderation_local_runner_screening_json(
+            manifest,
+            payload,
+            subject,
+            screened_at_unix,
+            Some("committee fixture"),
+        )
+        .expect("runner output");
+        let object = value.as_object_mut().expect("runner output object");
+        object.insert("combined_score_bps".into(), Value::from(u64::from(score)));
+        object.insert("verdict".into(), Value::from(verdict));
+        object.insert("screened_at_unix".into(), Value::from(screened_at_unix));
+        object.insert(
+            "evidence_digest_hex".into(),
+            Value::from(hex_encode(evidence_digest)),
+        );
+        value
+    }
+
+    fn write_moderation_json(path: &Path, value: &Value) {
+        let rendered = to_string_pretty(value).expect("render moderation JSON");
+        fs::write(path, format!("{rendered}\n")).expect("write moderation JSON");
+    }
+
+    #[test]
+    fn moderation_runner_status_endpoint_reports_locked_manifest() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let service = moderation_runner_fixture_service(manifest.clone());
+        let request =
+            moderation_runner_http_request("GET", "/v1/sorafs/moderation/runner/status", &[]);
+
+        let response = moderation_runner_http_response(&service, &request, service.max_body_bytes);
+        let (header, body) = moderation_runner_response_parts(&response);
+
+        assert!(header.starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(
+            body.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.runner.status.v1")
+        );
+        assert_eq!(
+            body.get("manifest_id_hex").and_then(Value::as_str),
+            Some(hex_encode(manifest.body.manifest_id).as_str())
+        );
+        assert_eq!(
+            body.get("outbound_network").and_then(Value::as_str),
+            Some("disabled")
+        );
+    }
+
+    #[test]
+    fn moderation_runner_screen_endpoint_matches_local_runner() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let service = moderation_runner_fixture_service(manifest.clone());
+        let payload = b"runner service moderation payload";
+        let body = norito::json::to_vec(&norito::json!({
+            "subject": " cid:bafy-runner-service ",
+            "payload_b64": (BASE64_STANDARD.encode(payload)),
+            "screened_at_unix": 1_800_002_000_u64,
+            "notes": " service fixture "
+        }))
+        .expect("screen request JSON");
+        let request =
+            moderation_runner_http_request("POST", "/v1/sorafs/moderation/runner/screen", &body);
+
+        let response = moderation_runner_http_response(&service, &request, service.max_body_bytes);
+        let (header, actual) = moderation_runner_response_parts(&response);
+        let expected = moderation_local_runner_screening_json(
+            &manifest,
+            payload,
+            "cid:bafy-runner-service",
+            1_800_002_000,
+            Some("service fixture"),
+        )
+        .expect("expected runner output");
+
+        assert!(header.starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(actual, expected);
+        assert_eq!(
+            actual.get("subject_digest_hex").and_then(Value::as_str),
+            Some(hex_encode(blake3_hash(payload).as_bytes()).as_str())
+        );
+    }
+
+    #[test]
+    fn moderation_runner_grpc_status_reports_locked_manifest() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let service = moderation_runner_fixture_service(manifest.clone());
+
+        let response = moderation_runner_status_proto(&service, "ready", Some("127.0.0.1:9199"));
+
+        assert_eq!(response.schema, "sorafs.moderation.runner.status.v1");
+        assert_eq!(response.status, "ready");
+        assert_eq!(
+            response.manifest_id_hex,
+            hex_encode(manifest.body.manifest_id)
+        );
+        assert_eq!(
+            response.runner_hash_hex,
+            hex_encode(manifest.body.runner_hash)
+        );
+        assert_eq!(response.outbound_network, "disabled");
+        assert_eq!(response.listen, "127.0.0.1:9199");
+    }
+
+    #[test]
+    fn moderation_runner_grpc_screen_matches_local_runner() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let service = moderation_runner_fixture_service(manifest.clone());
+        let payload = b"runner grpc moderation payload".to_vec();
+
+        let response = moderation_runner_screen_request_proto(
+            &service,
+            ModerationRunnerScreenRequest {
+                subject: " cid:bafy-runner-grpc ".to_string(),
+                payload: payload.clone(),
+                screened_at_unix: 1_800_002_100,
+                notes: Some(" grpc fixture ".to_string()),
+            },
+        )
+        .expect("gRPC screen succeeds");
+        let expected = moderation_runner_screen_proto_from_json(
+            &moderation_local_runner_screening_json(
+                &manifest,
+                &payload,
+                "cid:bafy-runner-grpc",
+                1_800_002_100,
+                Some("grpc fixture"),
+            )
+            .expect("local runner output"),
+        )
+        .expect("expected proto output");
+
+        assert_eq!(response.subject, expected.subject);
+        assert_eq!(response.subject_digest_hex, expected.subject_digest_hex);
+        assert_eq!(response.manifest_id_hex, expected.manifest_id_hex);
+        assert_eq!(response.runner_hash_hex, expected.runner_hash_hex);
+        assert_eq!(response.combined_score_bps, expected.combined_score_bps);
+        assert_eq!(response.verdict, expected.verdict);
+        assert_eq!(response.screened_at_unix, expected.screened_at_unix);
+        assert_eq!(response.evidence_digest_hex, expected.evidence_digest_hex);
+        assert_eq!(response.policy_digest_hex, expected.policy_digest_hex);
+        assert_eq!(response.notes, expected.notes);
+        assert_eq!(
+            response.subject_digest_hex,
+            hex_encode(blake3_hash(&payload).as_bytes())
+        );
+        assert_eq!(response.notes.as_deref(), Some("grpc fixture"));
+    }
+
+    #[test]
+    fn moderation_runner_grpc_screen_rejects_payload_over_limit() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let mut service = moderation_runner_fixture_service(manifest);
+        service.max_body_bytes = 4;
+
+        let error = match moderation_runner_screen_request_proto(
+            &service,
+            ModerationRunnerScreenRequest {
+                subject: "cid:bafy-runner-grpc".to_string(),
+                payload: b"oversized".to_vec(),
+                screened_at_unix: 1_800_002_101,
+                notes: None,
+            },
+        ) {
+            Ok(_) => panic!("oversized payload should fail"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("payload exceeds configured maximum"));
+    }
+
+    #[test]
+    fn moderation_runner_screen_requires_explicit_timestamp() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let service = moderation_runner_fixture_service(manifest);
+        let body = norito::json::to_vec(&norito::json!({
+            "subject": "cid:bafy-runner-service",
+            "payload_b64": (BASE64_STANDARD.encode(b"payload")),
+        }))
+        .expect("screen request JSON");
+        let request =
+            moderation_runner_http_request("POST", "/v1/sorafs/moderation/runner/screen", &body);
+
+        let response = moderation_runner_http_response(&service, &request, service.max_body_bytes);
+        let (header, body) = moderation_runner_response_parts(&response);
+
+        assert!(header.starts_with("HTTP/1.1 400 Bad Request"));
+        assert!(
+            body.get("message")
+                .and_then(Value::as_str)
+                .expect("error message")
+                .contains("screened_at_unix")
+        );
+    }
+
+    #[test]
+    fn moderation_runner_rejects_body_over_limit() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let service = moderation_runner_fixture_service(manifest);
+        let request = moderation_runner_http_request(
+            "POST",
+            "/v1/sorafs/moderation/runner/screen",
+            b"0123456789",
+        );
+
+        let response = moderation_runner_http_response(&service, &request, 4);
+        let (header, body) = moderation_runner_response_parts(&response);
+
+        assert!(header.starts_with("HTTP/1.1 413 Payload Too Large"));
+        assert_eq!(body.get("status").and_then(Value::as_str), Some("error"));
+    }
+
+    #[test]
+    fn moderation_runner_bundle_emits_supervised_artifacts() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let temp = TempDir::new().expect("tempdir");
+        let manifest_path = temp.path().join("repro.json");
+        let bundle_dir = temp.path().join("runner-bundle");
+        fs::write(
+            &manifest_path,
+            norito::json::to_json_pretty(&manifest).expect("render manifest json"),
+        )
+        .expect("write manifest");
+
+        moderation_runner_bundle(vec![
+            format!("--manifest={}", manifest_path.display()),
+            format!("--bundle-out={}", bundle_dir.display()),
+            "--listen=127.0.0.1:9195".to_string(),
+            "--max-body-bytes=8192".to_string(),
+            "--binary=/opt/sora/bin/sorafs_cli".to_string(),
+            "--service-name=org.sora.sorafs.runner-test".to_string(),
+            "--service-user=sorafs-runner".to_string(),
+            "--service-group=sorafs-runner".to_string(),
+        ])
+        .expect("runner bundle succeeds");
+
+        let manifest_copy = bundle_dir.join("manifest.json");
+        let env = fs::read_to_string(bundle_dir.join("runner.env")).expect("runner env");
+        let run_script = fs::read_to_string(bundle_dir.join("run.sh")).expect("run script");
+        let systemd = fs::read_to_string(bundle_dir.join("org.sora.sorafs.runner-test.service"))
+            .expect("systemd unit");
+        let launchd = fs::read_to_string(bundle_dir.join("org.sora.sorafs.runner-test.plist"))
+            .expect("launchd plist");
+        let readme = fs::read_to_string(bundle_dir.join("README.md")).expect("readme");
+        let metadata: Value = norito::json::from_str(
+            &fs::read_to_string(bundle_dir.join("bundle.json")).expect("bundle metadata"),
+        )
+        .expect("parse bundle metadata");
+
+        assert!(manifest_copy.exists());
+        assert!(env.contains("SORAFS_CLI='/opt/sora/bin/sorafs_cli'"));
+        assert!(env.contains("SORAFS_RUNNER_LISTEN='127.0.0.1:9195'"));
+        assert!(run_script.contains("moderation runner-serve"));
+        assert!(run_script.contains("--manifest=\"$SCRIPT_DIR/manifest.json\""));
+        assert!(run_script.contains("--format=json"));
+        assert!(systemd.contains("NoNewPrivileges=true"));
+        assert!(systemd.contains("EnvironmentFile="));
+        assert!(systemd.contains("User=sorafs-runner"));
+        assert!(launchd.contains("<key>KeepAlive</key>"));
+        assert!(readme.contains("SoraFS Moderation Runner Bundle"));
+        let object = metadata.as_object().expect("metadata object");
+        assert_eq!(
+            object.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.runner.bundle.v1")
+        );
+        assert_eq!(
+            object.get("manifest_id_hex").and_then(Value::as_str),
+            Some(hex_encode(manifest.body.manifest_id).as_str())
+        );
+        assert_eq!(
+            object.get("listen").and_then(Value::as_str),
+            Some("127.0.0.1:9195")
+        );
+        let files = match object.get("files") {
+            Some(Value::Array(values)) => values,
+            other => panic!("expected files array, got {other:?}"),
+        };
+        assert!(
+            files
+                .iter()
+                .any(|value| value.as_str() == Some("manifest.json"))
+        );
+        assert!(files.iter().any(|value| value.as_str() == Some("run.sh")));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = fs::metadata(bundle_dir.join("run.sh"))
+                .expect("run script metadata")
+                .permissions()
+                .mode();
+            assert_ne!(mode & 0o111, 0, "run.sh should be executable");
+        }
+    }
+
+    #[test]
+    fn moderation_runner_bundle_rejects_invalid_service_name() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let temp = TempDir::new().expect("tempdir");
+        let manifest_path = temp.path().join("repro.json");
+        fs::write(
+            &manifest_path,
+            norito::json::to_json_pretty(&manifest).expect("render manifest json"),
+        )
+        .expect("write manifest");
+
+        let err = moderation_runner_bundle(vec![
+            format!("--manifest={}", manifest_path.display()),
+            format!(
+                "--bundle-out={}",
+                temp.path().join("runner-bundle").display()
+            ),
+            "--service-name=bad/name".to_string(),
+        ])
+        .expect_err("invalid service name rejected");
+
+        assert!(err.contains("--service-name"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn moderation_runner_canary_emits_payload_free_rollout_evidence() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let temp = TempDir::new().expect("tempdir");
+        let manifest_path = temp.path().join("repro.json");
+        let payload_path = temp.path().join("payload.bin");
+        let out_path = temp.path().join("runner-canary.json");
+        let payload = b"runner canary payload bytes";
+        fs::write(
+            &manifest_path,
+            norito::json::to_json_pretty(&manifest).expect("render manifest json"),
+        )
+        .expect("write manifest");
+        fs::write(&payload_path, payload).expect("write payload");
+        let (runner_url, handle) = moderation_runner_canary_fixture_server(manifest.clone());
+
+        moderation_runner_canary(vec![
+            format!("--manifest={}", manifest_path.display()),
+            format!("--runner-url={runner_url}"),
+            format!("--payload={}", payload_path.display()),
+            "--subject=cid:bafy-runner-canary".to_string(),
+            "--screened-at=1800004000".to_string(),
+            "--checked-at=1800004999".to_string(),
+            "--notes=fixture rollout canary".to_string(),
+            "--timeout-ms=5000".to_string(),
+            format!("--json-out={}", out_path.display()),
+        ])
+        .expect("runner canary succeeds");
+        handle.join().expect("runner canary fixture exits");
+
+        let rendered = fs::read_to_string(&out_path).expect("read canary output");
+        assert!(!rendered.contains("payload_b64"));
+        let value: Value = norito::json::from_str(&rendered).expect("parse canary output");
+        let object = value.as_object().expect("canary output object");
+        assert_eq!(
+            object.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.runner.rollout_evidence.v1")
+        );
+        assert_eq!(
+            object.get("status").and_then(Value::as_str),
+            Some("verified")
+        );
+        assert_eq!(
+            object.get("manifest_id_hex").and_then(Value::as_str),
+            Some(hex_encode(manifest.body.manifest_id).as_str())
+        );
+        assert_eq!(
+            object.get("runner_hash_hex").and_then(Value::as_str),
+            Some(hex_encode(manifest.body.runner_hash).as_str())
+        );
+        assert_eq!(
+            object.get("subject_digest_hex").and_then(Value::as_str),
+            Some(hex_encode(blake3_hash(payload).as_bytes()).as_str())
+        );
+        assert_eq!(
+            object.get("checked_at_unix").and_then(Value::as_u64),
+            Some(1_800_004_999)
+        );
+        assert!(object.get("runner_status").is_some());
+        assert!(object.get("screening_result").is_some());
+    }
+
+    #[test]
+    fn moderation_runner_canary_rejects_manifest_mismatch() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let mut expected_manifest = manifest.clone();
+        expected_manifest.body.runner_hash = [0xDD; 32];
+        let payload = b"runner canary mismatch payload";
+        let subject = "cid:bafy-runner-canary";
+        let service = moderation_runner_fixture_service(manifest.clone());
+        let status_response = moderation_runner_status_json(&service, "ready", None);
+        let screening_response = moderation_local_runner_screening_json(
+            &manifest,
+            payload,
+            subject,
+            1_800_004_000,
+            None,
+        )
+        .expect("screening response");
+
+        let err = moderation_runner_canary_evidence_json(ModerationRunnerCanaryEvidenceInput {
+            manifest: &expected_manifest,
+            runner_url: "http://127.0.0.1:9194",
+            status_url: "http://127.0.0.1:9194/v1/sorafs/moderation/runner/status",
+            screen_url: "http://127.0.0.1:9194/v1/sorafs/moderation/runner/screen",
+            subject,
+            payload,
+            screened_at_unix: 1_800_004_000,
+            checked_at_unix: 1_800_004_999,
+            notes: None,
+            status_response,
+            screening_response,
+        })
+        .expect_err("runner hash mismatch rejected");
+
+        assert!(err.contains("runner hash"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn moderation_committee_status_endpoint_reports_locked_manifest() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let service = moderation_committee_fixture_service(manifest.clone(), 2);
+        let request =
+            moderation_runner_http_request("GET", "/v1/sorafs/moderation/committee/status", &[]);
+
+        let response =
+            moderation_committee_http_response(&service, &request, service.max_body_bytes);
+        let (header, body) = moderation_runner_response_parts(&response);
+
+        assert!(header.starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(
+            body.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.committee.status.v1")
+        );
+        assert_eq!(
+            body.get("manifest_id_hex").and_then(Value::as_str),
+            Some(hex_encode(manifest.body.manifest_id).as_str())
+        );
+        assert_eq!(body.get("quorum").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            body.get("aggregation").and_then(Value::as_str),
+            Some("median_score_bps")
+        );
+        assert_eq!(
+            body.get("outbound_network").and_then(Value::as_str),
+            Some("disabled")
+        );
+    }
+
+    #[test]
+    fn moderation_committee_aggregate_endpoint_matches_local_aggregation() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let service = moderation_committee_fixture_service(manifest.clone(), 2);
+        let payload = b"committee service payload bytes";
+        let subject = "cid:bafy-committee-service";
+        let result_a =
+            moderation_committee_result_fixture(&manifest, payload, subject, 5_900, 1_800_005_001);
+        let result_b =
+            moderation_committee_result_fixture(&manifest, payload, subject, 6_100, 1_800_005_002);
+        let result_c =
+            moderation_committee_result_fixture(&manifest, payload, subject, 8_700, 1_800_005_003);
+        let mut body = Map::new();
+        body.insert(
+            "results".into(),
+            Value::Array(vec![result_b.clone(), result_a.clone(), result_c.clone()]),
+        );
+        body.insert("notes".into(), Value::from("service aggregate"));
+        let body = to_vec(&Value::Object(body)).expect("committee request JSON");
+        let request = moderation_runner_http_request(
+            "POST",
+            "/v1/sorafs/moderation/committee/aggregate",
+            &body,
+        );
+
+        let response =
+            moderation_committee_http_response(&service, &request, service.max_body_bytes);
+        let (header, actual) = moderation_runner_response_parts(&response);
+        let expected_inputs = vec![
+            parse_moderation_committee_input_value("request.results[0]", &result_b, &manifest)
+                .expect("result b"),
+            parse_moderation_committee_input_value("request.results[1]", &result_a, &manifest)
+                .expect("result a"),
+            parse_moderation_committee_input_value("request.results[2]", &result_c, &manifest)
+                .expect("result c"),
+        ];
+        let expected = moderation_committee_aggregate_json(
+            &manifest,
+            &expected_inputs,
+            2,
+            Some("service aggregate"),
+        )
+        .expect("expected aggregate");
+
+        assert!(header.starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(actual, expected);
+        assert_eq!(
+            actual.get("aggregated_score_bps").and_then(Value::as_u64),
+            Some(6_100)
+        );
+        assert_eq!(
+            actual.get("verdict").and_then(Value::as_str),
+            Some("quarantine")
+        );
+    }
+
+    #[test]
+    fn moderation_committee_aggregate_endpoint_rejects_payload_bytes() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let service = moderation_committee_fixture_service(manifest.clone(), 1);
+        let result = moderation_committee_result_fixture(
+            &manifest,
+            b"committee service payload bytes",
+            "cid:bafy-committee-service",
+            6_100,
+            1_800_005_010,
+        );
+        let mut body = Map::new();
+        body.insert("results".into(), Value::Array(vec![result]));
+        body.insert(
+            "payload_b64".into(),
+            Value::from(BASE64_STANDARD.encode(b"payload")),
+        );
+        let body = to_vec(&Value::Object(body)).expect("committee request JSON");
+        let request = moderation_runner_http_request(
+            "POST",
+            "/v1/sorafs/moderation/committee/aggregate",
+            &body,
+        );
+
+        let response =
+            moderation_committee_http_response(&service, &request, service.max_body_bytes);
+        let (header, body) = moderation_runner_response_parts(&response);
+
+        assert!(header.starts_with("HTTP/1.1 400 Bad Request"));
+        assert!(
+            body.get("message")
+                .and_then(Value::as_str)
+                .expect("error message")
+                .contains("payload-free")
+        );
+    }
+
+    #[test]
+    fn moderation_committee_bundle_emits_supervised_artifacts() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let temp = TempDir::new().expect("tempdir");
+        let manifest_path = temp.path().join("repro.json");
+        let bundle_dir = temp.path().join("committee-bundle");
+        fs::write(
+            &manifest_path,
+            norito::json::to_json_pretty(&manifest).expect("render manifest json"),
+        )
+        .expect("write manifest");
+
+        moderation_committee_bundle(vec![
+            format!("--manifest={}", manifest_path.display()),
+            "--quorum=2".to_string(),
+            format!("--bundle-out={}", bundle_dir.display()),
+            "--listen=127.0.0.1:9197".to_string(),
+            "--max-body-bytes=8192".to_string(),
+            "--binary=/opt/sora/bin/sorafs_cli".to_string(),
+            "--service-name=org.sora.sorafs.committee-test".to_string(),
+            "--service-user=sorafs-committee".to_string(),
+            "--service-group=sorafs-committee".to_string(),
+        ])
+        .expect("committee bundle succeeds");
+
+        let manifest_copy = bundle_dir.join("manifest.json");
+        let env = fs::read_to_string(bundle_dir.join("committee.env")).expect("committee env");
+        let run_script = fs::read_to_string(bundle_dir.join("run.sh")).expect("run script");
+        let systemd = fs::read_to_string(bundle_dir.join("org.sora.sorafs.committee-test.service"))
+            .expect("systemd unit");
+        let launchd = fs::read_to_string(bundle_dir.join("org.sora.sorafs.committee-test.plist"))
+            .expect("launchd plist");
+        let readme = fs::read_to_string(bundle_dir.join("README.md")).expect("readme");
+        let metadata: Value = norito::json::from_str(
+            &fs::read_to_string(bundle_dir.join("bundle.json")).expect("bundle metadata"),
+        )
+        .expect("parse bundle metadata");
+
+        assert!(manifest_copy.exists());
+        assert!(env.contains("SORAFS_CLI='/opt/sora/bin/sorafs_cli'"));
+        assert!(env.contains("SORAFS_COMMITTEE_LISTEN='127.0.0.1:9197'"));
+        assert!(env.contains("SORAFS_COMMITTEE_QUORUM='2'"));
+        assert!(run_script.contains("moderation committee-serve"));
+        assert!(run_script.contains("--manifest=\"$SCRIPT_DIR/manifest.json\""));
+        assert!(run_script.contains("--quorum=\"$SORAFS_COMMITTEE_QUORUM\""));
+        assert!(systemd.contains("NoNewPrivileges=true"));
+        assert!(systemd.contains("EnvironmentFile="));
+        assert!(systemd.contains("User=sorafs-committee"));
+        assert!(launchd.contains("<key>KeepAlive</key>"));
+        assert!(readme.contains("SoraFS Moderation Committee Bundle"));
+        let object = metadata.as_object().expect("metadata object");
+        assert_eq!(
+            object.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.committee.bundle.v1")
+        );
+        assert_eq!(
+            object.get("manifest_id_hex").and_then(Value::as_str),
+            Some(hex_encode(manifest.body.manifest_id).as_str())
+        );
+        assert_eq!(object.get("quorum").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            object.get("aggregation").and_then(Value::as_str),
+            Some("median_score_bps")
+        );
+        assert_eq!(
+            object.get("listen").and_then(Value::as_str),
+            Some("127.0.0.1:9197")
+        );
+        let files = match object.get("files") {
+            Some(Value::Array(values)) => values,
+            other => panic!("expected files array, got {other:?}"),
+        };
+        assert!(
+            files
+                .iter()
+                .any(|value| value.as_str() == Some("manifest.json"))
+        );
+        assert!(
+            files
+                .iter()
+                .any(|value| value.as_str() == Some("committee.env"))
+        );
+        assert!(files.iter().any(|value| value.as_str() == Some("run.sh")));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = fs::metadata(bundle_dir.join("run.sh"))
+                .expect("run script metadata")
+                .permissions()
+                .mode();
+            assert_ne!(mode & 0o111, 0, "run.sh should be executable");
+        }
+    }
+
+    #[test]
+    fn moderation_committee_canary_emits_payload_free_rollout_evidence() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let temp = TempDir::new().expect("tempdir");
+        let manifest_path = temp.path().join("repro.json");
+        let out_path = temp.path().join("committee-canary.json");
+        let result_a = temp.path().join("a.json");
+        let result_b = temp.path().join("b.json");
+        let result_c = temp.path().join("c.json");
+        let payload = b"committee canary payload bytes";
+        let subject = "cid:bafy-committee-canary";
+        fs::write(
+            &manifest_path,
+            norito::json::to_json_pretty(&manifest).expect("render manifest json"),
+        )
+        .expect("write manifest");
+        write_moderation_json(
+            &result_a,
+            &moderation_committee_result_fixture(&manifest, payload, subject, 5_900, 1_800_006_001),
+        );
+        write_moderation_json(
+            &result_b,
+            &moderation_committee_result_fixture(&manifest, payload, subject, 6_100, 1_800_006_002),
+        );
+        write_moderation_json(
+            &result_c,
+            &moderation_committee_result_fixture(&manifest, payload, subject, 8_700, 1_800_006_003),
+        );
+        let (committee_url, handle) =
+            moderation_committee_canary_fixture_server(manifest.clone(), 2);
+
+        moderation_committee_canary(vec![
+            format!("--manifest={}", manifest_path.display()),
+            format!("--committee-url={committee_url}"),
+            "--quorum=2".to_string(),
+            format!("--result={}", result_b.display()),
+            format!("--result={}", result_a.display()),
+            format!("--result={}", result_c.display()),
+            "--checked-at=1800006999".to_string(),
+            "--notes=fixture committee rollout canary".to_string(),
+            "--timeout-ms=5000".to_string(),
+            format!("--json-out={}", out_path.display()),
+        ])
+        .expect("committee canary succeeds");
+        handle.join().expect("committee canary fixture exits");
+
+        let rendered = fs::read_to_string(&out_path).expect("read canary output");
+        assert!(!rendered.contains("payload_b64"));
+        let value: Value = norito::json::from_str(&rendered).expect("parse canary output");
+        let object = value.as_object().expect("canary output object");
+        assert_eq!(
+            object.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.committee.rollout_evidence.v1")
+        );
+        assert_eq!(
+            object.get("status").and_then(Value::as_str),
+            Some("verified")
+        );
+        assert_eq!(
+            object.get("manifest_id_hex").and_then(Value::as_str),
+            Some(hex_encode(manifest.body.manifest_id).as_str())
+        );
+        assert_eq!(
+            object.get("runner_hash_hex").and_then(Value::as_str),
+            Some(hex_encode(manifest.body.runner_hash).as_str())
+        );
+        assert_eq!(object.get("quorum").and_then(Value::as_u64), Some(2));
+        assert_eq!(object.get("result_count").and_then(Value::as_u64), Some(3));
+        assert_eq!(
+            object.get("subject_digest_hex").and_then(Value::as_str),
+            Some(hex_encode(blake3_hash(payload).as_bytes()).as_str())
+        );
+        assert_eq!(
+            object.get("aggregated_score_bps").and_then(Value::as_u64),
+            Some(6_100)
+        );
+        assert_eq!(
+            object.get("verdict").and_then(Value::as_str),
+            Some("quarantine")
+        );
+        assert_eq!(
+            object.get("checked_at_unix").and_then(Value::as_u64),
+            Some(1_800_006_999)
+        );
+        assert!(object.get("committee_status").is_some());
+        assert!(object.get("committee_aggregate").is_some());
+    }
+
+    #[test]
+    fn moderation_committee_canary_rejects_manifest_mismatch() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let mut expected_manifest = manifest.clone();
+        expected_manifest.body.runner_hash = [0xCC; 32];
+        let payload = b"committee canary mismatch payload";
+        let subject = "cid:bafy-committee-canary";
+        let service = moderation_committee_fixture_service(manifest.clone(), 2);
+        let status_response = moderation_committee_status_json(&service, "ready", None);
+        let result_a =
+            moderation_committee_result_fixture(&manifest, payload, subject, 5_900, 1_800_006_001);
+        let result_b =
+            moderation_committee_result_fixture(&manifest, payload, subject, 6_100, 1_800_006_002);
+        let expected_aggregate = moderation_committee_expected_aggregate_from_values(
+            &manifest,
+            &[result_a.clone(), result_b.clone()],
+            2,
+            None,
+        )
+        .expect("expected aggregate");
+        let aggregate_response = expected_aggregate.clone();
+
+        let err =
+            moderation_committee_canary_evidence_json(ModerationCommitteeCanaryEvidenceInput {
+                manifest: &expected_manifest,
+                committee_url: "http://127.0.0.1:9196",
+                status_url: "http://127.0.0.1:9196/v1/sorafs/moderation/committee/status",
+                aggregate_url: "http://127.0.0.1:9196/v1/sorafs/moderation/committee/aggregate",
+                quorum: 2,
+                checked_at_unix: 1_800_006_999,
+                notes: None,
+                result_sources: vec!["a.json".to_string(), "b.json".to_string()],
+                expected_aggregate,
+                status_response,
+                aggregate_response,
+            })
+            .expect_err("runner hash mismatch rejected");
+
+        assert!(err.contains("runner hash"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn moderation_committee_run_aggregates_runner_results() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let temp = TempDir::new().expect("tempdir");
+        let manifest_path = temp.path().join("repro.json");
+        let out_path = temp.path().join("committee.json");
+        let result_a = temp.path().join("a.json");
+        let result_b = temp.path().join("b.json");
+        let result_c = temp.path().join("c.json");
+        let payload = b"committee payload bytes";
+        let subject = "cid:bafy-committee";
+        fs::write(
+            &manifest_path,
+            norito::json::to_json_pretty(&manifest).expect("render manifest json"),
+        )
+        .expect("write manifest");
+        write_moderation_json(
+            &result_a,
+            &moderation_committee_result_fixture(&manifest, payload, subject, 5_900, 1_800_003_001),
+        );
+        write_moderation_json(
+            &result_b,
+            &moderation_committee_result_fixture(&manifest, payload, subject, 6_100, 1_800_003_002),
+        );
+        write_moderation_json(
+            &result_c,
+            &moderation_committee_result_fixture(&manifest, payload, subject, 8_700, 1_800_003_003),
+        );
+
+        moderation_committee_run(vec![
+            format!("--manifest={}", manifest_path.display()),
+            "--quorum=2".to_string(),
+            format!("--result={}", result_b.display()),
+            format!("--result={}", result_a.display()),
+            format!("--result={}", result_c.display()),
+            "--notes=fixture committee aggregate".to_string(),
+            format!("--json-out={}", out_path.display()),
+        ])
+        .expect("committee aggregate succeeds");
+
+        let rendered = fs::read_to_string(&out_path).expect("read committee output");
+        assert!(!rendered.contains("payload_b64"));
+        let value: Value = norito::json::from_str(&rendered).expect("parse committee output");
+        let object = value.as_object().expect("committee output object");
+        assert_eq!(
+            object.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.committee.aggregate.v1")
+        );
+        assert_eq!(
+            object.get("status").and_then(Value::as_str),
+            Some("quorum_satisfied")
+        );
+        assert_eq!(object.get("result_count").and_then(Value::as_u64), Some(3));
+        assert_eq!(object.get("quorum").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            object.get("aggregation").and_then(Value::as_str),
+            Some("median_score_bps")
+        );
+        assert_eq!(
+            object.get("aggregated_score_bps").and_then(Value::as_u64),
+            Some(6_100)
+        );
+        assert_eq!(
+            object.get("verdict").and_then(Value::as_str),
+            Some("quarantine")
+        );
+        assert_eq!(
+            object.get("screened_at_unix_min").and_then(Value::as_u64),
+            Some(1_800_003_001)
+        );
+        assert_eq!(
+            object.get("screened_at_unix_max").and_then(Value::as_u64),
+            Some(1_800_003_003)
+        );
+        let member_results = match object.get("member_results") {
+            Some(Value::Array(values)) => values,
+            other => panic!("expected member_results array, got {other:?}"),
+        };
+        assert_eq!(member_results.len(), 3);
+    }
+
+    #[test]
+    fn moderation_committee_run_rejects_manifest_mismatch() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let temp = TempDir::new().expect("tempdir");
+        let manifest_path = temp.path().join("repro.json");
+        let result_path = temp.path().join("result.json");
+        let out_path = temp.path().join("committee.json");
+        fs::write(
+            &manifest_path,
+            norito::json::to_json_pretty(&manifest).expect("render manifest json"),
+        )
+        .expect("write manifest");
+        let mut result = moderation_committee_result_fixture(
+            &manifest,
+            b"committee mismatch payload",
+            "cid:bafy-committee",
+            6_100,
+            1_800_003_010,
+        );
+        result.as_object_mut().expect("result object").insert(
+            "manifest_id_hex".into(),
+            Value::from(hex_encode([0xFF; 16])),
+        );
+        write_moderation_json(&result_path, &result);
+
+        let err = moderation_committee_run(vec![
+            format!("--manifest={}", manifest_path.display()),
+            "--quorum=1".to_string(),
+            format!("--result={}", result_path.display()),
+            format!("--json-out={}", out_path.display()),
+        ])
+        .expect_err("manifest mismatch rejected");
+
+        assert!(err.contains("manifest_id_hex"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn moderation_committee_run_rejects_insufficient_quorum() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let temp = TempDir::new().expect("tempdir");
+        let manifest_path = temp.path().join("repro.json");
+        let result_a = temp.path().join("a.json");
+        let result_b = temp.path().join("b.json");
+        fs::write(
+            &manifest_path,
+            norito::json::to_json_pretty(&manifest).expect("render manifest json"),
+        )
+        .expect("write manifest");
+        write_moderation_json(
+            &result_a,
+            &moderation_committee_result_fixture(
+                &manifest,
+                b"committee quorum payload",
+                "cid:bafy-committee",
+                5_900,
+                1_800_003_020,
+            ),
+        );
+        write_moderation_json(
+            &result_b,
+            &moderation_committee_result_fixture(
+                &manifest,
+                b"committee quorum payload",
+                "cid:bafy-committee",
+                6_100,
+                1_800_003_021,
+            ),
+        );
+
+        let err = moderation_committee_run(vec![
+            format!("--manifest={}", manifest_path.display()),
+            "--quorum=3".to_string(),
+            format!("--result={}", result_a.display()),
+            format!("--result={}", result_b.display()),
+        ])
+        .expect_err("insufficient quorum rejected");
+
+        assert!(err.contains("quorum 3"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn moderation_local_runner_rejects_inverted_thresholds() {
+        let mut manifest = signed_moderation_repro_manifest_fixture();
+        manifest.body.thresholds = ModerationThresholdsV1 {
+            quarantine: 9_000,
+            escalate: 8_000,
+        };
+
+        let err = validate_moderation_local_runner_manifest(&manifest)
+            .expect_err("inverted thresholds rejected");
+
+        assert!(
+            err.contains("quarantine threshold 9000 exceeds escalate threshold 8000"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -11299,6 +17096,11 @@ fn governance_payload_kind_cli(payload: &GovernanceLogPayloadV1) -> &'static str
         GovernanceLogPayloadV1::ModerationBallotEvent(_) => "moderation_ballot_event",
         GovernanceLogPayloadV1::AppealFinanceReport(_) => "appeal_finance_report",
         GovernanceLogPayloadV1::AppealFinanceWeeklyRollup(_) => "appeal_finance_weekly_rollup",
+        GovernanceLogPayloadV1::AppealFinanceSettlementReceipt(_) => {
+            "appeal_finance_settlement_receipt"
+        }
+        GovernanceLogPayloadV1::OrderbookSettlementReceipt(_) => "orderbook_settlement_receipt",
+        GovernanceLogPayloadV1::ExternalPayload(_) => "external_payload",
         GovernanceLogPayloadV1::ReputationSnapshot(_) => "reputation_snapshot",
     }
 }
@@ -13043,6 +18845,24 @@ mod tests {
             err.contains("attestation.chain_id"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn governance_payload_kind_cli_labels_external_payload() {
+        use sorafs_manifest::GovernanceExternalPayloadV1;
+
+        let encoded_payload = b"external moderation evidence".to_vec();
+        let payload = GovernanceLogPayloadV1::ExternalPayload(GovernanceExternalPayloadV1 {
+            version: 1,
+            payload_kind: "moderation_external_evidence".to_string(),
+            payload_version: 1,
+            encoded_blake3: *blake3_hash(&encoded_payload).as_bytes(),
+            encoded_len: encoded_payload.len() as u64,
+            encoded_payload,
+            metadata: Vec::new(),
+        });
+
+        assert_eq!(governance_payload_kind_cli(&payload), "external_payload");
     }
 
     #[test]

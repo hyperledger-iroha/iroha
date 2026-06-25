@@ -132,6 +132,11 @@ scripts/sorafs_gateway_self_cert.sh \
   fingerprints.
 - The self-cert harness downloads the manifest with `sorafs_fetch` and stores
   CAR replay logs; keep the outputs for audit evidence.
+- Metadata checks against `/.well-known/sorafs/manifest` and
+  `/v1/sorafs/cid/{cid}` may append `?limit=N` (default 50, max 500) to bound
+  the embedded `files` listing. Responses still include full `file_count`,
+  `returned_file_count`, and `truncated_files`, and `manifest_b64` remains
+  complete.
 
 ## 4. DNS & Telemetry Guardrails
 

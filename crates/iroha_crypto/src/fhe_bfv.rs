@@ -12971,20 +12971,11 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_v1(
         "BFV full-bootstrap release audit manifest circuit id",
         &manifest.circuit_id,
     )?;
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text(
+    validate_bfv_full_bootstrap_canonical_text_label(
         "BFV full-bootstrap release audit manifest scope",
-        manifest.audit_scope.as_bytes(),
+        &manifest.audit_scope,
+        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SCOPE_V1,
     )?;
-    validate_bfv_full_bootstrap_binary_decorated_placeholder_text(
-        "BFV full-bootstrap release audit manifest scope",
-        manifest.audit_scope.as_bytes(),
-    )?;
-    if manifest.audit_scope != BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SCOPE_V1 {
-        return Err(BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap release audit manifest scope `{}` does not match canonical `{BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SCOPE_V1}`",
-            manifest.audit_scope
-        )));
-    }
     if manifest.verdict != BfvFullBootstrapReleaseAuditVerdictV1::ApprovedForRelease {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap release audit manifest verdict must be approved for release"
@@ -25755,6 +25746,7 @@ fn validate_refresh_transcript_seed(label: &str, seed: &[u8]) -> Result<(), BfvE
         )));
     }
     validate_bfv_full_bootstrap_bytes_not_placeholder_text(label, seed)?;
+    validate_bfv_full_bootstrap_binary_decorated_placeholder_text(label, seed)?;
     if seed.len() > BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES {
         return Err(BfvError::InvalidParameters(format!(
             "{label} exceeds the maximum supported length {BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES}"
@@ -25775,6 +25767,7 @@ fn validate_deterministic_seed(label: &str, seed: &[u8]) -> Result<(), BfvError>
         )));
     }
     validate_bfv_full_bootstrap_bytes_not_placeholder_text(label, seed)?;
+    validate_bfv_full_bootstrap_binary_decorated_placeholder_text(label, seed)?;
     if seed.len() > BFV_DETERMINISTIC_SEED_MAX_BYTES {
         return Err(BfvError::InvalidParameters(format!(
             "{label} exceeds the maximum supported length {BFV_DETERMINISTIC_SEED_MAX_BYTES}"
@@ -27462,42 +27455,26 @@ fn validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
             "BFV full-bootstrap native transparent prover payload circuit id mismatch".to_owned(),
         ));
     }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
+    validate_bfv_full_bootstrap_canonical_text_label(
         "BFV full-bootstrap native transparent prover payload backend",
-        payload.backend.as_bytes(),
+        &payload.backend,
+        BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1,
     )?;
-    if payload.backend != BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1 {
-        return Err(BfvError::InvalidParameters(
-            "BFV full-bootstrap native transparent prover payload backend mismatch".to_owned(),
-        ));
-    }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
+    validate_bfv_full_bootstrap_canonical_text_label(
         "BFV full-bootstrap native transparent prover payload key format",
-        payload.key_format.as_bytes(),
+        &payload.key_format,
+        BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1,
     )?;
-    if payload.key_format != BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1 {
-        return Err(BfvError::InvalidParameters(
-            "BFV full-bootstrap native transparent prover payload key format mismatch".to_owned(),
-        ));
-    }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
+    validate_bfv_full_bootstrap_canonical_text_label(
         "BFV full-bootstrap native transparent prover payload proof system",
-        payload.proof_system.as_bytes(),
+        &payload.proof_system,
+        BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_PROOF_SYSTEM_V1,
     )?;
-    if payload.proof_system != BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_PROOF_SYSTEM_V1 {
-        return Err(BfvError::InvalidParameters(
-            "BFV full-bootstrap native transparent prover payload proof system mismatch".to_owned(),
-        ));
-    }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
+    validate_bfv_full_bootstrap_canonical_text_label(
         "BFV full-bootstrap native transparent prover payload field",
-        payload.field.as_bytes(),
+        &payload.field,
+        BFV_FULL_BOOTSTRAP_NATIVE_STARK_FIELD_V1,
     )?;
-    if payload.field != BFV_FULL_BOOTSTRAP_NATIVE_STARK_FIELD_V1 {
-        return Err(BfvError::InvalidParameters(
-            "BFV full-bootstrap native transparent prover payload field mismatch".to_owned(),
-        ));
-    }
     validate_bfv_full_bootstrap_arithmetic_trace_profile_digest_v1(
         "BFV full-bootstrap native transparent prover payload arithmetic trace profile digest",
         &payload.arithmetic_trace_profile_digest,
@@ -27563,42 +27540,26 @@ pub fn validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
             "BFV full-bootstrap native verifier payload circuit id mismatch".to_owned(),
         ));
     }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
+    validate_bfv_full_bootstrap_canonical_text_label(
         "BFV full-bootstrap native verifier payload backend",
-        payload.backend.as_bytes(),
+        &payload.backend,
+        BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1,
     )?;
-    if payload.backend != BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1 {
-        return Err(BfvError::InvalidParameters(
-            "BFV full-bootstrap native verifier payload backend mismatch".to_owned(),
-        ));
-    }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
+    validate_bfv_full_bootstrap_canonical_text_label(
         "BFV full-bootstrap native verifier payload key format",
-        payload.key_format.as_bytes(),
+        &payload.key_format,
+        BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1,
     )?;
-    if payload.key_format != BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1 {
-        return Err(BfvError::InvalidParameters(
-            "BFV full-bootstrap native verifier payload key format mismatch".to_owned(),
-        ));
-    }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
+    validate_bfv_full_bootstrap_canonical_text_label(
         "BFV full-bootstrap native verifier payload proof system",
-        payload.proof_system.as_bytes(),
+        &payload.proof_system,
+        BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_PROOF_SYSTEM_V1,
     )?;
-    if payload.proof_system != BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_PROOF_SYSTEM_V1 {
-        return Err(BfvError::InvalidParameters(
-            "BFV full-bootstrap native verifier payload proof system mismatch".to_owned(),
-        ));
-    }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
+    validate_bfv_full_bootstrap_canonical_text_label(
         "BFV full-bootstrap native verifier payload field",
-        payload.field.as_bytes(),
+        &payload.field,
+        BFV_FULL_BOOTSTRAP_NATIVE_STARK_FIELD_V1,
     )?;
-    if payload.field != BFV_FULL_BOOTSTRAP_NATIVE_STARK_FIELD_V1 {
-        return Err(BfvError::InvalidParameters(
-            "BFV full-bootstrap native verifier payload field mismatch".to_owned(),
-        ));
-    }
     validate_bfv_full_bootstrap_arithmetic_trace_profile_digest_v1(
         "BFV full-bootstrap native verifier payload arithmetic trace profile digest",
         &payload.arithmetic_trace_profile_digest,
@@ -27645,42 +27606,26 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_object_v1(
         )));
     }
     validate_bfv_full_bootstrap_proof_key_role(material.key_role)?;
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
+    validate_bfv_full_bootstrap_canonical_text_label(
         "BFV full-bootstrap native proof key material backend",
-        material.backend.as_bytes(),
+        &material.backend,
+        BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1,
     )?;
-    if material.backend != BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1 {
-        return Err(BfvError::InvalidParameters(
-            "BFV full-bootstrap native proof key material backend mismatch".to_owned(),
-        ));
-    }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
+    validate_bfv_full_bootstrap_canonical_text_label(
         "BFV full-bootstrap native proof key material key format",
-        material.key_format.as_bytes(),
+        &material.key_format,
+        BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1,
     )?;
-    if material.key_format != BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1 {
-        return Err(BfvError::InvalidParameters(
-            "BFV full-bootstrap native proof key material key format mismatch".to_owned(),
-        ));
-    }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
+    validate_bfv_full_bootstrap_canonical_text_label(
         "BFV full-bootstrap native proof key material proof system",
-        material.proof_system.as_bytes(),
+        &material.proof_system,
+        BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_PROOF_SYSTEM_V1,
     )?;
-    if material.proof_system != BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_PROOF_SYSTEM_V1 {
-        return Err(BfvError::InvalidParameters(
-            "BFV full-bootstrap native proof key material proof system mismatch".to_owned(),
-        ));
-    }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
+    validate_bfv_full_bootstrap_canonical_text_label(
         "BFV full-bootstrap native proof key material field",
-        material.field.as_bytes(),
+        &material.field,
+        BFV_FULL_BOOTSTRAP_NATIVE_STARK_FIELD_V1,
     )?;
-    if material.field != BFV_FULL_BOOTSTRAP_NATIVE_STARK_FIELD_V1 {
-        return Err(BfvError::InvalidParameters(
-            "BFV full-bootstrap native proof key material field mismatch".to_owned(),
-        ));
-    }
     validate_bfv_full_bootstrap_native_payload_circuit_id(
         "BFV full-bootstrap native proof-key material payload circuit id",
         &material.native_payload_circuit_id,
@@ -27737,30 +27682,33 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_object_v1(
             "BFV full-bootstrap native proof key payload digest mismatch".to_owned(),
         ));
     }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
+    let expected_native_payload_kind = match material.key_role {
+        BfvFullBootstrapCircuitArtifactRoleV1::ProverKey => {
+            BFV_FULL_BOOTSTRAP_NATIVE_PROVER_PAYLOAD_KIND_V1
+        }
+        BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey => {
+            BFV_FULL_BOOTSTRAP_NATIVE_VERIFIER_PAYLOAD_KIND_V1
+        }
+        _ => {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV full-bootstrap artifact role {:?} is not a proof-key role",
+                material.key_role
+            )));
+        }
+    };
+    validate_bfv_full_bootstrap_canonical_text_label(
         "BFV full-bootstrap native proof key material payload kind",
-        material.native_payload_kind.as_bytes(),
+        &material.native_payload_kind,
+        expected_native_payload_kind,
     )?;
     match material.key_role {
         BfvFullBootstrapCircuitArtifactRoleV1::ProverKey => {
-            if material.native_payload_kind != BFV_FULL_BOOTSTRAP_NATIVE_PROVER_PAYLOAD_KIND_V1 {
-                return Err(BfvError::InvalidParameters(
-                    "BFV full-bootstrap native prover-key material payload kind mismatch"
-                        .to_owned(),
-                ));
-            }
             validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
                 &material.native_payload_circuit_id,
                 &material.native_payload,
             )
         }
         BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey => {
-            if material.native_payload_kind != BFV_FULL_BOOTSTRAP_NATIVE_VERIFIER_PAYLOAD_KIND_V1 {
-                return Err(BfvError::InvalidParameters(
-                    "BFV full-bootstrap native verifier-key material payload kind mismatch"
-                        .to_owned(),
-                ));
-            }
             validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
                 &material.native_payload_circuit_id,
                 &material.native_payload,
@@ -27999,13 +27947,15 @@ fn validate_bfv_full_bootstrap_proof_key_material_envelope_digest_preflight_v1(
 fn validate_bfv_full_bootstrap_proof_key_material_envelope_text_preflight_v1(
     envelope: &BfvFullBootstrapProofKeyMaterialEnvelopeV1,
 ) -> Result<(), BfvError> {
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
+    validate_bfv_full_bootstrap_canonical_text_label(
         "BFV full-bootstrap proof key material envelope backend",
-        envelope.backend.as_bytes(),
+        &envelope.backend,
+        BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1,
     )?;
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
+    validate_bfv_full_bootstrap_canonical_text_label(
         "BFV full-bootstrap proof key material envelope key format",
-        envelope.key_format.as_bytes(),
+        &envelope.key_format,
+        BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1,
     )?;
     validate_bfv_full_bootstrap_canonical_circuit_id(
         "BFV full-bootstrap proof key material envelope circuit id",
@@ -28855,6 +28805,10 @@ fn validate_bootstrap_key_id(key_id: &str) -> Result<(), BfvError> {
             "bootstrap key id must be canonical without surrounding whitespace".to_owned(),
         ));
     }
+    validate_bfv_full_bootstrap_binary_decorated_placeholder_text(
+        "bootstrap key id",
+        key_id.as_bytes(),
+    )?;
     if !key_id.bytes().all(is_bootstrap_key_id_byte) {
         return Err(BfvError::InvalidParameters(
             "bootstrap key id must contain only ASCII alphanumeric, '.', '_', or '-' bytes"
@@ -33716,18 +33670,67 @@ mod tests {
             "native verifier material must reject impossible STARK blowup/domain geometry",
         );
 
-        let mut drifted_backend_payload: BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 =
-            norito::decode_from_bytes(&verifier_payload).expect("decode verifier payload");
-        drifted_backend_payload.backend = "stark/fri/sha256-wrong-field".to_owned();
-        let drifted_backend_payload =
-            norito::to_bytes(&drifted_backend_payload).expect("encode drifted backend payload");
-        assert_error_contains(
-            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1(
-                circuit_id,
-                &drifted_backend_payload,
-            ),
-            "backend mismatch",
-            "native verifier material must bind the proof backend label",
+        macro_rules! expect_verifier_payload_text_rejection {
+            ($field:ident: $value:expr, $context:literal) => {{
+                let mut payload = decoded_verifier_payload.clone();
+                payload.$field = $value.to_owned();
+                let payload =
+                    norito::to_bytes(&payload).expect("encode drifted verifier text payload");
+                assert_error_contains(
+                    encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1(
+                        circuit_id, &payload,
+                    ),
+                    "canonical",
+                    $context,
+                );
+            }};
+        }
+        expect_verifier_payload_text_rejection!(
+            backend: "stark/fri/sha256-wrong-field",
+            "native verifier material must bind the proof backend label"
+        );
+        expect_verifier_payload_text_rejection!(
+            key_format: "transparent-stark-fri-verifier-dev-only",
+            "native verifier material must bind the proof key-format label"
+        );
+        expect_verifier_payload_text_rejection!(
+            proof_system: "fri-dev-only",
+            "native verifier material must bind the proof-system label"
+        );
+        expect_verifier_payload_text_rejection!(
+            field: "goldilocks-dev-only",
+            "native verifier material must bind the native field label"
+        );
+        macro_rules! expect_prover_payload_text_rejection {
+            ($field:ident: $value:expr, $context:literal) => {{
+                let mut payload = decoded_prover_payload.clone();
+                payload.$field = $value.to_owned();
+                let payload =
+                    norito::to_bytes(&payload).expect("encode drifted prover text payload");
+                assert_error_contains(
+                    validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
+                        circuit_id, &payload,
+                    ),
+                    "canonical",
+                    $context,
+                );
+            }};
+        }
+        expect_prover_payload_text_rejection!(
+            backend: "stark/fri/sha256-wrong-field",
+            "native prover payload must bind the proof backend label"
+        );
+        expect_prover_payload_text_rejection!(
+            key_format: "transparent-stark-fri-prover-dev-only",
+            "native prover payload must bind the proof key-format label"
+        );
+        expect_prover_payload_text_rejection!(
+            proof_system: "fri-dev-only",
+            "native prover payload must bind the proof-system label"
+        );
+        expect_prover_payload_text_rejection!(
+            field: "goldilocks-dev-only",
+            "native prover payload must bind the native field label"
         );
 
         for (field, payload) in [
@@ -33741,7 +33744,7 @@ mod tests {
             (
                 "backend",
                 BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1 {
-                    backend: "TODO full-bootstrap prover backend".to_owned(),
+                    backend: "TODO_full-bootstrap_prover_backend".to_owned(),
                     ..decoded_prover_payload.clone()
                 },
             ),
@@ -33790,7 +33793,7 @@ mod tests {
             (
                 "backend",
                 BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1 {
-                    backend: "\0TODO full-bootstrap prover backend\0".to_owned(),
+                    backend: "\0TODO_full-bootstrap_prover_backend\0".to_owned(),
                     ..decoded_prover_payload.clone()
                 },
             ),
@@ -33840,7 +33843,7 @@ mod tests {
             (
                 "backend",
                 BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 {
-                    backend: "TODO full-bootstrap verifier backend".to_owned(),
+                    backend: "TODO_full-bootstrap_verifier_backend".to_owned(),
                     ..decoded_verifier_payload.clone()
                 },
             ),
@@ -33889,7 +33892,7 @@ mod tests {
             (
                 "backend",
                 BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 {
-                    backend: "\0TODO full-bootstrap verifier backend\0".to_owned(),
+                    backend: "\0TODO_full-bootstrap_verifier_backend\0".to_owned(),
                     ..decoded_verifier_payload.clone()
                 },
             ),
@@ -33932,6 +33935,53 @@ mod tests {
             (
                 "backend",
                 BfvFullBootstrapNativeProofKeyMaterialV1 {
+                    backend: "stark/fri/native-material-dev-only".to_owned(),
+                    ..decoded_prover.clone()
+                },
+            ),
+            (
+                "key format",
+                BfvFullBootstrapNativeProofKeyMaterialV1 {
+                    key_format: "transparent-stark-fri-native-material-dev-only".to_owned(),
+                    ..decoded_prover.clone()
+                },
+            ),
+            (
+                "proof system",
+                BfvFullBootstrapNativeProofKeyMaterialV1 {
+                    proof_system: "fri-dev-only".to_owned(),
+                    ..decoded_prover.clone()
+                },
+            ),
+            (
+                "field",
+                BfvFullBootstrapNativeProofKeyMaterialV1 {
+                    field: "goldilocks-dev-only".to_owned(),
+                    ..decoded_prover.clone()
+                },
+            ),
+            (
+                "payload kind",
+                BfvFullBootstrapNativeProofKeyMaterialV1 {
+                    native_payload_kind: BFV_FULL_BOOTSTRAP_NATIVE_VERIFIER_PAYLOAD_KIND_V1
+                        .to_owned(),
+                    ..decoded_prover.clone()
+                },
+            ),
+        ] {
+            let material =
+                norito::to_bytes(&material).expect("encode wrong native material metadata");
+            assert_error_contains(
+                decode_bfv_full_bootstrap_native_proof_key_material_v1(&material),
+                "canonical",
+                &format!("native proof-key material {field} must reject wrong labels"),
+            );
+        }
+
+        for (field, material) in [
+            (
+                "backend",
+                BfvFullBootstrapNativeProofKeyMaterialV1 {
                     backend: "replace_before_production".to_owned(),
                     ..decoded_prover.clone()
                 },
@@ -33939,7 +33989,7 @@ mod tests {
             (
                 "key format",
                 BfvFullBootstrapNativeProofKeyMaterialV1 {
-                    key_format: "TODO native proof-key material format".to_owned(),
+                    key_format: "TODO_native_proof-key_material_format".to_owned(),
                     ..decoded_prover.clone()
                 },
             ),
@@ -33986,7 +34036,7 @@ mod tests {
             (
                 "key format",
                 BfvFullBootstrapNativeProofKeyMaterialV1 {
-                    key_format: "\0TODO native proof-key material format\0".to_owned(),
+                    key_format: "\0TODO_native_proof-key_material_format\0".to_owned(),
                     ..decoded_prover.clone()
                 },
             ),
@@ -37632,6 +37682,19 @@ mod tests {
         );
         let err = keygen_from_seed(&params, b"replace_before_production")
             .expect_err("placeholder BFV keygen seeds must not derive key material");
+        assert!(
+            err.to_string().contains("placeholder text"),
+            "unexpected error: {err}"
+        );
+        let binary_decorated_placeholder_seed = [
+            b"\0".as_slice(),
+            b"replace_before_production".as_slice(),
+            b"\0".as_slice(),
+        ]
+        .concat();
+        let err = keygen_from_seed(&params, &binary_decorated_placeholder_seed).expect_err(
+            "binary-decorated placeholder BFV keygen seeds must not derive key material",
+        );
         assert!(
             err.to_string().contains("placeholder text"),
             "unexpected error: {err}"
@@ -48743,6 +48806,13 @@ mod tests {
             "placeholder text",
             "release audit manifests must reject placeholder scope ids before canonical mismatch",
         );
+        let mut wrong_scope_manifest = manifest.clone();
+        wrong_scope_manifest.audit_scope = "bfv-full-bootstrap-release-audit-dev-only".to_owned();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_manifest_v1(&wrong_scope_manifest),
+            "canonical",
+            "release audit manifests must reject wrong scope ids before manifest matching",
+        );
         let mut binary_placeholder_scope_manifest = manifest;
         binary_placeholder_scope_manifest.audit_scope =
             binary_decorated_placeholder("TODO release-audit manifest scope");
@@ -53457,6 +53527,35 @@ mod tests {
             "canonical",
             "proof-key material envelope validation must reject wrong witness digest domains before key metadata mismatch",
         );
+        for (field, envelope) in [
+            ("backend", {
+                let mut envelope =
+                    decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(&prover_key)
+                        .expect("decode canonical proof-key material envelope for backend drift");
+                envelope.backend = "stark/fri/envelope-dev-only".to_owned();
+                envelope
+            }),
+            ("key format", {
+                let mut envelope =
+                    decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(&prover_key)
+                        .expect("decode canonical proof-key material envelope for format drift");
+                envelope.key_format = "transparent-stark-fri-envelope-dev-only".to_owned();
+                envelope
+            }),
+        ] {
+            let envelope_key = BfvFullBootstrapProofKeyV1 {
+                key_material: norito::to_bytes(&envelope)
+                    .expect("encode wrong-label proof-key envelope"),
+                ..prover_key.clone()
+            };
+            assert_error_contains(
+                decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(&envelope_key),
+                "canonical",
+                &format!(
+                    "proof-key material envelope validation must reject wrong {field} labels before key metadata mismatch"
+                ),
+            );
+        }
         let mut binary_decorated_placeholder_text_envelope =
             decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(&prover_key)
                 .expect("decode canonical proof-key material envelope for text preflight");
@@ -60306,6 +60405,30 @@ mod tests {
             err.to_string().contains("placeholder text"),
             "unexpected error: {err}"
         );
+        let binary_decorated_placeholder_transcript_seed = [
+            b"\0".as_slice(),
+            b"replace_before_production".as_slice(),
+            b"\0".as_slice(),
+        ]
+        .concat();
+        let binary_decorated_placeholder_rotation_seed = [BfvRotationKeyTranscriptSeed {
+            rotation_steps: material.rotation_key.rotation_steps,
+            seed: &binary_decorated_placeholder_transcript_seed,
+        }];
+        let err = bundle
+            .validate_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &binary_decorated_placeholder_rotation_seed,
+                valid_bootstrap_transcript,
+            )
+            .expect_err(
+                "binary-decorated placeholder rotation transcript seeds must fail metadata preflight",
+            );
+        assert!(
+            err.to_string().contains("placeholder text"),
+            "unexpected error: {err}"
+        );
         let delayed_placeholder_transcript_seed = [
             b"bfv transcript before placeholder: ".as_slice(),
             b"replace before production".as_slice(),
@@ -60441,6 +60564,25 @@ mod tests {
             err.to_string().contains("placeholder text"),
             "unexpected error: {err}"
         );
+        let binary_decorated_placeholder_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed {
+            key_id: "bootstrap-refresh-key",
+            max_refresh_rounds: 2,
+            seed: &binary_decorated_placeholder_transcript_seed,
+        });
+        let err = bundle
+            .validate_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &valid_rotation_transcripts,
+                binary_decorated_placeholder_bootstrap_seed,
+            )
+            .expect_err(
+                "binary-decorated placeholder bootstrap transcript seeds must fail metadata preflight",
+            );
+        assert!(
+            err.to_string().contains("placeholder text"),
+            "unexpected error: {err}"
+        );
         let delayed_placeholder_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed {
             key_id: "bootstrap-refresh-key",
             max_refresh_rounds: 2,
@@ -60474,6 +60616,26 @@ mod tests {
                 placeholder_bootstrap_metadata,
             )
             .expect_err("placeholder bootstrap transcript key ids must fail metadata preflight");
+        assert!(
+            err.to_string().contains("placeholder text"),
+            "unexpected error: {err}"
+        );
+
+        let binary_decorated_placeholder_bootstrap_metadata = Some(BfvBootstrapKeyTranscriptSeed {
+            key_id: "\0replace_before_production\0",
+            max_refresh_rounds: 2,
+            seed: bootstrap_seed,
+        });
+        let err = bundle
+            .validate_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &valid_rotation_transcripts,
+                binary_decorated_placeholder_bootstrap_metadata,
+            )
+            .expect_err(
+                "binary-decorated placeholder bootstrap transcript key ids must fail metadata preflight",
+            );
         assert!(
             err.to_string().contains("placeholder text"),
             "unexpected error: {err}"
@@ -67187,6 +67349,24 @@ mod tests {
             &placeholder_bootstrap_key,
             "placeholder text",
             "placeholder bootstrap key ids must be rejected",
+        );
+
+        let binary_decorated_placeholder_bootstrap_key = BfvEvaluationKeyBundle {
+            relinearization_key: material.relinearization_key.clone(),
+            rotation_keys: Vec::new(),
+            galois_keys: Vec::new(),
+            bootstrap_key: Some(bootstrap_key_with_rounds(
+                "\0replace_before_production\0",
+                BFV_BOOTSTRAP_KEY_DEFAULT_MAX_REFRESH_ROUNDS,
+                &material.zero_refresh,
+                vec![material.zero_refresh.clone()],
+            )),
+        };
+        assert_evaluation_key_bundle_error_contains(
+            &material.params,
+            &binary_decorated_placeholder_bootstrap_key,
+            "placeholder text",
+            "binary-decorated placeholder bootstrap key ids must be rejected",
         );
 
         let padded_bootstrap_key = BfvEvaluationKeyBundle {

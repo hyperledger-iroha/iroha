@@ -14,7 +14,8 @@ use std::collections::BTreeSet;
 
 use blake3::Hasher;
 use ed25519_dalek::{
-    PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature as DalekSignature, Verifier, VerifyingKey,
+    PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature as DalekSignature, Signer, SigningKey, Verifier,
+    VerifyingKey,
 };
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
@@ -34,6 +35,8 @@ pub const ORDERBOOK_TRADE_EVENT_VERSION_V1: u8 = 1;
 pub const SETTLEMENT_CHANNEL_VERSION_V1: u8 = 1;
 /// Schema version for [`SettlementReceiptV1`].
 pub const SETTLEMENT_RECEIPT_VERSION_V1: u8 = 1;
+/// Schema version for [`OrderbookRuntimeSnapshotV1`].
+pub const ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1: u8 = 1;
 /// Number of bytes in one GiB.
 pub const BYTES_PER_GIB: u64 = 1_073_741_824;
 const ORDERBOOK_TRADE_ID_DOMAIN_V1: &[u8] = b"sorafs.orderbook.trade-id.v1";
@@ -252,6 +255,22 @@ pub fn verify_order_request_signature_v1(
     verify_orderbook_signature_v1(&order.signature, &digest)
 }
 
+/// Sign an order submission with the canonical SFM-2 Ed25519 digest.
+///
+/// The helper replaces the payload's signature material with the signing key's
+/// public key and the signature over [`order_request_signature_digest_v1`], then
+/// verifies the resulting payload before returning it.
+pub fn sign_order_request_ed25519_v1(
+    mut order: OrderRequestV1,
+    signing_key: &SigningKey,
+) -> Result<OrderRequestV1, OrderbookValidationError> {
+    order.signature = empty_ed25519_orderbook_signature(signing_key);
+    let digest = order_request_signature_digest_v1(&order)?;
+    order.signature.signature = signing_key.sign(&digest).to_bytes().to_vec();
+    verify_order_request_signature_v1(&order)?;
+    Ok(order)
+}
+
 /// Derive the canonical Ed25519 message digest for an order cancellation.
 ///
 /// The digest is BLAKE3 over a domain separator plus the canonical Norito cancel
@@ -271,6 +290,22 @@ pub fn verify_order_cancel_signature_v1(
     cancel.validate()?;
     let digest = order_cancel_signature_digest_v1(cancel)?;
     verify_orderbook_signature_v1(&cancel.signature, &digest)
+}
+
+/// Sign an order cancellation with the canonical SFM-2 Ed25519 digest.
+///
+/// The helper replaces the payload's signature material with the signing key's
+/// public key and the signature over [`order_cancel_signature_digest_v1`], then
+/// verifies the resulting payload before returning it.
+pub fn sign_order_cancel_ed25519_v1(
+    mut cancel: OrderCancelV1,
+    signing_key: &SigningKey,
+) -> Result<OrderCancelV1, OrderbookValidationError> {
+    cancel.signature = empty_ed25519_orderbook_signature(signing_key);
+    let digest = order_cancel_signature_digest_v1(&cancel)?;
+    cancel.signature.signature = signing_key.sign(&digest).to_bytes().to_vec();
+    verify_order_cancel_signature_v1(&cancel)?;
+    Ok(cancel)
 }
 
 /// Trade fill event emitted by a deterministic matcher/contract.
@@ -345,7 +380,7 @@ pub struct OrderFillOutcomeV1 {
 }
 
 /// Order plus canonical admission sequence used for price-time priority.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct OrderBookEntryV1 {
     /// Canonical order payload.
     pub order: OrderRequestV1,
@@ -362,6 +397,159 @@ pub struct OrderBookMatchOutcomeV1 {
     pub remaining_orders: Vec<OrderRequestV1>,
     /// Expired order identifiers skipped before matching.
     pub expired_order_ids: Vec<[u8; 32]>,
+}
+
+/// Canonical replay snapshot for a local orderbook mirror.
+///
+/// The snapshot is not a replacement for an on-chain contract. It gives the
+/// runtime/durable matcher service a Norito-encoded checkpoint format for the
+/// local open order set, emitted trade/channel state, accepted receipts, and
+/// expired-order tombstones.
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+pub struct OrderbookRuntimeSnapshotV1 {
+    /// Schema version (`ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1`).
+    pub version: u8,
+    /// Next admission sequence to assign after restoring the snapshot.
+    pub next_sequence: u64,
+    /// Unix timestamp (seconds) when the snapshot was generated.
+    pub generated_at_unix: u64,
+    /// Open orders with their canonical local admission sequence.
+    pub open_orders: Vec<OrderBookEntryV1>,
+    /// Trade events already emitted by the local matcher.
+    pub trades: Vec<TradeEventV1>,
+    /// Current settlement-channel snapshots.
+    pub settlement_channels: Vec<SettlementChannelV1>,
+    /// Settlement receipts already accepted for local channels.
+    pub settlement_receipts: Vec<SettlementReceiptV1>,
+    /// Expired order ids removed by prior matching passes.
+    pub expired_order_ids: Vec<[u8; 32]>,
+}
+
+impl OrderbookRuntimeSnapshotV1 {
+    /// Validate structural replay invariants for a runtime snapshot.
+    pub fn validate(&self) -> Result<(), OrderbookValidationError> {
+        if self.version != ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1 {
+            return Err(OrderbookValidationError::UnsupportedSnapshotVersion {
+                found: self.version,
+            });
+        }
+        if self.generated_at_unix == 0 {
+            return Err(OrderbookValidationError::InvalidTimestamp);
+        }
+
+        let mut open_order_ids = BTreeSet::new();
+        let mut sequences = BTreeSet::new();
+        for entry in &self.open_orders {
+            entry.order.validate()?;
+            if !open_order_ids.insert(entry.order.order_id) {
+                return Err(OrderbookValidationError::DuplicateOrderId {
+                    order_id: entry.order.order_id,
+                });
+            }
+            if !sequences.insert(entry.sequence) {
+                return Err(OrderbookValidationError::DuplicateOrderSequence {
+                    sequence: entry.sequence,
+                });
+            }
+            if entry.sequence >= self.next_sequence {
+                return Err(OrderbookValidationError::InvalidSnapshotSequence {
+                    sequence: entry.sequence,
+                    next_sequence: self.next_sequence,
+                });
+            }
+        }
+
+        let mut trade_ids = BTreeSet::new();
+        for trade in &self.trades {
+            trade.validate()?;
+            if !trade_ids.insert(trade.trade_id) {
+                return Err(OrderbookValidationError::DuplicateTradeId {
+                    trade_id: trade.trade_id,
+                });
+            }
+        }
+
+        let mut channel_ids = BTreeSet::new();
+        for channel in &self.settlement_channels {
+            channel.validate()?;
+            if !channel_ids.insert(channel.channel_id) {
+                return Err(OrderbookValidationError::DuplicateChannelId {
+                    channel_id: channel.channel_id,
+                });
+            }
+            if !trade_ids.contains(&channel.trade_id) {
+                return Err(OrderbookValidationError::SnapshotChannelTradeMissing {
+                    channel_id: channel.channel_id,
+                    trade_id: channel.trade_id,
+                });
+            }
+        }
+
+        let mut receipt_ids = BTreeSet::new();
+        let mut receipts_by_channel = BTreeSet::<([u8; 32], u64, u64, [u8; 32])>::new();
+        for receipt in &self.settlement_receipts {
+            receipt.validate()?;
+            if !receipt_ids.insert(receipt.receipt_id) {
+                return Err(OrderbookValidationError::DuplicateReceiptId {
+                    receipt_id: receipt.receipt_id,
+                });
+            }
+            let Some(channel) = self
+                .settlement_channels
+                .iter()
+                .find(|channel| channel.channel_id == receipt.channel_id)
+            else {
+                return Err(OrderbookValidationError::SnapshotReceiptChannelMissing {
+                    receipt_id: receipt.receipt_id,
+                    channel_id: receipt.channel_id,
+                });
+            };
+            if channel.trade_id != receipt.trade_id {
+                return Err(OrderbookValidationError::SettlementChannelMismatch);
+            }
+            if receipt.issued_at_unix < channel.opened_at_unix
+                || receipt.issued_at_unix > channel.updated_at_unix
+            {
+                return Err(OrderbookValidationError::InvalidTimestamp);
+            }
+            if let Some((_, _, _, existing_receipt_id)) =
+                receipts_by_channel
+                    .iter()
+                    .find(|(channel_id, start, end, _)| {
+                        *channel_id == receipt.channel_id
+                            && ranges_overlap(*start, *end, receipt.range.start, receipt.range.end)
+                    })
+            {
+                return Err(OrderbookValidationError::SnapshotReceiptRangeOverlap {
+                    receipt_id: receipt.receipt_id,
+                    existing_receipt_id: *existing_receipt_id,
+                });
+            }
+            receipts_by_channel.insert((
+                receipt.channel_id,
+                receipt.range.start,
+                receipt.range.end,
+                receipt.receipt_id,
+            ));
+        }
+
+        let mut expired_order_ids = BTreeSet::new();
+        for order_id in &self.expired_order_ids {
+            validate_digest(*order_id, OrderbookValidationError::InvalidOrderId)?;
+            if !expired_order_ids.insert(*order_id) {
+                return Err(OrderbookValidationError::DuplicateExpiredOrderId {
+                    order_id: *order_id,
+                });
+            }
+            if open_order_ids.contains(order_id) {
+                return Err(OrderbookValidationError::SnapshotExpiredOrderStillOpen {
+                    order_id: *order_id,
+                });
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -463,9 +651,9 @@ pub fn match_orders_v1(
 ///
 /// Callers must supply entries in any order together with unique monotonic
 /// `sequence` values from the canonical order-admission log. The helper filters
-/// expired orders into `expired_order_ids`, then matches independently by tier:
-/// bids sort by highest price, asks by lowest price, and both sides use lower
-/// sequence as the time-priority tiebreaker.
+/// expired orders into sequence-ordered `expired_order_ids`, then matches
+/// independently by tier: bids sort by highest price, asks by lowest price, and
+/// both sides use lower sequence as the time-priority tiebreaker.
 pub fn match_order_book_v1(
     entries: &[OrderBookEntryV1],
     timestamp_unix: u64,
@@ -493,7 +681,7 @@ pub fn match_order_book_v1(
             });
         }
         if timestamp_unix > entry.order.expiry_unix {
-            expired_order_ids.push(entry.order.order_id);
+            expired_order_ids.push((entry.sequence, entry.order.order_id));
             continue;
         }
 
@@ -569,11 +757,19 @@ pub fn match_order_book_v1(
             .cmp(&rhs.sequence)
             .then_with(|| lhs.order.order_id.cmp(&rhs.order.order_id))
     });
+    expired_order_ids.sort_by(|(lhs_sequence, lhs_id), (rhs_sequence, rhs_id)| {
+        lhs_sequence
+            .cmp(rhs_sequence)
+            .then_with(|| lhs_id.cmp(rhs_id))
+    });
 
     Ok(OrderBookMatchOutcomeV1 {
         fills,
         remaining_orders: remaining.into_iter().map(|entry| entry.order).collect(),
-        expired_order_ids,
+        expired_order_ids: expired_order_ids
+            .into_iter()
+            .map(|(_, order_id)| order_id)
+            .collect(),
     })
 }
 
@@ -859,6 +1055,23 @@ pub fn verify_settlement_receipt_signature_v1(
     verify_orderbook_signature_v1(&receipt.settlement_signature, &digest)
 }
 
+/// Sign a settlement receipt with the canonical SFM-2 Ed25519 digest.
+///
+/// The helper replaces the receipt's settlement signature material with the
+/// signing key's public key and the signature over
+/// [`settlement_receipt_signature_digest_v1`], then verifies the resulting
+/// payload before returning it.
+pub fn sign_settlement_receipt_ed25519_v1(
+    mut receipt: SettlementReceiptV1,
+    signing_key: &SigningKey,
+) -> Result<SettlementReceiptV1, OrderbookValidationError> {
+    receipt.settlement_signature = empty_ed25519_orderbook_signature(signing_key);
+    let digest = settlement_receipt_signature_digest_v1(&receipt)?;
+    receipt.settlement_signature.signature = signing_key.sign(&digest).to_bytes().to_vec();
+    verify_settlement_receipt_signature_v1(&receipt)?;
+    Ok(receipt)
+}
+
 /// Apply a validated settlement receipt to a settlement channel.
 ///
 /// This helper enforces channel/trade binding, monotonic receipt time, remaining
@@ -939,6 +1152,14 @@ fn orderbook_signature_digest<T: norito::core::NoritoSerialize>(
     Ok(*hasher.finalize().as_bytes())
 }
 
+fn empty_ed25519_orderbook_signature(signing_key: &SigningKey) -> OrderbookSignatureV1 {
+    OrderbookSignatureV1 {
+        algorithm: SignatureAlgorithm::Ed25519,
+        public_key: signing_key.verifying_key().to_bytes().to_vec(),
+        signature: Vec::new(),
+    }
+}
+
 fn verify_orderbook_signature_v1(
     signature: &OrderbookSignatureV1,
     digest: &[u8; 32],
@@ -994,6 +1215,10 @@ fn validate_fee_bps(fee_bps: u16) -> Result<(), OrderbookValidationError> {
     Ok(())
 }
 
+fn ranges_overlap(lhs_start: u64, lhs_end: u64, rhs_start: u64, rhs_end: u64) -> bool {
+    lhs_start < rhs_end && rhs_start < lhs_end
+}
+
 /// Validation errors for SoraFS orderbook payloads.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum OrderbookValidationError {
@@ -1012,6 +1237,12 @@ pub enum OrderbookValidationError {
     /// Unsupported settlement receipt version.
     #[error("unsupported settlement receipt version {found}")]
     UnsupportedReceiptVersion { found: u8 },
+    /// Unsupported runtime snapshot version.
+    #[error("unsupported orderbook runtime snapshot version {found}")]
+    UnsupportedSnapshotVersion {
+        /// Observed version.
+        found: u8,
+    },
     /// Order identifier is all zeroes.
     #[error("order id must not be zero")]
     InvalidOrderId,
@@ -1154,6 +1385,68 @@ pub enum OrderbookValidationError {
         /// Repeated sequence.
         sequence: u64,
     },
+    /// Snapshot open-order sequence is outside the restore window.
+    #[error("snapshot order sequence {sequence} must be less than next sequence {next_sequence}")]
+    InvalidSnapshotSequence {
+        /// Observed sequence.
+        sequence: u64,
+        /// Next sequence recorded by the snapshot.
+        next_sequence: u64,
+    },
+    /// Duplicate trade id in a runtime snapshot.
+    #[error("duplicate trade id {trade_id:02x?}")]
+    DuplicateTradeId {
+        /// Repeated trade id.
+        trade_id: [u8; 32],
+    },
+    /// Duplicate channel id in a runtime snapshot.
+    #[error("duplicate settlement channel id {channel_id:02x?}")]
+    DuplicateChannelId {
+        /// Repeated channel id.
+        channel_id: [u8; 32],
+    },
+    /// Duplicate receipt id in a runtime snapshot.
+    #[error("duplicate settlement receipt id {receipt_id:02x?}")]
+    DuplicateReceiptId {
+        /// Repeated receipt id.
+        receipt_id: [u8; 32],
+    },
+    /// Duplicate expired order id in a runtime snapshot.
+    #[error("duplicate expired order id {order_id:02x?}")]
+    DuplicateExpiredOrderId {
+        /// Repeated expired order id.
+        order_id: [u8; 32],
+    },
+    /// Snapshot channel references a trade absent from the snapshot.
+    #[error("snapshot channel {channel_id:02x?} references missing trade {trade_id:02x?}")]
+    SnapshotChannelTradeMissing {
+        /// Channel id.
+        channel_id: [u8; 32],
+        /// Missing trade id.
+        trade_id: [u8; 32],
+    },
+    /// Snapshot receipt references a channel absent from the snapshot.
+    #[error("snapshot receipt {receipt_id:02x?} references missing channel {channel_id:02x?}")]
+    SnapshotReceiptChannelMissing {
+        /// Receipt id.
+        receipt_id: [u8; 32],
+        /// Missing channel id.
+        channel_id: [u8; 32],
+    },
+    /// Snapshot receipt range overlaps another accepted receipt.
+    #[error("snapshot receipt {receipt_id:02x?} overlaps receipt {existing_receipt_id:02x?}")]
+    SnapshotReceiptRangeOverlap {
+        /// Overlapping receipt id.
+        receipt_id: [u8; 32],
+        /// Existing receipt id.
+        existing_receipt_id: [u8; 32],
+    },
+    /// Snapshot marks an order as both expired and open.
+    #[error("snapshot expired order {order_id:02x?} is still open")]
+    SnapshotExpiredOrderStillOpen {
+        /// Conflicting order id.
+        order_id: [u8; 32],
+    },
     /// GiB-to-byte expansion overflowed.
     #[error("byte count overflow")]
     ByteCountOverflow,
@@ -1238,8 +1531,10 @@ pub enum OrderbookValidationError {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
     use super::*;
-    use ed25519_dalek::{Signer, SigningKey};
+    use ed25519_dalek::SigningKey;
 
     fn id(seed: u8) -> [u8; 32] {
         [seed; 32]
@@ -1261,16 +1556,9 @@ mod tests {
         SigningKey::from_bytes(&[seed; 32])
     }
 
-    fn sign_order(mut order: OrderRequestV1, seed: u8) -> OrderRequestV1 {
+    fn sign_order(order: OrderRequestV1, seed: u8) -> OrderRequestV1 {
         let key = signing_key(seed);
-        order.signature = OrderbookSignatureV1 {
-            algorithm: SignatureAlgorithm::Ed25519,
-            public_key: key.verifying_key().to_bytes().to_vec(),
-            signature: Vec::new(),
-        };
-        let digest = order_request_signature_digest_v1(&order).expect("order digest");
-        order.signature.signature = key.sign(&digest).to_bytes().to_vec();
-        order
+        sign_order_request_ed25519_v1(order, &key).expect("signed order")
     }
 
     fn cancel() -> OrderCancelV1 {
@@ -1284,16 +1572,9 @@ mod tests {
         }
     }
 
-    fn sign_cancel(mut cancel: OrderCancelV1, seed: u8) -> OrderCancelV1 {
+    fn sign_cancel(cancel: OrderCancelV1, seed: u8) -> OrderCancelV1 {
         let key = signing_key(seed);
-        cancel.signature = OrderbookSignatureV1 {
-            algorithm: SignatureAlgorithm::Ed25519,
-            public_key: key.verifying_key().to_bytes().to_vec(),
-            signature: Vec::new(),
-        };
-        let digest = order_cancel_signature_digest_v1(&cancel).expect("cancel digest");
-        cancel.signature.signature = key.sign(&digest).to_bytes().to_vec();
-        cancel
+        sign_order_cancel_ed25519_v1(cancel, &key).expect("signed cancel")
     }
 
     fn receipt() -> SettlementReceiptV1 {
@@ -1313,17 +1594,9 @@ mod tests {
         }
     }
 
-    fn sign_receipt(mut receipt: SettlementReceiptV1, seed: u8) -> SettlementReceiptV1 {
+    fn sign_receipt(receipt: SettlementReceiptV1, seed: u8) -> SettlementReceiptV1 {
         let key = signing_key(seed);
-        receipt.settlement_signature = OrderbookSignatureV1 {
-            algorithm: SignatureAlgorithm::Ed25519,
-            public_key: key.verifying_key().to_bytes().to_vec(),
-            signature: Vec::new(),
-        };
-        let digest =
-            settlement_receipt_signature_digest_v1(&receipt).expect("settlement receipt digest");
-        receipt.settlement_signature.signature = key.sign(&digest).to_bytes().to_vec();
-        receipt
+        sign_settlement_receipt_ed25519_v1(receipt, &key).expect("signed receipt")
     }
 
     fn order() -> OrderRequestV1 {
@@ -1363,6 +1636,284 @@ mod tests {
 
     fn book_entry(order: OrderRequestV1, sequence: u64) -> OrderBookEntryV1 {
         OrderBookEntryV1 { order, sequence }
+    }
+
+    fn snapshot_trade() -> TradeEventV1 {
+        TradeEventV1 {
+            version: ORDERBOOK_TRADE_EVENT_VERSION_V1,
+            trade_id: id(4),
+            maker_order_id: id(2),
+            taker_order_id: id(3),
+            tier: OrderTierV1::Hot,
+            price_per_gib: XorAmount::from_micro(1_400_000),
+            filled_gib: 2,
+            maker_fee: XorAmount::from_micro(14_000),
+            taker_fee: XorAmount::from_micro(28_000),
+            timestamp_unix: 1_800_000_100,
+        }
+    }
+
+    fn snapshot_channel(trade: &TradeEventV1) -> SettlementChannelV1 {
+        SettlementChannelV1 {
+            version: SETTLEMENT_CHANNEL_VERSION_V1,
+            channel_id: id(5),
+            trade_id: trade.trade_id,
+            buyer_account: account(9),
+            provider_id: id(6),
+            total_bytes: BYTES_PER_GIB,
+            remaining_bytes: BYTES_PER_GIB - 32,
+            xor_locked: XorAmount::from_micro(1_000),
+            status: SettlementChannelStatusV1::Open,
+            opened_at_unix: 1_800_000_100,
+            updated_at_unix: 1_800_000_200,
+        }
+    }
+
+    fn runtime_snapshot() -> OrderbookRuntimeSnapshotV1 {
+        let mut open = book_order(9, OrderSideV1::Ask, 1_700_000, 1);
+        open.expiry_unix = 1_800_000_300;
+        let trade = snapshot_trade();
+        let channel = snapshot_channel(&trade);
+        let mut accepted_receipt = receipt();
+        accepted_receipt.channel_id = channel.channel_id;
+        accepted_receipt.trade_id = channel.trade_id;
+        accepted_receipt.issued_at_unix = channel.updated_at_unix;
+        accepted_receipt = sign_receipt(accepted_receipt, 0x55);
+
+        OrderbookRuntimeSnapshotV1 {
+            version: ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
+            next_sequence: 3,
+            generated_at_unix: 1_800_000_250,
+            open_orders: vec![book_entry(open, 2)],
+            trades: vec![trade],
+            settlement_channels: vec![channel],
+            settlement_receipts: vec![accepted_receipt],
+            expired_order_ids: vec![id(8)],
+        }
+    }
+
+    #[derive(Debug)]
+    struct DeterministicRng {
+        state: u64,
+    }
+
+    impl DeterministicRng {
+        fn new(seed: u64) -> Self {
+            Self { state: seed }
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            let mut value = self.state;
+            value ^= value << 13;
+            value ^= value >> 7;
+            value ^= value << 17;
+            self.state = value;
+            value
+        }
+
+        fn range(&mut self, upper_exclusive: u64) -> u64 {
+            self.next_u64() % upper_exclusive
+        }
+    }
+
+    fn generated_order_id(scenario: u8, index: u8) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out[0] = 0xD0;
+        out[1] = scenario;
+        out[2] = index;
+        out[31] = 1;
+        out
+    }
+
+    fn generated_account(scenario: u8, index: u8) -> Vec<u8> {
+        let mut account = vec![0u8; 33];
+        account[0] = 0xA0;
+        account[1] = scenario;
+        account[2] = index;
+        account
+    }
+
+    fn generated_tier(value: u64) -> OrderTierV1 {
+        match value % 3 {
+            0 => OrderTierV1::Hot,
+            1 => OrderTierV1::Warm,
+            _ => OrderTierV1::Archive,
+        }
+    }
+
+    fn generated_side(value: u64) -> OrderSideV1 {
+        if value.is_multiple_of(2) {
+            OrderSideV1::Bid
+        } else {
+            OrderSideV1::Ask
+        }
+    }
+
+    fn tier_index(tier: OrderTierV1) -> usize {
+        match tier {
+            OrderTierV1::Hot => 0,
+            OrderTierV1::Warm => 1,
+            OrderTierV1::Archive => 2,
+        }
+    }
+
+    fn side_index(side: OrderSideV1) -> usize {
+        match side {
+            OrderSideV1::Bid => 0,
+            OrderSideV1::Ask => 1,
+        }
+    }
+
+    fn add_quantity(totals: &mut [[u64; 2]; 3], tier: OrderTierV1, side: OrderSideV1, value: u64) {
+        totals[tier_index(tier)][side_index(side)] =
+            totals[tier_index(tier)][side_index(side)].saturating_add(value);
+    }
+
+    fn assert_match_invariants(
+        entries: &[OrderBookEntryV1],
+        outcome: &OrderBookMatchOutcomeV1,
+        now_unix: u64,
+    ) {
+        let mut original = BTreeMap::new();
+        let mut live_totals = [[0u64; 2]; 3];
+        let mut expected_expired = BTreeSet::new();
+        for entry in entries {
+            let order = &entry.order;
+            assert!(
+                original.insert(order.order_id, order.clone()).is_none(),
+                "generated fixture must keep order ids unique"
+            );
+            if now_unix > order.expiry_unix {
+                expected_expired.insert(order.order_id);
+            } else {
+                add_quantity(
+                    &mut live_totals,
+                    order.tier,
+                    order.side,
+                    order.remaining_gib,
+                );
+            }
+        }
+        let actual_expired = outcome
+            .expired_order_ids
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(actual_expired, expected_expired);
+
+        let mut remaining_totals = [[0u64; 2]; 3];
+        let mut remaining_ids = BTreeSet::new();
+        let mut max_remaining_bid: [Option<u128>; 3] = [None, None, None];
+        let mut min_remaining_ask: [Option<u128>; 3] = [None, None, None];
+        for order in &outcome.remaining_orders {
+            assert!(remaining_ids.insert(order.order_id));
+            assert!(!expected_expired.contains(&order.order_id));
+            let original_order = original
+                .get(&order.order_id)
+                .expect("remaining order must originate from input");
+            assert_eq!(order.side, original_order.side);
+            assert_eq!(order.tier, original_order.tier);
+            assert!(order.remaining_gib > 0);
+            assert!(order.remaining_gib <= original_order.remaining_gib);
+            add_quantity(
+                &mut remaining_totals,
+                order.tier,
+                order.side,
+                order.remaining_gib,
+            );
+            let tier = tier_index(order.tier);
+            let price = order.price_per_gib.as_micro();
+            match order.side {
+                OrderSideV1::Bid => {
+                    max_remaining_bid[tier] =
+                        Some(max_remaining_bid[tier].map_or(price, |current| current.max(price)));
+                }
+                OrderSideV1::Ask => {
+                    min_remaining_ask[tier] =
+                        Some(min_remaining_ask[tier].map_or(price, |current| current.min(price)));
+                }
+            }
+        }
+
+        let mut filled_totals = [[0u64; 2]; 3];
+        let mut trade_ids = BTreeSet::new();
+        for fill in &outcome.fills {
+            assert!(trade_ids.insert(fill.trade.trade_id));
+            assert!(fill.trade.filled_gib > 0);
+            let maker = original
+                .get(&fill.trade.maker_order_id)
+                .expect("maker must originate from input");
+            let taker = original
+                .get(&fill.trade.taker_order_id)
+                .expect("taker must originate from input");
+            assert!(!expected_expired.contains(&maker.order_id));
+            assert!(!expected_expired.contains(&taker.order_id));
+            assert_ne!(maker.side, taker.side);
+            assert_eq!(maker.tier, taker.tier);
+            let (bid, ask) = if maker.side == OrderSideV1::Bid {
+                (maker, taker)
+            } else {
+                (taker, maker)
+            };
+            assert!(
+                bid.price_per_gib.as_micro() >= ask.price_per_gib.as_micro(),
+                "filled orders must cross"
+            );
+            add_quantity(
+                &mut filled_totals,
+                fill.trade.tier,
+                OrderSideV1::Bid,
+                fill.trade.filled_gib,
+            );
+            add_quantity(
+                &mut filled_totals,
+                fill.trade.tier,
+                OrderSideV1::Ask,
+                fill.trade.filled_gib,
+            );
+            assert_eq!(
+                fill.gross_value,
+                fill.trade
+                    .price_per_gib
+                    .checked_mul_u64(fill.trade.filled_gib)
+                    .expect("gross value should fit fixture limits")
+            );
+            assert_eq!(
+                fill.trade.maker_fee,
+                fill.gross_value
+                    .checked_mul_basis_points(maker.maker_fee_bps)
+                    .expect("maker fee should fit fixture limits")
+            );
+            assert_eq!(
+                fill.trade.taker_fee,
+                fill.gross_value
+                    .checked_mul_basis_points(taker.taker_fee_bps)
+                    .expect("taker fee should fit fixture limits")
+            );
+        }
+
+        for tier in 0..3 {
+            for side in 0..2 {
+                assert_eq!(
+                    live_totals[tier][side],
+                    remaining_totals[tier][side].saturating_add(filled_totals[tier][side]),
+                    "live quantity must equal remaining plus filled for tier {tier} side {side}"
+                );
+            }
+            if let (Some(bid), Some(ask)) = (max_remaining_bid[tier], min_remaining_ask[tier]) {
+                assert!(
+                    bid < ask,
+                    "remaining book must not contain a crossing bid/ask for tier {tier}"
+                );
+            }
+        }
+    }
+
+    fn shuffle_entries(entries: &mut [OrderBookEntryV1], rng: &mut DeterministicRng) {
+        for index in (1..entries.len()).rev() {
+            let swap_with = rng.range((index + 1) as u64) as usize;
+            entries.swap(index, swap_with);
+        }
     }
 
     #[test]
@@ -1422,6 +1973,34 @@ mod tests {
 
         let receipt = sign_receipt(receipt(), 0x14);
         assert!(settlement_receipt_signature_digest_v1(&receipt).is_ok());
+    }
+
+    #[test]
+    fn ed25519_signing_helpers_attach_public_key_and_verify_payloads() {
+        let key = signing_key(0x41);
+        let public_key = key.verifying_key().to_bytes().to_vec();
+
+        let signed_order = sign_order_request_ed25519_v1(order(), &key).expect("signed order");
+        assert_eq!(signed_order.signature.public_key, public_key);
+        assert_eq!(signed_order.signature.signature.len(), SIGNATURE_LENGTH);
+        assert_eq!(verify_order_request_signature_v1(&signed_order), Ok(()));
+
+        let signed_cancel = sign_order_cancel_ed25519_v1(cancel(), &key).expect("signed cancel");
+        assert_eq!(signed_cancel.signature.public_key, public_key);
+        assert_eq!(signed_cancel.signature.signature.len(), SIGNATURE_LENGTH);
+        assert_eq!(verify_order_cancel_signature_v1(&signed_cancel), Ok(()));
+
+        let signed_receipt =
+            sign_settlement_receipt_ed25519_v1(receipt(), &key).expect("signed receipt");
+        assert_eq!(signed_receipt.settlement_signature.public_key, public_key);
+        assert_eq!(
+            signed_receipt.settlement_signature.signature.len(),
+            SIGNATURE_LENGTH
+        );
+        assert_eq!(
+            verify_settlement_receipt_signature_v1(&signed_receipt),
+            Ok(())
+        );
     }
 
     #[test]
@@ -1573,6 +2152,107 @@ mod tests {
     }
 
     #[test]
+    fn match_order_book_generated_streams_preserve_balance_and_no_crossing_remainder() {
+        let now_unix = 1_700_000_000;
+        let mut rng = DeterministicRng::new(0x5eed_f00d_cafe_babe);
+        for scenario in 0..48u8 {
+            let order_count = 8 + rng.range(20) as usize;
+            let mut entries = Vec::with_capacity(order_count);
+            for index in 0..order_count {
+                let index_u8 = index as u8;
+                let side = generated_side(rng.range(2));
+                let tier = generated_tier(rng.range(3));
+                let price_step = rng.range(14);
+                let price_micro = match side {
+                    OrderSideV1::Bid => 900_000 + price_step * 90_000,
+                    OrderSideV1::Ask => 850_000 + price_step * 80_000,
+                };
+                let quantity_gib = 1 + rng.range(12);
+                let mut order = OrderRequestV1 {
+                    version: ORDERBOOK_ORDER_VERSION_V1,
+                    order_id: generated_order_id(scenario, index_u8),
+                    side,
+                    tier,
+                    price_per_gib: XorAmount::from_micro(u128::from(price_micro)),
+                    quantity_gib,
+                    remaining_gib: quantity_gib,
+                    owner_account: generated_account(scenario, index_u8),
+                    expiry_unix: now_unix + 1 + rng.range(600),
+                    nonce: u64::from(scenario) * 1_000 + index as u64 + 1,
+                    maker_fee_bps: rng.range(40) as u16,
+                    taker_fee_bps: rng.range(40) as u16,
+                    signature: signature(),
+                };
+                if rng.range(11) == 0 {
+                    order.expiry_unix = now_unix.saturating_sub(1);
+                }
+                entries.push(book_entry(order, index as u64));
+            }
+
+            let outcome =
+                match_order_book_v1(&entries, now_unix).expect("generated book should match");
+
+            assert_match_invariants(&entries, &outcome, now_unix);
+        }
+    }
+
+    #[test]
+    fn match_order_book_generated_streams_are_permutation_invariant() {
+        let now_unix = 1_700_000_000;
+        let mut rng = DeterministicRng::new(0x0123_4567_89ab_cdef);
+
+        for scenario in 0..32u8 {
+            let order_count = 18 + rng.range(18) as usize;
+            let mut entries = Vec::with_capacity(order_count);
+            for index in 0..order_count {
+                let index_u8 = index as u8;
+                let side = generated_side((index as u64) ^ rng.range(4));
+                let tier = generated_tier((index as u64) + rng.range(5));
+                let price_step = rng.range(18);
+                let price_micro = match side {
+                    OrderSideV1::Bid => 1_000_000 + price_step * 70_000,
+                    OrderSideV1::Ask => 900_000 + price_step * 65_000,
+                };
+                let quantity_gib = 1 + rng.range(16);
+                let mut order = OrderRequestV1 {
+                    version: ORDERBOOK_ORDER_VERSION_V1,
+                    order_id: generated_order_id(scenario.wrapping_add(80), index_u8),
+                    side,
+                    tier,
+                    price_per_gib: XorAmount::from_micro(u128::from(price_micro)),
+                    quantity_gib,
+                    remaining_gib: quantity_gib,
+                    owner_account: generated_account(scenario.wrapping_add(80), index_u8),
+                    expiry_unix: now_unix + 10 + rng.range(900),
+                    nonce: u64::from(scenario) * 10_000 + index as u64 + 1,
+                    maker_fee_bps: rng.range(60) as u16,
+                    taker_fee_bps: rng.range(60) as u16,
+                    signature: signature(),
+                };
+                if index % 7 == 0 || index % 11 == 0 {
+                    order.expiry_unix = now_unix.saturating_sub(1);
+                }
+                entries.push(book_entry(order, index as u64));
+            }
+
+            let expected =
+                match_order_book_v1(&entries, now_unix).expect("canonical book should match");
+            assert_match_invariants(&entries, &expected, now_unix);
+
+            let mut shuffled = entries.clone();
+            shuffle_entries(&mut shuffled, &mut rng);
+            let actual =
+                match_order_book_v1(&shuffled, now_unix).expect("shuffled book should match");
+
+            assert_eq!(
+                actual, expected,
+                "matching must depend on canonical sequence, not input order, in scenario {scenario}"
+            );
+            assert_match_invariants(&shuffled, &actual, now_unix);
+        }
+    }
+
+    #[test]
     fn match_order_book_skips_expired_orders() {
         let mut expired_ask = book_order(31, OrderSideV1::Ask, 1_000_000, 5);
         expired_ask.expiry_unix = 1_699_999_999;
@@ -1703,6 +2383,37 @@ mod tests {
                 credited_plus_fees: 101,
             })
         );
+    }
+
+    #[test]
+    fn orderbook_runtime_snapshot_validates_replay_state() {
+        let snapshot = runtime_snapshot();
+
+        snapshot
+            .validate()
+            .expect("snapshot replay state validates");
+        let bytes = norito::to_bytes(&snapshot).expect("encode runtime snapshot");
+        let decoded: OrderbookRuntimeSnapshotV1 =
+            norito::decode_from_bytes(&bytes).expect("decode runtime snapshot");
+
+        assert_eq!(decoded, snapshot);
+    }
+
+    #[test]
+    fn orderbook_runtime_snapshot_rejects_overlapping_receipts() {
+        let mut snapshot = runtime_snapshot();
+        let mut overlapping = snapshot.settlement_receipts[0].clone();
+        overlapping.receipt_id = id(10);
+        overlapping.range = ByteRangeV1 { start: 20, end: 52 };
+        overlapping.bytes_delivered = 32;
+        overlapping.chunk_hash = id(11);
+        overlapping = sign_receipt(overlapping, 0x56);
+        snapshot.settlement_receipts.push(overlapping);
+
+        assert!(matches!(
+            snapshot.validate(),
+            Err(OrderbookValidationError::SnapshotReceiptRangeOverlap { .. })
+        ));
     }
 
     #[test]

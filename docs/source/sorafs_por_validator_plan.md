@@ -115,7 +115,7 @@ The CLI serialises these types using Norito JSON (`norito::json`) and ensures re
 | `GET` | `/v1/sorafs/por/status` | Query `PorChallengeStatusV1` records filtered by manifest, provider, epoch, status, limit, and page token. |
 | `GET` | `/v1/sorafs/por/export` | Return a Norito `PorStatusExportV1` for an optional epoch range. |
 | `GET` | `/v1/sorafs/por/report/{iso_week}` | Return a Norito `PorWeeklyReportV1` generated from coordinator history. |
-| `GET` | `/v1/sorafs/por/ingestion/{manifest_digest_hex}` | Return provider backlog and last verdict timestamps from `sorafs_node`. |
+| `GET` | `/v1/sorafs/por/ingestion/{manifest_digest_hex}?limit=N` | Return `limit`-bounded provider backlog and last verdict timestamps from `sorafs_node`, with total provider counts retained. |
 | `POST` | `/v1/sorafs/capacity/por-challenge` | Record a governance-issued `PorChallengeV1`. |
 | `POST` | `/v1/sorafs/capacity/por-proof` | Record a provider `PorProofV1`. |
 | `POST` | `/v1/sorafs/capacity/por-verdict` | Record an auditor `AuditVerdictV1` and update coordinator status. |

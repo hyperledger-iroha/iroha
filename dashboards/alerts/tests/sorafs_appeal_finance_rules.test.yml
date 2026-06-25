@@ -6,6 +6,8 @@ tests:
     input_series:
       - series: 'sorafs_governance_dag_publish_total{payload_kind="appeal_finance_report",result="failure",sink="filesystem"}'
         values: '0 0 1 1 1 1 1 1 1 1 1 1'
+      - series: 'sorafs_governance_dag_publish_total{payload_kind="appeal_finance_settlement_receipt",result="failure",sink="filesystem"}'
+        values: '0 0 0 1 1 1 1 1 1 1 1 1'
       - series: 'sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="appeal_finance_report",sink="filesystem"}'
         values: '0+0x40'
       - series: 'sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="appeal_finance_weekly_rollup",sink="filesystem"}'
@@ -19,6 +21,13 @@ tests:
         exp_alerts:
           - exp_labels:
               payload_kind: appeal_finance_report
+              result: failure
+              severity: critical
+              sink: filesystem
+            exp_annotations:
+              summary: "SoraFS appeal finance publication failures detected"
+          - exp_labels:
+              payload_kind: appeal_finance_settlement_receipt
               result: failure
               severity: critical
               sink: filesystem
@@ -67,6 +76,35 @@ tests:
               sink: filesystem
             exp_annotations:
               summary: "SoraFS appeal finance rollups lag reports"
+  - interval: 1h
+    input_series:
+      - series: 'sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="appeal_finance_report",sink="filesystem"}'
+        values: '0+3600x12'
+      - series: 'sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="appeal_finance_settlement_receipt",sink="filesystem"}'
+        values: '0+0x12'
+    alert_rule_test:
+      - alertname: SoraFSAppealFinanceSettlementReceiptStale
+        eval_time: 6h
+        exp_alerts: []
+      - alertname: SoraFSAppealFinanceSettlementReceiptStale
+        eval_time: 8h
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              sink: filesystem
+            exp_annotations:
+              summary: "SoraFS appeal finance settlement receipts are stale"
+      - alertname: SoraFSAppealFinanceSettlementReceiptsLagReports
+        eval_time: 6h
+        exp_alerts: []
+      - alertname: SoraFSAppealFinanceSettlementReceiptsLagReports
+        eval_time: 8h
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              sink: filesystem
+            exp_annotations:
+              summary: "SoraFS appeal finance settlement receipts lag reports"
   - interval: 5m
     input_series:
       - series: 'sorafs_governance_dag_publish_total{payload_kind="appeal_finance_report",result="failure",sink="filesystem"}'
@@ -86,5 +124,11 @@ tests:
         eval_time: 55m
         exp_alerts: []
       - alertname: SoraFSAppealFinanceRollupLaggingReports
+        eval_time: 55m
+        exp_alerts: []
+      - alertname: SoraFSAppealFinanceSettlementReceiptStale
+        eval_time: 55m
+        exp_alerts: []
+      - alertname: SoraFSAppealFinanceSettlementReceiptsLagReports
         eval_time: 55m
         exp_alerts: []

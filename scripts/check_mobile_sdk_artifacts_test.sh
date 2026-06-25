@@ -15,6 +15,22 @@ fail() {
   exit 1
 }
 
+command -v zip >/dev/null 2>&1 || fail "zip command is required"
+
+make_aar() {
+  local archive="$1"
+  shift
+  local stage
+  local entry
+
+  stage="$(mktemp -d "$TMP_DIR/aar.XXXXXX")"
+  for entry in "$@"; do
+    mkdir -p "$stage/$(dirname "$entry")"
+    printf 'fixture\n' >"$stage/$entry"
+  done
+  (cd "$stage" && zip -qr "$archive" .)
+}
+
 make_gradle_file() {
   local path="$1"
   local artifact_id="$2"
@@ -145,6 +161,16 @@ fixture="$TMP_DIR/valid"
 make_fixture "$fixture"
 run_expect_pass "$fixture"
 
+apple_only_without_android="$TMP_DIR/apple-only-without-android"
+make_fixture "$apple_only_without_android"
+rm -rf "$apple_only_without_android/kotlin"
+run_expect_pass "$apple_only_without_android" --apple-only
+
+android_only_without_apple="$TMP_DIR/android-only-without-apple"
+make_fixture "$android_only_without_apple"
+rm -rf "$android_only_without_apple/IrohaSwift" "$android_only_without_apple/dist"
+run_expect_pass "$android_only_without_apple" --android-only
+
 missing_ios="$TMP_DIR/missing-ios"
 make_fixture "$missing_ios"
 rm -rf "$missing_ios/dist/NoritoBridge.xcframework/ios-arm64"
@@ -183,15 +209,95 @@ missing_android_outputs="$TMP_DIR/missing-android-outputs"
 make_fixture "$missing_android_outputs"
 run_expect_fail "$missing_android_outputs" "missing core-jvm built jar" --require-built-android
 
+missing_client_android_aar="$TMP_DIR/missing-client-android-aar"
+make_fixture "$missing_client_android_aar"
+mkdir -p "$missing_client_android_aar/kotlin/core-jvm/build/libs"
+printf 'jar\n' >"$missing_client_android_aar/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
+run_expect_fail "$missing_client_android_aar" "missing client-android release aar" --require-built-android
+
+missing_offline_wallet_android_aar="$TMP_DIR/missing-offline-wallet-android-aar"
+make_fixture "$missing_offline_wallet_android_aar"
+mkdir -p \
+  "$missing_offline_wallet_android_aar/kotlin/core-jvm/build/libs" \
+  "$missing_offline_wallet_android_aar/kotlin/client-android/build/outputs/aar"
+printf 'jar\n' >"$missing_offline_wallet_android_aar/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
+mkdir -p \
+  "$missing_offline_wallet_android_aar/kotlin/client-android/src/main/jniLibs/arm64-v8a" \
+  "$missing_offline_wallet_android_aar/kotlin/client-android/src/main/jniLibs/x86_64"
+printf 'so\n' >"$missing_offline_wallet_android_aar/kotlin/client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so"
+printf 'so\n' >"$missing_offline_wallet_android_aar/kotlin/client-android/src/main/jniLibs/x86_64/libconnect_norito_bridge.so"
+make_aar \
+  "$missing_offline_wallet_android_aar/kotlin/client-android/build/outputs/aar/client-android-release.aar" \
+  "AndroidManifest.xml" \
+  "classes.jar" \
+  "jni/arm64-v8a/libconnect_norito_bridge.so" \
+  "jni/x86_64/libconnect_norito_bridge.so"
+run_expect_fail "$missing_offline_wallet_android_aar" "missing offline-wallet-android release aar" --require-built-android
+
+missing_client_native_source="$TMP_DIR/missing-client-native-source"
+make_fixture "$missing_client_native_source"
+mkdir -p \
+  "$missing_client_native_source/kotlin/core-jvm/build/libs" \
+  "$missing_client_native_source/kotlin/client-android/build/outputs/aar" \
+  "$missing_client_native_source/kotlin/offline-wallet-android/build/outputs/aar"
+printf 'jar\n' >"$missing_client_native_source/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
+make_aar \
+  "$missing_client_native_source/kotlin/client-android/build/outputs/aar/client-android-release.aar" \
+  "AndroidManifest.xml" \
+  "classes.jar" \
+  "jni/arm64-v8a/libconnect_norito_bridge.so" \
+  "jni/x86_64/libconnect_norito_bridge.so"
+make_aar \
+  "$missing_client_native_source/kotlin/offline-wallet-android/build/outputs/aar/offline-wallet-android-release.aar" \
+  "AndroidManifest.xml" \
+  "classes.jar"
+run_expect_fail "$missing_client_native_source" "missing client-android arm64-v8a native bridge library" --require-built-android
+
+missing_client_native_aar_entry="$TMP_DIR/missing-client-native-aar-entry"
+make_fixture "$missing_client_native_aar_entry"
+mkdir -p \
+  "$missing_client_native_aar_entry/kotlin/core-jvm/build/libs" \
+  "$missing_client_native_aar_entry/kotlin/client-android/build/outputs/aar" \
+  "$missing_client_native_aar_entry/kotlin/client-android/src/main/jniLibs/arm64-v8a" \
+  "$missing_client_native_aar_entry/kotlin/client-android/src/main/jniLibs/x86_64" \
+  "$missing_client_native_aar_entry/kotlin/offline-wallet-android/build/outputs/aar"
+printf 'jar\n' >"$missing_client_native_aar_entry/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
+printf 'so\n' >"$missing_client_native_aar_entry/kotlin/client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so"
+printf 'so\n' >"$missing_client_native_aar_entry/kotlin/client-android/src/main/jniLibs/x86_64/libconnect_norito_bridge.so"
+make_aar \
+  "$missing_client_native_aar_entry/kotlin/client-android/build/outputs/aar/client-android-release.aar" \
+  "AndroidManifest.xml" \
+  "classes.jar" \
+  "jni/arm64-v8a/libconnect_norito_bridge.so"
+make_aar \
+  "$missing_client_native_aar_entry/kotlin/offline-wallet-android/build/outputs/aar/offline-wallet-android-release.aar" \
+  "AndroidManifest.xml" \
+  "classes.jar"
+run_expect_fail "$missing_client_native_aar_entry" "client-android release aar missing ZIP entry jni/x86_64/libconnect_norito_bridge.so" --require-built-android
+
 with_android_outputs="$TMP_DIR/with-android-outputs"
 make_fixture "$with_android_outputs"
 mkdir -p \
   "$with_android_outputs/kotlin/core-jvm/build/libs" \
   "$with_android_outputs/kotlin/client-android/build/outputs/aar" \
+  "$with_android_outputs/kotlin/client-android/src/main/jniLibs/arm64-v8a" \
+  "$with_android_outputs/kotlin/client-android/src/main/jniLibs/x86_64" \
   "$with_android_outputs/kotlin/offline-wallet-android/build/outputs/aar"
 printf 'jar\n' >"$with_android_outputs/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
-printf 'aar\n' >"$with_android_outputs/kotlin/client-android/build/outputs/aar/client-android-release.aar"
-printf 'aar\n' >"$with_android_outputs/kotlin/offline-wallet-android/build/outputs/aar/offline-wallet-android-release.aar"
+printf 'so\n' >"$with_android_outputs/kotlin/client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so"
+printf 'so\n' >"$with_android_outputs/kotlin/client-android/src/main/jniLibs/x86_64/libconnect_norito_bridge.so"
+make_aar \
+  "$with_android_outputs/kotlin/client-android/build/outputs/aar/client-android-release.aar" \
+  "AndroidManifest.xml" \
+  "classes.jar" \
+  "jni/arm64-v8a/libconnect_norito_bridge.so" \
+  "jni/x86_64/libconnect_norito_bridge.so"
+make_aar \
+  "$with_android_outputs/kotlin/offline-wallet-android/build/outputs/aar/offline-wallet-android-release.aar" \
+  "AndroidManifest.xml" \
+  "classes.jar"
 run_expect_pass "$with_android_outputs" --require-built-android
+rm -rf "$with_android_outputs/IrohaSwift" "$with_android_outputs/dist"
+run_expect_pass "$with_android_outputs" --android-only --require-built-android
 
 echo "[mobile-sdk-artifacts-test] all checks passed"

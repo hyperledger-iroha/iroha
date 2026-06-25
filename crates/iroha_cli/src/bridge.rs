@@ -853,11 +853,10 @@ mod tests {
     fn sample_sccp_message_proof_artifact() -> iroha_sccp::NexusSccpMessageTransparentProofV1 {
         use iroha_sccp::{
             NexusBridgeFinalityProofV1, NexusCommitQcV1, NexusConsensusPhaseV1,
-            NexusSccpMessageProofV1,
-            SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1, SccpPayloadV1,
-            TransferPayloadV1, build_nexus_sccp_message_transparent_proof_allow_unready,
-            canonical_sccp_payload_bytes, merkle_root_from_commitment, payload_hash,
-            sccp_message_id,
+            NexusSccpMessageProofV1, SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1,
+            SccpPayloadV1, TransferPayloadV1,
+            build_nexus_sccp_message_transparent_proof_allow_unready, canonical_sccp_payload_bytes,
+            merkle_root_from_commitment, payload_hash, sccp_message_id,
         };
 
         let payload = SccpPayloadV1::Transfer(TransferPayloadV1 {

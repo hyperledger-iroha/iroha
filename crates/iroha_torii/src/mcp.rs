@@ -387,6 +387,7 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_accounts_onboard_tool());
     tools.push(iroha_accounts_faucet_tool());
     tools.push(iroha_account_transactions_tool());
+    tools.push(iroha_account_history_tool());
     tools.push(iroha_account_transactions_query_tool());
     tools.push(iroha_transactions_query_tool());
     tools.push(iroha_transactions_visible_query_tool());
@@ -626,6 +627,7 @@ fn is_manual_read_tool_name(name: &str) -> bool {
             | "iroha.health"
             | "iroha.accounts.qr"
             | "iroha.accounts.transactions"
+            | "iroha.accounts.history"
             | "iroha.da.commitments.prove"
             | "iroha.da.pin_intents.prove"
             | "iroha.node.query_projection_checkpoint"
@@ -1603,6 +1605,12 @@ async fn handle_tools_call(
         }
         "iroha.accounts.transactions" => {
             match dispatch_iroha_account_transactions(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.accounts.history" => {
+            match dispatch_iroha_account_history(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -5641,6 +5649,37 @@ async fn dispatch_iroha_account_transactions(
     path_args.insert("account_id".into(), Value::String(account_id));
     let path_value = Value::Object(path_args);
     let route = fill_path_template("/v1/accounts/{account_id}/transactions", Some(&path_value))?;
+    let query = collect_query_arguments(
+        arguments,
+        &["path", "account_id", "query", "headers", "accept"],
+    )?;
+    let route = append_query(route, query.as_ref())?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_account_history(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let account_id = extract_account_id_argument(arguments)?;
+    let mut path_args = Map::new();
+    path_args.insert("account_id".into(), Value::String(account_id));
+    let path_value = Value::Object(path_args);
+    let route = fill_path_template("/v1/accounts/{account_id}/history", Some(&path_value))?;
     let query = collect_query_arguments(
         arguments,
         &["path", "account_id", "query", "headers", "accept"],
@@ -12282,6 +12321,48 @@ fn iroha_account_transactions_tool() -> ToolSpec {
     }
 }
 
+fn iroha_account_history_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.accounts.history".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.accounts.history"),
+        description:
+            "List indexed account activity, including incoming and outgoing account history."
+                .to_owned(),
+        method: Method::GET,
+        path_template: "/v1/accounts/{account_id}/history".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `path.account_id`."
+                },
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["account_id"],
+                    "properties": {
+                        "account_id": { "type": "string" }
+                    }
+                },
+                "query": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "asset_id": { "type": "string" },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
 fn iroha_account_transactions_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.transactions.query".to_owned(),
@@ -15730,6 +15811,11 @@ mod tests {
             tools
                 .iter()
                 .any(|tool| tool.name == "iroha.accounts.transactions.query")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.accounts.history")
         );
         assert!(
             tools

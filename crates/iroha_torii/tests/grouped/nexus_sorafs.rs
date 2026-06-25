@@ -18,6 +18,8 @@ mod nexus_lifecycle_endpoint;
 mod nexus_public_lanes;
 #[path = "../offline_readiness_smoke.rs"]
 mod offline_readiness_smoke;
+#[path = "../offline_v2_kagemusha_redeem_smoke.rs"]
+mod offline_v2_kagemusha_redeem_smoke;
 #[path = "../offline_v2_readiness_smoke.rs"]
 mod offline_v2_readiness_smoke;
 #[path = "../push_bridge.rs"]

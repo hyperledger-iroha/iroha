@@ -160,6 +160,7 @@ Governance audit JSON metadata mirrors the repair telemetry labels (`status`, `t
 3. **SoraNet Privacy Metrics** (`dashboards/grafana/soranet_privacy_metrics.json`) — charts anonymised relay buckets, suppression windows, and collector health via `soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`, and `soranet_privacy_poll_errors_total{provider}`.
 4. **Capacity Health** (`dashboards/grafana/sorafs_capacity_health.json`) — tracks provider headroom, egress byte/drift reconciliation, repair SLA escalations, repair queue depth by provider, and GC sweeps/evictions/bytes freed/blocked reasons/expired-manifest age and reconciliation divergence snapshots.
 5. **Governance DAG Publication** (`dashboards/grafana/sorafs_governance_dag.json`) — tracks SF-12 local publication health while public IPFS/IPNS workers are still pending.
+6. **Appeal Finance Publication** (`dashboards/grafana/sorafs_appeal_finance.json`) — tracks report, weekly-rollup, and settlement-receipt publication throughput, freshness, failures, payload bytes, rollup lag, receipt/report lag, and Governance DAG backlog.
 
 Alert bundles:
 
@@ -167,6 +168,7 @@ Alert bundles:
 - `dashboards/alerts/sorafs_fetch_rules.yml` — orchestrator failures/retries/stalls; validated via `scripts/telemetry/test_sorafs_fetch_alerts.sh`, `dashboards/alerts/tests/sorafs_fetch_rules.test.yml`, `dashboards/alerts/tests/soranet_privacy_rules.test.yml`, and `dashboards/alerts/tests/soranet_policy_rules.test.yml`.
 - `dashboards/alerts/sorafs_capacity_rules.yml` — capacity pressure, egress counter drift, repair SLA/backlog/lease-expiry, and GC stall/blocked/error alerts for retention sweeps.
 - `dashboards/alerts/sorafs_governance_dag_rules.yml` — local Governance DAG publication failures, backlog, stale head, and missing recent publication alerts.
+- `dashboards/alerts/sorafs_appeal_finance_rules.yml` — report/weekly-rollup/settlement-receipt publication failures, stale reports, stale weekly rollups, stale settlement receipts, rollup lag, and receipt/report lag alerts.
 - `dashboards/alerts/soranet_privacy_rules.yml` — privacy downgrade spikes, suppression alarms, collector-idle detection, and disabled-collector alerts (`soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`).
 - `dashboards/alerts/soranet_policy_rules.yml` — anonymity brownout alarms wired to `sorafs_orchestrator_brownouts_total`.
 - `dashboards/alerts/taikai_viewer_rules.yml` — Taikai viewer drift/ingest/CEK lag alarms plus the new SoraFS proof-health penalty/cooldown alerts powered by `torii_sorafs_proof_health_*`.

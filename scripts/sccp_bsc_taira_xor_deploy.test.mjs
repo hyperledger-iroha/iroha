@@ -49,6 +49,7 @@ import {
   buildDeploymentEvidence,
   buildMergedBscTairaXorRouteConfigToml,
   bscProductionRequirements,
+  compiledContractCodeHashesFromArtifacts,
   main,
   isKnownDiagnosticBscVerifierKeyHash,
   isCanonicalBscProductionArtifactPath,
@@ -208,6 +209,20 @@ const BURN_RECORD_SHA256 = `0x${createHash("sha256").update(BURN_RECORD_BYTES).d
 const sha256Hex = (bytes) =>
   `0x${createHash("sha256").update(bytes).digest("hex")}`;
 const fixtureHash = (label) => sha256Hex(Buffer.from(label, "utf8"));
+const BSC_BROWSER_PROVER_MANIFEST_SCHEMA =
+  "iroha-demo-sccp-bsc-browser-prover-manifest/v1";
+const DESTINATION_BROWSER_MODULE_URL =
+  "https://provers.sora.org/bsc-destination.js";
+const SOURCE_BROWSER_MODULE_URL =
+  "https://provers.sora.org/bsc-source.js";
+const DESTINATION_BROWSER_MODULE_HASH = fixtureHash(
+  "bsc destination browser module",
+);
+const SOURCE_BROWSER_MODULE_HASH = fixtureHash("bsc source browser module");
+const DESTINATION_BROWSER_MANIFEST_HASH = fixtureHash(
+  "bsc destination browser manifest",
+);
+const SOURCE_BROWSER_MANIFEST_HASH = fixtureHash("bsc source browser manifest");
 const BSC_GROTH16_ATTESTATION_SIGNATURE_SCHEMA =
   "iroha-sccp-bsc-groth16-attestation-signature/v1";
 const TEST_ATTESTATION_SIGNER = generateKeyPairSync("ed25519");
@@ -527,6 +542,86 @@ const compiledContractCodeHashes = (overrides = {}) => ({
   ...overrides,
 });
 
+const browserProverRef = (direction, rollout = routeManifest().destinationRollout) => {
+  const source = direction === "source";
+  return {
+    moduleUrl: source ? SOURCE_BROWSER_MODULE_URL : DESTINATION_BROWSER_MODULE_URL,
+    moduleHash: source ? SOURCE_BROWSER_MODULE_HASH : DESTINATION_BROWSER_MODULE_HASH,
+    manifestHash: source
+      ? SOURCE_BROWSER_MANIFEST_HASH
+      : DESTINATION_BROWSER_MANIFEST_HASH,
+    expectedExports: source
+      ? ["bscSccpSourceProve", "bscSccpSourceNativeProverSelfTest"]
+      : ["bscSccpProve", "bscSccpNativeProverSelfTest"],
+    boundRouteHash: rollout.destinationBindingHash,
+    boundProofHash: rollout.proofArtifactHash,
+  };
+};
+
+const browserProverSidecarManifest = ({
+  direction = "destination",
+  nativeEvmProverBundleHash = HASH_88,
+  rollout = routeManifest().destinationRollout,
+} = {}) => {
+  const ref = browserProverRef(direction, rollout);
+  return {
+    schema: BSC_BROWSER_PROVER_MANIFEST_SCHEMA,
+    moduleUrl: ref.moduleUrl,
+    moduleSha256: ref.moduleHash,
+    exports: ref.expectedExports,
+    routeId: "taira_bsc_xor",
+    assetKey: "xor",
+    bscNetwork: "testnet",
+    bscChainIdHex: "0x61",
+    proofArtifactHash: rollout.proofArtifactHash,
+    provingKeyHash: rollout.provingKeyHash,
+    nativeEvmProverBundleHash,
+  };
+};
+
+const writeBrowserProverSidecars = async (
+  dir,
+  {
+    prefix = "",
+    rollout = routeManifest().destinationRollout,
+    nativeEvmProverBundleHash,
+  } = {},
+) => {
+  const destinationSidecarPath = join(
+    dir,
+    `${prefix}destination-browser-prover.manifest.json`,
+  );
+  const sourceSidecarPath = join(
+    dir,
+    `${prefix}source-browser-prover.manifest.json`,
+  );
+  await writeFile(
+    destinationSidecarPath,
+    `${JSON.stringify(
+      browserProverSidecarManifest({
+        direction: "destination",
+        nativeEvmProverBundleHash,
+        rollout,
+      }),
+      null,
+      2,
+    )}\n`,
+  );
+  await writeFile(
+    sourceSidecarPath,
+    `${JSON.stringify(
+      browserProverSidecarManifest({
+        direction: "source",
+        nativeEvmProverBundleHash,
+        rollout,
+      }),
+      null,
+      2,
+    )}\n`,
+  );
+  return { destinationSidecarPath, sourceSidecarPath };
+};
+
 const verifierMaterial = (overrides = {}) => {
   const material = {
     schema: "iroha-sccp-bsc-groth16-verifier-key/v1",
@@ -632,6 +727,16 @@ const routeManifest = (overrides = {}) => {
     routeCanaryExplorerUrl: ROUTE_CANARY_EXPLORER_URL,
     ...postDeployOverrides,
   };
+  const browserProvers =
+    topLevelOverrides.productionReady === true
+      ? {
+          destinationBrowserProver: browserProverRef(
+            "destination",
+            destinationRollout,
+          ),
+          sourceBrowserProver: browserProverRef("source", destinationRollout),
+        }
+      : {};
   return {
     schema: ROUTE_MANIFEST_SCHEMA,
     routeId: "taira_bsc_xor",
@@ -656,6 +761,7 @@ const routeManifest = (overrides = {}) => {
     tairaXorBurnRecord,
     settlement,
     postDeployLiveEvidence,
+    ...browserProvers,
     ...topLevelOverrides,
   };
 };
@@ -721,6 +827,8 @@ const offlineFullTomlEvidence = (overrides = {}) => ({
     "sha256:merged-full-config-without-post_deploy_offline_full_toml_sha256",
   hashInputSha256: HASH_88,
   renderedTomlSha256: HASH_66,
+  routeManifestPath: "taira-bsc-xor-route.manifest.json",
+  fullConfigPath: "taira-bsc-xor-full-config.toml",
   postDeployLiveEvidence: {
     fullTomlReady: true,
     offlineFullTomlSha256: HASH_88,
@@ -1691,6 +1799,89 @@ test("BSC deployment evidence accepts only matching live readback", () => {
   );
 });
 
+test("BSC compiled code hashes bind source bridge constructor immutables", () => {
+  const zeroWord = "00".repeat(32);
+  const sourceBridgeRuntime = `0x60${zeroWord}${zeroWord}${zeroWord}5b`;
+  const artifacts = {
+    token: { deployedBytecodeKeccak256: HASH_33 },
+    bridge: { deployedBytecodeKeccak256: HASH_44 },
+    sourceBridge: {
+      deployedBytecode: sourceBridgeRuntime,
+      deployedBytecodeKeccak256: HASH_55,
+      immutableReferences: {
+        "18": [{ start: 1, length: 32 }],
+        "20": [{ start: 33, length: 32 }],
+        "22": [{ start: 65, length: 32 }],
+      },
+      immutableReferenceNames: {
+        "18": { name: "networkId", type: "bytes32" },
+        "20": { name: "sourceDomain", type: "uint32" },
+        "22": { name: "targetDomain", type: "uint32" },
+      },
+    },
+    verifier: { deployedBytecodeKeccak256: HASH_11 },
+  };
+
+  const hashes = compiledContractCodeHashesFromArtifacts(artifacts, {
+    profile: "testnet",
+  });
+  assert.equal(hashes.token, HASH_33);
+  assert.equal(hashes.bridge, HASH_44);
+  assert.equal(hashes.verifier, HASH_11);
+  assert.match(hashes.sourceBridge, /^0x[0-9a-f]{64}$/u);
+  assert.notEqual(hashes.sourceBridge, HASH_55);
+
+  const patchedReadback = readyReadback({
+    codeHashes: { sourceBridge: hashes.sourceBridge },
+  });
+  assert.equal(patchedReadback.codeHashes.sourceBridge, hashes.sourceBridge);
+  const evidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+    readback: patchedReadback,
+    compiledContractCodeHashes: hashes,
+  });
+  assert.equal(
+    evidence.compiledContractCodeHashes.sourceBridge,
+    hashes.sourceBridge,
+  );
+
+  assert.throws(
+    () =>
+      buildDeploymentEvidence({
+        tokenAddress: BSC_TOKEN_ADDRESS,
+        bridgeAddress: BSC_BRIDGE_ADDRESS,
+        sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+        verifierAddress: BSC_VERIFIER_ADDRESS,
+        verifierCodeHash: HASH_11,
+        verifierKeyHash: HASH_22,
+        readback: readyReadback(),
+        compiledContractCodeHashes: hashes,
+      }),
+    /compiled sourceBridge code hash does not match live readback/u,
+  );
+  assert.throws(
+    () =>
+      compiledContractCodeHashesFromArtifacts(
+        {
+          ...artifacts,
+          bridge: {
+            deployedBytecode: "0x6000",
+            deployedBytecodeKeccak256: HASH_44,
+            immutableReferences: { "1": [{ start: 1, length: 1 }] },
+            immutableReferenceNames: { "1": { name: "unexpected" } },
+          },
+        },
+        { profile: "testnet" },
+      ),
+    /BSC bridge has immutables but no deployment-aware code hash binding/u,
+  );
+});
+
 test("BSC deployment evidence ignores accessor-backed public inputs", () => {
   const deploymentInput = accessorBackedRecord([
     "tokenAddress",
@@ -1814,6 +2005,11 @@ test("BSC route-manifest command builds production-ready manifests only with bou
   const evidencePath = join(dir, "deployment.evidence.json");
   const contractPath = join(dir, "burn-record.contract.json");
   const bundlePath = join(dir, "native-prover-bundle.json");
+  const destinationSidecarPath = join(
+    dir,
+    "destination-browser-prover.manifest.json",
+  );
+  const sourceSidecarPath = join(dir, "source-browser-prover.manifest.json");
   const fullTomlEvidencePath = join(dir, "full-config.evidence.json");
   const out = join(dir, "route.manifest.json");
   const evidence = buildDeploymentEvidence({
@@ -1826,8 +2022,12 @@ test("BSC route-manifest command builds production-ready manifests only with bou
     readback: readyReadback(),
     compiledContractCodeHashes: compiledContractCodeHashes(),
   });
-  const bundle = nativeProverBundleForRollout(
-    routeManifest().destinationRollout,
+  const rollout = routeManifest().destinationRollout;
+  const bundle = nativeProverBundleForRollout(rollout);
+  const expectedBundleHash = canonicalBscNativeEvmProverBundleHash(
+    validateBscTestnetNativeEvmProverBundle(bundle, {
+      expectedDestinationBindingHash: bindingHash(),
+    }),
   );
   await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
   await writeFile(
@@ -1835,6 +2035,30 @@ test("BSC route-manifest command builds production-ready manifests only with bou
     `${JSON.stringify(tairaBurnRecordContract(), null, 2)}\n`,
   );
   await writeFile(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`);
+  await writeFile(
+    destinationSidecarPath,
+    `${JSON.stringify(
+      browserProverSidecarManifest({
+        direction: "destination",
+        nativeEvmProverBundleHash: expectedBundleHash,
+        rollout,
+      }),
+      null,
+      2,
+    )}\n`,
+  );
+  await writeFile(
+    sourceSidecarPath,
+    `${JSON.stringify(
+      browserProverSidecarManifest({
+        direction: "source",
+        nativeEvmProverBundleHash: expectedBundleHash,
+        rollout,
+      }),
+      null,
+      2,
+    )}\n`,
+  );
   await writeFile(
     fullTomlEvidencePath,
     `${JSON.stringify(offlineFullTomlEvidence(), null, 2)}\n`,
@@ -1852,6 +2076,10 @@ test("BSC route-manifest command builds production-ready manifests only with bou
     "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
     "--native-prover-bundle",
     bundlePath,
+    "--destination-browser-prover-manifest",
+    destinationSidecarPath,
+    "--source-browser-prover-manifest",
+    sourceSidecarPath,
     "--source-bridge-config-hash",
     HASH_33,
     "--source-event-transaction-id",
@@ -1878,11 +2106,6 @@ test("BSC route-manifest command builds production-ready manifests only with bou
 
   const result = await main(productionReadyRouteManifestArgs(evidencePath, out));
   const manifest = JSON.parse(await readFile(out, "utf8"));
-  const expectedBundleHash = canonicalBscNativeEvmProverBundleHash(
-    validateBscTestnetNativeEvmProverBundle(bundle, {
-      expectedDestinationBindingHash: bindingHash(),
-    }),
-  );
 
   assert.equal(result.productionReady, true);
   assert.equal(manifest.productionReady, true);
@@ -2103,9 +2326,18 @@ test("BSC route-manifest command accepts generated offline full TOML evidence", 
     readback: readyReadback(),
     compiledContractCodeHashes: compiledContractCodeHashes(),
   });
-  const bundle = nativeProverBundleForRollout(
-    routeManifest().destinationRollout,
+  const rollout = routeManifest().destinationRollout;
+  const bundle = nativeProverBundleForRollout(rollout);
+  const nativeEvmProverBundleHash = canonicalBscNativeEvmProverBundleHash(
+    validateBscTestnetNativeEvmProverBundle(bundle, {
+      expectedDestinationBindingHash: bindingHash(),
+    }),
   );
+  const { destinationSidecarPath, sourceSidecarPath } =
+    await writeBrowserProverSidecars(dir, {
+      rollout,
+      nativeEvmProverBundleHash,
+    });
   await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
   await writeFile(
     contractPath,
@@ -2127,6 +2359,10 @@ test("BSC route-manifest command accepts generated offline full TOML evidence", 
     "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
     "--native-prover-bundle",
     bundlePath,
+    "--destination-browser-prover-manifest",
+    destinationSidecarPath,
+    "--source-browser-prover-manifest",
+    sourceSidecarPath,
     "--source-bridge-config-hash",
     HASH_33,
     "--source-event-transaction-id",
@@ -2169,6 +2405,10 @@ test("BSC route-manifest command accepts generated offline full TOML evidence", 
         "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
         "--native-prover-bundle",
         bundlePath,
+        "--destination-browser-prover-manifest",
+        destinationSidecarPath,
+        "--source-browser-prover-manifest",
+        sourceSidecarPath,
         "--source-bridge-config-hash",
         HASH_33,
         "--source-event-transaction-id",
@@ -2282,6 +2522,46 @@ test("BSC route-manifest command rejects ambiguous offline full TOML evidence", 
       },
       /BSC offline full TOML evidence postDeployLiveEvidence must not use multiple aliases/u,
     ],
+    [
+      "encoded route manifest traversal",
+      {
+        ...offlineFullTomlEvidence(),
+        routeManifestPath: "%252e%252e/route.manifest.json",
+      },
+      /BSC offline full TOML evidence routeManifestPath must not contain percent-encoded path segments/u,
+    ],
+    [
+      "source URL full config path",
+      {
+        ...offlineFullTomlEvidence(),
+        fullConfigPath: "https://example.invalid/full-config.toml",
+      },
+      /BSC offline full TOML evidence fullConfigPath must not be a URL or URI/u,
+    ],
+    [
+      "query string full config path",
+      {
+        ...offlineFullTomlEvidence(),
+        fullConfigPath: "full-config.toml?sha256=abc",
+      },
+      /BSC offline full TOML evidence fullConfigPath must not contain query strings or fragments/u,
+    ],
+    [
+      "backslash route manifest path",
+      {
+        ...offlineFullTomlEvidence(),
+        routeManifestPath: "evidence\\route.manifest.json",
+      },
+      /BSC offline full TOML evidence routeManifestPath must use POSIX separators/u,
+    ],
+    [
+      "absolute noncanonical full config path",
+      {
+        ...offlineFullTomlEvidence(),
+        fullConfigPath: join(tmpdir(), "draft-full-config.toml"),
+      },
+      /BSC offline full TOML evidence fullConfigPath must be a safe relative path or canonical BSC production artifact path/u,
+    ],
   ]) {
     const fullTomlEvidencePath = join(dir, `${name.replaceAll(" ", "-")}.json`);
     await writeFile(
@@ -2338,8 +2618,12 @@ test("BSC route-manifest production readiness rejects missing TOML hash and diag
     }),
     compiledContractCodeHashes: compiledContractCodeHashes(),
   });
-  const bundle = nativeProverBundleForRollout(
-    routeManifest().destinationRollout,
+  const rollout = routeManifest().destinationRollout;
+  const bundle = nativeProverBundleForRollout(rollout);
+  const nativeEvmProverBundleHash = canonicalBscNativeEvmProverBundleHash(
+    validateBscTestnetNativeEvmProverBundle(bundle, {
+      expectedDestinationBindingHash: bindingHash(),
+    }),
   );
   const diagnosticRoute = routeManifest({
     destinationRollout: {
@@ -2355,6 +2639,22 @@ test("BSC route-manifest production readiness rejects missing TOML hash and diag
   const diagnosticBundle = nativeProverBundleForRollout(
     diagnosticRoute.destinationRollout,
   );
+  const diagnosticNativeEvmProverBundleHash =
+    canonicalBscNativeEvmProverBundleHash(
+      validateBscTestnetNativeEvmProverBundle(diagnosticBundle, {
+        expectedDestinationBindingHash: diagnosticBindingHash(),
+      }),
+    );
+  const normalSidecars = await writeBrowserProverSidecars(dir, {
+    prefix: "normal-",
+    rollout,
+    nativeEvmProverBundleHash,
+  });
+  const diagnosticSidecars = await writeBrowserProverSidecars(dir, {
+    prefix: "diagnostic-",
+    rollout: diagnosticRoute.destinationRollout,
+    nativeEvmProverBundleHash: diagnosticNativeEvmProverBundleHash,
+  });
   await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
   await writeFile(
     diagnosticEvidencePath,
@@ -2411,6 +2711,10 @@ test("BSC route-manifest production readiness rejects missing TOML hash and diag
         evidencePath,
         "--native-prover-bundle",
         bundlePath,
+        "--destination-browser-prover-manifest",
+        normalSidecars.destinationSidecarPath,
+        "--source-browser-prover-manifest",
+        normalSidecars.sourceSidecarPath,
       ]),
     /production-ready BSC route manifests require --offline-full-toml-evidence/u,
   );
@@ -2422,6 +2726,10 @@ test("BSC route-manifest production readiness rejects missing TOML hash and diag
         diagnosticEvidencePath,
         "--native-prover-bundle",
         diagnosticBundlePath,
+        "--destination-browser-prover-manifest",
+        diagnosticSidecars.destinationSidecarPath,
+        "--source-browser-prover-manifest",
+        diagnosticSidecars.sourceSidecarPath,
         "--offline-full-toml-evidence",
         fullTomlEvidencePath,
       ]),
@@ -2443,9 +2751,18 @@ test("BSC route-manifest production readiness rejects placeholder TAIRA burn-rec
     readback: readyReadback(),
     compiledContractCodeHashes: compiledContractCodeHashes(),
   });
-  const bundle = nativeProverBundleForRollout(
-    routeManifest().destinationRollout,
+  const rollout = routeManifest().destinationRollout;
+  const bundle = nativeProverBundleForRollout(rollout);
+  const nativeEvmProverBundleHash = canonicalBscNativeEvmProverBundleHash(
+    validateBscTestnetNativeEvmProverBundle(bundle, {
+      expectedDestinationBindingHash: bindingHash(),
+    }),
   );
+  const { destinationSidecarPath, sourceSidecarPath } =
+    await writeBrowserProverSidecars(dir, {
+      rollout,
+      nativeEvmProverBundleHash,
+    });
   await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
   await writeFile(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`);
   const readyArgs = [
@@ -2456,6 +2773,10 @@ test("BSC route-manifest production readiness rejects placeholder TAIRA burn-rec
     "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
     "--native-prover-bundle",
     bundlePath,
+    "--destination-browser-prover-manifest",
+    destinationSidecarPath,
+    "--source-browser-prover-manifest",
+    sourceSidecarPath,
     "--source-bridge-config-hash",
     HASH_33,
     "--source-event-transaction-id",
@@ -4689,6 +5010,103 @@ test("BSC native-prover-bundle validates bound Groth16 material manifests", asyn
       "groth16-material.json",
     );
 
+    const unsafeAttestationPathCases = [
+      [
+        "backslash attestation path",
+        "nested\\semantic-sccp-circuit-attestation.json",
+        "nested/semantic-sccp-circuit-attestation.json",
+      ],
+      [
+        "encoded separator attestation path",
+        "semantic-sccp-circuit-attestation%2ejson",
+        "semantic-sccp-circuit-attestation%2ejson",
+      ],
+      [
+        "encoded parent attestation path",
+        "%2e%2e/semantic-sccp-circuit-attestation.json",
+        null,
+      ],
+      [
+        "over-encoded parent attestation path",
+        "%252e%252e/semantic-sccp-circuit-attestation.json",
+        null,
+      ],
+      [
+        "current segment attestation path",
+        "./semantic-sccp-circuit-attestation.json",
+        null,
+      ],
+      [
+        "empty segment attestation path",
+        "nested//semantic-sccp-circuit-attestation.json",
+        "nested/semantic-sccp-circuit-attestation.json",
+      ],
+      [
+        "URI attestation path",
+        "file:semantic-sccp-circuit-attestation.json",
+        null,
+      ],
+      [
+        "query attestation path",
+        "semantic-sccp-circuit-attestation.json?sha256=abc",
+        null,
+      ],
+      [
+        "fragment attestation path",
+        "semantic-sccp-circuit-attestation.json#sha256",
+        null,
+      ],
+      [
+        "malformed escape attestation path",
+        "semantic-sccp-circuit-attestation.json%",
+        null,
+      ],
+    ];
+    for (const [name, pathName, mirrorPath] of unsafeAttestationPathCases) {
+      const pathFixture = await writeNativeProverFixtureFiles();
+      try {
+        if (mirrorPath) {
+          const mirrorAbsolutePath = join(pathFixture.artifactRoot, mirrorPath);
+          await mkdir(dirname(mirrorAbsolutePath), { recursive: true });
+          await writeFile(
+            mirrorAbsolutePath,
+            await readFile(
+              join(
+                pathFixture.artifactRoot,
+                "semantic-sccp-circuit-attestation.json",
+              ),
+            ),
+          );
+        }
+        await writeFile(
+          join(pathFixture.artifactRoot, "groth16-material.json"),
+          `${JSON.stringify(
+            nativeGroth16MaterialManifest(pathFixture, {
+              attestations: {
+                semanticSccpCircuit: {
+                  ...pathFixture.groth16Attestations.semanticSccpCircuit,
+                  path: pathName,
+                },
+              },
+            }),
+            null,
+            2,
+          )}\n`,
+        );
+        await assert.rejects(
+          () =>
+            buildBscNativeEvmProverBundleFromArtifacts({
+              ...pathFixture.options,
+              "groth16-material-manifest": "groth16-material.json",
+            }),
+          /Groth16 material manifest attestations are not production-ready: .*Groth16 material manifest attestation path must be a safe relative path/u,
+          name,
+        );
+      } finally {
+        await rm(pathFixture.workDir, { recursive: true, force: true });
+      }
+    }
+
     await writeFile(
       manifestPath,
       `${JSON.stringify(
@@ -6567,8 +6985,70 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
         ...fixture.options,
         "proof-artifact": "../proof-artifact.bin",
       }),
-    /proof artifact must stay under artifact-root/u,
+    /proof artifact must not contain empty, current-directory, or parent-directory segments/u,
   );
+  const suspiciousPathCases = [
+    [
+      "URI proof artifact path",
+      "file:proof-artifact.r1cs",
+      /proof artifact must be a relative artifact path, not a URL or URI/u,
+    ],
+    [
+      "query proof artifact path",
+      "proof-artifact.r1cs?sha256=abc",
+      /proof artifact must not contain query strings or fragments/u,
+    ],
+    [
+      "fragment proof artifact path",
+      "proof-artifact.r1cs#hash",
+      /proof artifact must not contain query strings or fragments/u,
+    ],
+    [
+      "backslash proof artifact path",
+      "nested\\proof-artifact.r1cs",
+      /proof artifact must use POSIX separators/u,
+    ],
+    [
+      "encoded separator proof artifact path",
+      "nested%2fproof-artifact.r1cs",
+      /proof artifact must not contain percent-encoded path segments/u,
+    ],
+    [
+      "current segment proof artifact path",
+      "./proof-artifact.r1cs",
+      /proof artifact must not contain empty, current-directory, or parent-directory segments/u,
+    ],
+    [
+      "empty segment proof artifact path",
+      "nested//proof-artifact.r1cs",
+      /proof artifact must not contain empty, current-directory, or parent-directory segments/u,
+    ],
+  ];
+  for (const [name, pathName, pattern] of suspiciousPathCases) {
+    if (!pathName.startsWith("./") && !pathName.includes("//")) {
+      await writeFile(
+        join(fixture.artifactRoot, pathName),
+        await readFile(join(fixture.artifactRoot, "proof-artifact.r1cs")),
+      ).catch(async () => {
+        await mkdir(dirname(join(fixture.artifactRoot, pathName)), {
+          recursive: true,
+        });
+        await writeFile(
+          join(fixture.artifactRoot, pathName),
+          await readFile(join(fixture.artifactRoot, "proof-artifact.r1cs")),
+        );
+      });
+    }
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...fixture.options,
+          "proof-artifact": pathName,
+        }),
+      pattern,
+      name,
+    );
+  }
   for (const encodedPath of [
     "%2e%2e/proof-artifact.r1cs",
     "%252e%252e/proof-artifact.r1cs",
@@ -6586,7 +7066,7 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
           ...fixture.options,
           "proof-artifact": encodedPath,
         }),
-      /proof artifact must not use URL-encoded parent-directory segments/u,
+      /proof artifact must not contain percent-encoded path segments/u,
     );
   }
   const routeManifestLink = join(fixture.workDir, "route-link.json");
@@ -7419,7 +7899,7 @@ test("BSC canonical production output guard rejects diagnostic or draft material
       },
       "BSC offline full TOML evidence",
     ).join(" "),
-    /routeManifestPath must point to canonical BSC production artifacts/u,
+    /routeManifestPath must be a safe relative path or canonical BSC production artifact path/u,
   );
   assert.match(
     bscCanonicalProductionOutputProblems(
@@ -7430,7 +7910,29 @@ test("BSC canonical production output guard rejects diagnostic or draft material
       },
       "BSC offline full TOML evidence",
     ).join(" "),
-    /fullConfigPath must point to canonical BSC production artifacts/u,
+    /fullConfigPath must be a safe relative path or canonical BSC production artifact path/u,
+  );
+  assert.match(
+    bscCanonicalProductionOutputProblems(
+      canonicalOfflineEvidencePath,
+      {
+        ...cleanOfflineEvidence,
+        routeManifestPath: `${CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT}/%2e%2e/draft-route.manifest.json`,
+      },
+      "BSC offline full TOML evidence",
+    ).join(" "),
+    /routeManifestPath must not contain percent-encoded path segments/u,
+  );
+  assert.match(
+    bscCanonicalProductionOutputProblems(
+      canonicalOfflineEvidencePath,
+      {
+        ...cleanOfflineEvidence,
+        fullConfigPath: `${CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT}/full-config.toml?sha256=abc`,
+      },
+      "BSC offline full TOML evidence",
+    ).join(" "),
+    /fullConfigPath must not contain query strings or fragments/u,
   );
   assert.match(
     bscCanonicalProductionOutputProblems(
@@ -8199,7 +8701,7 @@ test("BSC route-config command validates canonical offline evidence before writi
           "--write-offline-full-toml-evidence",
           evidenceOut,
         ]),
-      /routeManifestPath must point to canonical BSC production artifacts/u,
+      /routeManifestPath must be a safe relative path or canonical BSC production artifact path/u,
     );
     await assert.rejects(() => readFile(out, "utf8"), /ENOENT/u);
     await assert.rejects(() => readFile(evidenceOut, "utf8"), /ENOENT/u);
@@ -8600,6 +9102,7 @@ test("BSC deployment helper subcommand help does not touch operator inputs", asy
   );
   assert.match(groth16Material.help, /groth16-material sign-attestation/u);
   assert.match(groth16Material.help, /groth16-material attestation-status/u);
+  assert.match(groth16Material.help, /groth16-material attestation-inventory/u);
   assert.match(groth16Material.help, /groth16-material proof-self-test/u);
   assert.match(groth16Material.help, /groth16-material finalize-attestations/u);
   assert.doesNotMatch(
@@ -8851,7 +9354,7 @@ test("BSC production requirements command writes public artifact without deploye
     assert.equal(result.wrote, out);
     assert.equal(result.schema, PRODUCTION_REQUIREMENTS_SCHEMA);
     assert.equal(result.bscNetwork, "mainnet");
-    assert.equal(result.inputCount, 41);
+    assert.equal(result.inputCount, 43);
     assert.deepEqual(result.requiredReports, [
       "route-preflight",
       "peer-config-audit",
@@ -8863,6 +9366,14 @@ test("BSC production requirements command writes public artifact without deploye
     const written = JSON.parse(await readFile(out, "utf8"));
     assert.equal(written.schema, PRODUCTION_REQUIREMENTS_SCHEMA);
     assert.equal(written.bsc.network, "mainnet");
+    assert.match(
+      JSON.stringify(written.inputs),
+      /destination-browser-prover-manifest/u,
+    );
+    assert.match(
+      JSON.stringify(written.inputs),
+      /source-browser-prover-manifest/u,
+    );
     assert.match(written.commands.deploy, /--confirm-mainnet true/u);
     assert.match(
       written.commands.groth16Material,
@@ -8936,6 +9447,10 @@ test("BSC production requirements command writes public artifact without deploye
     assert.match(
       written.commands.groth16AttestationStatus,
       /--trusted-attestation-signer <0x\.\.\.>/u,
+    );
+    assert.match(
+      written.commands.groth16AttestationInventory,
+      /groth16-material attestation-inventory --request <attestation-request\.json> --scan-dir <native-prover-artifact-root> --trusted-attestation-signer <0x\.\.\.>/u,
     );
     assert.match(
       written.commands.groth16ProofSelfTest,

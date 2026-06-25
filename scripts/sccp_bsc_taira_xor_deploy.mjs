@@ -172,6 +172,8 @@ const BSC_GROTH16_MATERIAL_MANIFEST_SCHEMA =
   "iroha-sccp-bsc-groth16-material-manifest/v1";
 const BSC_GROTH16_PROOF_SELF_TEST_SCHEMA =
   "iroha-sccp-bsc-groth16-proof-self-test/v1";
+const BSC_BROWSER_PROVER_MANIFEST_SCHEMA =
+  "iroha-demo-sccp-bsc-browser-prover-manifest/v1";
 const BSC_FULL_SCCP_CIRCUIT_PROFILE = "sccp-bsc-full-message-v1";
 const DEFAULT_BSC_FULL_MESSAGE_CIRCUIT_SOURCE =
   "artifacts/sccp-bsc/circuits/sccp-bsc-full-message-v1.circom";
@@ -239,14 +241,22 @@ export const DEFAULT_NATIVE_EVM_SOURCE_PARITY_ATTESTATION_OUT =
   "artifacts/sccp-bsc/native-prover/source-parity-attestation.json";
 export const DEFAULT_PRODUCTION_REQUIREMENTS_OUT =
   "artifacts/sccp-bsc/taira-bsc-xor-production-requirements.json";
+export const DEFAULT_ROUTE_MANIFEST_ISI_OUT =
+  "artifacts/sccp-bsc/taira-bsc-xor-route-manifest.upsert-isi.json";
 export const CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT = "artifacts/sccp-bsc";
 export const DEFAULT_PRIVATE_KEY_ENV = "SCCP_BSC_DEPLOYER_PRIVATE_KEY";
+export const DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV =
+  "SCCP_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY";
+export const DEFAULT_TAIRA_TORII_URL = "https://taira.sora.org";
+export const DEFAULT_TAIRA_CHAIN_ID =
+  "809574f5-fee7-5e69-bfcf-52451e42d50f";
 export const TAIRA_BURN_RECORD_ARTIFACT_MIN_BYTES = 32;
 export const TAIRA_BURN_RECORD_ARTIFACT_MAX_BYTES = 8 * 1024 * 1024;
 export const TAIRA_BURN_RECORD_PRODUCTION_ARTIFACT_MIN_BYTES = 256;
 export const SCCP_BSC_JSON_INPUT_MAX_BYTES = 12 * 1024 * 1024;
 export const SCCP_BSC_TEXT_INPUT_MAX_BYTES = 8 * 1024 * 1024;
 export const SCCP_BSC_BINARY_ARTIFACT_INPUT_MAX_BYTES = 512 * 1024 * 1024;
+const SCCP_BSC_BROWSER_PROVER_MANIFEST_MAX_BYTES = 256 * 1024;
 const EVM_EMPTY_CODE_KECCAK256 =
   "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470";
 const BSC_CONTRACT_CODE_ROLES = Object.freeze([
@@ -719,7 +729,7 @@ function usage() {
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs compile [--out ${DEFAULT_ARTIFACTS_OUT}]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs deploy --bsc-network testnet|mainnet --verifier <verifier-key.json> --broadcast true --confirm-network ${ROUTE_ID}:testnet|${ROUTE_ID}:mainnet [--confirm-mainnet true] [--private-key-env ${DEFAULT_PRIVATE_KEY_ENV}] [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs evidence --bsc-network testnet|mainnet --token <addr> --bridge <addr> --source-bridge <addr> --verifier <addr> [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
-	  node scripts/sccp_bsc_taira_xor_deploy.mjs route-manifest --evidence ${DEFAULT_EVIDENCE_OUT} --taira-contract ${DEFAULT_TAIRA_BURN_RECORD_CONTRACT_OUT} --settlement-asset-definition-id <asset-id> [--proof-artifact-hash <0x...> --proving-key-hash <0x...>] [--native-prover-bundle ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--source-bridge-config-hash <0x...> --source-event-transaction-id <0x...> --source-event-explorer-url <url> --route-canary-evidence-hash <0x...> --route-canary-transaction-id <0x...> --route-canary-explorer-url <url> --full-toml-ready true --offline-full-toml-sha256 <0x...>|--offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}] [--production-ready true --offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT} --live-readback-checked true --confirm-testnet ${ROUTE_ID}|--confirm-mainnet true --confirm-network ${ROUTE_ID}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
+	  node scripts/sccp_bsc_taira_xor_deploy.mjs route-manifest --evidence ${DEFAULT_EVIDENCE_OUT} --taira-contract ${DEFAULT_TAIRA_BURN_RECORD_CONTRACT_OUT} --settlement-asset-definition-id <asset-id> [--proof-artifact-hash <0x...> --proving-key-hash <0x...>] [--native-prover-bundle ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--destination-browser-prover-manifest <destination-sidecar.json> --source-browser-prover-manifest <source-sidecar.json>] [--source-bridge-config-hash <0x...> --source-event-transaction-id <0x...> --source-event-explorer-url <url> --route-canary-evidence-hash <0x...> --route-canary-transaction-id <0x...> --route-canary-explorer-url <url> --full-toml-ready true --offline-full-toml-sha256 <0x...>|--offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}] [--production-ready true --offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT} --live-readback-checked true --confirm-testnet ${ROUTE_ID}|--confirm-mainnet true --confirm-network ${ROUTE_ID}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs source-parity-attestation [--bsc-network testnet|mainnet] [--out ${DEFAULT_NATIVE_EVM_SOURCE_PARITY_ATTESTATION_OUT}]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material generate --bsc-network testnet --ptau <phase2.ptau> [--out-dir output/sccp-bsc-production/groth16-material/testnet] [--circom-bin circom2] [--snarkjs-bin snarkjs]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material toolchain-fingerprint [--transcript <reproducible-build-transcript.json>] [--circom-bin circom2] [--snarkjs-bin snarkjs] [--out <json>]
@@ -732,8 +742,10 @@ function usage() {
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material verify-handoff --handoff <handoff.json> [--trusted-attestation-signer <0x...>]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material sign-attestation --request <attestation-request.json> --role semanticSccpCircuit|circuitSecurity|trustedSetup|reproducibleBuild --private-key-pem <ed25519-private-key.pem> [--out <signed-role-attestation.json>]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-status --request <attestation-request.json> --semantic-attestation <json> --circuit-security-attestation <json> --trusted-setup-attestation <json> --reproducible-build-attestation <json> --trusted-attestation-signer <0x...>
+	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-inventory --request <attestation-request.json> --scan-dir <dir> --trusted-attestation-signer <0x...>
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material finalize-attestations --request <attestation-request.json> --semantic-attestation <json> --circuit-security-attestation <json> --trusted-setup-attestation <json> --reproducible-build-attestation <json> --trusted-attestation-signer <0x...> [--out-dir ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT}/testnet]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs native-prover-bundle --route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT} --artifact-root ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT} --proof-artifact <relative-file> --proving-key <relative-file> --verifier-key <relative-file> --groth16-material-manifest <relative-json> --groth16-proof-self-test <relative-json> --snarkjs-bin <snarkjs> --trusted-attestation-signer <0x...> --cross-sdk-parity <relative-json> --native-prover-self-test <relative-json> --javascript-implementation <relative-file> --swift-implementation <relative-file> --kotlin-implementation <relative-file> --java-android-implementation <relative-file> --dotnet-implementation <relative-file> --audit-circuit-security <hex-or-relative-file> --audit-native-implementation <hex-or-relative-file> --audit-reproducible-build <hex-or-relative-file> --audit-no-wasm-no-remote-scan <hex-or-relative-file> [--audit-cross-sdk-parity <matching-hex-or-relative-file>] [--audit-native-prover-self-test <matching-hex-or-relative-file>] [--out ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--attach-route-manifest-out ${DEFAULT_ROUTE_MANIFEST_OUT}]
+  node scripts/sccp_bsc_taira_xor_deploy.mjs publish-route-manifest [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--out ${DEFAULT_ROUTE_MANIFEST_ISI_OUT}] [--submit true --torii-url ${DEFAULT_TAIRA_TORII_URL} --chain-id ${DEFAULT_TAIRA_CHAIN_ID} --authority <account> --private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV}] [--wait-for-commit true|false]
   node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--allow-unready true|false] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}] [--write-offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs requirements [--bsc-network testnet|mainnet] [--out ${DEFAULT_PRODUCTION_REQUIREMENTS_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs self-test
@@ -768,13 +780,13 @@ Reads deployed BSC contracts and writes public deployment evidence. The
 readback must bind the token, bridge, source bridge, verifier, network id,
 verifier key hash, and destination binding hash to the selected BSC profile.`,
   "route-manifest": `Usage:
-  node scripts/sccp_bsc_taira_xor_deploy.mjs route-manifest --evidence ${DEFAULT_EVIDENCE_OUT} --taira-contract ${DEFAULT_TAIRA_BURN_RECORD_CONTRACT_OUT} --settlement-asset-definition-id <asset-id> [--proof-artifact-hash <0x...> --proving-key-hash <0x...>] [--native-prover-bundle ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--source-bridge-config-hash <0x...> --source-event-transaction-id <0x...> --source-event-explorer-url <url> --route-canary-evidence-hash <0x...> --route-canary-transaction-id <0x...> --route-canary-explorer-url <url> --full-toml-ready true --offline-full-toml-sha256 <0x...>|--offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}] [--production-ready true --offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT} --live-readback-checked true --confirm-testnet ${ROUTE_ID}|--confirm-mainnet true --confirm-network ${ROUTE_ID}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
+  node scripts/sccp_bsc_taira_xor_deploy.mjs route-manifest --evidence ${DEFAULT_EVIDENCE_OUT} --taira-contract ${DEFAULT_TAIRA_BURN_RECORD_CONTRACT_OUT} --settlement-asset-definition-id <asset-id> [--proof-artifact-hash <0x...> --proving-key-hash <0x...>] [--native-prover-bundle ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--destination-browser-prover-manifest <destination-sidecar.json> --source-browser-prover-manifest <source-sidecar.json>] [--source-bridge-config-hash <0x...> --source-event-transaction-id <0x...> --source-event-explorer-url <url> --route-canary-evidence-hash <0x...> --route-canary-transaction-id <0x...> --route-canary-explorer-url <url> --full-toml-ready true --offline-full-toml-sha256 <0x...>|--offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}] [--production-ready true --offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT} --live-readback-checked true --confirm-testnet ${ROUTE_ID}|--confirm-mainnet true --confirm-network ${ROUTE_ID}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
 
 Builds the TAIRA/BSC SCCP route manifest from public deployment evidence,
 TAIRA burn-record contract material, production proof hashes, native prover
-bundle attestations, and post-deploy live evidence. Canonical production output
-is refused unless the manifest is productionReady true and free of diagnostic
-or placeholder material.`,
+bundle attestations, browser prover sidecar references, and post-deploy live
+evidence. Canonical production output is refused unless the manifest is
+productionReady true and free of diagnostic or placeholder material.`,
   "native-prover-bundle": `Usage:
   node scripts/sccp_bsc_taira_xor_deploy.mjs native-prover-bundle --route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT} --artifact-root ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT} --proof-artifact <relative-file> --proving-key <relative-file> --verifier-key <relative-file> --groth16-material-manifest <relative-json> --groth16-proof-self-test <relative-json> --snarkjs-bin <snarkjs> --trusted-attestation-signer <0x...> --cross-sdk-parity <relative-json> --native-prover-self-test <relative-json> --javascript-implementation <relative-file> --swift-implementation <relative-file> --kotlin-implementation <relative-file> --java-android-implementation <relative-file> --dotnet-implementation <relative-file> --audit-circuit-security <hex-or-relative-file> --audit-native-implementation <hex-or-relative-file> --audit-reproducible-build <hex-or-relative-file> --audit-no-wasm-no-remote-scan <hex-or-relative-file> [--audit-cross-sdk-parity <matching-hex-or-relative-file>] [--audit-native-prover-self-test <matching-hex-or-relative-file>] [--out ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--attach-route-manifest-out ${DEFAULT_ROUTE_MANIFEST_OUT}]
 
@@ -807,6 +819,7 @@ marker evidence.`,
   node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material verify-handoff --handoff <handoff.json> [--trusted-attestation-signer <0x...>]
   node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material sign-attestation --request <attestation-request.json> --role semanticSccpCircuit|circuitSecurity|trustedSetup|reproducibleBuild --private-key-pem <ed25519-private-key.pem> [--out <signed-role-attestation.json>]
   node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-status --request <attestation-request.json> --semantic-attestation <json> --circuit-security-attestation <json> --trusted-setup-attestation <json> --reproducible-build-attestation <json> --trusted-attestation-signer <0x...>
+  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-inventory --request <attestation-request.json> --scan-dir <dir> --trusted-attestation-signer <0x...>
   node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material finalize-attestations --request <attestation-request.json> --semantic-attestation <json> --circuit-security-attestation <json> --trusted-setup-attestation <json> --reproducible-build-attestation <json> --trusted-attestation-signer <0x...> [--out-dir ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT}/testnet]
 
 Generates real Circom/SnarkJS Groth16 candidate material or materializes
@@ -836,9 +849,19 @@ production-ready.`,
   "route-config": `Usage:
   node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--allow-unready true|false] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}] [--write-offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}]
 
-Renders the TAIRA route TOML overlay or a merged full config. Production-ready
-manifests must not use --allow-unready; draft manifests must opt in to
---allow-unready true and cannot be written as canonical production material.`,
+Renders a legacy/offline TAIRA route TOML overlay or merged full config for
+evidence hashing only. Production route material is published on-chain with
+publish-route-manifest; peer configs should not carry a local BSC SCCP route
+stanza. Production-ready manifests must not use --allow-unready; draft
+manifests must opt in to --allow-unready true and cannot be written as
+canonical production material.`,
+  "publish-route-manifest": `Usage:
+  node scripts/sccp_bsc_taira_xor_deploy.mjs publish-route-manifest [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--out ${DEFAULT_ROUTE_MANIFEST_ISI_OUT}] [--submit true --torii-url ${DEFAULT_TAIRA_TORII_URL} --chain-id ${DEFAULT_TAIRA_CHAIN_ID} --authority <account> --private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV}] [--wait-for-commit true|false]
+
+Builds the UpsertSccpRouteManifest ISI payload from a production BSC route
+manifest. By default the command writes the public ISI artifact without
+broadcasting. With --submit true it signs and submits the ISI to TAIRA using an
+operator account that holds CanManageSccpRouteManifests.`,
   requirements: `Usage:
   node scripts/sccp_bsc_taira_xor_deploy.mjs requirements [--bsc-network testnet|mainnet] [--out ${DEFAULT_PRODUCTION_REQUIREMENTS_OUT}]
 
@@ -1048,6 +1071,11 @@ export function bscProductionRequirements(options = {}) {
         "--trusted-setup-attestation <trusted-setup-ceremony.json> " +
         "--reproducible-build-attestation <reproducible-build-attestation.json> " +
         "--trusted-attestation-signer <0x...>",
+      groth16AttestationInventory:
+        "node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-inventory " +
+        "--request <attestation-request.json> " +
+        "--scan-dir <native-prover-artifact-root> " +
+        "--trusted-attestation-signer <0x...>",
       groth16ProofSelfTest:
         "node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material proof-self-test " +
         "--manifest <production-ready-groth16-material.manifest.json> " +
@@ -1087,6 +1115,14 @@ export function bscProductionRequirements(options = {}) {
         "--audit-no-wasm-no-remote-scan <hex-or-relative-file> " +
         `--out ${nativeBundleOut} ` +
         `--attach-route-manifest-out ${routeManifestOut}`,
+      publishRouteManifest:
+        "node scripts/sccp_bsc_taira_xor_deploy.mjs publish-route-manifest " +
+        `--manifest ${routeManifestOut} ` +
+        `--out ${DEFAULT_ROUTE_MANIFEST_ISI_OUT} ` +
+        `--submit true --torii-url ${DEFAULT_TAIRA_TORII_URL} ` +
+        `--chain-id ${DEFAULT_TAIRA_CHAIN_ID} ` +
+        "--authority <taira-route-manifest-manager-account> " +
+        `--private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV}`,
       routeConfig:
         `node scripts/sccp_bsc_taira_xor_deploy.mjs route-config --manifest ${routeManifestOut} ` +
         `--base-config <deployed-taira-config.toml> --write-offline-full-toml-evidence ${fullConfigEvidenceOut}`,
@@ -1128,9 +1164,29 @@ export function bscProductionRequirements(options = {}) {
         id: "production-route-manifest",
         kind: "file",
         placeholder: routeManifestOut,
-        requiredBy: ["native-prover-bundle", "route-config"],
+        requiredBy: [
+          "native-prover-bundle",
+          "route-config",
+          "publish-route-manifest",
+        ],
         description:
-          "Production route manifest bound to BSC deployment evidence, TAIRA route publication, and live canary evidence.",
+          "Production route manifest bound to BSC deployment evidence, browser prover references, TAIRA route publication, and live canary evidence.",
+      }),
+      productionRequirementInput({
+        id: "destination-browser-prover-manifest",
+        kind: "file-or-url",
+        placeholder: "<destination-browser-prover-manifest.json>",
+        requiredBy: ["route-manifest"],
+        description:
+          "Route-bound TAIRA-to-BSC browser prover sidecar manifest; the route manifest publishes only its URL/specifier, module hash, sidecar hash, expected exports, and bound route/proof hashes.",
+      }),
+      productionRequirementInput({
+        id: "source-browser-prover-manifest",
+        kind: "file-or-url",
+        placeholder: "<source-browser-prover-manifest.json>",
+        requiredBy: ["route-manifest"],
+        description:
+          "Route-bound BSC-to-TAIRA browser prover sidecar manifest; the route manifest publishes only its URL/specifier, module hash, sidecar hash, expected exports, and bound route/proof hashes.",
       }),
       productionRequirementInput({
         id: "taira-burn-record-contract",
@@ -1163,7 +1219,7 @@ export function bscProductionRequirements(options = {}) {
         placeholder: "<deployed-taira-config.toml>",
         requiredBy: ["route-config"],
         description:
-          "Deployed TAIRA peer config used to render the merged route config and generated offline full-TOML evidence.",
+          "Deployed TAIRA base config used only to render legacy/offline full-TOML evidence; production SCCP BSC route material is published on-chain.",
       }),
       productionRequirementInput({
         id: "offline-full-toml-evidence",
@@ -1396,12 +1452,12 @@ export function bscProductionRequirements(options = {}) {
         }),
       ),
       productionRequirementInput({
-        id: "taira-peer-config-targets",
+        id: "taira-route-manifest-manager",
         kind: "operator-environment",
-        placeholder: "<taira-peer-config-targets>",
-        requiredBy: ["route-config"],
+        placeholder: "<taira-route-manifest-manager-account-and-key-env>",
+        requiredBy: ["publish-route-manifest"],
         description:
-          "TAIRA peer configuration targets that will receive the generated route stanza.",
+          "TAIRA account with CanManageSccpRouteManifests plus an operator key provided only through the named environment variable.",
       }),
     ],
     requiredReports: [
@@ -1674,6 +1730,370 @@ function normalizePrivateKeyEnvName(value = DEFAULT_PRIVATE_KEY_ENV) {
     );
   }
   return normalized;
+}
+
+function normalizeTairaPrivateKeyEnvName(
+  value = DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV,
+) {
+  const raw = String(value ?? "");
+  const normalized = trim(raw);
+  if (
+    !normalized ||
+    normalized !== raw ||
+    !/^[A-Z_][A-Z0-9_]{0,127}$/u.test(normalized)
+  ) {
+    throw new Error(
+      "--private-key-env must be an uppercase environment variable name containing only letters, digits, and underscores.",
+    );
+  }
+  return normalized;
+}
+
+function normalizeTairaToriiUrl(value = DEFAULT_TAIRA_TORII_URL) {
+  const text = trim(value) || DEFAULT_TAIRA_TORII_URL;
+  let url;
+  try {
+    url = new URL(text);
+  } catch (_error) {
+    throw new Error("--torii-url must be a valid URL.");
+  }
+  const isLoopback = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(isLoopback && url.protocol === "http:")) {
+    throw new Error("--torii-url must use HTTPS unless it is loopback HTTP.");
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error(
+      "--torii-url must not contain credentials, query strings, or fragments.",
+    );
+  }
+  return url.toString().replace(/\/$/u, "");
+}
+
+function normalizeTairaChainId(value = DEFAULT_TAIRA_CHAIN_ID) {
+  const text = trim(value) || DEFAULT_TAIRA_CHAIN_ID;
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(
+      text,
+    )
+  ) {
+    throw new Error("--chain-id must be a canonical lowercase UUID.");
+  }
+  return text;
+}
+
+function normalizeBrowserProverModuleUrl(value, label) {
+  const text = normalizeNonEmptyText(value, label);
+  if (/[\u0000-\u001f\u007f]/u.test(text)) {
+    throw new Error(`${label} contains control characters.`);
+  }
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(text)) {
+    let url;
+    try {
+      url = new URL(text);
+    } catch (_error) {
+      throw new Error(`${label} must be a valid URL.`);
+    }
+    const isLoopback = ["localhost", "127.0.0.1", "::1"].includes(
+      url.hostname,
+    );
+    if (
+      url.protocol !== "https:" &&
+      !(isLoopback && url.protocol === "http:")
+    ) {
+      throw new Error(`${label} must use HTTPS or loopback HTTP.`);
+    }
+    if (url.username || url.password || url.search || url.hash) {
+      throw new Error(
+        `${label} must not contain credentials, query strings, or fragments.`,
+      );
+    }
+    return url.toString();
+  }
+  if (
+    !(
+      text.startsWith("/") ||
+      text.startsWith("./") ||
+      text.startsWith("../")
+    ) ||
+    text.includes("?") ||
+    text.includes("#") ||
+    text.includes("\\")
+  ) {
+    throw new Error(
+      `${label} must be package-relative, root-relative, HTTPS, or loopback HTTP without query strings or fragments.`,
+    );
+  }
+  return text;
+}
+
+function normalizeCanonicalChainIdHex(value, label) {
+  const text = normalizeNonEmptyText(value, label);
+  if (!/^0x[0-9a-f]+$/u.test(text)) {
+    throw new Error(`${label} must be a canonical lowercase 0x hex string.`);
+  }
+  return text;
+}
+
+function readStringArray(record, keys, label) {
+  if (!isRecord(record)) return [];
+  let selected = null;
+  let selectedKey = "";
+  for (const key of keys) {
+    if (!hasOwn(record, key)) continue;
+    const value = ownValue(record, key);
+    if (!Array.isArray(value)) {
+      throw new Error(`${label}.${key} must be an array of strings.`);
+    }
+    const normalized = value.map((entry, index) =>
+      normalizeNonEmptyText(entry, `${label}.${key}[${index}]`),
+    );
+    if (selected) {
+      throw new Error(
+        `${label} must not use multiple export aliases: ${selectedKey}, ${key}.`,
+      );
+    }
+    selected = normalized;
+    selectedKey = key;
+  }
+  return selected ?? [];
+}
+
+function normalizeBrowserProverRefRecord(record, label) {
+  const source = routeConfigRequiredRecord(record, label);
+  assertSingleStringAliasPerSource(
+    [
+      {
+        record: source,
+        keys: ["moduleUrl", "module_url", "browserModuleUrl", "browser_module_url"],
+        pathName: label,
+      },
+    ],
+    `${label}.moduleUrl`,
+  );
+  assertSingleStringAliasPerSource(
+    [
+      {
+        record: source,
+        keys: ["moduleSpecifier", "module_specifier", "specifier"],
+        pathName: label,
+      },
+    ],
+    `${label}.moduleSpecifier`,
+  );
+  const moduleSpecifier = readOptionalCanonicalManifestText(
+    source,
+    ["moduleSpecifier", "module_specifier", "specifier"],
+    `${label}.moduleSpecifier`,
+    { allowNull: true },
+  );
+  const expectedExports = readStringArray(
+    source,
+    ["expectedExports", "expected_exports", "exports", "exportNames", "export_names"],
+    label,
+  );
+  if (expectedExports.length === 0) {
+    throw new Error(`${label}.expectedExports must not be empty.`);
+  }
+  return {
+    moduleUrl: normalizeBrowserProverModuleUrl(
+      readFirstString(source, "moduleUrl", "module_url", "browserModuleUrl", "browser_module_url"),
+      `${label}.moduleUrl`,
+    ),
+    moduleSpecifier: moduleSpecifier || null,
+    moduleHash: normalizeCanonicalHex32(
+      readFirstString(source, "moduleHash", "module_hash", "moduleSha256", "module_sha256", "sha256"),
+      `${label}.moduleHash`,
+    ),
+    manifestHash: normalizeCanonicalHex32(
+      readFirstString(source, "manifestHash", "manifest_hash", "manifestSha256", "manifest_sha256"),
+      `${label}.manifestHash`,
+    ),
+    expectedExports,
+    boundRouteHash: normalizeCanonicalHex32(
+      readFirstString(source, "boundRouteHash", "bound_route_hash", "routeHash", "route_hash", "destinationBindingHash", "destination_binding_hash"),
+      `${label}.boundRouteHash`,
+    ),
+    boundProofHash: normalizeCanonicalHex32(
+      readFirstString(source, "boundProofHash", "bound_proof_hash", "proofHash", "proof_hash", "proofArtifactHash", "proof_artifact_hash"),
+      `${label}.boundProofHash`,
+    ),
+  };
+}
+
+async function readBscRouteBrowserProverManifestRef(
+  options,
+  direction,
+  {
+    profile,
+    proofArtifactHash,
+    provingKeyHash,
+    nativeEvmProverBundleHash,
+    destinationBindingHash,
+  },
+) {
+  const optionKeys =
+    direction === "source"
+      ? [
+          "source-browser-prover-manifest",
+          "sourceBrowserProverManifest",
+          "source-prover-manifest",
+        ]
+      : [
+          "destination-browser-prover-manifest",
+          "destinationBrowserProverManifest",
+          "destination-prover-manifest",
+        ];
+  const provided = optionKeys
+    .map((key) => [key, ownValue(options, key)])
+    .filter(([, value]) => value !== undefined && value !== null && trim(value) !== "");
+  if (provided.length === 0) {
+    return null;
+  }
+  if (provided.length > 1) {
+    throw new Error(
+      `${direction} browser prover manifest must not use multiple aliases: ${provided
+        .map(([key]) => `--${key}`)
+        .join(", ")}.`,
+    );
+  }
+  const [optionKey, pathName] = provided[0];
+  const filePath = resolve(String(pathName));
+  const bytes = await readFile(filePath);
+  if (bytes.byteLength > SCCP_BSC_BROWSER_PROVER_MANIFEST_MAX_BYTES) {
+    throw new Error(
+      `--${optionKey} exceeds ${SCCP_BSC_BROWSER_PROVER_MANIFEST_MAX_BYTES} bytes.`,
+    );
+  }
+  const manifest = JSON.parse(Buffer.from(bytes).toString("utf8"));
+  if (!isRecord(manifest)) {
+    throw new Error(`--${optionKey} must contain a JSON object.`);
+  }
+  const reason = unsafeSecretReason(manifest, `--${optionKey}`);
+  if (reason) {
+    throw new Error(reason);
+  }
+  const label = `${direction} browser prover manifest`;
+  const schema = readRequiredString(manifest, ["schema"], `${label}.schema`);
+  if (schema !== BSC_BROWSER_PROVER_MANIFEST_SCHEMA) {
+    throw new Error(
+      `${label}.schema must be ${BSC_BROWSER_PROVER_MANIFEST_SCHEMA}.`,
+    );
+  }
+  const routeId = readRequiredString(
+    manifest,
+    ["routeId", "route_id"],
+    `${label}.routeId`,
+  );
+  const assetKey = readRequiredString(
+    manifest,
+    ["assetKey", "asset_key"],
+    `${label}.assetKey`,
+  );
+  if (routeId !== ROUTE_ID || assetKey !== ASSET_KEY) {
+    throw new Error(`${label} must bind ${ROUTE_ID}/${ASSET_KEY}.`);
+  }
+  const bscNetwork = readRequiredString(
+    manifest,
+    ["bscNetwork", "bsc_network", "network"],
+    `${label}.bscNetwork`,
+  );
+  if (normalizeBscTestnetKey(bscNetwork, `${label}.bscNetwork`) !== profile.key) {
+    throw new Error(`${label}.bscNetwork must be ${profile.key}.`);
+  }
+  const chainIdHex = normalizeCanonicalChainIdHex(
+    readRequiredString(
+      manifest,
+      ["bscChainIdHex", "bsc_chain_id_hex", "chainIdHex", "chain_id_hex"],
+      `${label}.bscChainIdHex`,
+    ),
+    `${label}.bscChainIdHex`,
+  );
+  if (chainIdHex !== profile.chainIdHex) {
+    throw new Error(`${label}.bscChainIdHex must be ${profile.chainIdHex}.`);
+  }
+  const moduleUrl = normalizeBrowserProverModuleUrl(
+    readRequiredString(
+      manifest,
+      ["moduleUrl", "module_url", "browserModuleUrl", "browser_module_url"],
+      `${label}.moduleUrl`,
+    ),
+    `${label}.moduleUrl`,
+  );
+  const moduleSpecifier = readOptionalCanonicalManifestText(
+    manifest,
+    ["moduleSpecifier", "module_specifier", "specifier"],
+    `${label}.moduleSpecifier`,
+    { allowNull: true },
+  );
+  const moduleHash = normalizeCanonicalHex32(
+    readRequiredString(
+      manifest,
+      ["moduleSha256", "module_sha256", "moduleHash", "module_hash", "sha256"],
+      `${label}.moduleSha256`,
+    ),
+    `${label}.moduleSha256`,
+  );
+  const expectedExports = readStringArray(
+    manifest,
+    ["exports", "exportNames", "export_names", "expectedExports", "expected_exports"],
+    label,
+  );
+  if (expectedExports.length === 0) {
+    throw new Error(`${label}.exports must not be empty.`);
+  }
+  const manifestProofArtifactHash = normalizeCanonicalHex32(
+    readRequiredString(
+      manifest,
+      ["proofArtifactHash", "proof_artifact_hash"],
+      `${label}.proofArtifactHash`,
+    ),
+    `${label}.proofArtifactHash`,
+  );
+  if (proofArtifactHash && manifestProofArtifactHash !== proofArtifactHash) {
+    throw new Error(`${label}.proofArtifactHash must match route manifest.`);
+  }
+  const manifestProvingKeyHash = normalizeCanonicalHex32(
+    readRequiredString(
+      manifest,
+      ["provingKeyHash", "proving_key_hash"],
+      `${label}.provingKeyHash`,
+    ),
+    `${label}.provingKeyHash`,
+  );
+  if (provingKeyHash && manifestProvingKeyHash !== provingKeyHash) {
+    throw new Error(`${label}.provingKeyHash must match route manifest.`);
+  }
+  const manifestNativeBundleHash = normalizeCanonicalHex32(
+    readRequiredString(
+      manifest,
+      [
+        "nativeEvmProverBundleHash",
+        "native_evm_prover_bundle_hash",
+        "nativeProverBundleHash",
+        "native_prover_bundle_hash",
+      ],
+      `${label}.nativeEvmProverBundleHash`,
+    ),
+    `${label}.nativeEvmProverBundleHash`,
+  );
+  if (
+    nativeEvmProverBundleHash &&
+    manifestNativeBundleHash !== nativeEvmProverBundleHash
+  ) {
+    throw new Error(
+      `${label}.nativeEvmProverBundleHash must match route manifest.`,
+    );
+  }
+  const manifestHash = sha256HexBytes(bytes);
+  return {
+    moduleUrl,
+    moduleSpecifier: moduleSpecifier || null,
+    moduleHash,
+    manifestHash,
+    expectedExports,
+    boundRouteHash: destinationBindingHash,
+    boundProofHash: manifestProofArtifactHash,
+  };
 }
 
 function normalizeUint256(value, label) {
@@ -2022,11 +2442,12 @@ function bscGroth16SelfTestWord(profile, signalName) {
 }
 
 function bscGroth16PublicSignal(labelHash, valueBytes) {
+  const input = Buffer.concat([
+    Buffer.from(hex32Bytes(labelHash, "BSC Groth16 signal label")),
+    Buffer.from(valueBytes),
+  ]);
   const digest = keccak_256(
-    Buffer.concat([
-      Buffer.from(hex32Bytes(labelHash, "BSC Groth16 signal label")),
-      Buffer.from(valueBytes),
-    ]),
+    new Uint8Array(input.buffer, input.byteOffset, input.byteLength),
   );
   return (bigintFromBytes(digest) % BN254_SCALAR_FIELD_MODULUS).toString(10);
 }
@@ -2697,10 +3118,18 @@ function offlineFullTomlEvidenceProductionProblems(record, label) {
   );
   if (!routeManifestPath) {
     problems.push(`${label} routeManifestPath is required`);
-  } else if (!isCanonicalBscProductionArtifactPath(routeManifestPath)) {
-    problems.push(
-      `${label} routeManifestPath must point to canonical BSC production artifacts`,
+  } else {
+    const pathProblem = bscOfflineFullTomlEvidencePathProblem(
+      routeManifestPath,
+      `${label} routeManifestPath`,
     );
+    if (pathProblem) {
+      problems.push(pathProblem);
+    } else if (!isCanonicalBscProductionArtifactPath(routeManifestPath)) {
+      problems.push(
+        `${label} routeManifestPath must point to canonical BSC production artifacts`,
+      );
+    }
   }
 
   const fullConfigPath = readFirstString(
@@ -2710,10 +3139,18 @@ function offlineFullTomlEvidenceProductionProblems(record, label) {
   );
   if (!fullConfigPath) {
     problems.push(`${label} fullConfigPath is required`);
-  } else if (!isCanonicalBscProductionArtifactPath(fullConfigPath)) {
-    problems.push(
-      `${label} fullConfigPath must point to canonical BSC production artifacts`,
+  } else {
+    const pathProblem = bscOfflineFullTomlEvidencePathProblem(
+      fullConfigPath,
+      `${label} fullConfigPath`,
     );
+    if (pathProblem) {
+      problems.push(pathProblem);
+    } else if (!isCanonicalBscProductionArtifactPath(fullConfigPath)) {
+      problems.push(
+        `${label} fullConfigPath must point to canonical BSC production artifacts`,
+      );
+    }
   }
 
   const networkText =
@@ -3489,16 +3926,179 @@ function normalizeBscCompiledContractCodeHashes(input, required = false) {
   );
 }
 
-function compiledContractCodeHashesFromArtifacts(artifacts) {
+function hasImmutableReferences(artifact) {
+  return (
+    isRecord(artifact?.immutableReferences) &&
+    Object.keys(artifact.immutableReferences).length > 0
+  );
+}
+
+function uint256WordHex(value, label) {
+  const bigint = typeof value === "bigint" ? value : BigInt(value);
+  if (bigint < 0n || bigint >= 2n ** 256n) {
+    throw new Error(`${label} must fit into a uint256 word.`);
+  }
+  return `0x${bigint.toString(16).padStart(64, "0")}`;
+}
+
+function sourceBridgeImmutableValues(profile) {
+  return {
+    networkId: profile.networkIdHex,
+    sourceDomain: uint256WordHex(SCCP_DOMAIN_BSC, "sourceBridge.sourceDomain"),
+    targetDomain: uint256WordHex(SCCP_DOMAIN_SORA, "sourceBridge.targetDomain"),
+  };
+}
+
+function deployedBytecodeWithNamedImmutables(artifact, valuesByName, label) {
+  if (!hasImmutableReferences(artifact)) {
+    return artifact.deployedBytecode;
+  }
+  if (!isRecord(artifact.immutableReferenceNames)) {
+    throw new Error(`${label} immutable reference names are missing.`);
+  }
+  const bytes = hexToBytes(artifact.deployedBytecode, `${label} bytecode`, null, {
+    allowZero: false,
+  });
+  for (const [id, locations] of ownRecordEntries(artifact.immutableReferences)) {
+    if (!Array.isArray(locations) || locations.length === 0) {
+      throw new Error(`${label} immutable reference ${id} has no locations.`);
+    }
+    const metadata = ownValue(artifact.immutableReferenceNames, id);
+    const name = isRecord(metadata) ? ownValue(metadata, "name") : undefined;
+    if (typeof name !== "string" || !name) {
+      throw new Error(`${label} immutable reference ${id} has no source name.`);
+    }
+    const value = ownValue(valuesByName, name);
+    if (value === undefined) {
+      throw new Error(`${label} immutable ${name} has no deployment value.`);
+    }
+    for (const location of locations) {
+      if (!isRecord(location)) {
+        throw new Error(`${label} immutable ${name} location is invalid.`);
+      }
+      const start = ownValue(location, "start");
+      const length = ownValue(location, "length");
+      if (
+        !Number.isSafeInteger(start) ||
+        !Number.isSafeInteger(length) ||
+        start < 0 ||
+        length <= 0 ||
+        start + length > bytes.length
+      ) {
+        throw new Error(`${label} immutable ${name} location is out of range.`);
+      }
+      const valueBytes = hexToBytes(value, `${label} immutable ${name}`, length, {
+        allowZero: true,
+      });
+      const existing = bytes.slice(start, start + length);
+      if (!existing.every((byte) => byte === 0)) {
+        throw new Error(
+          `${label} immutable ${name} placeholder is not zero-filled.`,
+        );
+      }
+      bytes.set(valueBytes, start);
+    }
+  }
+  return bytesToHex(bytes);
+}
+
+function deploymentAwareCompiledCodeHash(key, artifact, { profile }) {
+  if (!hasImmutableReferences(artifact)) {
+    return artifact?.deployedBytecodeKeccak256;
+  }
+  if (key !== "sourceBridge") {
+    throw new Error(
+      `BSC ${key} has immutables but no deployment-aware code hash binding.`,
+    );
+  }
+  const patchedBytecode = deployedBytecodeWithNamedImmutables(
+    artifact,
+    sourceBridgeImmutableValues(profile),
+    "BSC sourceBridge",
+  );
+  return bytesToHex(
+    keccak_256(
+      hexToBytes(patchedBytecode, "BSC sourceBridge patched bytecode", null, {
+        allowZero: false,
+      }),
+    ),
+  );
+}
+
+export function compiledContractCodeHashesFromArtifacts(
+  artifacts,
+  { profile } = {},
+) {
+  const normalizedProfile = normalizeBscNetworkProfile(profile?.key ?? profile);
   return normalizeBscCompiledContractCodeHashes(
     Object.fromEntries(
       BSC_CONTRACT_CODE_ROLES.map((key) => [
         key,
-        artifacts?.[key]?.deployedBytecodeKeccak256,
+        deploymentAwareCompiledCodeHash(key, artifacts?.[key], {
+          profile: normalizedProfile,
+        }),
       ]),
     ),
     true,
   );
+}
+
+function collectSolcImmutableDeclarations(node, declarations = {}) {
+  if (!isRecord(node)) {
+    return declarations;
+  }
+  if (
+    ownValue(node, "nodeType") === "VariableDeclaration" &&
+    ownValue(node, "stateVariable") === true &&
+    ownValue(node, "mutability") === "immutable"
+  ) {
+    const id = ownValue(node, "id");
+    const name = ownValue(node, "name");
+    if (Number.isSafeInteger(id) && typeof name === "string" && name) {
+      const typeDescriptions = ownValue(node, "typeDescriptions");
+      declarations[String(id)] = {
+        name,
+        type: isRecord(typeDescriptions)
+          ? ownValue(typeDescriptions, "typeString") ?? null
+          : null,
+      };
+    }
+  }
+  for (const value of Object.values(node)) {
+    if (Array.isArray(value)) {
+      for (const child of value) {
+        collectSolcImmutableDeclarations(child, declarations);
+      }
+    } else if (isRecord(value)) {
+      collectSolcImmutableDeclarations(value, declarations);
+    }
+  }
+  return declarations;
+}
+
+function immutableReferenceNamesForContract(
+  output,
+  definition,
+  immutableReferences,
+) {
+  if (!isRecord(immutableReferences) || Object.keys(immutableReferences).length === 0) {
+    return {};
+  }
+  const declarations = {};
+  for (const source of Object.values(output.sources ?? {})) {
+    collectSolcImmutableDeclarations(ownValue(source, "ast"), declarations);
+  }
+  const result = {};
+  for (const id of Object.keys(immutableReferences)) {
+    const declaration = ownValue(declarations, id);
+    if (!isRecord(declaration)) {
+      throw new Error(
+        `Missing immutable declaration ${id} for ${definition.contract}.`,
+      );
+    }
+    result[id] = declaration;
+  }
+  return result;
 }
 
 function assertBscCompiledCodeHashesMatchReadback({
@@ -4499,6 +5099,44 @@ function pathHasDecodedParentSegment(value) {
   return true;
 }
 
+function bscOfflineFullTomlEvidencePathProblem(value, label) {
+  let normalized = "";
+  try {
+    normalized = normalizeNonEmptyText(value, label);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  if (normalized.includes("\0")) {
+    return `${label} must not contain NUL bytes`;
+  }
+  if (/[?#]/u.test(normalized)) {
+    return `${label} must not contain query strings or fragments`;
+  }
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(normalized)) {
+    return `${label} must not be a URL or URI`;
+  }
+  if (normalized.includes("\\")) {
+    return `${label} must use POSIX separators`;
+  }
+  if (/%[0-9a-f]{2}/iu.test(normalized)) {
+    return `${label} must not contain percent-encoded path segments`;
+  }
+  if (pathHasDecodedParentSegment(normalized)) {
+    return `${label} must not contain encoded traversal or malformed percent escapes`;
+  }
+  if (isCanonicalBscProductionArtifactPath(normalized)) {
+    return "";
+  }
+  if (isAbsolute(normalized) || win32.isAbsolute(normalized)) {
+    return `${label} must be a safe relative path or canonical BSC production artifact path`;
+  }
+  const segments = normalized.split("/");
+  if (!segments.every((segment) => segment && segment !== "." && segment !== "..")) {
+    return `${label} must not contain empty, current-directory, or parent-directory segments`;
+  }
+  return "";
+}
+
 function assertBundleArtifactPathSafe(pathName, label) {
   if (pathHasDecodedParentSegment(pathName)) {
     throw new Error(
@@ -4507,8 +5145,47 @@ function assertBundleArtifactPathSafe(pathName, label) {
   }
 }
 
+function nativeBundleArtifactPathProblem(value, label) {
+  let normalized = "";
+  try {
+    normalized = normalizeNonEmptyText(value, label);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  if (normalized.includes("\0")) {
+    return `${label} must not contain NUL bytes`;
+  }
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(normalized)) {
+    return `${label} must be a relative artifact path, not a URL or URI`;
+  }
+  if (/[?#]/u.test(normalized)) {
+    return `${label} must not contain query strings or fragments`;
+  }
+  if (normalized.includes("\\")) {
+    return `${label} must use POSIX separators`;
+  }
+  if (/%[0-9a-f]{2}/iu.test(normalized)) {
+    return `${label} must not contain percent-encoded path segments`;
+  }
+  if (isAbsolute(normalized) || win32.isAbsolute(normalized)) {
+    return `${label} must be a relative artifact path under artifact-root`;
+  }
+  const segments = normalized.split("/");
+  if (!segments.every((segment) => segment && segment !== "." && segment !== "..")) {
+    return `${label} must not contain empty, current-directory, or parent-directory segments`;
+  }
+  if (pathHasDecodedParentSegment(normalized)) {
+    return `${label} must not contain encoded traversal or malformed percent escapes`;
+  }
+  return "";
+}
+
 async function readArtifactUnderRoot(root, value, label) {
   const text = normalizeNonEmptyText(value, label);
+  const pathProblem = nativeBundleArtifactPathProblem(text, label);
+  if (pathProblem) {
+    throw new Error(pathProblem);
+  }
   const target = isAbsolute(text) ? resolve(text) : resolve(root, text);
   const pathName = relativePosixPath(root, target, label);
   assertBundleArtifactPathSafe(pathName, label);
@@ -6359,15 +7036,26 @@ function referencedGroth16AttestationPathCandidates(root, pathRef) {
   const normalized = normalizeNonEmptyText(
     pathRef,
     "Groth16 material manifest attestation path",
-  ).replace(/\\/gu, "/");
+  );
   if (
     normalized.includes("\0") ||
     /^[a-z][a-z0-9+.-]*:/iu.test(normalized) ||
-    normalized.includes("?") ||
-    normalized.includes("#") ||
+    /[?#]/u.test(normalized) ||
+    normalized.includes("\\") ||
+    /%[0-9a-f]{2}/iu.test(normalized) ||
     isAbsolute(normalized) ||
     win32.isAbsolute(normalized) ||
     pathHasDecodedParentSegment(normalized)
+  ) {
+    throw new Error(
+      "Groth16 material manifest attestation path must be a safe relative path",
+    );
+  }
+  const segments = normalized.split("/");
+  if (
+    !segments.every(
+      (segment) => segment && segment !== "." && segment !== "..",
+    )
   ) {
     throw new Error(
       "Groth16 material manifest attestation path must be a safe relative path",
@@ -9304,7 +9992,13 @@ async function compileBscContracts({ writeOut = null } = {}) {
       optimizer: { enabled: true, runs: 200 },
       outputSelection: {
         "*": {
-          "*": ["abi", "evm.bytecode.object", "evm.deployedBytecode.object"],
+          "": ["ast"],
+          "*": [
+            "abi",
+            "evm.bytecode.object",
+            "evm.deployedBytecode.object",
+            "evm.deployedBytecode.immutableReferences",
+          ],
         },
       },
     },
@@ -9323,12 +10017,22 @@ async function compileBscContracts({ writeOut = null } = {}) {
     if (!contract?.evm?.bytecode?.object) {
       throw new Error(`Missing compiled artifact for ${definition.contract}.`);
     }
+    const immutableReferences =
+      contract.evm.deployedBytecode?.immutableReferences ?? {};
+    const immutableReferenceNames = immutableReferenceNamesForContract(
+      output,
+      definition,
+      immutableReferences,
+    );
     artifacts[definition.key] = {
       file: definition.file,
       contractName: definition.contract,
       abi: contract.abi,
       bytecode: `0x${contract.evm.bytecode.object}`,
       deployedBytecode: `0x${contract.evm.deployedBytecode.object}`,
+      ...(Object.keys(immutableReferences).length
+        ? { immutableReferences, immutableReferenceNames }
+        : {}),
       bytecodeKeccak256: bytesToHex(
         keccak_256(
           hexToBytes(
@@ -10563,6 +11267,30 @@ function normalizeBscOfflineFullTomlEvidence(record, profile) {
       "BSC offline full TOML evidence fullTomlReady must be true.",
     );
   }
+  const routeManifestPath = readRequiredString(
+    record,
+    ["routeManifestPath", "route_manifest_path"],
+    "BSC offline full TOML evidence routeManifestPath",
+  );
+  const routeManifestPathProblem = bscOfflineFullTomlEvidencePathProblem(
+    routeManifestPath,
+    "BSC offline full TOML evidence routeManifestPath",
+  );
+  if (routeManifestPathProblem) {
+    throw new Error(routeManifestPathProblem);
+  }
+  const fullConfigPath = readRequiredString(
+    record,
+    ["fullConfigPath", "full_config_path"],
+    "BSC offline full TOML evidence fullConfigPath",
+  );
+  const fullConfigPathProblem = bscOfflineFullTomlEvidencePathProblem(
+    fullConfigPath,
+    "BSC offline full TOML evidence fullConfigPath",
+  );
+  if (fullConfigPathProblem) {
+    throw new Error(fullConfigPathProblem);
+  }
   const offlineFullTomlSha256Sources = [
     {
       record,
@@ -10752,6 +11480,32 @@ export async function buildBscTairaXorRouteManifestDraft(input = {}) {
       : "",
   ].filter(Boolean);
   const nativeEvmProverBundleHash = nativeBundle?.hash ?? null;
+  const browserProverRefContext = {
+    profile,
+    proofArtifactHash,
+    provingKeyHash,
+    nativeEvmProverBundleHash,
+    destinationBindingHash: routeEvidence.destinationBindingHash,
+  };
+  const destinationBrowserProver =
+    await readBscRouteBrowserProverManifestRef(
+      options,
+      "destination",
+      browserProverRefContext,
+    );
+  const sourceBrowserProver = await readBscRouteBrowserProverManifestRef(
+    options,
+    "source",
+    browserProverRefContext,
+  );
+  if (
+    productionReady &&
+    (!destinationBrowserProver || !sourceBrowserProver)
+  ) {
+    throw new Error(
+      "production-ready BSC route manifests require --destination-browser-prover-manifest and --source-browser-prover-manifest.",
+    );
+  }
   const manifest = {
     schema: ROUTE_MANIFEST_SCHEMA,
     createdAt,
@@ -10790,6 +11544,10 @@ export async function buildBscTairaXorRouteManifestDraft(input = {}) {
     ...(proofArtifactHash ? { proofArtifactHash } : {}),
     ...(provingKeyHash ? { provingKeyHash } : {}),
     ...(nativeEvmProverBundleHash ? { nativeEvmProverBundleHash } : {}),
+    ...(destinationBrowserProver
+      ? { destinationBrowserProver }
+      : {}),
+    ...(sourceBrowserProver ? { sourceBrowserProver } : {}),
     ...(nativeBundle ? { nativeEvmProverBundle: nativeBundle.bundle } : {}),
     destinationRollout: {
       version: 1,
@@ -11943,6 +12701,65 @@ function normalizeRouteManifestForConfig(manifest) {
       nativeEvmProverBundleHash,
     ]);
   }
+  assertSingleRecordAlias(
+    record,
+    ["destinationBrowserProver", "destination_browser_prover"],
+    "route manifest",
+    "route manifest destinationBrowserProver",
+  );
+  assertSingleRecordAlias(
+    record,
+    ["sourceBrowserProver", "source_browser_prover"],
+    "route manifest",
+    "route manifest sourceBrowserProver",
+  );
+  const destinationBrowserProverRecord = readFirstRecord(
+    record,
+    "destinationBrowserProver",
+    "destination_browser_prover",
+  );
+  const sourceBrowserProverRecord = readFirstRecord(
+    record,
+    "sourceBrowserProver",
+    "source_browser_prover",
+  );
+  const destinationBrowserProver = destinationBrowserProverRecord
+    ? normalizeBrowserProverRefRecord(
+        destinationBrowserProverRecord,
+        "route manifest destinationBrowserProver",
+      )
+    : null;
+  const sourceBrowserProver = sourceBrowserProverRecord
+    ? normalizeBrowserProverRefRecord(
+        sourceBrowserProverRecord,
+        "route manifest sourceBrowserProver",
+      )
+    : null;
+  if (productionReady && (!destinationBrowserProver || !sourceBrowserProver)) {
+    throw new Error(
+      "route manifest productionReady requires destinationBrowserProver and sourceBrowserProver.",
+    );
+  }
+  for (const [label, ref] of [
+    ["destinationBrowserProver", destinationBrowserProver],
+    ["sourceBrowserProver", sourceBrowserProver],
+  ]) {
+    if (!ref) continue;
+    if (ref.boundRouteHash !== destinationBindingHash) {
+      throw new Error(
+        `route manifest ${label}.boundRouteHash must match destinationBindingHash.`,
+      );
+    }
+    if (proofArtifactHash && ref.boundProofHash !== proofArtifactHash) {
+      throw new Error(
+        `route manifest ${label}.boundProofHash must match proofArtifactHash.`,
+      );
+    }
+    roleSeparatedHashes.push(
+      [`${label}.moduleHash`, ref.moduleHash],
+      [`${label}.manifestHash`, ref.manifestHash],
+    );
+  }
   const seenRouteHashes = new Map();
   for (const [label, value] of roleSeparatedHashes.filter(([, value]) =>
     Boolean(value),
@@ -12335,6 +13152,8 @@ function normalizeRouteManifestForConfig(manifest) {
     deploymentEvidenceSha256,
     nativeEvmProverBundleHash,
     nativeEvmProverBundle,
+    destinationBrowserProver,
+    sourceBrowserProver,
     destinationBindingKey,
     destinationBindingHash,
     settlementAssetDefinitionId,
@@ -12376,6 +13195,36 @@ function tomlString(value, label) {
 function tomlOptionalStringLine(key, value, label) {
   if (value === undefined || value === null || value === "") return [];
   return [`${key} = ${tomlString(value, label)}`];
+}
+
+function tomlStringArray(values, label) {
+  if (!Array.isArray(values) || values.length === 0) {
+    throw new Error(`${label} must be a non-empty string array.`);
+  }
+  return `[${values
+    .map((entry, index) => tomlString(entry, `${label}[${index}]`))
+    .join(", ")}]`;
+}
+
+function tomlBrowserProverRefLine(key, ref, label) {
+  if (!ref) return [];
+  const entries = [
+    `module_url = ${tomlString(ref.moduleUrl, `${label}.moduleUrl`)}`,
+    ...(ref.moduleSpecifier
+      ? [
+          `module_specifier = ${tomlString(
+            ref.moduleSpecifier,
+            `${label}.moduleSpecifier`,
+          )}`,
+        ]
+      : []),
+    `module_hash = ${tomlString(ref.moduleHash, `${label}.moduleHash`)}`,
+    `manifest_hash = ${tomlString(ref.manifestHash, `${label}.manifestHash`)}`,
+    `expected_exports = ${tomlStringArray(ref.expectedExports, `${label}.expectedExports`)}`,
+    `bound_route_hash = ${tomlString(ref.boundRouteHash, `${label}.boundRouteHash`)}`,
+    `bound_proof_hash = ${tomlString(ref.boundProofHash, `${label}.boundProofHash`)}`,
+  ];
+  return [`${key} = { ${entries.join(", ")} }`];
 }
 
 export function buildBscTairaXorRouteConfigToml(manifest, options = {}) {
@@ -12440,6 +13289,16 @@ export function buildBscTairaXorRouteConfigToml(manifest, options = {}) {
       "native_evm_prover_bundle_hash",
       route.nativeEvmProverBundleHash,
       "native_evm_prover_bundle_hash",
+    ),
+    ...tomlBrowserProverRefLine(
+      "destination_browser_prover",
+      route.destinationBrowserProver,
+      "destination_browser_prover",
+    ),
+    ...tomlBrowserProverRefLine(
+      "source_browser_prover",
+      route.sourceBrowserProver,
+      "source_browser_prover",
     ),
     ...tomlOptionalStringLine(
       "deployment_evidence_sha256",
@@ -12774,6 +13633,7 @@ async function commandDeploy(options) {
     readback,
     compiledContractCodeHashes: compiledContractCodeHashesFromArtifacts(
       artifacts,
+      { profile },
     ),
     bscNetwork: profile.key,
   });
@@ -12841,6 +13701,7 @@ async function commandEvidence(options) {
     readback,
     compiledContractCodeHashes: compiledContractCodeHashesFromArtifacts(
       artifacts,
+      { profile },
     ),
     bscNetwork: profile.key,
   });
@@ -12911,8 +13772,8 @@ async function commandRouteManifest(options) {
     settlementAssetDefinitionId:
       manifest.tairaXorBurnRecord.settlementAssetDefinitionId,
     nextStep: manifest.productionReady
-      ? "Generate the TAIRA route config from this manifest, deploy it to every public peer, rerun peer audit/smoke-readiness/production gate, then capture live UI video proof."
-      : "Attach production verifier/proof/native-prover/live evidence, rerun route-manifest with production-ready confirmations, then generate and deploy the TAIRA route config.",
+      ? "Publish this route manifest on-chain with publish-route-manifest, rerun peer override audit/smoke-readiness/production gate, then capture live UI video proof."
+      : "Attach production verifier/proof/native-prover/browser-prover/live evidence, rerun route-manifest with production-ready confirmations, then publish it on-chain with publish-route-manifest.",
   };
 }
 
@@ -13019,8 +13880,192 @@ async function commandRouteConfig(options) {
       readFirstValue(manifest, "productionReady", "production_ready") !== true,
     ),
     nextStep: baseConfigPath
-      ? "Deploy this merged TAIRA node config on every public validator and restart Torii/Iroha before rerunning the BSC SCCP preflight without --manifest-file."
-      : "Merge this TOML into the TAIRA node config and redeploy/restart Torii before rerunning the BSC SCCP preflight.",
+      ? "Use this merged TAIRA node config only as legacy/offline evidence. Publish production BSC route material on-chain with publish-route-manifest, and keep peer configs free of local BSC SCCP route stanzas."
+      : "Use this TOML only as legacy/offline evidence. Publish production BSC route material on-chain with publish-route-manifest, and keep peer configs free of local BSC SCCP route stanzas.",
+  };
+}
+
+function sccpRouteBrowserProverRefIsi(ref) {
+  if (!ref) return null;
+  return {
+    module_url: ref.moduleUrl,
+    module_specifier: ref.moduleSpecifier ?? null,
+    module_hash: ref.moduleHash,
+    manifest_hash: ref.manifestHash,
+    expected_exports: ref.expectedExports,
+    bound_route_hash: ref.boundRouteHash,
+    bound_proof_hash: ref.boundProofHash,
+  };
+}
+
+export function buildUpsertSccpRouteManifestInstruction(manifest) {
+  const route = normalizeRouteManifestForConfig(manifest);
+  if (!Number.isInteger(route.version) || route.version < 0 || route.version > 255) {
+    throw new Error("route manifest version must fit u8 for ISI publication.");
+  }
+  const payload = {
+    version: route.version,
+    route_id: route.routeId,
+    asset_key: route.assetKey,
+    tron_network: route.legacyTronNetwork,
+    chain: route.chain,
+    chain_id_hex: route.chainIdHex,
+    counterparty_domain: route.counterpartyDomain,
+    verifier_target: route.verifierTarget,
+    production_ready: route.productionReady,
+    disabled_reason: route.disabledReason ?? null,
+    network_id_hex: route.networkIdHex,
+    taira_xor_token_address: route.tokenAddress,
+    taira_xor_bridge_address: route.bridgeAddress,
+    sccp_tron_source_bridge_address: route.sourceBridgeAddress,
+    tron_verifier_address: route.verifierAddress,
+    verifier_code_hash: route.verifierCodeHash,
+    verifier_key_hash: route.verifierKeyHash,
+    proof_artifact_hash: route.proofArtifactHash ?? null,
+    proving_key_hash: route.provingKeyHash ?? null,
+    native_evm_prover_bundle_hash: route.nativeEvmProverBundleHash ?? null,
+    destination_browser_prover: sccpRouteBrowserProverRefIsi(
+      route.destinationBrowserProver,
+    ),
+    source_browser_prover: sccpRouteBrowserProverRefIsi(
+      route.sourceBrowserProver,
+    ),
+    deployment_evidence_sha256: route.deploymentEvidenceSha256 ?? null,
+    destination_binding_key: route.destinationBindingKey,
+    destination_binding_hash: route.destinationBindingHash,
+    taira_burn_record_settlement_asset_definition_id:
+      route.settlementAssetDefinitionId,
+    taira_burn_record_contract_artifact_b64: route.contractArtifactB64,
+    taira_burn_record_artifact_sha256: route.artifactSha256,
+    taira_burn_record_code_hash: route.codeHash,
+    taira_burn_record_vk_backend: route.vkBackend,
+    taira_burn_record_vk_name: route.vkName,
+    taira_burn_record_gas_limit: route.gasLimit,
+    settlement_contract_address: route.settlementContractAddress ?? null,
+    settlement_contract_alias: route.settlementContractAlias ?? null,
+    post_deploy_full_toml_ready:
+      route.postDeployLiveEvidence?.fullTomlReady ?? null,
+    post_deploy_source_bridge_config_hash:
+      route.postDeployLiveEvidence?.sourceBridgeConfigHash ?? null,
+    post_deploy_source_event_transaction_id:
+      route.postDeployLiveEvidence?.sourceEventTransactionId ?? null,
+    post_deploy_source_event_explorer_url:
+      route.postDeployLiveEvidence?.sourceEventExplorerUrl ?? null,
+    post_deploy_route_canary_evidence_hash:
+      route.postDeployLiveEvidence?.routeCanaryEvidenceHash ?? null,
+    post_deploy_route_canary_transaction_id:
+      route.postDeployLiveEvidence?.routeCanaryTransactionId ?? null,
+    post_deploy_route_canary_explorer_url:
+      route.postDeployLiveEvidence?.routeCanaryExplorerUrl ?? null,
+    post_deploy_offline_full_toml_sha256:
+      route.postDeployLiveEvidence?.offlineFullTomlSha256 ?? null,
+  };
+  const instruction = {
+    UpsertSccpRouteManifest: {
+      manifest: payload,
+    },
+  };
+  return {
+    instruction,
+    routeKey: {
+      routeId: route.routeId,
+      assetKey: route.assetKey,
+      counterpartyDomain: route.counterpartyDomain,
+      chainIdHex: route.chainIdHex,
+    },
+    productionReady: route.productionReady,
+    nativeEvmProverBundleHash: route.nativeEvmProverBundleHash ?? null,
+    destinationBrowserProverManifestHash:
+      route.destinationBrowserProver?.manifestHash ?? null,
+    sourceBrowserProverManifestHash:
+      route.sourceBrowserProver?.manifestHash ?? null,
+  };
+}
+
+async function commandPublishRouteManifest(options) {
+  const manifestPath = normalizeBscRouteManifestPath(
+    options.manifest ?? DEFAULT_ROUTE_MANIFEST_OUT,
+  );
+  const manifest = await readJson(manifestPath, "BSC route manifest");
+  const publication = buildUpsertSccpRouteManifestInstruction(manifest);
+  const artifact = {
+    schema: "iroha-sccp-route-manifest-isi/v1",
+    routeId: publication.routeKey.routeId,
+    assetKey: publication.routeKey.assetKey,
+    routeKey: publication.routeKey,
+    requiredPermission: "CanManageSccpRouteManifests",
+    instruction: publication.instruction,
+    manifestSha256: sha256HexBytes(
+      Buffer.from(canonicalJson(manifest), "utf8"),
+    ),
+    productionReady: publication.productionReady,
+    nativeEvmProverBundleHash: publication.nativeEvmProverBundleHash,
+    destinationBrowserProverManifestHash:
+      publication.destinationBrowserProverManifestHash,
+    sourceBrowserProverManifestHash:
+      publication.sourceBrowserProverManifestHash,
+  };
+  const out = resolve(options.out ?? DEFAULT_ROUTE_MANIFEST_ISI_OUT);
+  await writeJsonNoSecrets(out, artifact);
+
+  const submit = optionEnabled(options, "submit", false);
+  if (!submit) {
+    return {
+      ok: true,
+      wrote: out,
+      submitted: false,
+      routeId: publication.routeKey.routeId,
+      assetKey: publication.routeKey.assetKey,
+      requiredPermission: artifact.requiredPermission,
+      nextStep:
+        "Review the ISI artifact, then rerun with --submit true and a TAIRA authority holding CanManageSccpRouteManifests.",
+    };
+  }
+
+  const authority = normalizeNonEmptyText(options.authority, "--authority");
+  const privateKeyEnv = normalizeTairaPrivateKeyEnvName(
+    options["private-key-env"] ?? DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV,
+  );
+  const privateKey = Buffer.from(
+    normalizePrivateKey(process.env[privateKeyEnv], privateKeyEnv).slice(2),
+    "hex",
+  );
+  const chainId = normalizeTairaChainId(options["chain-id"]);
+  const toriiUrl = normalizeTairaToriiUrl(options["torii-url"]);
+  const waitForCommit = optionEnabled(options, "wait-for-commit", true);
+  const { buildTransaction, submitSignedTransaction } = await import(
+    "../javascript/iroha_js/src/transaction.js"
+  );
+  const { ToriiClient } = await import("../javascript/iroha_js/src/toriiClient.js");
+  const transaction = buildTransaction({
+    chainId,
+    authority,
+    instructions: [publication.instruction],
+    metadata: {
+      routeId: publication.routeKey.routeId,
+      assetKey: publication.routeKey.assetKey,
+      action: "publish_sccp_route_manifest",
+    },
+    privateKey,
+  });
+  const client = new ToriiClient(toriiUrl);
+  const submission = await submitSignedTransaction(
+    client,
+    transaction.signedTransaction,
+    { waitForCommit },
+  );
+  return {
+    ok: true,
+    wrote: out,
+    submitted: true,
+    toriiUrl,
+    chainId,
+    authority,
+    hash: transaction.hash.toString("hex"),
+    submittedHash: submission.hash,
+    status: submission.status ?? null,
+    routeId: publication.routeKey.routeId,
+    assetKey: publication.routeKey.assetKey,
   };
 }
 
@@ -13071,7 +14116,7 @@ async function commandNativeProverBundle(options) {
       result.artifacts.groth16MaterialManifest?.path ?? null,
     verifiedSdks: result.verifiedSdks,
     nextStep:
-      "Attach this nativeEvmProverBundle to the production BSC route manifest, regenerate the TAIRA route config, redeploy every public peer, then rerun the BSC SCCP production gates.",
+      "Attach this nativeEvmProverBundle plus browser prover references to the production BSC route manifest, publish the manifest on-chain via ISI, then rerun the BSC SCCP production gates.",
   };
 }
 
@@ -13121,7 +14166,7 @@ async function commandRequirements(options) {
     inputCount: requirements.inputs.length,
     requiredReports: requirements.requiredReports,
     nextStep:
-      "Fill every public requirement with production artifacts/evidence, then run deploy, native-prover-bundle, route-config, peer audit, smoke readiness, production gate, and live video proof.",
+      "Fill every public requirement with production artifacts/evidence, then run deploy, native-prover-bundle, publish-route-manifest, peer override audit, smoke readiness, production gate, and live video proof.",
   };
 }
 
@@ -13206,6 +14251,8 @@ export async function main(argv = process.argv.slice(2)) {
       return commandSourceParityAttestation(options);
     case "native-prover-bundle":
       return commandNativeProverBundle(options);
+    case "publish-route-manifest":
+      return commandPublishRouteManifest(options);
     case "route-config":
       return commandRouteConfig(options);
     case "requirements":

@@ -1593,6 +1593,8 @@ struct AppState {
     torii_proxy_bridge_signer: KeyPair,
     #[cfg(feature = "app_api")]
     public_dataspace_upstreams: Arc<BTreeMap<DataSpaceId, String>>,
+    #[cfg(feature = "app_api")]
+    recipient_lookup: Arc<iroha_config::parameters::actual::ToriiRecipientLookup>,
     da_ingest: iroha_config::parameters::actual::DaIngest,
     da_spooler: Option<Arc<da::DaSpooler>>,
     sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
@@ -1648,6 +1650,8 @@ struct AppState {
     sorafs_chunk_range_overrides: DashMap<[u8; 32], bool>,
     #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
+    #[cfg(feature = "app_api")]
+    sorafs_appeal_settlement_submitter: Option<SoraFsAppealSettlementSubmitter>,
     #[cfg(feature = "app_api")]
     offline_issuer: Option<Arc<offline_issuer::OfflineIssuerRuntime>>,
     #[cfg(feature = "app_api")]
@@ -4696,6 +4700,80 @@ async fn handler_account_transactions_get(
         vec![canonical_account_id.to_string()],
         query_string,
         Vec::new(),
+    )
+    .await)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_account_history_get(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(account_id): AxPath<String>,
+    AxQuery(params): AxQuery<crate::routing::AccountHistoryGetParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let key_hint = account_id.clone();
+    let limits = crate::routing::app_query_limits();
+    let mut params = params;
+    let page_limit = limits.clamp_page_limit(params.limit)?;
+    params.limit = Some(page_limit);
+    let allowed_asset_definition_id = resolve_tx_history_allowed_asset_definition_id(&app)?;
+    if !trusted_internal {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        let cost = limits.rate_limit_cost(page_limit);
+        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &key_hint, enforce, cost)
+            .await?;
+    }
+    let telemetry = app.telemetry.clone();
+    let (parsed_account_id, canonical_account_id) =
+        match routing::parse_account_path_segment_with_state(
+            app.state.as_ref(),
+            &key_hint,
+            &telemetry,
+            routing::ENDPOINT_ACCOUNTS_HISTORY,
+        ) {
+            Ok(parsed) => parsed,
+            Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
+        };
+    let caller = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        routing::ENDPOINT_ACCOUNTS_HISTORY,
+    )?;
+    let use_target_account_routes = trusted_internal || caller.is_signed();
+    let route_scope = torii_account_read_route_scope(
+        &parsed_account_id,
+        caller.caller(),
+        use_target_account_routes,
+    );
+    let routes = match torii_account_read_routes(
+        app.as_ref(),
+        &parsed_account_id,
+        caller.caller(),
+        use_target_account_routes,
+    ) {
+        Ok(routes) => routes,
+        Err(response) => return Ok(response),
+    };
+    if routes.is_empty() {
+        return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
+    }
+    let query_string = encode_torii_proxy_query(&params)?;
+    let _ = allowed_asset_definition_id;
+    Ok(execute_torii_account_history_read_for_routes(
+        &app,
+        routes,
+        route_scope,
+        vec![canonical_account_id.to_string()],
+        query_string,
     )
     .await)
 }
@@ -15796,6 +15874,106 @@ fn merged_list_response(
 }
 
 #[cfg(feature = "app_api")]
+#[derive(Debug)]
+struct AccountHistoryMergeItem {
+    timestamp_ms: u64,
+    id: String,
+    canonical: Vec<u8>,
+    value: Value,
+}
+
+#[cfg(feature = "app_api")]
+fn account_history_merge_item(payload: &Value) -> Result<AccountHistoryMergeItem, Response> {
+    let canonical = canonical_json_bytes(payload)?;
+    let object = payload
+        .as_object()
+        .ok_or_else(|| torii_internal_json_error("account history item must be a JSON object"))?;
+    let timestamp_ms = object
+        .get("timestamp_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let id = object
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    Ok(AccountHistoryMergeItem {
+        timestamp_ms,
+        id,
+        canonical,
+        value: payload.clone(),
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn account_history_count_mode_label(raw: Option<&str>) -> &'static str {
+    match raw {
+        Some("bounded") => "bounded",
+        Some("exact") | None => "exact",
+        Some(_) => "bounded",
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn merged_account_history_response(
+    payloads: Vec<Value>,
+    page_offset: u64,
+    page_limit: u64,
+    count_mode_label: &'static str,
+    routed_by: &'static str,
+) -> Result<Response, Response> {
+    let mut seen = BTreeSet::<Vec<u8>>::new();
+    let mut merged_items = Vec::new();
+    for payload in payloads {
+        let payload_items = list_items_from_payload(
+            &payload,
+            "expected JSON object with `items` while merging account history response",
+        )?;
+        for item in payload_items {
+            let merge_item = account_history_merge_item(item)?;
+            if seen.insert(merge_item.canonical.clone()) {
+                merged_items.push(merge_item);
+            }
+        }
+    }
+
+    merged_items.sort_by(|left, right| {
+        right
+            .timestamp_ms
+            .cmp(&left.timestamp_ms)
+            .then_with(|| left.id.cmp(&right.id))
+            .then_with(|| left.canonical.cmp(&right.canonical))
+    });
+
+    let total = merged_items.len();
+    let start = usize::try_from(page_offset)
+        .unwrap_or(usize::MAX)
+        .min(total);
+    let limit = usize::try_from(page_limit).unwrap_or(usize::MAX);
+    let end = start.saturating_add(limit).min(total);
+    let has_more = end < total;
+    let items = merged_items
+        .into_iter()
+        .skip(start)
+        .take(end.saturating_sub(start))
+        .map(|item| item.value)
+        .collect::<Vec<_>>();
+
+    let mut root = norito::json::Map::new();
+    root.insert("items".into(), Value::Array(items));
+    if count_mode_label == "exact" {
+        root.insert("total".into(), Value::from(total as u64));
+    }
+    root.insert("has_more".into(), Value::from(has_more));
+    root.insert("count_mode".into(), Value::from(count_mode_label));
+    root.insert("query_source".into(), Value::from("account_history_fanout"));
+    let mut response =
+        crate::utils::respond_value_with_format(Value::Object(root), ResponseFormat::Json);
+    insert_routed_by_header(&mut response, routed_by);
+    Ok(response)
+}
+
+#[cfg(feature = "app_api")]
 fn torii_empty_list_response(routed_by: &'static str) -> Response {
     let mut root = norito::json::Map::new();
     root.insert("items".into(), Value::Array(Vec::new()));
@@ -18140,6 +18318,45 @@ mod torii_routed_read_tests {
         assert_eq!(ids, vec!["b", "a", "c"]);
     }
 
+    #[tokio::test]
+    async fn merged_account_history_response_sorts_deduplicates_and_pages_globally() {
+        let response = merged_account_history_response(
+            vec![
+                norito::json!({
+                    "items": [
+                        {"id": "old", "timestamp_ms": 100, "account_id": "alice"},
+                        {"id": "new", "timestamp_ms": 300, "account_id": "alice"}
+                    ],
+                    "total": 2
+                }),
+                norito::json!({
+                    "items": [
+                        {"id": "mid", "timestamp_ms": 200, "account_id": "alice"},
+                        {"id": "old", "timestamp_ms": 100, "account_id": "alice"}
+                    ],
+                    "total": 2
+                }),
+            ],
+            1,
+            2,
+            "exact",
+            "proxy",
+        )
+        .expect("account history merge should succeed");
+
+        let json = response_json(response).await;
+        let ids = json["items"]
+            .as_array()
+            .expect("merged account history should include items")
+            .iter()
+            .map(|item| item["id"].as_str().expect("item id should be present"))
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["mid", "old"]);
+        assert_eq!(json["total"].as_u64(), Some(3));
+        assert_eq!(json["has_more"].as_bool(), Some(false));
+        assert_eq!(json["count_mode"].as_str(), Some("exact"));
+    }
+
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn merged_alias_resolve_index_response_deduplicates_identical_bindings() {
@@ -19633,6 +19850,10 @@ fn torii_external_read_path(request: &ToriiReadProxyRequestV1) -> Result<String,
             "/v1/accounts/{}/transactions",
             torii_read_path_arg_encoded(request, 0, "account_id")?
         ),
+        ToriiReadEndpointV1::AccountHistoryGet => format!(
+            "/v1/accounts/{}/history",
+            torii_read_path_arg_encoded(request, 0, "account_id")?
+        ),
         ToriiReadEndpointV1::AccountTransactionsQuery => format!(
             "/v1/accounts/{}/transactions/query",
             torii_read_path_arg_encoded(request, 0, "account_id")?
@@ -19965,6 +20186,34 @@ async fn execute_torii_read_request_locally(
                 };
             finish_torii_read_result(
                 routing::handle_v1_account_transactions_get_with_policy(
+                    app.state.clone(),
+                    AxPath(account_id),
+                    crate::NoritoQuery(params),
+                    app.telemetry.clone(),
+                    allowed_asset_definition_id,
+                )
+                .await,
+                routing_decision,
+                routed_by,
+            )
+        }
+        ToriiReadEndpointV1::AccountHistoryGet => {
+            let Ok(account_id) = torii_proxy_path_arg(&request, 0, "account_id") else {
+                return torii_proxy_path_arg(&request, 0, "account_id").unwrap_err();
+            };
+            let params = match decode_torii_proxy_query::<routing::AccountHistoryGetParams>(
+                request.query_string.as_deref(),
+            ) {
+                Ok(params) => params,
+                Err(response) => return response,
+            };
+            let allowed_asset_definition_id =
+                match resolve_tx_history_allowed_asset_definition_id(app) {
+                    Ok(value) => value,
+                    Err(error) => return error.into_response(),
+                };
+            finish_torii_read_result(
+                routing::handle_v1_account_history_get_with_policy(
                     app.state.clone(),
                     AxPath(account_id),
                     crate::NoritoQuery(params),
@@ -21130,6 +21379,180 @@ async fn execute_torii_account_read_for_resolved_routes(
 }
 
 #[cfg(feature = "app_api")]
+fn account_history_payload_has_more(payload: &Value, item_count: usize, page_limit: u64) -> bool {
+    payload
+        .as_object()
+        .and_then(|object| object.get("has_more"))
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| u64::try_from(item_count).unwrap_or(u64::MAX) >= page_limit)
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_torii_account_history_read_for_resolved_routes(
+    app: &SharedAppState,
+    routes: Vec<RoutingDecision>,
+    path_args: Vec<String>,
+    query_string: Option<String>,
+) -> Response {
+    if routes.is_empty() {
+        return with_torii_fanout_headers(
+            torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "no Nexus dataspace routes are configured",
+            ),
+            ToriiFanoutDiagnostics::default(),
+        );
+    }
+    let Some(account_id) = path_args.get(0).cloned() else {
+        return torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_proxy_request",
+            "missing proxied path argument `account_id`",
+        );
+    };
+    let mut params =
+        match decode_torii_proxy_query::<routing::AccountHistoryGetParams>(query_string.as_deref())
+        {
+            Ok(params) => params,
+            Err(response) => return response,
+        };
+    let limits = routing::app_query_limits();
+    let page_limit = match limits.clamp_page_limit(params.limit) {
+        Ok(0) => {
+            return Error::AppQueryValidation {
+                code: "invalid_pagination",
+                message: format!(
+                    "limit must be between 1 and {} for {}",
+                    limits.max_page_limit,
+                    routing::ENDPOINT_ACCOUNTS_HISTORY
+                ),
+            }
+            .into_response();
+        }
+        Ok(limit) => limit,
+        Err(error) => return error.into_response(),
+    };
+    params.limit = Some(page_limit);
+    let count_mode_label = account_history_count_mode_label(params.count_mode.as_deref());
+    let per_route_target = (count_mode_label == "bounded")
+        .then(|| params.offset.saturating_add(page_limit).saturating_add(1));
+    let chunk_limit = limits.max_page_limit.max(1);
+    let routed_by = routed_by_for_routes(app, &routes);
+    let mut payloads = Vec::new();
+    let mut diagnostics = ToriiFanoutDiagnostics::default();
+    let mut last_not_found = None;
+    let mut last_route_unavailable = None;
+
+    for route in &routes {
+        diagnostics.record_attempt();
+        let mut route_offset = 0_u64;
+        let mut route_items_seen = 0_u64;
+        let mut route_succeeded = false;
+
+        loop {
+            let mut page_params = params.clone();
+            page_params.offset = route_offset;
+            let next_limit = per_route_target
+                .map(|target| {
+                    target
+                        .saturating_sub(route_items_seen)
+                        .max(1)
+                        .min(chunk_limit)
+                })
+                .unwrap_or(chunk_limit);
+            page_params.limit = Some(next_limit);
+            let page_query_string = match encode_torii_proxy_query(&page_params) {
+                Ok(query_string) => query_string,
+                Err(error) => return error.into_response(),
+            };
+            let response = execute_torii_single_route_read(
+                app,
+                *route,
+                ToriiReadEndpointV1::AccountHistoryGet,
+                vec![account_id.clone()],
+                page_query_string,
+                Vec::new(),
+            )
+            .await;
+
+            if response.status() == StatusCode::NOT_FOUND {
+                diagnostics.record_skipped_response(&response);
+                if !route_succeeded {
+                    last_not_found = Some(response);
+                }
+                break;
+            }
+            if torii_response_has_reject_code(&response, "route_unavailable") {
+                diagnostics.record_skipped_response(&response);
+                if !route_succeeded {
+                    last_route_unavailable = Some(response);
+                }
+                break;
+            }
+
+            let payload = match torii_json_body_value(response).await {
+                Ok(payload) => payload,
+                Err(response) => {
+                    diagnostics.record_skipped_response(&response);
+                    return with_torii_fanout_headers(response, diagnostics);
+                }
+            };
+            let item_count = match list_items_from_payload(
+                &payload,
+                "expected account history JSON object with `items`",
+            ) {
+                Ok(items) => items.len(),
+                Err(response) => {
+                    diagnostics.record_skipped_response(&response);
+                    return with_torii_fanout_headers(response, diagnostics);
+                }
+            };
+            let has_more = account_history_payload_has_more(&payload, item_count, next_limit);
+            payloads.push(payload);
+            route_succeeded = true;
+            let item_count_u64 = u64::try_from(item_count).unwrap_or(u64::MAX);
+            route_items_seen = route_items_seen.saturating_add(item_count_u64);
+
+            if item_count == 0
+                || !has_more
+                || per_route_target.is_some_and(|target| route_items_seen >= target)
+            {
+                break;
+            }
+            route_offset = route_offset.saturating_add(item_count_u64);
+        }
+
+        if route_succeeded {
+            diagnostics.record_success();
+        }
+    }
+
+    if payloads.is_empty() {
+        let response = last_not_found.unwrap_or_else(|| {
+            last_route_unavailable.unwrap_or_else(|| {
+                torii_proxy_error_response(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "no dataspace returned a matching result",
+                )
+            })
+        });
+        return with_torii_fanout_headers(response, diagnostics);
+    }
+
+    merge_with_torii_fanout_headers(diagnostics, || {
+        merged_account_history_response(
+            payloads,
+            params.offset,
+            page_limit,
+            count_mode_label,
+            routed_by,
+        )
+    })
+}
+
+#[cfg(feature = "app_api")]
 async fn execute_torii_read_fanout_for_resolved_routes(
     app: &SharedAppState,
     routes: Vec<RoutingDecision>,
@@ -21216,6 +21639,15 @@ async fn execute_torii_read_fanout_for_resolved_routes(
                 routes,
                 canonical_account_id,
                 response_format_from_torii_proxy(response_format),
+            )
+            .await
+        }
+        ToriiReadFanoutMergeV1::AccountHistory => {
+            execute_torii_account_history_read_for_resolved_routes(
+                app,
+                routes,
+                path_args,
+                query_string,
             )
             .await
         }
@@ -21436,6 +21868,41 @@ async fn execute_torii_list_read_for_routes(
             path_args,
             query_string,
             body,
+            ToriiProxyResponseFormatV1::Json,
+        )
+        .await
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_torii_account_history_read_for_routes(
+    app: &SharedAppState,
+    routes: Vec<RoutingDecision>,
+    route_scope: ToriiFanoutRouteScopeV1,
+    path_args: Vec<String>,
+    query_string: Option<String>,
+) -> Response {
+    if routes.len() > 1 {
+        execute_torii_read_fanout_via_nexus(
+            app,
+            route_scope,
+            ToriiReadFanoutMergeV1::AccountHistory,
+            ToriiReadEndpointV1::AccountHistoryGet,
+            path_args,
+            query_string,
+            Vec::new(),
+            ToriiProxyResponseFormatV1::Json,
+        )
+        .await
+    } else {
+        execute_torii_read_fanout_for_resolved_routes(
+            app,
+            routes,
+            ToriiReadFanoutMergeV1::List,
+            ToriiReadEndpointV1::AccountHistoryGet,
+            path_args,
+            query_string,
+            Vec::new(),
             ToriiProxyResponseFormatV1::Json,
         )
         .await
@@ -34335,6 +34802,240 @@ async fn handler_alias_lookup_by_account(
 }
 
 #[cfg(feature = "app_api")]
+fn recipient_lookup_normalize_fi_id(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "hbl.sbp" => Some("hbl.sbp"),
+        "ubl.sbp" => Some("ubl.sbp"),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn recipient_lookup_fi_id_from_alias(alias_fqn: &str) -> Option<&'static str> {
+    alias_fqn
+        .rsplit_once('@')
+        .and_then(|(_, scope)| recipient_lookup_normalize_fi_id(scope))
+}
+
+#[cfg(feature = "app_api")]
+fn recipient_lookup_response(
+    resolved: bool,
+    account_id: String,
+    alias_fqn: String,
+    fi_id: String,
+    full_name: Option<String>,
+) -> Value {
+    let mut object = Map::new();
+    object.insert("resolved".to_owned(), Value::Bool(resolved));
+    object.insert("account_id".to_owned(), Value::String(account_id));
+    object.insert("alias_fqn".to_owned(), Value::String(alias_fqn));
+    object.insert("fi_id".to_owned(), Value::String(fi_id));
+    if resolved {
+        if let Some(full_name) = full_name {
+            object.insert("full_name".to_owned(), Value::String(full_name));
+        }
+    }
+    Value::Object(object)
+}
+
+#[cfg(feature = "app_api")]
+fn recipient_lookup_unresolved_response(
+    account_id: &str,
+    alias_fqn: &str,
+    fi_id: &str,
+) -> Result<AxResponse, Error> {
+    alias_json_response(
+        StatusCode::OK,
+        recipient_lookup_response(
+            false,
+            account_id.to_owned(),
+            alias_fqn.to_owned(),
+            fi_id.to_owned(),
+            None,
+        ),
+    )
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_retail_recipient_lookup(
+    State(app): State<SharedAppState>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    let request: routing::RetailRecipientLookupRequestDto = norito::json::from_slice(body.as_ref())
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+            ))
+        })?;
+    if request.account_id.trim().is_empty() {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_recipient_lookup",
+            "account_id must not be empty",
+        ));
+    }
+    if request.alias_fqn.trim().is_empty() {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_recipient_lookup",
+            "alias_fqn must not be empty",
+        ));
+    }
+
+    let (account_id, canonical_account_id, _) = AccountId::parse_encoded(request.account_id.trim())
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                    "invalid account_id: {err}"
+                )),
+            ))
+        })?
+        .into_parts();
+    let nexus = app.state.nexus_snapshot();
+    let (canonical_alias, alias_label) = parse_account_alias_label_with_catalog(
+        request.alias_fqn.as_str(),
+        &nexus.dataspace_catalog,
+    )?;
+    let Some(fi_id) = recipient_lookup_fi_id_from_alias(&canonical_alias) else {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "unsupported_recipient_lookup_fi",
+            "recipient lookup is only available for hbl.sbp and ubl.sbp aliases",
+        ));
+    };
+
+    match resolve_alias_label_on_chain(&app, canonical_alias.clone(), &alias_label)? {
+        Some((_, bound_account_id, _)) if bound_account_id == account_id => {}
+        _ => {
+            return recipient_lookup_unresolved_response(
+                &canonical_account_id,
+                &canonical_alias,
+                fi_id,
+            );
+        }
+    }
+
+    let Some(route) = app
+        .recipient_lookup
+        .routes
+        .iter()
+        .find(|route| route.fi_id == fi_id)
+        .cloned()
+    else {
+        return Ok(torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "recipient_lookup_not_configured",
+            format!("recipient lookup route is not configured for {fi_id}"),
+        ));
+    };
+
+    let endpoint = format!(
+        "{}/v1/retail/recipients/lookup",
+        route.base_url.as_str().trim_end_matches('/')
+    );
+    let body = norito::json::to_vec(&routing::RetailRecipientLookupRequestDto {
+        account_id: canonical_account_id.clone(),
+        alias_fqn: canonical_alias.clone(),
+    })
+    .map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            err.to_string(),
+        ))
+    })?;
+    let upstream = match reqwest::Client::new()
+        .post(endpoint)
+        .header("accept", "application/json")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", route.bearer_token))
+        .body(body)
+        .timeout(app.recipient_lookup.request_timeout)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(err) => {
+            let status = if err.is_timeout() {
+                StatusCode::GATEWAY_TIMEOUT
+            } else {
+                StatusCode::SERVICE_UNAVAILABLE
+            };
+            return Ok(torii_proxy_error_response(
+                status,
+                "recipient_lookup_unavailable",
+                format!("recipient lookup upstream request failed: {err}"),
+            ));
+        }
+    };
+    if !upstream.status().is_success() {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_GATEWAY,
+            "recipient_lookup_rejected",
+            format!(
+                "recipient lookup upstream returned HTTP {}",
+                upstream.status().as_u16()
+            ),
+        ));
+    }
+    let upstream_body = match upstream.bytes().await {
+        Ok(body) => body,
+        Err(err) => {
+            return Ok(torii_proxy_error_response(
+                StatusCode::BAD_GATEWAY,
+                "recipient_lookup_invalid_response",
+                format!("recipient lookup upstream response body failed: {err}"),
+            ));
+        }
+    };
+    let upstream_payload: Value = match norito::json::from_slice(upstream_body.as_ref()) {
+        Ok(payload) => payload,
+        Err(err) => {
+            return Ok(torii_proxy_error_response(
+                StatusCode::BAD_GATEWAY,
+                "recipient_lookup_invalid_response",
+                format!("recipient lookup upstream response was not valid JSON: {err}"),
+            ));
+        }
+    };
+    let Some(upstream_object) = upstream_payload.as_object() else {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_GATEWAY,
+            "recipient_lookup_invalid_response",
+            "recipient lookup upstream response was not a JSON object",
+        ));
+    };
+
+    let full_name = upstream_object
+        .get("full_name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .map(str::to_owned)
+        .filter(|name| !name.is_empty());
+    let confirmed_fi_id = upstream_object
+        .get("fi_id")
+        .and_then(Value::as_str)
+        .and_then(recipient_lookup_normalize_fi_id);
+    let confirmed = upstream_object.get("resolved") == Some(&Value::Bool(true))
+        && upstream_object.get("account_id").and_then(Value::as_str)
+            == Some(canonical_account_id.as_str())
+        && upstream_object
+            .get("alias_fqn")
+            .and_then(Value::as_str)
+            .is_some_and(|alias| alias.eq_ignore_ascii_case(&canonical_alias))
+        && confirmed_fi_id == Some(fi_id)
+        && full_name.is_some();
+    alias_json_response(
+        StatusCode::OK,
+        recipient_lookup_response(
+            confirmed,
+            canonical_account_id,
+            canonical_alias,
+            fi_id.to_owned(),
+            full_name,
+        ),
+    )
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_asset_alias_resolve(
     State(app): State<SharedAppState>,
     NoritoJson(request): NoritoJson<routing::AssetAliasResolveRequestDto>,
@@ -35733,6 +36434,56 @@ struct AccountOnboardingSigner {
     alias_auto_renew_subscription_domain: Option<DomainId>,
 }
 
+#[cfg(feature = "app_api")]
+#[derive(Clone)]
+struct SoraFsAppealSettlementSubmitter {
+    signers: BTreeMap<AccountId, KeyPair>,
+    worker_scan_interval: Duration,
+    worker_max_retry_attempts: u32,
+}
+
+#[cfg(feature = "app_api")]
+impl SoraFsAppealSettlementSubmitter {
+    fn from_config(
+        config: &iroha_config::parameters::actual::SorafsAppealFinanceSettlement,
+    ) -> Option<Self> {
+        if config.submitter_signers.is_empty() {
+            return None;
+        }
+
+        let mut signers = BTreeMap::new();
+        for key_pair in &config.submitter_signers {
+            let account = AccountId::new(key_pair.public_key().clone());
+            if signers.insert(account.clone(), key_pair.clone()).is_some() {
+                panic!(
+                    "duplicate torii.sorafs.appeal_finance_settlement submitter for `{account}`"
+                );
+            }
+        }
+        Some(Self {
+            signers,
+            worker_scan_interval: config.worker_scan_interval,
+            worker_max_retry_attempts: config.worker_max_retry_attempts,
+        })
+    }
+
+    fn signer_for(&self, authority: &AccountId) -> Option<&KeyPair> {
+        self.signers.get(authority)
+    }
+
+    fn signer_count(&self) -> usize {
+        self.signers.len()
+    }
+
+    fn worker_scan_interval(&self) -> Duration {
+        self.worker_scan_interval
+    }
+
+    fn worker_max_retry_attempts(&self) -> u32 {
+        self.worker_max_retry_attempts
+    }
+}
+
 /// Main network handler and the only entrypoint of the Iroha.
 pub struct Torii {
     chain_id: Arc<ChainId>,
@@ -35847,6 +36598,8 @@ pub struct Torii {
     torii_proxy_bridge_signer: KeyPair,
     #[cfg(feature = "app_api")]
     public_dataspace_upstreams: Arc<BTreeMap<DataSpaceId, String>>,
+    #[cfg(feature = "app_api")]
+    recipient_lookup: Arc<iroha_config::parameters::actual::ToriiRecipientLookup>,
     da_ingest: iroha_config::parameters::actual::DaIngest,
     #[cfg(feature = "app_api")]
     sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
@@ -35880,6 +36633,8 @@ pub struct Torii {
     stream_token_issuer: Option<Arc<sorafs::StreamTokenIssuer>>,
     #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
+    #[cfg(feature = "app_api")]
+    sorafs_appeal_settlement_submitter: Option<SoraFsAppealSettlementSubmitter>,
     #[cfg(feature = "app_api")]
     offline_issuer: Option<Arc<offline_issuer::OfflineIssuerRuntime>>,
     #[cfg(feature = "app_api")]
@@ -36370,6 +37125,10 @@ impl Torii {
                 .route(
                     "/v1/aliases/by_account",
                     post(handler_alias_lookup_by_account),
+                )
+                .route(
+                    "/v1/retail/recipients/lookup",
+                    post(handler_retail_recipient_lookup),
                 )
                 .route(
                     "/v1/assets/aliases/resolve",
@@ -36864,6 +37623,10 @@ impl Torii {
                     post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_settle),
                 )
                 .route(
+                    "/v1/sorafs/appeals/finance/deposits/submit-settlement",
+                    post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_submit_settlement),
+                )
+                .route(
                     "/v1/sorafs/appeals/finance/deposits/reconcile",
                     post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_reconcile),
                 )
@@ -36895,6 +37658,52 @@ impl Torii {
                 .route(
                     "/v1/sorafs/moderation/ballots/events",
                     get(sorafs::api::handle_get_sorafs_moderation_ballot_events),
+                )
+                .route(
+                    "/v1/sorafs/moderation/model-registry",
+                    get(sorafs::api::handle_get_sorafs_moderation_model_registry),
+                )
+                .route(
+                    "/v1/sorafs/moderation/model-registry/repro-manifests",
+                    post(sorafs::api::handle_post_sorafs_moderation_model_registry_repro_manifest),
+                )
+                .route(
+                    "/v1/sorafs/moderation/model-registry/corpora",
+                    post(sorafs::api::handle_post_sorafs_moderation_model_registry_corpus_manifest),
+                )
+                .route(
+                    "/v1/sorafs/moderation/screening-results",
+                    post(sorafs::api::handle_post_sorafs_moderation_screening_result)
+                        .get(sorafs::api::handle_get_sorafs_moderation_screening_results),
+                )
+                .route(
+                    "/v1/sorafs/moderation/quarantine",
+                    get(sorafs::api::handle_get_sorafs_moderation_quarantine),
+                )
+                .route(
+                    "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review",
+                    post(sorafs::api::handle_post_sorafs_moderation_quarantine_review),
+                )
+                .route(
+                    "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release",
+                    post(sorafs::api::handle_post_sorafs_moderation_quarantine_release),
+                )
+                .route(
+                    "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff",
+                    post(sorafs::api::handle_post_sorafs_moderation_quarantine_appeal_handoff),
+                )
+                .route(
+                    "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-ballot",
+                    post(sorafs::api::handle_post_sorafs_moderation_quarantine_appeal_ballot),
+                )
+                .route(
+                    "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel",
+                    get(sorafs::api::handle_get_sorafs_moderation_quarantine_operator_panel),
+                )
+                .route(
+                    "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object",
+                    post(sorafs::api::handle_post_sorafs_moderation_quarantine_object)
+                        .get(sorafs::api::handle_get_sorafs_moderation_quarantine_object),
                 );
             let group = group
                 .route(
@@ -37208,6 +38017,10 @@ impl Torii {
                 .route(
                     "/v1/accounts/{account_id}/transactions",
                     get(handler_account_transactions_get),
+                )
+                .route(
+                    "/v1/accounts/{account_id}/history",
+                    get(handler_account_history_get),
                 );
             let router = router
                 .merge(aa_group)
@@ -37936,6 +38749,64 @@ impl Torii {
                         ),
                     )
                     .route(
+                        "/v1/sorafs/transparency/cycles",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_transparency_cycles),
+                    )
+                    .route(
+                        "/v1/sorafs/transparency/cycles/{cycle_id_hex}",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_transparency_cycle),
+                    )
+                    .route(
+                        "/v1/sorafs/transparency/cycles/{cycle_id_hex}/entries/{entry_id_hex}",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_transparency_cycle_entry),
+                    )
+                    .route(
+                        "/v1/sorafs/transparency/explorer",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_transparency_explorer),
+                    )
+                    .route(
+                        "/v1/sorafs/transparency/explorer/ui",
+                        axum::routing::get(
+                            sorafs::api::handle_get_sorafs_transparency_explorer_ui,
+                        ),
+                    )
+                    .route(
+                        "/v1/sorafs/transparency/source-entries/{source_kind}",
+                        axum::routing::post(
+                            sorafs::api::handle_post_sorafs_transparency_source_entry,
+                        ),
+                    )
+                    .route(
+                        "/v1/sorafs/transparency/privacy-aggregates/source-events",
+                        axum::routing::post(
+                            sorafs::api::handle_post_sorafs_transparency_privacy_aggregate_source_event,
+                        ),
+                    )
+                    .route(
+                        "/v1/sorafs/transparency/privacy-aggregates/publish-due",
+                        axum::routing::post(
+                            sorafs::api::handle_post_sorafs_transparency_privacy_aggregate_publish_due,
+                        ),
+                    )
+                    .route(
+                        "/v1/sorafs/transparency/tokens",
+                        axum::routing::get(
+                            sorafs::api::handle_get_sorafs_transparency_token_issuances,
+                        ),
+                    )
+                    .route(
+                        "/v1/sorafs/transparency/tokens/issuances",
+                        axum::routing::post(
+                            sorafs::api::handle_post_sorafs_transparency_token_issuance,
+                        ),
+                    )
+                    .route(
+                        "/v1/sorafs/transparency/tokens/verify",
+                        axum::routing::post(
+                            sorafs::api::handle_post_sorafs_transparency_token_verify,
+                        ),
+                    )
+                    .route(
                         "/v1/sorafs/appeals/finance/reports",
                         axum::routing::post(sorafs::api::handle_post_sorafs_appeal_finance_report)
                             .get(sorafs::api::handle_get_sorafs_appeal_finance_reports),
@@ -37946,6 +38817,12 @@ impl Torii {
                             sorafs::api::handle_get_sorafs_appeal_finance_weekly_rollups,
                         )
                         .post(sorafs::api::handle_post_sorafs_appeal_finance_weekly_rollup),
+                    )
+                    .route(
+                        "/v1/sorafs/appeals/finance/settlement-receipts",
+                        axum::routing::get(
+                            sorafs::api::handle_get_sorafs_appeal_finance_settlement_receipts,
+                        ),
                     )
                     .route(
                         "/v1/sorafs/governance/dag/car-queue",
@@ -38931,6 +39808,9 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let account_faucet = config.faucet.clone();
         #[cfg(feature = "app_api")]
+        let sorafs_appeal_settlement_submitter =
+            SoraFsAppealSettlementSubmitter::from_config(&config.sorafs_appeal_finance_settlement);
+        #[cfg(feature = "app_api")]
         let offline_issuer = config
             .offline_issuer
             .clone()
@@ -38971,6 +39851,8 @@ impl Torii {
             Arc::new(load_tx_history_access_policy(config.tx_history.as_ref()));
         #[cfg(feature = "app_api")]
         let public_dataspace_upstreams = Arc::new(load_public_dataspace_upstreams(state.as_ref()));
+        #[cfg(feature = "app_api")]
+        let recipient_lookup = Arc::new(config.recipient_lookup.clone());
         let pipeline_status_cache = Arc::new(PipelineStatusCache::new());
 
         Self {
@@ -39080,6 +39962,8 @@ impl Torii {
             torii_proxy_bridge_signer,
             #[cfg(feature = "app_api")]
             public_dataspace_upstreams,
+            #[cfg(feature = "app_api")]
+            recipient_lookup,
             da_ingest: config.da_ingest.clone(),
             #[cfg(feature = "connect")]
             connect_bus: connect::Bus::from_config(&config.connect),
@@ -39121,6 +40005,8 @@ impl Torii {
             stream_token_issuer,
             #[cfg(feature = "app_api")]
             account_faucet,
+            #[cfg(feature = "app_api")]
+            sorafs_appeal_settlement_submitter,
             #[cfg(feature = "app_api")]
             offline_issuer,
             #[cfg(feature = "app_api")]
@@ -39333,9 +40219,9 @@ impl Torii {
         }
     }
 
-    /// Helper function to create router. This router can be tested without starting up an HTTP server
+    /// Helper function to create router and shared runtime state.
     #[allow(clippy::too_many_lines)]
-    fn create_api_router(&self) -> axum::Router {
+    fn create_api_router_with_state(&self) -> (axum::Router, SharedAppState) {
         // Ensure the erased iterable-query registry is initialized before any
         // request decoding happens (the Norito extractor deserializes queries).
         #[allow(let_underscore_drop)]
@@ -39503,6 +40389,8 @@ impl Torii {
             torii_proxy_bridge_signer: self.torii_proxy_bridge_signer.clone(),
             #[cfg(feature = "app_api")]
             public_dataspace_upstreams: self.public_dataspace_upstreams.clone(),
+            #[cfg(feature = "app_api")]
+            recipient_lookup: self.recipient_lookup.clone(),
             da_ingest: self.da_ingest.clone(),
             da_spooler: da_runtime.spooler,
             sumeragi: self.sumeragi.clone(),
@@ -39569,6 +40457,8 @@ impl Torii {
             #[cfg(feature = "app_api")]
             account_faucet: self.account_faucet.clone(),
             #[cfg(feature = "app_api")]
+            sorafs_appeal_settlement_submitter: self.sorafs_appeal_settlement_submitter.clone(),
+            #[cfg(feature = "app_api")]
             offline_issuer: self.offline_issuer.clone(),
             #[cfg(feature = "app_api")]
             offline_v2_issuer: self.offline_v2_issuer.clone(),
@@ -39631,6 +40521,7 @@ impl Torii {
             &app_state.stream_token_concurrency,
             &app_state.sorafs_chunk_range_overrides,
             &app_state.account_faucet,
+            &app_state.sorafs_appeal_settlement_submitter,
             &app_state.uaid_onboarding,
             &app_state.soracloud_runtime,
         );
@@ -39663,7 +40554,13 @@ impl Torii {
             attach_torii_proxy_network(app_state.clone(), network);
         }
 
-        self.compose_api_router(app_state)
+        let router = self.compose_api_router(app_state.clone());
+        (router, app_state)
+    }
+
+    /// Helper function to create router. This router can be tested without starting up an HTTP server
+    fn create_api_router(&self) -> axum::Router {
+        self.create_api_router_with_state().0
     }
 
     /// Compose the HTTP router from prepared runtime state.
@@ -39968,7 +40865,14 @@ impl Torii {
         .attach("failed to bind to the specified address")
         .attach_with(|| self.address.clone().into_attachment())?;
 
-        let api_router = self.create_api_router();
+        let (api_router, app_state) = self.create_api_router_with_state();
+        #[cfg(feature = "app_api")]
+        sorafs::api::spawn_sorafs_appeal_finance_settlement_worker(
+            app_state,
+            shutdown_signal.clone(),
+        );
+        #[cfg(not(feature = "app_api"))]
+        drop(app_state);
         let make = api_router.into_make_service_with_connect_info::<std::net::SocketAddr>();
 
         iroha_logger::info!(addr = %torii_address, "Torii bound and listening");
@@ -43526,6 +44430,8 @@ pub(crate) mod tests_runtime_handlers {
             ),
             #[cfg(feature = "app_api")]
             public_dataspace_upstreams: Arc::new(BTreeMap::new()),
+            #[cfg(feature = "app_api")]
+            recipient_lookup: Arc::new(Default::default()),
             da_ingest,
             da_spooler: None,
             #[cfg(feature = "app_api")]
@@ -43568,6 +44474,8 @@ pub(crate) mod tests_runtime_handlers {
             sorafs_chunk_range_overrides: DashMap::new(),
             #[cfg(feature = "app_api")]
             account_faucet: None,
+            #[cfg(feature = "app_api")]
+            sorafs_appeal_settlement_submitter: None,
             #[cfg(feature = "app_api")]
             offline_issuer: None,
             #[cfg(feature = "app_api")]
@@ -50743,6 +51651,9 @@ pub(crate) mod tests_runtime_handlers {
             verifier_key_hash: format!("0x{}", "22".repeat(32)),
             proof_artifact_hash: None,
             proving_key_hash: None,
+            native_evm_prover_bundle_hash: None,
+            destination_browser_prover: None,
+            source_browser_prover: None,
             deployment_evidence_sha256: None,
             destination_binding_key: "iroha:sccp:tron-destination-binding:v1:0:5:nile".to_owned(),
             destination_binding_hash: format!("0x{}", "33".repeat(32)),

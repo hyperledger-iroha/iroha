@@ -20,6 +20,7 @@ import {
   mkdir,
   open,
   readFile,
+  readdir,
   rename,
   rm,
   writeFile,
@@ -417,6 +418,54 @@ function optionalPath(options, names) {
     }
   }
   return null;
+}
+
+function evidenceArtifactInputPathBlockers(pathName, label) {
+  const normalized = trim(pathName);
+  if (!normalized) {
+    return [`${label} path is required`];
+  }
+  const usesUriScheme =
+    /^[a-z][a-z0-9+.-]*:/iu.test(normalized) && !win32.isAbsolute(normalized);
+  if (
+    normalized.includes("\0") ||
+    /[\u0000-\u001f\u007f]/u.test(normalized) ||
+    usesUriScheme ||
+    normalized.includes("?") ||
+    normalized.includes("#") ||
+    normalized.includes("\\") ||
+    /%[0-9a-f]{2}/iu.test(normalized) ||
+    pathHasDecodedParentSegment(normalized)
+  ) {
+    return [`${label} path must be a safe local artifact path.`];
+  }
+  const slashPath = normalized.replace(/\\/gu, "/");
+  const segments = slashPath.startsWith("/")
+    ? slashPath.slice(1).split("/")
+    : slashPath.split("/");
+  if (!segments.every((segment) => segment && segment !== "." && segment !== "..")) {
+    return [`${label} path must be a safe local artifact path.`];
+  }
+  return [];
+}
+
+function optionalEvidenceArtifactPath(options, names, label) {
+  const keys = Array.isArray(names) ? names : [names];
+  for (const key of keys) {
+    const value = ownValue(options, key);
+    if (value !== undefined && trim(value) !== "") {
+      const rawPath = String(value);
+      const blockers = evidenceArtifactInputPathBlockers(
+        rawPath,
+        `${label} evidence artifact`,
+      );
+      return {
+        pathName: blockers.length > 0 ? null : resolve(rawPath),
+        pathBlockers: blockers,
+      };
+    }
+  }
+  return { pathName: null, pathBlockers: [] };
 }
 
 function sha256Hex(bytes) {
@@ -2314,6 +2363,32 @@ function materialManifestReferenceBlockers(manifest, label = "material manifest"
   ];
 }
 
+function materialManifestArtifactPathBlockers(pathName, label) {
+  const normalized = trim(pathName);
+  if (!normalized) {
+    return [`${label} is required`];
+  }
+  if (
+    normalized.includes("\0") ||
+    /[\u0000-\u001f\u007f]/u.test(normalized) ||
+    /^[a-z][a-z0-9+.-]*:/iu.test(normalized) ||
+    normalized.includes("?") ||
+    normalized.includes("#") ||
+    normalized.includes("\\") ||
+    /%[0-9a-f]{2}/iu.test(normalized) ||
+    pathHasDecodedParentSegment(normalized)
+  ) {
+    return [`${label} must be a safe artifact path.`];
+  }
+  if (!isAbsolute(normalized) && !win32.isAbsolute(normalized)) {
+    const segments = normalized.split("/");
+    if (!segments.every((segment) => segment && segment !== "." && segment !== "..")) {
+      return [`${label} must be a safe artifact path.`];
+    }
+  }
+  return [];
+}
+
 function materialManifestShapeBlockers(manifest, label = "material manifest") {
   if (!isRecord(manifest)) {
     return [];
@@ -2353,6 +2428,10 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
         "public_signal_names",
         "verifierKeyHash",
         "verifier_key_hash",
+        "proofArtifactHash",
+        "proof_artifact_hash",
+        "provingKeyHash",
+        "proving_key_hash",
         "productionReady",
         "production_ready",
         "productionBlockers",
@@ -2387,6 +2466,8 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
         ["publicInputCount", "public_input_count"],
         ["publicSignalNames", "public_signal_names"],
         ["verifierKeyHash", "verifier_key_hash"],
+        ["proofArtifactHash", "proof_artifact_hash"],
+        ["provingKeyHash", "proving_key_hash"],
         ["productionReady", "production_ready"],
         ["productionBlockers", "production_blockers"],
         ["trustedSetup", "trusted_setup"],
@@ -2470,6 +2551,14 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
           `${label} artifacts.${artifactLabel}`,
         ),
       );
+      if (isRecord(artifact)) {
+        blockers.push(
+          ...materialManifestArtifactPathBlockers(
+            ownValue(artifact, "path"),
+            `${label} artifacts.${artifactLabel}.path`,
+          ),
+        );
+      }
     }
   }
 
@@ -2710,6 +2799,50 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
   }
 
   return blockers.filter(Boolean);
+}
+
+function materialManifestRequiredArtifactHash(manifest, keys, label) {
+  const artifacts = ownValue(manifest, "artifacts");
+  if (!isRecord(artifacts)) {
+    throw new Error("material manifest artifacts are required.");
+  }
+  const artifact = keys
+    .map((key) => ownValue(artifacts, key))
+    .find((value) => value !== undefined);
+  if (!isRecord(artifact)) {
+    throw new Error(`material manifest artifacts.${label} is required.`);
+  }
+  return normalizeManifestHash(
+    ownValue(artifact, "sha256") ??
+      ownValue(artifact, "hash") ??
+      ownValue(artifact, "artifactHash") ??
+      ownValue(artifact, "artifact_hash"),
+    `material manifest artifacts.${label}.sha256`,
+  );
+}
+
+function requireMaterialManifestTopLevelArtifactHash({
+  manifest,
+  manifestKeys,
+  artifactKeys,
+  artifactLabel,
+  fieldLabel,
+}) {
+  const declared = normalizeManifestHash(
+    attestationValue(manifest, manifestKeys),
+    `material manifest ${fieldLabel}`,
+  );
+  const artifactHash = materialManifestRequiredArtifactHash(
+    manifest,
+    artifactKeys,
+    artifactLabel,
+  );
+  if (declared !== artifactHash) {
+    throw new Error(
+      `material manifest ${fieldLabel} must match artifacts.${artifactLabel}.sha256.`,
+    );
+  }
+  return declared;
 }
 
 const BSC_GROTH16_EVIDENCE_COMMON_FIELDS = Object.freeze([
@@ -4206,19 +4339,23 @@ function evidenceReportReference(record, key, label) {
 }
 
 function pathHasDecodedParentSegment(pathName) {
-  const normalized = trim(pathName).replace(/\\/gu, "/");
-  const variants = new Set([normalized]);
-  try {
-    variants.add(decodeURIComponent(normalized));
-  } catch (_error) {
-    // Invalid percent-encoding is handled by normal path checks below.
-  }
-  for (const variant of variants) {
-    if (variant.split("/").some((segment) => segment === "..")) {
+  let normalized = trim(pathName).replace(/\\/gu, "/");
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (normalized.split("/").some((segment) => segment === "..")) {
       return true;
     }
+    let decoded;
+    try {
+      decoded = decodeURIComponent(normalized).replace(/\\/gu, "/");
+    } catch (_error) {
+      return true;
+    }
+    if (decoded === normalized) {
+      return false;
+    }
+    normalized = decoded;
   }
-  return false;
+  return true;
 }
 
 function evidenceReportPathBlockers(pathName, label) {
@@ -4232,9 +4369,18 @@ function evidenceReportPathBlockers(pathName, label) {
     /^[a-z][a-z0-9+.-]*:/iu.test(normalized) ||
     normalized.includes("?") ||
     normalized.includes("#") ||
+    normalized.includes("\\") ||
+    /%[0-9a-f]{2}/iu.test(normalized) ||
     isAbsolute(normalized) ||
     win32.isAbsolute(normalized) ||
     pathHasDecodedParentSegment(normalized)
+  ) {
+    return [`${label} path must be a safe relative path.`];
+  }
+  if (
+    !normalized
+      .split("/")
+      .every((segment) => segment && segment !== "." && segment !== "..")
   ) {
     return [`${label} path must be a safe relative path.`];
   }
@@ -4405,6 +4551,7 @@ function evidenceMaterialBindingBlockers({
 
 async function bscGroth16EvidenceReference({
   pathName,
+  pathBlockers = [],
   label,
   expectedSchema,
   reportKey,
@@ -4412,6 +4559,13 @@ async function bscGroth16EvidenceReference({
   bodyFields,
   specificBlockers,
 }) {
+  if (pathBlockers.length > 0) {
+    return {
+      reference: null,
+      bodyFields: {},
+      blockers: pathBlockers,
+    };
+  }
   if (!pathName) {
     return {
       reference: null,
@@ -4561,9 +4715,19 @@ function circuitSecurityAuditEvidenceBlockers(record, label) {
 }
 
 async function buildBscGroth16RequestEvidence(options, context) {
+  const semanticReviewPath = optionalEvidenceArtifactPath(
+    options,
+    BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_OPTION_NAMES,
+    "semantic SCCP circuit review",
+  );
+  const circuitSecurityAuditPath = optionalEvidenceArtifactPath(
+    options,
+    BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_OPTION_NAMES,
+    "circuit security audit",
+  );
   return {
     semanticReview: await bscGroth16EvidenceReference({
-      pathName: optionalPath(options, BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_OPTION_NAMES),
+      ...semanticReviewPath,
       label: "semantic SCCP circuit review",
       expectedSchema: BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA,
       reportKey: "reviewReport",
@@ -4576,7 +4740,7 @@ async function buildBscGroth16RequestEvidence(options, context) {
       specificBlockers: semanticReviewEvidenceBlockers,
     }),
     circuitSecurityAudit: await bscGroth16EvidenceReference({
-      pathName: optionalPath(options, BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_OPTION_NAMES),
+      ...circuitSecurityAuditPath,
       label: "circuit security audit",
       expectedSchema: BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA,
       reportKey: "auditReport",
@@ -4875,6 +5039,8 @@ async function generateMaterialFromVerificationKey({
     publicInputCount: 9,
     publicSignalNames: [...BSC_GROTH16_PUBLIC_SIGNAL_NAMES],
     verifierKeyHash: verifierMaterial.verifierKeyHash,
+    proofArtifactHash: artifacts.r1cs.sha256,
+    provingKeyHash: artifacts.provingKey.sha256,
     productionReady: productionBlockers.length === 0,
     productionBlockers,
     artifacts,
@@ -4908,6 +5074,8 @@ async function generateMaterialFromVerificationKey({
     manifest: manifestPath,
     verifierKey: bscVerifierKeyPath,
     verifierKeyHash: verifierMaterial.verifierKeyHash,
+    proofArtifactHash: artifacts.r1cs.sha256,
+    provingKeyHash: artifacts.provingKey.sha256,
     proofArtifact: r1csPath,
     provingKey: zkeyPath,
   };
@@ -5164,6 +5332,13 @@ function materialManifestArtifact(manifest, key, label = key) {
   if (!artifactPath) {
     throw new Error(`material manifest ${label} artifact path is required.`);
   }
+  const pathBlockers = materialManifestArtifactPathBlockers(
+    artifactPath,
+    `material manifest ${label} artifact path`,
+  );
+  if (pathBlockers.length > 0) {
+    throw new Error(pathBlockers[0]);
+  }
   return {
     path: artifactPath,
     sha256: normalizeManifestHash(
@@ -5336,6 +5511,20 @@ function validateMaterialManifestForAttestationRequest(manifest, profile) {
     ownValue(manifest, "verifierKeyHash"),
     "material manifest verifierKeyHash",
   );
+  requireMaterialManifestTopLevelArtifactHash({
+    manifest,
+    manifestKeys: ["proofArtifactHash", "proof_artifact_hash"],
+    artifactKeys: ["r1cs"],
+    artifactLabel: "r1cs",
+    fieldLabel: "proofArtifactHash",
+  });
+  requireMaterialManifestTopLevelArtifactHash({
+    manifest,
+    manifestKeys: ["provingKeyHash", "proving_key_hash"],
+    artifactKeys: ["provingKey", "proving_key"],
+    artifactLabel: "provingKey",
+    fieldLabel: "provingKeyHash",
+  });
   const selfChecks = ownValue(manifest, "selfChecks");
   const snarkjsSelfCheck = isRecord(selfChecks)
     ? ownValue(selfChecks, "snarkjs")
@@ -10114,6 +10303,309 @@ export async function auditBscGroth16AttestationStatus(options = {}) {
   };
 }
 
+function attestationRoleSpecForSchema(schema) {
+  return BSC_GROTH16_ATTESTATION_ROLE_SPECS.find(
+    (spec) => spec.expectedSchema === schema,
+  );
+}
+
+function positiveIntegerOption(options, key, fallback, label = key) {
+  const raw = ownValue(options, key);
+  if (raw === undefined || raw === null || trim(raw) === "") {
+    return fallback;
+  }
+  const value = Number.parseInt(String(raw), 10);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`--${label} must be a positive integer.`);
+  }
+  return value;
+}
+
+async function assertReadableDirectory(pathName, label) {
+  const resolved = resolve(String(pathName));
+  let stat;
+  try {
+    stat = await lstat(resolved);
+  } catch (error) {
+    throw new Error(
+      `${label} is not readable: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!stat.isDirectory()) {
+    throw new Error(`${label} must be a directory.`);
+  }
+  if (stat.isSymbolicLink()) {
+    throw new Error(`${label} must not be a symlink.`);
+  }
+  return resolved;
+}
+
+async function collectAttestationInventoryJsonFiles(rootDir, { maxDepth, maxFiles }) {
+  const files = [];
+  const visit = async (dir, depth) => {
+    if (depth > maxDepth || files.length >= maxFiles) {
+      return;
+    }
+    const entries = await readdir(dir, { withFileTypes: true });
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      if (files.length >= maxFiles) {
+        return;
+      }
+      const pathName = join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        await visit(pathName, depth + 1);
+        continue;
+      }
+      if (entry.isFile() && entry.name.endsWith(".json")) {
+        files.push(pathName);
+      }
+    }
+  };
+  await visit(rootDir, 0);
+  return files;
+}
+
+async function classifyAttestationInventoryCandidate({
+  pathName,
+  roleStatuses,
+  trustedSignerFingerprints,
+}) {
+  const resolved = resolve(pathName);
+  const candidate = {
+    path: repoRelativePath(resolved),
+    sha256: await fileSha256(resolved),
+    schema: null,
+    role: null,
+    classification: "ignored",
+    usable: false,
+    signedPayloadSha256: null,
+    expectedSignedPayloadSha256: null,
+    signature: null,
+    problems: [],
+  };
+  let record;
+  try {
+    record = await readJson(resolved, "BSC Groth16 signed attestation candidate");
+  } catch (error) {
+    candidate.classification = "invalid-json";
+    candidate.problems.push(error instanceof Error ? error.message : String(error));
+    return candidate;
+  }
+  const secretReason = unsafeSecretReason(record, "BSC Groth16 signed attestation candidate");
+  if (secretReason) {
+    candidate.classification = "rejected-secret-like";
+    candidate.problems.push(secretReason);
+    return candidate;
+  }
+  if (!isRecord(record)) {
+    candidate.classification = "invalid-shape";
+    candidate.problems.push("signed attestation candidate must be a JSON object");
+    return candidate;
+  }
+  candidate.schema = ownValue(record, "schema") ?? null;
+  const spec = attestationRoleSpecForSchema(candidate.schema);
+  if (!spec) {
+    return candidate;
+  }
+  candidate.role = spec.key;
+  candidate.classification = "invalid";
+  const roleStatus = roleStatuses[spec.key];
+  candidate.signedPayloadSha256 = sha256Hex(attestationSignaturePayload(record));
+  candidate.expectedSignedPayloadSha256 = roleStatus?.signedPayloadSha256 ?? null;
+  if (!roleStatus?.signable) {
+    candidate.classification = "request-role-blocked";
+    candidate.problems.push(
+      `${spec.label} request role is not ready for signature`,
+      ...(roleStatus?.blockers ?? []),
+    );
+  }
+  if (
+    candidate.expectedSignedPayloadSha256 &&
+    candidate.signedPayloadSha256 !== candidate.expectedSignedPayloadSha256
+  ) {
+    candidate.classification =
+      candidate.classification === "request-role-blocked"
+        ? "request-role-blocked"
+        : "stale-or-wrong-request";
+    candidate.problems.push(
+      `${spec.label} signed attestation body does not match this request package`,
+    );
+  }
+  const entry = {
+    path: candidate.path,
+    sha256: candidate.sha256,
+    schema: candidate.schema,
+    record,
+  };
+  const signatureBlockers = attestationSignatureBlockers(
+    entry,
+    trustedSignerFingerprints,
+    `${spec.label} attestation`,
+  );
+  candidate.signature = entry.signatureSummary ?? null;
+  candidate.problems.push(...signatureBlockers);
+  if (
+    candidate.problems.length === 0 &&
+    candidate.expectedSignedPayloadSha256 === candidate.signedPayloadSha256
+  ) {
+    candidate.classification = "usable";
+    candidate.usable = true;
+  } else if (
+    candidate.classification === "invalid" &&
+    signatureBlockers.length > 0
+  ) {
+    candidate.classification = "signature-invalid-or-untrusted";
+  }
+  return candidate;
+}
+
+export async function inventoryBscGroth16Attestations(options = {}) {
+  const requestPath = await assertReadableRegularFile(
+    requiredOption(
+      options,
+      ["request", "attestation-request", "request-package"],
+      "attestation inventory",
+    ),
+    "BSC Groth16 attestation request package",
+  );
+  const scanDir = await assertReadableDirectory(
+    requiredOption(
+      options,
+      ["scan-dir", "attestation-dir", "dir"],
+      "attestation inventory",
+    ),
+    "BSC Groth16 attestation inventory directory",
+  );
+  const trustedSignerFingerprints = parseTrustedSignerFingerprints(options);
+  const status = await auditBscGroth16AttestationStatus({
+    ...options,
+    request: requestPath,
+    "trusted-attestation-signers": trustedSignerFingerprints.join(","),
+  });
+  const files = await collectAttestationInventoryJsonFiles(scanDir, {
+    maxDepth: positiveIntegerOption(options, "max-depth", 5),
+    maxFiles: positiveIntegerOption(options, "max-files", 1000),
+  });
+  const candidates = [];
+  let ignoredJsonCount = 0;
+  for (const pathName of files) {
+    const candidate = await classifyAttestationInventoryCandidate({
+      pathName,
+      roleStatuses: status.roles,
+      trustedSignerFingerprints,
+    });
+    if (candidate.role) {
+      candidates.push(candidate);
+    } else {
+      ignoredJsonCount += 1;
+    }
+  }
+  const selectedCandidates = {};
+  const roleSummary = {};
+  for (const spec of BSC_GROTH16_ATTESTATION_ROLE_SPECS) {
+    const roleCandidates = candidates.filter((candidate) => candidate.role === spec.key);
+    const usableCandidates = roleCandidates.filter((candidate) => candidate.usable);
+    const selected = usableCandidates[0] ?? null;
+    roleSummary[spec.key] = {
+      signable: status.roles[spec.key]?.signable ?? false,
+      candidateCount: roleCandidates.length,
+      usableCount: usableCandidates.length,
+      selected: selected
+        ? {
+            path: selected.path,
+            sha256: selected.sha256,
+            signerFingerprint: selected.signature?.signerFingerprint ?? null,
+            signedPayloadSha256: selected.signedPayloadSha256,
+          }
+        : null,
+      classifications: Object.fromEntries(
+        [...new Set(roleCandidates.map((candidate) => candidate.classification))]
+          .sort()
+          .map((classification) => [
+            classification,
+            roleCandidates.filter((candidate) => candidate.classification === classification)
+              .length,
+          ]),
+      ),
+    };
+    selectedCandidates[spec.key] = selected
+      ? {
+          path: selected.path,
+          sha256: selected.sha256,
+          schema: selected.schema,
+          signature: selected.signature,
+        }
+      : null;
+  }
+  const selectedEntries = Object.fromEntries(
+    Object.entries(selectedCandidates).map(([key, value]) => [
+      key,
+      value
+        ? {
+            ...value,
+            signatureSummary: value.signature,
+          }
+        : null,
+    ]),
+  );
+  const signerDiversityBlockers = attestationSignerDiversityBlockers(selectedEntries);
+  const missingUsableRoles = BSC_GROTH16_ATTESTATION_ROLE_SPECS
+    .filter((spec) => !selectedCandidates[spec.key])
+    .map((spec) => spec.key);
+  const missingSignedRoleProblemSet = new Set(
+    status.missingSignedRoles.map(
+      (role) => `${role} signed attestation file is missing`,
+    ),
+  );
+  const scanIndependentProblems = status.problems.filter(
+    (problem) => !missingSignedRoleProblemSet.has(problem),
+  );
+  const candidateSetReady =
+    scanIndependentProblems.length === 0 &&
+    missingUsableRoles.length === 0 &&
+    signerDiversityBlockers.length === 0 &&
+    Object.values(status.requestReadyForSignature).every(Boolean);
+  const problems = [
+    ...scanIndependentProblems,
+    ...missingUsableRoles.map((role) => `${role} has no usable signed attestation candidate`),
+    ...signerDiversityBlockers,
+  ];
+  return {
+    ok: true,
+    candidateSetReady,
+    request: status.request,
+    requestSha256: status.requestSha256,
+    requestManifest: status.requestManifest,
+    requestManifestSha256: status.requestManifestSha256,
+    bscNetwork: status.bscNetwork,
+    scanDir: repoRelativePath(scanDir),
+    scannedJsonCount: files.length,
+    ignoredJsonCount,
+    trustedSignerFingerprints,
+    requestReadyForSignature: status.requestReadyForSignature,
+    roleSummary,
+    selectedCandidates,
+    missingUsableRoles,
+    signerDiversityBlockers,
+    candidates,
+    problems,
+    problemCount: problems.length,
+    nextActions: candidateSetReady
+      ? [
+          "Run attestation-status/finalize-attestations with the selected candidate paths and trusted signer fingerprints.",
+        ]
+      : [
+          ...status.nextActions.filter(
+            (action) => !/^Sign the missing ready role payloads:/u.test(action),
+          ),
+          "Provide signed role files whose bodies match this request package's signedPayloadSha256 values.",
+        ],
+  };
+}
+
 export async function finalizeBscGroth16Attestations(options = {}) {
   const requestPath = await assertReadableRegularFile(
     requiredOption(
@@ -10524,6 +11016,23 @@ export async function preflightBscGroth16Material(options = {}) {
             status.problems[0] ?? "request package is invalid"
           }`,
         );
+      } else {
+        const blockedRoles = Object.entries(status.requestReadyForSignature)
+          .filter(([, ready]) => ready !== true)
+          .map(([role]) => role);
+        if (blockedRoles.length > 0) {
+          const blockerPreview = status.problems
+            .filter((problem) =>
+              blockedRoles.some((role) => problem.startsWith(`${role}:`)),
+            )
+            .slice(0, 4)
+            .join("; ");
+          problems.push(
+            `attestation request roles are not ready for signature: ${blockedRoles.join(
+              ", ",
+            )}${blockerPreview ? ` (${blockerPreview})` : ""}`,
+          );
+        }
       }
     } catch (error) {
       problems.push(
@@ -10584,6 +11093,7 @@ function usage() {
   node scripts/sccp_bsc_groth16_material.mjs verify-handoff --handoff <handoff.json> [--trusted-attestation-signer <0x...>]
   node scripts/sccp_bsc_groth16_material.mjs sign-attestation --request <attestation-request.json> --role semanticSccpCircuit|circuitSecurity|trustedSetup|reproducibleBuild --private-key-pem <ed25519-private-key.pem> [--signer-fingerprint <0x...>] [--out <signed-role-attestation.json>]
   node scripts/sccp_bsc_groth16_material.mjs attestation-status --request <attestation-request.json> --semantic-attestation <json> --circuit-security-attestation <json> --trusted-setup-attestation <json> --reproducible-build-attestation <json> --trusted-attestation-signer <0x...>
+  node scripts/sccp_bsc_groth16_material.mjs attestation-inventory --request <attestation-request.json> --scan-dir <dir> --trusted-attestation-signer <0x...> [--max-depth 5] [--max-files 1000]
   node scripts/sccp_bsc_groth16_material.mjs finalize-attestations --request <attestation-request.json> --semantic-attestation <json> --circuit-security-attestation <json> --trusted-setup-attestation <json> --reproducible-build-attestation <json> --trusted-attestation-signer <0x...> [--out-dir <dir>]
   node scripts/sccp_bsc_groth16_material.mjs preflight --bsc-network testnet|mainnet [--circuit-profile ${BSC_FULL_SCCP_CIRCUIT_PROFILE}] [--out-dir ${DEFAULT_GENERATED_MATERIAL_OUT}/testnet] [--toolchain-root ${DEFAULT_GROTH16_TOOLCHAIN_ROOT}] [--circom-bin circom2] [--snarkjs-bin snarkjs]
 
@@ -10634,7 +11144,11 @@ fingerprint itself, refuses blocked roles, and writes only public detached
 signature material. The attestation-status command is read-only and audits a
 request package plus supplied signed role files for request/manifest binding,
 transcript blockers, signed body drift, trusted signer verification, and signer
-separation before finalization. The finalize-attestations command imports signed role files,
+separation before finalization. The attestation-inventory command is read-only
+and recursively classifies JSON files in a directory as usable, stale,
+request-role-blocked, or signature-invalid for the exact request package, so
+temporary or foreign signed attestations are not mistaken for production inputs.
+The finalize-attestations command imports signed role files,
 verifies that every signed body exactly matches the request package, enforces
 trusted role-separated signatures, and re-materializes the production manifest
 from the request package artifacts.
@@ -10694,6 +11208,10 @@ export async function main(argv = process.argv.slice(2)) {
     case "verify-attestations":
     case "attestation-audit":
       return auditBscGroth16AttestationStatus(options);
+    case "attestation-inventory":
+    case "attestation-scan":
+    case "scan-attestations":
+      return inventoryBscGroth16Attestations(options);
     case "finalize-attestations":
     case "finalize-attestation":
     case "attestation-finalize":

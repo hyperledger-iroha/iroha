@@ -14,6 +14,7 @@ import {
   TransactionTimeoutError,
   IsoMessageTimeoutError,
   buildRbcSampleRequest,
+  buildSorafsOrderbookEventsWebSocketUrl,
   statusLivenessElapsedMs,
   isStatusQueueStalled,
 } from "../src/toriiClient.js";
@@ -4010,6 +4011,7 @@ test("SoraFS reputation helpers fetch REST and SSE endpoints", async () => {
     }
     throw new Error(`unexpected URL: ${url}`);
   };
+  fetchImpl.__irohaSupportsRawUtf8Headers = true;
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
   const latest = await client.getSorafsReputationLatest({ ifNoneMatch: '"old"' });
@@ -4101,6 +4103,465 @@ test("SoraFS reputation helpers validate options and identifiers before fetch", 
     () => client.streamSorafsReputationEvents({ extra: true }),
     /streamSorafsReputationEvents options contains unsupported fields: extra/,
   );
+});
+
+test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
+  const orderIdHex = "11".repeat(32);
+  const tradeIdHex = "22".repeat(32);
+  const channelIdHex = "33".repeat(32);
+  const receiptIdHex = "44".repeat(32);
+  const providerIdHex = "55".repeat(32);
+  const chunkHashHex = "66".repeat(32);
+  const signature = {
+    algorithm: "Ed25519",
+    public_key_hex: "AA".repeat(32),
+    signature_hex: "BB".repeat(64),
+  };
+  const order = {
+    version: 1,
+    order_id_hex: `0x${orderIdHex.toUpperCase()}`,
+    side: "bid",
+    tier: "hot",
+    price_per_gib_micro_xor: "1500000",
+    quantity_gib: 4,
+    remaining_gib: 2,
+    owner_account_hex: "CAFE",
+    expiry_unix: 1_800_000_000,
+    nonce: 7,
+    maker_fee_bps: 25,
+    taker_fee_bps: 35,
+    signature,
+  };
+  const trade = {
+    version: 1,
+    trade_id_hex: tradeIdHex,
+    maker_order_id_hex: orderIdHex,
+    taker_order_id_hex: "77".repeat(32),
+    tier: "hot",
+    price_per_gib_micro_xor: "1500000",
+    filled_gib: 2,
+    maker_fee_micro_xor: "75000",
+    taker_fee_micro_xor: "105000",
+    timestamp_unix: 1_700_000_100,
+  };
+  const channel = {
+    version: 1,
+    channel_id_hex: channelIdHex,
+    trade_id_hex: tradeIdHex,
+    buyer_account_hex: "FACE",
+    provider_id_hex: providerIdHex,
+    total_bytes: 2147483648,
+    remaining_bytes: 1073741824,
+    xor_locked_micro: "3000000",
+    status: "open",
+    opened_at_unix: 1_700_000_101,
+    updated_at_unix: 1_700_000_102,
+  };
+  const receipt = {
+    version: 1,
+    receipt_id_hex: receiptIdHex,
+    channel_id_hex: channelIdHex,
+    trade_id_hex: tradeIdHex,
+    range: { start: 0, end: 1024 },
+    chunk_hash_hex: chunkHashHex,
+    bytes_delivered: 1024,
+    xor_debited_micro: "1500",
+    provider_credit_micro: "1400",
+    fee_amount_micro: "100",
+    issued_at_unix: 1_700_000_103,
+    settlement_signature: signature,
+  };
+  const event = {
+    sequence: 9,
+    kind: "settlement_receipt_accepted",
+    generated_at_unix: 1_700_000_104,
+    order_id_hex: null,
+    trade_ids_hex: [tradeIdHex],
+    settlement_channel_ids_hex: [channelIdHex],
+    receipt_id_hex: receiptIdHex,
+    expired_order_ids_hex: [orderIdHex],
+    open_order_count: 1,
+    open_settlement_channel_count: 1,
+    settlement_receipt_count: 1,
+  };
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    if (init?.method === "POST" && url.includes("/v1/sorafs/orderbook/orders")) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          status: "accepted",
+          sequence: 12,
+          open_order_count: 1,
+          accepted_order: order,
+          fills: [
+            {
+              trade,
+              maker_remaining_gib: 0,
+              taker_remaining_gib: 2,
+              gross_value_micro_xor: "3000000",
+            },
+          ],
+          settlement_channels_opened: [channel],
+          expired_order_ids_hex: [orderIdHex],
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (init?.method === "POST" && url.includes("/v1/sorafs/orderbook/cancel")) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          status: "cancelled",
+          reason: "owner_requested",
+          open_order_count: 0,
+          cancelled_order: order,
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (init?.method === "POST" && url.includes("/v1/sorafs/orderbook/receipts")) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          status: "accepted",
+          settlement_receipt_count: 1,
+          open_settlement_channel_count: 1,
+          accepted_receipt: receipt,
+          updated_channel: channel,
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.includes("/v1/sorafs/orderbook/book")) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          schema: "sorafs.orderbook.local.v1",
+          source: "local",
+          generated_at_unix: 1_700_000_000,
+          next_sequence: 10,
+          open_order_count: 1,
+          trade_count: 1,
+          settlement_channel_count: 1,
+          settlement_receipt_count: 1,
+          depth: {
+            hot_bid_gib: 2,
+            hot_ask_gib: 0,
+            warm_bid_gib: 0,
+            warm_ask_gib: 0,
+            archive_bid_gib: 0,
+            archive_ask_gib: 0,
+          },
+          open_orders: [{ sequence: 1, order }],
+          trades: [trade],
+          settlement_channels: [channel],
+          settlement_receipts: [receipt],
+          expired_order_ids_hex: [orderIdHex],
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.includes("/v1/sorafs/orderbook/trades")) {
+      return createResponse({
+        status: 200,
+        jsonData: { count: 1, trades: [trade] },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.includes("/v1/sorafs/orderbook/channels")) {
+      return createResponse({
+        status: 200,
+        jsonData: { count: 1, channels: [channel] },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.includes("/v1/sorafs/orderbook/receipts")) {
+      return createResponse({
+        status: 200,
+        jsonData: { count: 1, receipts: [receipt] },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.includes("/v1/sorafs/orderbook/events/stream")) {
+      return createSseResponse([
+        "id: 9\n",
+        "event: settlement_receipt_accepted\n",
+        `data: ${JSON.stringify(event)}\n`,
+        "\n",
+      ]);
+    }
+    if (url.includes("/v1/sorafs/orderbook/events")) {
+      return createResponse({
+        status: 200,
+        jsonData: { since: 0, limit: 10, count: 1, next_since: 9, events: [event] },
+        headers: { "content-type": "application/json", etag: '"orderbook-events"' },
+      });
+    }
+    throw new Error(`unexpected URL: ${url}`);
+  };
+  markFetchSupportsRawUtf8Headers(fetchImpl);
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+
+  const book = await client.getSorafsOrderbook({ headers: { "X-Trace": "book" } });
+  assert.equal(book.open_order_count, 1);
+  assert.equal(book.open_orders[0]?.order.order_id_hex, orderIdHex);
+  assert.equal(book.open_orders[0]?.order.owner_account_hex, "cafe");
+  assert.equal(book.open_orders[0]?.order.signature.public_key_hex, "aa".repeat(32));
+  assert.equal(calls[0]?.url, `${BASE_URL}/v1/sorafs/orderbook/book`);
+  assert.equal(calls[0]?.init?.headers?.["X-Trace"], "book");
+
+  const trades = await client.listSorafsOrderbookTrades();
+  assert.equal(trades.count, 1);
+  assert.equal(trades.trades[0]?.trade_id_hex, tradeIdHex);
+
+  const channels = await client.listSorafsOrderbookChannels();
+  assert.equal(channels.channels[0]?.provider_id_hex, providerIdHex);
+  assert.equal(channels.channels[0]?.status, "open");
+
+  const receipts = await client.listSorafsOrderbookReceipts();
+  assert.equal(receipts.receipts[0]?.range.end, 1024);
+  assert.equal(receipts.receipts[0]?.settlement_signature.signature_hex, "bb".repeat(64));
+
+  const events = await client.listSorafsOrderbookEvents({
+    since: 0,
+    limit: "10",
+    ifNoneMatch: '"old-events"',
+  });
+  assert.equal(events?.events[0]?.kind, "settlement_receipt_accepted");
+  assert.equal(events?.events[0]?.receipt_id_hex, receiptIdHex);
+  const eventsUrl = new URL(calls[4]?.url);
+  assert.equal(eventsUrl.searchParams.get("since"), "0");
+  assert.equal(eventsUrl.searchParams.get("limit"), "10");
+  assert.equal(calls[4]?.init?.headers?.["If-None-Match"], '"old-events"');
+
+  const stream = client.streamSorafsOrderbookEvents({
+    since: 8,
+    limit: 1,
+    lastEventId: "8",
+  });
+  const first = await stream.next();
+  assert.equal(first.done, false);
+  assert.equal(first.value.event, "settlement_receipt_accepted");
+  assert.equal(first.value.id, "9");
+  assert.equal(first.value.data.receipt_id_hex, receiptIdHex);
+  const streamUrl = new URL(calls[5]?.url);
+  assert.equal(streamUrl.pathname, "/v1/sorafs/orderbook/events/stream");
+  assert.equal(streamUrl.searchParams.get("since"), "8");
+  assert.equal(streamUrl.searchParams.get("limit"), "1");
+  assert.equal(calls[5]?.init?.headers?.["Last-Event-ID"], "8");
+
+  const canonicalAuth = {
+    accountId: FIXTURE_ALICE_ID,
+    privateKey: Buffer.alloc(32, 1),
+  };
+  const orderPayload = Uint8Array.from([1, 2, 3]);
+  const orderSubmit = await client.submitSorafsOrderbookOrder(orderPayload, {
+    canonicalAuth,
+    headers: { "X-Trace": "order-submit" },
+  });
+  assert.equal(orderSubmit.status, "accepted");
+  assert.equal(orderSubmit.sequence, 12);
+  assert.equal(orderSubmit.fills[0]?.gross_value_micro_xor, "3000000");
+  assert.equal(orderSubmit.settlement_channels_opened[0]?.channel_id_hex, channelIdHex);
+  const orderCall = calls[6];
+  assert.equal(orderCall?.url, `${BASE_URL}/v1/sorafs/orderbook/orders`);
+  assert.deepEqual(Array.from(Buffer.from(orderCall?.init?.body)), [1, 2, 3]);
+  assert.equal(orderCall?.init?.headers?.["Content-Type"], "application/octet-stream");
+  assert.equal(orderCall?.init?.headers?.["X-Trace"], "order-submit");
+  assert.equal(orderCall?.init?.headers?.["X-Iroha-Account"], FIXTURE_ALICE_ID);
+  assert.ok(orderCall?.init?.headers?.["X-Iroha-Signature"]);
+
+  const cancelSubmit = await client.submitSorafsOrderbookCancel([4, 5], {
+    canonicalAuth,
+  });
+  assert.equal(cancelSubmit.status, "cancelled");
+  assert.equal(cancelSubmit.cancelled_order.order_id_hex, orderIdHex);
+  assert.equal(calls[7]?.url, `${BASE_URL}/v1/sorafs/orderbook/cancel`);
+
+  const receiptSubmit = await client.submitSorafsOrderbookReceipt(Buffer.from([6]), {
+    canonicalAuth,
+  });
+  assert.equal(receiptSubmit.status, "accepted");
+  assert.equal(receiptSubmit.accepted_receipt.receipt_id_hex, receiptIdHex);
+  assert.equal(calls[8]?.url, `${BASE_URL}/v1/sorafs/orderbook/receipts`);
+});
+
+test("SoraFS orderbook read helpers validate options and cache validators", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not run for invalid orderbook inputs");
+    },
+  });
+  await assert.rejects(
+    () => client.getSorafsOrderbook("invalid"),
+    /getSorafsOrderbook options must be an object/,
+  );
+  await assert.rejects(
+    () => client.listSorafsOrderbookTrades({ extra: true }),
+    /listSorafsOrderbookTrades options contains unsupported fields: extra/,
+  );
+  await assert.rejects(
+    () => client.listSorafsOrderbookEvents({ limit: 0 }),
+    /listSorafsOrderbookEvents\.limit must be a positive integer/,
+  );
+  await assert.rejects(
+    () => client.listSorafsOrderbookEvents({ ifNoneMatch: '"a"', etag: '"b"' }),
+    /only one of ifNoneMatch or etag/,
+  );
+  assert.throws(
+    () => client.streamSorafsOrderbookEvents({ extra: true }),
+    /streamSorafsOrderbookEvents options contains unsupported fields: extra/,
+  );
+  assert.throws(
+    () => client.streamSorafsOrderbookEvents({ lastEventId: "   " }),
+    /streamSorafsOrderbookEvents\.lastEventId must not be empty/,
+  );
+  assert.throws(
+    () => client.buildSorafsOrderbookEventsWebSocketUrl({ extra: true }),
+    /ToriiClient\.buildSorafsOrderbookEventsWebSocketUrl options contains unsupported fields: extra/,
+  );
+  assert.throws(
+    () => client.openSorafsOrderbookEventsWebSocket({ limit: 0, WebSocketImpl: class {} }),
+    /ToriiClient\.openSorafsOrderbookEventsWebSocket\.limit must be a positive integer/,
+  );
+  assert.throws(
+    () => client.streamSorafsOrderbookEventsWebSocket({ extra: true }),
+    /streamSorafsOrderbookEventsWebSocket options contains unsupported fields: extra/,
+  );
+  await assert.rejects(
+    () => client.submitSorafsOrderbookOrder(Buffer.from([1]), {}),
+    /submitSorafsOrderbookOrder\.canonicalAuth is required/,
+  );
+  await assert.rejects(
+    () =>
+      client.submitSorafsOrderbookReceipt(Buffer.alloc(0), {
+        canonicalAuth: { accountId: FIXTURE_ALICE_ID, privateKey: Buffer.alloc(32, 1) },
+      }),
+    /submitSorafsOrderbookReceipt\.payload must not be empty/,
+  );
+
+  const cachedClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({ status: 304, headers: {} }),
+  });
+  assert.equal(await cachedClient.listSorafsOrderbookEvents({ etag: '"same"' }), null);
+});
+
+test("SoraFS orderbook WebSocket helper opens and normalizes event frames", async () => {
+  class FakeWebSocket {
+    static instances = [];
+
+    constructor(url, protocols, options) {
+      this.url = url;
+      this.protocols = protocols;
+      this.options = options;
+      this.listeners = new Map();
+      this.closed = false;
+      FakeWebSocket.instances.push(this);
+    }
+
+    addEventListener(event, listener) {
+      const listeners = this.listeners.get(event) ?? [];
+      listeners.push(listener);
+      this.listeners.set(event, listeners);
+    }
+
+    removeEventListener(event, listener) {
+      const listeners = this.listeners.get(event) ?? [];
+      this.listeners.set(
+        event,
+        listeners.filter((candidate) => candidate !== listener),
+      );
+    }
+
+    emit(event, payload) {
+      for (const listener of this.listeners.get(event) ?? []) {
+        listener(payload);
+      }
+    }
+
+    close() {
+      this.closed = true;
+      this.emit("close", {});
+    }
+  }
+
+  const receiptIdHex = "44".repeat(32);
+  const client = new ToriiClient(BASE_URL);
+  const defaultWebSocketUrl = `${BASE_URL.replace("https:", "wss:")}/v1/sorafs/orderbook/events/ws`;
+  assert.equal(client.buildSorafsOrderbookEventsWebSocketUrl(), defaultWebSocketUrl);
+  assert.equal(buildSorafsOrderbookEventsWebSocketUrl(BASE_URL), defaultWebSocketUrl);
+
+  const defaultSocket = client.openSorafsOrderbookEventsWebSocket({
+    WebSocketImpl: FakeWebSocket,
+  });
+  assert.equal(defaultSocket.url, defaultWebSocketUrl);
+
+  const defaultStream = client.streamSorafsOrderbookEventsWebSocket({
+    WebSocketImpl: FakeWebSocket,
+  });
+  const defaultStreamSocket = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+  assert.equal(defaultStreamSocket.url, defaultWebSocketUrl);
+  await defaultStream.return();
+  FakeWebSocket.instances = [];
+
+  assert.equal(
+    client.buildSorafsOrderbookEventsWebSocketUrl({ since: 8, limit: 1 }),
+    `${BASE_URL.replace("https:", "wss:")}/v1/sorafs/orderbook/events/ws?since=8&limit=1`,
+  );
+
+  const stream = client.streamSorafsOrderbookEventsWebSocket({
+    since: 8,
+    limit: 1,
+    protocols: "iroha.sorafs.orderbook.v1",
+    websocketOptions: { perMessageDeflate: false },
+    WebSocketImpl: FakeWebSocket,
+  });
+  const socket = FakeWebSocket.instances[0];
+  assert.equal(
+    socket.url,
+    `${BASE_URL.replace("https:", "wss:")}/v1/sorafs/orderbook/events/ws?since=8&limit=1`,
+  );
+  assert.equal(socket.protocols, "iroha.sorafs.orderbook.v1");
+  assert.deepEqual(socket.options, { perMessageDeflate: false });
+
+  const eventPromise = stream.next();
+  socket.emit("message", {
+    data: JSON.stringify({
+      event: "settlement_receipt_accepted",
+      data: {
+        sequence: 9,
+        kind: "settlement_receipt_accepted",
+        generated_at_unix: 1_700_000_104,
+        order_id_hex: null,
+        trade_ids_hex: ["22".repeat(32)],
+        settlement_channel_ids_hex: ["33".repeat(32)],
+        receipt_id_hex: receiptIdHex,
+        expired_order_ids_hex: ["11".repeat(32)],
+        open_order_count: 1,
+        open_settlement_channel_count: 1,
+        settlement_receipt_count: 1,
+      },
+    }),
+  });
+  const first = await eventPromise;
+  assert.equal(first.done, false);
+  assert.equal(first.value.event, "settlement_receipt_accepted");
+  assert.equal(first.value.data.receipt_id_hex, receiptIdHex);
+  assert.equal(first.value.data.kind, "settlement_receipt_accepted");
+
+  const lagPromise = stream.next();
+  socket.emit("message", {
+    data: JSON.stringify({ event: "lagged", data: { skipped: 3 } }),
+  });
+  const lagged = await lagPromise;
+  assert.equal(lagged.done, false);
+  assert.equal(lagged.value.event, "lagged");
+  assert.deepEqual(lagged.value.data, { skipped: 3 });
+
+  await stream.return();
+  assert.equal(socket.closed, true);
 });
 
 test("getUaidPortfolio normalizes UAID literals and dataspace payloads", async () => {
@@ -16182,7 +16643,7 @@ test("queryDomains rejects non-object select entries", async () => {
       client.queryDomains({
         select: [{ id: true }, []],
       }),
-    /select\[1] must be a plain object/,
+    /select\[1] must be a field-path string or plain object/,
   );
   assert.equal(callCount, 0);
 });
@@ -17683,6 +18144,63 @@ test("queryVisibleTransactions builds convenience transaction filters", async ()
   ]);
   assert.equal(capturedBody.fetch_size, 25);
   assert.equal(capturedBody.query, "VisibleTransactions");
+});
+
+test("queryVisibleTransactions posts field-path select projections", async () => {
+  let capturedPath;
+  let capturedBody;
+  const fetchImpl = async (url, init) => {
+    const parsed = new URL(url);
+    capturedPath = parsed.pathname;
+    assert.equal(init.method, "POST");
+    capturedBody = JSON.parse(init.body);
+    return createResponse({
+      status: 200,
+      jsonData: { items: [], total: 0 },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await client.queryVisibleTransactions({
+    select: [" authority ", "metadata.amount", "metadata.from_account_id"],
+    queryName: "VisibleTransactionProjection",
+  });
+  assert.equal(capturedPath, "/v1/transactions/visible/query");
+  assert.deepEqual(capturedBody.select, [
+    "authority",
+    "metadata.amount",
+    "metadata.from_account_id",
+  ]);
+  assert.equal(capturedBody.query, "VisibleTransactionProjection");
+});
+
+test("queryVisibleTransactions rejects invalid select projection entries", async () => {
+  let callCount = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      callCount += 1;
+      return createResponse({
+        status: 200,
+        jsonData: { items: [], total: 0 },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.queryVisibleTransactions({
+        select: ["authority", 42],
+      }),
+    /select\[1] must be a field-path string or plain object/,
+  );
+  await assert.rejects(
+    () =>
+      client.queryVisibleTransactions({
+        select: ["authority", " "],
+      }),
+    /select\[1] must be a non-empty field path/,
+  );
+  assert.equal(callCount, 0);
 });
 
 test("queryAccountTransactions merges raw and convenience filters", async () => {

@@ -5,7 +5,7 @@ use std::{
     num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use hex;
@@ -602,7 +602,7 @@ impl SnapshotMaker {
     pub fn start(self, shutdown_signal: ShutdownSignal) -> Child {
         Child::new(
             tokio::spawn(self.run(shutdown_signal)),
-            OnShutdown::Wait(Duration::from_secs(2)),
+            OnShutdown::Wait(Duration::from_secs(30)),
         )
     }
 
@@ -1105,6 +1105,46 @@ fn reconcile_snapshot_hash_height_with_kura(
     })
 }
 
+fn reconcile_snapshot_hashes_with_kura(
+    state: &mut State,
+    snapshot_hashes: &[HashOf<BlockHeader>],
+    kura: &Arc<Kura>,
+    hard_fork_snapshot_bootstrap: bool,
+) -> Result<(), TryReadError> {
+    let snapshot_height = snapshot_hashes.len();
+    for (idx, snapshot_block_hash) in snapshot_hashes.iter().copied().enumerate() {
+        let height = idx + 1;
+        let height_nz = NonZeroUsize::new(height).expect("iterating from 1");
+        let kura_block_hash = kura
+            .block_hash_at_height(height_nz)
+            .ok_or(TryReadError::MissingBlock { height })?;
+        if kura_block_hash == snapshot_block_hash {
+            continue;
+        }
+
+        if hard_fork_snapshot_bootstrap || height != snapshot_height {
+            return Err(TryReadError::MismatchedHash {
+                height,
+                snapshot_block_hash,
+                kura_block_hash,
+            });
+        }
+
+        let kura_block = kura
+            .get_block(height_nz)
+            .ok_or(TryReadError::MissingBlock { height })?;
+        iroha_logger::warn!(
+            "Snapshot has incorrect latest block hash, discarding changes made by this block"
+        );
+        state
+            .block_and_revert(kura_block.header())
+            .commit()
+            .map_err(TryReadError::StateCommit)?;
+    }
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 fn try_read_snapshot_bundle(
@@ -1208,44 +1248,19 @@ fn try_read_snapshot_bundle(
     {
         return Err(TryReadError::MissingOfflineNoteReplayKeys { snapshot_height });
     }
-    for (idx, snapshot_block_hash) in snapshot_hashes.into_iter().enumerate() {
-        let height = idx + 1;
-        let height_nz = NonZeroUsize::new(height).expect("iterating from 1");
-        if hard_fork_snapshot_bootstrap_enabled() {
-            let kura_block_hash = kura
-                .block_hash_at_height(height_nz)
-                .ok_or(TryReadError::MissingBlock { height })?;
-            if kura_block_hash != snapshot_block_hash {
-                return Err(TryReadError::MismatchedHash {
-                    height,
-                    snapshot_block_hash,
-                    kura_block_hash,
-                });
-            }
-            continue;
-        }
-
-        let kura_block = kura
-            .get_block(height_nz)
-            .ok_or(TryReadError::MissingBlock { height })?;
-        if kura_block.hash() != snapshot_block_hash {
-            if height == snapshot_height {
-                iroha_logger::warn!(
-                    "Snapshot has incorrect latest block hash, discarding changes made by this block"
-                );
-                state
-                    .block_and_revert(kura_block.header())
-                    .commit()
-                    .map_err(TryReadError::StateCommit)?;
-            } else {
-                return Err(TryReadError::MismatchedHash {
-                    height,
-                    snapshot_block_hash,
-                    kura_block_hash: kura_block.hash(),
-                });
-            }
-        }
-    }
+    let hash_reconcile_started_at = Instant::now();
+    reconcile_snapshot_hashes_with_kura(
+        &mut state,
+        &snapshot_hashes,
+        kura,
+        hard_fork_snapshot_bootstrap_enabled(),
+    )?;
+    iroha_logger::info!(
+        snapshot_height,
+        kura_height = block_count,
+        validation_ms = hash_reconcile_started_at.elapsed().as_millis(),
+        "Validated snapshot block hashes against Kura"
+    );
     if !has_space_directory_manifest_section && snapshot_height > 0 {
         let restored =
             restore_space_directory_manifests_from_kura(&mut state, kura, snapshot_height)?;
@@ -1962,8 +1977,19 @@ enum TryWriteError {
 
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Cow, fs::File, io::Write, num::NonZeroUsize, sync::Arc};
+    use std::{borrow::Cow, fs::File, io::Write, num::NonZeroUsize, path::Path, sync::Arc};
 
+    use iroha_config::{
+        base::WithOrigin,
+        kura::{FsyncMode, InitMode},
+        parameters::{
+            actual::{Kura as KuraConfig, LaneConfig},
+            defaults::kura::{
+                BLOCK_SYNC_ROSTER_RETENTION, EVICTION_REQUIRED_REPLICAS, FSYNC_INTERVAL,
+                MAX_DISK_USAGE_BYTES, MERGE_LEDGER_CACHE_CAPACITY, ROSTER_SIDECAR_RETENTION,
+            },
+        },
+    };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         ChainId, Level,
@@ -2071,6 +2097,25 @@ mod tests {
 
     fn state_factory() -> State {
         state_factory_with_kura(Kura::blank_kura_for_testing())
+    }
+
+    fn kura_config_for_snapshot_test(
+        store_dir: &Path,
+        blocks_in_memory: NonZeroUsize,
+    ) -> KuraConfig {
+        KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_dir.to_path_buf()),
+            max_disk_usage_bytes: MAX_DISK_USAGE_BYTES,
+            blocks_in_memory,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: FSYNC_INTERVAL,
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas: EVICTION_REQUIRED_REPLICAS,
+        }
     }
 
     fn install_active_space_directory_manifest(
@@ -2405,10 +2450,17 @@ mod tests {
     fn signed_block_with_transaction(
         transaction: AcceptedTransaction<'static>,
     ) -> Arc<SignedBlock> {
+        signed_block_after_transaction(transaction, None)
+    }
+
+    fn signed_block_after_transaction(
+        transaction: AcceptedTransaction<'static>,
+        latest_block: Option<&SignedBlock>,
+    ) -> Arc<SignedBlock> {
         let block_signer = checked_seeded_keypair(0x33, Algorithm::BlsNormal);
         Arc::new(
             BlockBuilder::new(vec![transaction])
-                .chain(0, None)
+                .chain(0, latest_block)
                 .sign(block_signer.private_key())
                 .unpack(|_| {})
                 .into(),
@@ -2788,6 +2840,139 @@ mod tests {
 
         reconcile_snapshot_hash_height_with_kura(&[canonical_hash], 1, &kura, true)
             .expect("hard-fork snapshot at durable Kura height should be accepted");
+    }
+
+    #[test]
+    async fn snapshot_read_validates_hashes_without_historical_block_body() {
+        let tmp_root = tempdir().unwrap();
+        let snapshot_store_dir = tmp_root.path().join("snapshot");
+        let kura_store_dir = tmp_root.path().join("kura");
+        let lane_config = LaneConfig::default();
+        let kura_config = kura_config_for_snapshot_test(&kura_store_dir, nonzero!(1_usize));
+        let (kura, _) = Kura::new(&kura_config, &lane_config).expect("kura init");
+        let mut state = state_factory_with_kura(Arc::clone(&kura));
+        let key_pair = checked_random_snapshot_keypair();
+
+        let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
+        store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block1));
+        let block2 = signed_block_after_transaction(
+            accepted_log_transaction("second"),
+            Some(block1.as_ref()),
+        );
+        store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block2));
+        let block3 = signed_block_after_transaction(
+            accepted_log_transaction("third"),
+            Some(block2.as_ref()),
+        );
+        store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block3));
+        let expected_snapshot = canonical_state_snapshot_bytes_for_tests(&state);
+
+        try_write_snapshot(&state, &snapshot_store_dir, &key_pair, TEST_CHUNK_SIZE)
+            .expect("snapshot write");
+
+        let (kura, block_count) = Kura::new(&kura_config, &lane_config).expect("kura reopen");
+        let historical_height = nonzero!(2_usize);
+        let payload_len = kura
+            .advertise_required_replicas_for_bench(historical_height)
+            .expect("historical payload length");
+        let freed = kura
+            .evict_block_bodies_for_bench(payload_len)
+            .expect("evict historical block body");
+        assert!(freed >= payload_len);
+        let historical_sidecar_path = lane_config
+            .primary()
+            .blocks_dir(&kura_store_dir)
+            .join("da_blocks")
+            .join(format!("{:020}.norito", historical_height.get()));
+        assert!(
+            historical_sidecar_path.is_file(),
+            "expected evicted block sidecar at {}",
+            historical_sidecar_path.display()
+        );
+        std::fs::remove_file(&historical_sidecar_path).expect("remove historical sidecar");
+        assert!(
+            kura.block_hash_at_height(historical_height).is_some(),
+            "hash journal must still contain the historical block"
+        );
+        assert!(
+            kura.get_block(historical_height).is_none(),
+            "test fixture must make the historical block body unavailable"
+        );
+
+        let snapshot_state = try_read_snapshot(
+            &snapshot_store_dir,
+            &kura,
+            LiveQueryStore::start_test,
+            block_count,
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::new(<_>::default(), true),
+        )
+        .expect("snapshot read should validate historical hashes without block bodies");
+
+        assert_eq!(
+            canonical_state_snapshot_bytes_for_tests(&snapshot_state),
+            expected_snapshot
+        );
+    }
+
+    #[test]
+    async fn snapshot_hash_reconcile_rejects_non_latest_mismatch() {
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = state_factory_with_kura(Arc::clone(&kura));
+        let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
+        store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block1));
+        let block2 = signed_block_after_transaction(
+            accepted_log_transaction("second"),
+            Some(block1.as_ref()),
+        );
+        store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block2));
+        let block3 = signed_block_after_transaction(
+            accepted_log_transaction("third"),
+            Some(block2.as_ref()),
+        );
+        store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block3));
+
+        let mut snapshot_hashes = state.committed_block_hashes_snapshot();
+        snapshot_hashes[1] =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x44; 32]));
+
+        let err = reconcile_snapshot_hashes_with_kura(&mut state, &snapshot_hashes, &kura, false)
+            .expect_err("non-latest hash mismatch must reject snapshot");
+        assert!(matches!(
+            err,
+            TryReadError::MismatchedHash { height: 2, .. }
+        ));
+        assert_eq!(state.committed_height(), 3);
+    }
+
+    #[test]
+    async fn snapshot_hash_reconcile_rolls_back_latest_mismatch() {
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = state_factory_with_kura(Arc::clone(&kura));
+        let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
+        store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block1));
+        let block2 = signed_block_after_transaction(
+            accepted_log_transaction("second"),
+            Some(block1.as_ref()),
+        );
+        store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block2));
+
+        let mut snapshot_hashes = state.committed_block_hashes_snapshot();
+        snapshot_hashes[1] =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x55; 32]));
+
+        reconcile_snapshot_hashes_with_kura(&mut state, &snapshot_hashes, &kura, false)
+            .expect("latest hash mismatch should preserve rollback behavior");
+
+        assert_eq!(state.committed_height(), 1);
+        assert_eq!(
+            state.latest_block_hash_fast(),
+            Some(block1.hash()),
+            "latest mismatch rollback should discard the snapshot tip"
+        );
     }
 
     #[test]

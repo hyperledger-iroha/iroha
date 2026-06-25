@@ -203,5 +203,95 @@
         "exclusive-swift-property"
       ]
     }
+  ],
+  "pending_schema_sources": [
+    {
+      "message_def_id": "colr.012.001.05",
+      "source": {
+        "catalogue_url": "https://www.iso20022.org/iso-20022-message-definitions",
+        "download_url": "https://www.iso20022.org/message/22504/download",
+        "download_type": "XSD",
+        "message_name": "CollateralSubstitutionConfirmationV05",
+        "submitting_organisation": "SWIFT, FPL, ISDA/FpML, ISITC"
+      },
+      "reason": "Official ISO catalogue lists an XSD download; checked-in redistributable schema bytes are still pending."
+    },
+    {
+      "message_def_id": "sese.023.001.09",
+      "source": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17196/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionInstructionV09",
+        "submitting_organisation": "SWIFT"
+      },
+      "reason": "Official ISO archive lists an XSD download; checked-in redistributable schema bytes are still pending."
+    },
+    {
+      "message_def_id": "sese.023.001.11",
+      "source": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/22545/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionInstructionV11",
+        "submitting_organisation": "SWIFT"
+      },
+      "reason": "Official ISO archive lists an XSD download; checked-in redistributable schema bytes are still pending."
+    },
+    {
+      "message_def_id": "sese.024.001.09",
+      "source": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17236/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionStatusAdviceV09",
+        "submitting_organisation": "SWIFT"
+      },
+      "reason": "Official ISO archive lists an XSD download; checked-in redistributable schema bytes are still pending."
+    },
+    {
+      "message_def_id": "sese.024.001.10",
+      "source": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17241/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionStatusAdviceV10",
+        "submitting_organisation": "SWIFT"
+      },
+      "reason": "Official ISO archive lists an XSD download; checked-in redistributable schema bytes are still pending."
+    },
+    {
+      "message_def_id": "sese.025.001.08",
+      "source": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17286/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionConfirmationV08",
+        "submitting_organisation": "SWIFT"
+      },
+      "reason": "Official ISO archive lists an XSD download; checked-in redistributable schema bytes are still pending."
+    },
+    {
+      "message_def_id": "sese.025.001.10",
+      "source": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/21776/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionConfirmationV10",
+        "submitting_organisation": "SWIFT"
+      },
+      "reason": "Official ISO archive lists an XSD download; checked-in redistributable schema bytes are still pending."
+    },
+    {
+      "message_def_id": "sese.025.001.11",
+      "source": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/22547/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionConfirmationV11",
+        "submitting_organisation": "SWIFT"
+      },
+      "reason": "Official ISO archive lists an XSD download; checked-in redistributable schema bytes are still pending."
+    }
   ]
 }

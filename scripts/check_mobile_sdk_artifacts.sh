@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/check_mobile_sdk_artifacts.sh [--root <repo-root>] [--require-built-android]
+  scripts/check_mobile_sdk_artifacts.sh [--root <repo-root>] [--apple-only|--android-only] [--require-built-android]
 
 Checks that the Iroha mobile SDK packaging surface is ready for wallet
 integration:
@@ -15,11 +15,16 @@ integration:
 
 By default Android build outputs are not required. Pass --require-built-android
 or set MOBILE_SDK_REQUIRE_ANDROID_OUTPUTS=1 to require jar/aar outputs too.
+By default both Apple and Android packaging surfaces are checked. Pass
+--apple-only or --android-only when platform artifact builds run in separate CI
+jobs.
 USAGE
 }
 
 ROOT_ARG=""
 REQUIRE_ANDROID_OUTPUTS="${MOBILE_SDK_REQUIRE_ANDROID_OUTPUTS:-0}"
+CHECK_APPLE=1
+CHECK_ANDROID=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -36,6 +41,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --require-built-android)
       REQUIRE_ANDROID_OUTPUTS=1
+      ;;
+    --apple-only)
+      CHECK_APPLE=1
+      CHECK_ANDROID=0
+      ;;
+    --android-only)
+      CHECK_APPLE=0
+      CHECK_ANDROID=1
       ;;
     --help|-h)
       usage
@@ -125,11 +138,34 @@ require_glob() {
   local pattern="$1"
   local label="$2"
   local matches=()
-  shopt -s nullglob
-  matches=($pattern)
-  shopt -u nullglob
+  while IFS= read -r match; do
+    matches+=("$match")
+  done < <(compgen -G "$pattern" || true)
   if [[ ${#matches[@]} -eq 0 ]]; then
     fail "missing $label: $pattern"
+  fi
+}
+
+require_zip_entry() {
+  local archive="$1"
+  local entry="$2"
+  local label="$3"
+  local entries
+
+  if [[ ! -f "$archive" ]]; then
+    fail "cannot inspect missing $label: $(relpath "$archive")"
+    return
+  fi
+  if ! command -v unzip >/dev/null 2>&1; then
+    fail "unzip is required to inspect $label"
+    return
+  fi
+  if ! entries="$(unzip -Z1 "$archive" 2>/dev/null)"; then
+    fail "$label is not a readable ZIP/AAR archive: $(relpath "$archive")"
+    return
+  fi
+  if ! grep -Fxq -- "$entry" <<<"$entries"; then
+    fail "$label missing ZIP entry $entry in $(relpath "$archive")"
   fi
 }
 
@@ -211,7 +247,7 @@ check_gradle_publication() {
   require_file "$build_file" "$module Gradle build file"
   require_regex "$build_file" 'maven-publish' "$module maven-publish plugin"
   require_regex "$build_file" 'group[[:space:]]*=[[:space:]]*"org\.hyperledger\.iroha\.sdk"' "$module Maven group"
-  require_regex "$build_file" 'version[[:space:]]*=[[:space:]]*"[^"]+"' "$module Maven version"
+  require_regex "$build_file" 'version[[:space:]]*=[[:space:]]*("[^"]+"|providers\.gradleProperty\("irohaSdkVersion"\))' "$module Maven version"
   require_regex "$build_file" 'create<MavenPublication>\("release"\)' "$module release publication"
   require_regex "$build_file" "artifactId[[:space:]]*=[[:space:]]*\"$artifact_id\"" "$module artifact id"
 }
@@ -232,15 +268,34 @@ check_android_package() {
   require_file "$ROOT_DIR/kotlin/offline-wallet-android/src/main/AndroidManifest.xml" "offline-wallet-android AndroidManifest"
 
   if [[ "$REQUIRE_ANDROID_OUTPUTS" == "1" ]]; then
+    local client_aar="$ROOT_DIR/kotlin/client-android/build/outputs/aar/client-android-release.aar"
+    local offline_aar="$ROOT_DIR/kotlin/offline-wallet-android/build/outputs/aar/offline-wallet-android-release.aar"
+    local abi
+
     require_glob "$ROOT_DIR/kotlin/core-jvm/build/libs/core-jvm-*.jar" "core-jvm built jar"
-    require_glob "$ROOT_DIR/kotlin/client-android/build/outputs/aar/client-android-release.aar" "client-android release aar"
-    require_glob "$ROOT_DIR/kotlin/offline-wallet-android/build/outputs/aar/offline-wallet-android-release.aar" "offline-wallet-android release aar"
+    require_glob "$client_aar" "client-android release aar"
+    require_glob "$offline_aar" "offline-wallet-android release aar"
+
+    require_zip_entry "$client_aar" "AndroidManifest.xml" "client-android release aar"
+    require_zip_entry "$client_aar" "classes.jar" "client-android release aar"
+    require_zip_entry "$offline_aar" "AndroidManifest.xml" "offline-wallet-android release aar"
+    require_zip_entry "$offline_aar" "classes.jar" "offline-wallet-android release aar"
+
+    for abi in arm64-v8a x86_64; do
+      require_file "$ROOT_DIR/kotlin/client-android/src/main/jniLibs/$abi/libconnect_norito_bridge.so" "client-android $abi native bridge library"
+      require_zip_entry "$client_aar" "jni/$abi/libconnect_norito_bridge.so" "client-android release aar"
+    done
   fi
 }
 
-check_swift_package
-check_xcframework
-check_android_package
+if [[ "$CHECK_APPLE" == "1" ]]; then
+  check_swift_package
+  check_xcframework
+fi
+
+if [[ "$CHECK_ANDROID" == "1" ]]; then
+  check_android_package
+fi
 
 if [[ "$FAILURES" -ne 0 ]]; then
   echo "[mobile-sdk-artifacts] validation failed for $ROOT_DIR" >&2

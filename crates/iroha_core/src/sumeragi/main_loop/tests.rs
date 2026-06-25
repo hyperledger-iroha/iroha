@@ -35651,14 +35651,26 @@ async fn clear_rbc_runtime_state_records_payload_bytes_from_kura_rs16() {
 async fn clear_rbc_runtime_state_releases_pending_rbc_dedup() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
+    super::status::reset_pending_rbc_for_tests();
     let key = pending_session_key(17);
     let dedup_keys = insert_pending_rbc_stash_with_dedup(actor, key, 0xA7);
+    actor.publish_rbc_backlog_snapshot();
+    assert_eq!(
+        super::status::pending_rbc_snapshot().sessions,
+        1,
+        "test setup should expose the pending RBC stash through operator status"
+    );
 
     actor.clear_rbc_runtime_state(key, true);
 
     assert!(
         !actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
         "runtime clear should discard the pending RBC stash"
+    );
+    assert_eq!(
+        super::status::pending_rbc_snapshot().sessions,
+        0,
+        "runtime clear should also update the operator pending-RBC snapshot"
     );
     assert_block_payload_dedup_keys_absent(
         actor,
@@ -198711,6 +198723,91 @@ async fn qc_conflict_check_finds_identity_vote_at_stored_view() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn qc_conflict_check_maps_incoming_signers_with_rotated_topology() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    seed_genesis_block_for_state(&actor.state);
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let epoch = actor.epoch_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let topology =
+        super::network_topology::Topology::new(super::roster::canonicalize_roster_for_mode(
+            actor.effective_commit_topology(),
+            consensus_mode,
+        ));
+    let incoming_view = (1..64_u64)
+        .find(|view| {
+            let rotated = super::topology_for_view(&topology, height, *view, mode_tag, prf_seed);
+            rotated.as_ref().first() != topology.as_ref().first()
+        })
+        .expect("test topology should rotate for a non-zero view");
+    let signature_topology =
+        super::topology_for_view(&topology, height, incoming_view, mode_tag, prf_seed);
+    let signer_peer = signature_topology
+        .as_ref()
+        .first()
+        .expect("rotated topology should have a signer")
+        .clone();
+    assert_ne!(
+        topology
+            .as_ref()
+            .first()
+            .expect("canonical topology should have a signer")
+            .public_key(),
+        signer_peer.public_key(),
+        "test requires signer index 0 to differ after view rotation"
+    );
+
+    let conflicting_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x91; Hash::LENGTH]));
+    let incoming_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x92; Hash::LENGTH]));
+    let chain_order_hash = crate::sumeragi::consensus::default_chain_order_hash();
+    let rechain_seq = 0;
+    let vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash: conflicting_hash,
+        parent_state_root: Hash::prehashed([0x93; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0x94; Hash::LENGTH]),
+        height,
+        view: incoming_view,
+        epoch,
+        chain_order_hash,
+        rechain_seq,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    actor.vote_log_identities.insert(
+        vote_identity_key_for_vote(&vote, signer_peer.public_key()),
+        vote.clone(),
+    );
+    let signer_set = BTreeSet::from([0]);
+
+    let (conflict_peer, conflict_vote) = actor
+        .qc_conflicts_with_vote_history(
+            Phase::Commit,
+            incoming_hash,
+            height,
+            incoming_view,
+            epoch,
+            chain_order_hash,
+            rechain_seq,
+            &signer_set,
+            &signature_topology,
+            None,
+        )
+        .expect("rotated signer index should identify the conflicting validator");
+    assert_eq!(conflict_peer.public_key(), signer_peer.public_key());
+    assert_eq!(conflict_vote, vote);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn qc_conflict_check_bounds_raw_votes_to_recorded_views() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -209574,6 +209671,7 @@ fn assert_block_payload_dedup_keys_present(
 async fn clear_pending_rbc_releases_block_payload_dedup() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
+    super::status::reset_pending_rbc_for_tests();
 
     let key = pending_session_key(12);
     let epoch = actor.epoch_for_height(key.1);
@@ -209652,11 +209750,22 @@ async fn clear_pending_rbc_releases_block_payload_dedup() {
     }
 
     actor.subsystems.da_rbc.rbc.pending.insert(key, pending);
+    actor.publish_rbc_backlog_snapshot();
+    assert_eq!(
+        super::status::pending_rbc_snapshot().sessions,
+        1,
+        "test setup should expose the pending RBC stash through operator status"
+    );
     actor.clear_pending_rbc(&key);
 
     assert!(
         !actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
         "clear should discard the pending RBC stash"
+    );
+    assert_eq!(
+        super::status::pending_rbc_snapshot().sessions,
+        0,
+        "clear should also update the operator pending-RBC snapshot"
     );
     let guard = actor
         .block_payload_dedup
@@ -209682,17 +209791,29 @@ async fn clear_pending_rbc_releases_block_payload_dedup() {
 async fn clear_all_pending_rbc_releases_block_payload_dedup() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
+    super::status::reset_pending_rbc_for_tests();
 
     let key_a = pending_session_key(13);
     let key_b = pending_session_key(14);
     let keys_a = insert_pending_rbc_stash_with_dedup(actor, key_a, 0xA0);
     let keys_b = insert_pending_rbc_stash_with_dedup(actor, key_b, 0xB0);
+    actor.publish_rbc_backlog_snapshot();
+    assert_eq!(
+        super::status::pending_rbc_snapshot().sessions,
+        2,
+        "test setup should expose both pending RBC stashes through operator status"
+    );
 
     actor.clear_all_pending_rbc();
 
     assert!(
         actor.subsystems.da_rbc.rbc.pending.is_empty(),
         "bulk clear should discard every pending RBC stash"
+    );
+    assert_eq!(
+        super::status::pending_rbc_snapshot().sessions,
+        0,
+        "bulk clear should also update the operator pending-RBC snapshot"
     );
     assert_block_payload_dedup_keys_absent(
         actor,
@@ -209703,6 +209824,40 @@ async fn clear_all_pending_rbc_releases_block_payload_dedup() {
         actor,
         &keys_b,
         "bulk clear should release second pending RBC stash",
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn flush_pending_rbc_updates_published_snapshot() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    super::status::reset_pending_rbc_for_tests();
+    let key = pending_session_key(15);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .pending
+        .insert(key, PendingRbcMessages::new(Instant::now()));
+    actor.publish_rbc_backlog_snapshot();
+    assert_eq!(
+        super::status::pending_rbc_snapshot().sessions,
+        1,
+        "test setup should publish the pending RBC stash before flush"
+    );
+
+    actor.flush_pending_rbc(key).expect("flush pending rbc");
+
+    assert!(
+        !actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "flush should remove the pending RBC stash"
+    );
+    assert_eq!(
+        super::status::pending_rbc_snapshot().sessions,
+        0,
+        "flush should update the operator pending-RBC snapshot"
     );
 
     harness.shutdown.send();
@@ -211041,6 +211196,103 @@ fn idle_view_repair_retries_after_skipped_due_proposal_only_when_frontier_empty(
         !should_retry_idle_view_after_proposal(true, 16, 0, true),
         "commit-inflight work must not be interrupted by the post-proposal retry"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn tick_prioritizes_due_proposal_over_stale_quorum_timeout_repair() {
+    let _cause_guard = super::status::view_change_cause_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    seed_genesis_block_for_state(&actor.state);
+    let committed_qc = actor
+        .latest_committed_qc()
+        .expect("seeded genesis should publish a committed QC");
+    actor.highest_qc = Some(committed_qc);
+    actor.locked_qc = Some(committed_qc);
+    push_sample_transaction(actor);
+
+    let committed_height = actor.committed_height_snapshot();
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let view = actor.phase_tracker.current_view(height).unwrap_or(0);
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view,
+        since: now,
+    });
+    actor.subsystems.propose.pacemaker.next_deadline =
+        now.checked_sub(Duration::from_millis(1)).unwrap_or(now);
+    actor.subsystems.propose.last_pacemaker_attempt = None;
+    actor.pending.pending_blocks.clear();
+
+    let stale = now
+        .checked_sub(super::saturating_mul_duration(
+            actor
+                .frontier_recovery_window()
+                .max(Duration::from_millis(1)),
+            3,
+        ))
+        .unwrap_or(now);
+    actor.frontier_recovery = Some(super::FrontierRecoveryState {
+        frontier_height: height,
+        phase: super::FrontierRecoveryPhase::CatchUp,
+        entered_at: stale,
+        last_progress_at: stale,
+        last_dependency_progress_at: Some(stale),
+        last_action_at: Some(stale),
+        no_progress_windows: 3,
+        cleanup_done: false,
+        last_view: view,
+        last_rotation_view: None,
+        last_cause: "quorum_timeout",
+    });
+
+    let before = super::status::snapshot();
+    assert!(actor.tick(), "due queued work should make tick progress");
+    let after = super::status::snapshot();
+
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(height, view)
+            .is_some(),
+        "queued proposal work should run before stale quorum-timeout repair can rotate the view"
+    );
+    assert!(
+        actor
+            .pending
+            .pending_blocks
+            .values()
+            .any(|pending| pending.height == height && pending.view == view),
+        "proposal assembly should stage a same-view pending block"
+    );
+    assert_eq!(
+        after.view_change_causes.quorum_timeout_total,
+        before.view_change_causes.quorum_timeout_total,
+        "stale quorum-timeout recovery must not emit another quorum-timeout cause before proposal work"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(view),
+        "proposal-first tick should keep the current view"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
 }
 
 #[test]

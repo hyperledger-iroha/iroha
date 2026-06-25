@@ -5815,6 +5815,8 @@ pub struct Torii {
     pub sorafs_gateway: SorafsGateway,
     /// Proof-of-Retrievability coordinator configuration.
     pub sorafs_por: SorafsPor,
+    /// Appeal-finance settlement submitter configuration.
+    pub sorafs_appeal_finance_settlement: SorafsAppealFinanceSettlement,
     /// Transport-specific configuration (Norito-RPC rollout, streaming knobs).
     pub transport: ToriiTransport,
     /// Native MCP endpoint configuration.
@@ -5833,6 +5835,8 @@ pub struct Torii {
     pub ram_lfe: Option<ToriiRamLfe>,
     /// Optional transaction-history visibility/auth configuration.
     pub tx_history: Option<ToriiTxHistory>,
+    /// Retail recipient lookup route configuration.
+    pub recipient_lookup: ToriiRecipientLookup,
     /// App-facing query/backpressure limits.
     pub app_api: AppApi,
     /// Webhook delivery/backpressure configuration.
@@ -5870,6 +5874,37 @@ pub struct ToriiTxHistoryJwt {
     pub issuer: Option<String>,
     /// Optional audience constraint.
     pub audience: Option<String>,
+}
+
+/// Retail recipient lookup route configuration for Torii app API.
+#[derive(Debug, Clone)]
+pub struct ToriiRecipientLookup {
+    /// HTTP request timeout applied to upstream bank Core API calls.
+    pub request_timeout: Duration,
+    /// Configured bank Core API routes keyed by canonical FI id.
+    pub routes: Vec<ToriiRecipientLookupRoute>,
+}
+
+impl Default for ToriiRecipientLookup {
+    fn default() -> Self {
+        Self {
+            request_timeout: Duration::from_millis(
+                defaults::torii::recipient_lookup::REQUEST_TIMEOUT_MS,
+            ),
+            routes: Vec::new(),
+        }
+    }
+}
+
+/// Single bank Core API route used by the retail recipient lookup endpoint.
+#[derive(Debug, Clone)]
+pub struct ToriiRecipientLookupRoute {
+    /// Canonical FI identifier, for example `hbl.sbp` or `ubl.sbp`.
+    pub fi_id: String,
+    /// Bank Core API base URL.
+    pub base_url: Url,
+    /// Service bearer token used only by Torii when calling the bank Core API.
+    pub bearer_token: String,
 }
 
 /// Execution mode for attachment sanitization.
@@ -6827,6 +6862,17 @@ impl Default for SorafsPor {
     }
 }
 
+/// SoraFS appeal-finance settlement submitter configuration.
+#[derive(Debug, Clone, Default)]
+pub struct SorafsAppealFinanceSettlement {
+    /// Runtime signer keypairs allowed to submit settlement transactions.
+    pub submitter_signers: Vec<KeyPair>,
+    /// Interval between worker reconciliation scans for follow-up settlement steps.
+    pub worker_scan_interval: Duration,
+    /// Maximum queue attempts for one unchanged worker settlement state.
+    pub worker_max_retry_attempts: u32,
+}
+
 /// Embedded SoraFS storage configuration (Torii-owned).
 #[derive(Debug, Clone)]
 pub struct SorafsStorage {
@@ -6850,6 +6896,10 @@ pub struct SorafsStorage {
     pub metering_smoothing: SorafsMeteringSmoothing,
     /// Stream-token issuance configuration for chunk-range gateways.
     pub stream_tokens: SorafsTokenConfig,
+    /// Local orderbook admission policy.
+    pub orderbook: SorafsOrderbook,
+    /// Local SFM-4c privacy aggregate publication scheduler.
+    pub privacy_aggregates: SorafsPrivacyAggregateSchedule,
     /// Optional filesystem directory used to publish governance artefacts.
     pub governance_dag_dir: Option<PathBuf>,
     /// Optional publisher peer identifier used for signed Governance DAG blocks.
@@ -6858,6 +6908,26 @@ pub struct SorafsStorage {
     pub governance_dag_signing_key_path: Option<PathBuf>,
     /// Authentication and rate limits for manifest pin submissions.
     pub pin: SorafsStoragePin,
+}
+
+/// SoraFS local orderbook admission policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SorafsOrderbook {
+    /// Minimum accepted order quantity in GiB.
+    pub min_order_gib: u64,
+    /// Accepted price tick in micro-XOR per GiB.
+    pub price_tick_micro_xor: u64,
+}
+
+/// Local SFM-4c privacy aggregate publication scheduler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SorafsPrivacyAggregateSchedule {
+    /// Whether config-backed due-cycle publication is enabled.
+    pub enabled: bool,
+    /// Width of each privacy aggregate cycle, in seconds.
+    pub cycle_seconds: u64,
+    /// Delay after a cycle closes before publication, in seconds.
+    pub publish_delay_seconds: u64,
 }
 
 /// Authentication and abuse controls for `/v1/sorafs/storage/pin`.
@@ -6888,11 +6958,33 @@ impl Default for SorafsStorage {
             adverts: SorafsAdvertOverrides::default(),
             metering_smoothing: SorafsMeteringSmoothing::default(),
             stream_tokens: SorafsTokenConfig::default(),
+            orderbook: SorafsOrderbook::default(),
+            privacy_aggregates: SorafsPrivacyAggregateSchedule::default(),
             governance_dag_dir: defaults::sorafs::storage::governance_dir(),
             governance_dag_publisher_peer_id:
                 defaults::sorafs::storage::governance_publisher_peer_id(),
             governance_dag_signing_key_path,
             pin: SorafsStoragePin::default(),
+        }
+    }
+}
+
+impl Default for SorafsOrderbook {
+    fn default() -> Self {
+        Self {
+            min_order_gib: defaults::sorafs::storage::orderbook::MIN_ORDER_GIB,
+            price_tick_micro_xor: defaults::sorafs::storage::orderbook::PRICE_TICK_MICRO_XOR,
+        }
+    }
+}
+
+impl Default for SorafsPrivacyAggregateSchedule {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sorafs::storage::privacy_aggregates::ENABLED,
+            cycle_seconds: defaults::sorafs::storage::privacy_aggregates::CYCLE_SECONDS,
+            publish_delay_seconds:
+                defaults::sorafs::storage::privacy_aggregates::PUBLISH_DELAY_SECONDS,
         }
     }
 }
@@ -8194,6 +8286,25 @@ pub struct SccpRouteAllowlist {
     pub blockers: Vec<String>,
 }
 
+/// Route-bound browser prover manifest reference advertised to wallet clients.
+#[derive(Debug, Clone)]
+pub struct SccpRouteBrowserProverManifestRef {
+    /// Browser-safe prover module URL.
+    pub module_url: String,
+    /// Optional package/module specifier for reproducible builds.
+    pub module_specifier: Option<String>,
+    /// Hex-encoded SHA-256 digest of the browser module bytes.
+    pub module_hash: String,
+    /// Hex-encoded SHA-256 digest of the public browser prover manifest.
+    pub manifest_hash: String,
+    /// Expected exported symbols in the browser module.
+    pub expected_exports: Vec<String>,
+    /// Hex-encoded route/deployment hash this prover manifest is bound to.
+    pub bound_route_hash: String,
+    /// Hex-encoded proof/material hash this prover manifest is bound to.
+    pub bound_proof_hash: String,
+}
+
 /// Configured SCCP route manifest material advertised to wallet clients.
 #[derive(Debug, Clone)]
 pub struct SccpRouteManifest {
@@ -8235,6 +8346,12 @@ pub struct SccpRouteManifest {
     pub proof_artifact_hash: Option<String>,
     /// Optional hex-encoded proving key digest.
     pub proving_key_hash: Option<String>,
+    /// Optional hex-encoded native EVM prover bundle digest.
+    pub native_evm_prover_bundle_hash: Option<String>,
+    /// Optional route-bound TAIRA-to-counterparty browser prover manifest reference.
+    pub destination_browser_prover: Option<SccpRouteBrowserProverManifestRef>,
+    /// Optional route-bound counterparty-to-TAIRA browser prover manifest reference.
+    pub source_browser_prover: Option<SccpRouteBrowserProverManifestRef>,
     /// Optional hash of the normalized deployment evidence used to build this route.
     pub deployment_evidence_sha256: Option<String>,
     /// Canonical destination binding key.

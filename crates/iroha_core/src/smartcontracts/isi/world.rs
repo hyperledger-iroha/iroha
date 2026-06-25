@@ -8700,11 +8700,11 @@ pub mod isi {
             } else {
                 None
             };
-        validate_configured_sccp_single_lane_launch_scope(source_domain)?;
         if let (Some(material), Some(deployment)) = (
             configured_source_material.as_ref(),
             configured_source_deployment.as_ref(),
         ) {
+            validate_configured_sccp_single_lane_launch_scope(source_domain)?;
             let destination_rollout = configured_sccp_destination_rollout_for_domain(
                 &state_transaction.zk,
                 source_domain,
@@ -9336,6 +9336,229 @@ pub mod isi {
                 authority,
             });
             state_transaction.world.emit_events(events);
+            Ok(())
+        }
+    }
+
+    const CAN_MANAGE_SCCP_ROUTE_MANIFESTS: &str = "CanManageSccpRouteManifests";
+
+    fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+        if let Some(message) = payload.downcast_ref::<&str>() {
+            (*message).to_owned()
+        } else if let Some(message) = payload.downcast_ref::<String>() {
+            message.clone()
+        } else {
+            "unknown panic while validating SCCP route manifest".to_owned()
+        }
+    }
+
+    fn ensure_can_manage_sccp_route_manifests(
+        authority: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if has_permission(
+            &state_transaction.world,
+            authority,
+            CAN_MANAGE_SCCP_ROUTE_MANIFESTS,
+        ) {
+            Ok(())
+        } else {
+            Err(InstructionExecutionError::InvariantViolation(
+                format!("not permitted: {CAN_MANAGE_SCCP_ROUTE_MANIFESTS}").into(),
+            ))
+        }
+    }
+
+    fn sccp_route_browser_prover_ref_to_user(
+        reference: bridge::SccpRouteBrowserProverManifestRef,
+    ) -> iroha_config::parameters::user::SccpRouteBrowserProverManifestRef {
+        iroha_config::parameters::user::SccpRouteBrowserProverManifestRef {
+            module_url: reference.module_url,
+            module_specifier: reference.module_specifier,
+            module_hash: reference.module_hash,
+            manifest_hash: reference.manifest_hash,
+            expected_exports: reference.expected_exports,
+            bound_route_hash: reference.bound_route_hash,
+            bound_proof_hash: reference.bound_proof_hash,
+        }
+    }
+
+    fn sccp_route_manifest_key(
+        manifest: &iroha_config::parameters::actual::SccpRouteManifest,
+    ) -> (String, String, u32, String) {
+        (
+            manifest.route_id.clone(),
+            manifest.asset_key.clone(),
+            manifest.counterparty_domain,
+            manifest.chain_id_hex.trim().to_ascii_lowercase(),
+        )
+    }
+
+    fn sccp_route_manifest_removal_key(
+        route_id: String,
+        asset_key: String,
+        counterparty_domain: u32,
+        chain_id_hex: String,
+    ) -> Result<(String, String, u32, String), Error> {
+        let route_id = route_id.trim().to_owned();
+        let asset_key = asset_key.trim().to_owned();
+        let chain_id_hex = chain_id_hex.trim().to_ascii_lowercase();
+        if route_id.is_empty() || asset_key.is_empty() || chain_id_hex.is_empty() {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "SCCP route manifest removal key fields must not be empty".into(),
+                ),
+            ));
+        }
+        Ok((route_id, asset_key, counterparty_domain, chain_id_hex))
+    }
+
+    fn sccp_route_manifest_to_actual(
+        manifest: bridge::SccpRouteManifest,
+    ) -> Result<iroha_config::parameters::actual::SccpRouteManifest, Error> {
+        let is_bsc = manifest.counterparty_domain == iroha_sccp::SCCP_DOMAIN_BSC;
+        let source_bridge_address = manifest.sccp_tron_source_bridge_address;
+        let verifier_address = manifest.tron_verifier_address;
+        let user_manifest = iroha_config::parameters::user::SccpRouteManifest {
+            version: manifest.version,
+            route_id: manifest.route_id,
+            asset_key: manifest.asset_key,
+            tron_network: manifest.tron_network,
+            chain: manifest.chain,
+            chain_id_hex: manifest.chain_id_hex,
+            counterparty_domain: manifest.counterparty_domain,
+            verifier_target: manifest.verifier_target,
+            production_ready: manifest.production_ready,
+            disabled_reason: manifest.disabled_reason,
+            network_id_hex: manifest.network_id_hex,
+            taira_xor_token_address: manifest.taira_xor_token_address,
+            taira_xor_bridge_address: manifest.taira_xor_bridge_address,
+            source_bridge_address: None,
+            sccp_bsc_source_bridge_address: is_bsc.then(|| source_bridge_address.clone()),
+            bsc_source_bridge_address: None,
+            sccp_tron_source_bridge_address: (!is_bsc).then_some(source_bridge_address),
+            destination_verifier_address: None,
+            verifier_address: None,
+            sccp_bsc_destination_verifier_address: is_bsc.then(|| verifier_address.clone()),
+            bsc_verifier_address: None,
+            evm_verifier_address: None,
+            tron_verifier_address: (!is_bsc).then_some(verifier_address),
+            verifier_code_hash: manifest.verifier_code_hash,
+            verifier_key_hash: manifest.verifier_key_hash,
+            proof_artifact_hash: manifest.proof_artifact_hash,
+            prover_artifact_hash: None,
+            circuit_artifact_hash: None,
+            proving_key_hash: manifest.proving_key_hash,
+            native_evm_prover_bundle_hash: manifest.native_evm_prover_bundle_hash,
+            destination_browser_prover: manifest
+                .destination_browser_prover
+                .map(sccp_route_browser_prover_ref_to_user),
+            source_browser_prover: manifest
+                .source_browser_prover
+                .map(sccp_route_browser_prover_ref_to_user),
+            deployment_evidence_sha256: manifest.deployment_evidence_sha256,
+            destination_binding_key: manifest.destination_binding_key,
+            destination_binding_hash: manifest.destination_binding_hash,
+            taira_burn_record_settlement_asset_definition_id: manifest
+                .taira_burn_record_settlement_asset_definition_id,
+            taira_burn_record_contract_artifact_b64: manifest
+                .taira_burn_record_contract_artifact_b64,
+            taira_burn_record_artifact_sha256: manifest.taira_burn_record_artifact_sha256,
+            taira_burn_record_code_hash: manifest.taira_burn_record_code_hash,
+            taira_burn_record_vk_backend: manifest.taira_burn_record_vk_backend,
+            taira_burn_record_vk_name: manifest.taira_burn_record_vk_name,
+            taira_burn_record_gas_limit: manifest.taira_burn_record_gas_limit,
+            settlement_contract_address: manifest.settlement_contract_address,
+            settlement_contract_alias: manifest.settlement_contract_alias,
+            post_deploy_full_toml_ready: manifest.post_deploy_full_toml_ready,
+            post_deploy_source_bridge_config_hash: manifest.post_deploy_source_bridge_config_hash,
+            post_deploy_source_event_transaction_id: manifest
+                .post_deploy_source_event_transaction_id,
+            post_deploy_source_event_explorer_url: manifest.post_deploy_source_event_explorer_url,
+            post_deploy_route_canary_evidence_hash: manifest.post_deploy_route_canary_evidence_hash,
+            post_deploy_route_canary_transaction_id: manifest
+                .post_deploy_route_canary_transaction_id,
+            post_deploy_route_canary_explorer_url: manifest.post_deploy_route_canary_explorer_url,
+            post_deploy_offline_full_toml_sha256: manifest.post_deploy_offline_full_toml_sha256,
+        };
+        let actual =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| user_manifest.parse()))
+                .map_err(|payload| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "invalid SCCP route manifest: {}",
+                            panic_payload_message(payload)
+                        )),
+                    )
+                })?;
+        if actual.production_ready && actual.counterparty_domain == iroha_sccp::SCCP_DOMAIN_BSC {
+            if actual.route_id != "taira_bsc_xor" || actual.asset_key != "xor" {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "production BSC SCCP route manifest must target taira_bsc_xor/xor".into(),
+                    ),
+                ));
+            }
+            if actual.verifier_target != "EvmContract" {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "production BSC SCCP route manifest verifier_target must be EvmContract"
+                            .into(),
+                    ),
+                ));
+            }
+        }
+        Ok(actual)
+    }
+
+    impl Execute for bridge::UpsertSccpRouteManifest {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            ensure_can_manage_sccp_route_manifests(authority, state_transaction)?;
+            let manifest = sccp_route_manifest_to_actual(self.manifest)?;
+            let key = sccp_route_manifest_key(&manifest);
+            if let Some(existing) = state_transaction
+                .zk
+                .sccp_route_manifests
+                .iter_mut()
+                .find(|candidate| sccp_route_manifest_key(candidate) == key)
+            {
+                *existing = manifest;
+            } else {
+                state_transaction.zk.sccp_route_manifests.push(manifest);
+            }
+            Ok(())
+        }
+    }
+
+    impl Execute for bridge::RemoveSccpRouteManifest {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            ensure_can_manage_sccp_route_manifests(authority, state_transaction)?;
+            let key = sccp_route_manifest_removal_key(
+                self.route_id,
+                self.asset_key,
+                self.counterparty_domain,
+                self.chain_id_hex,
+            )?;
+            let before = state_transaction.zk.sccp_route_manifests.len();
+            state_transaction
+                .zk
+                .sccp_route_manifests
+                .retain(|manifest| sccp_route_manifest_key(manifest) != key);
+            if state_transaction.zk.sccp_route_manifests.len() == before {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP route manifest removal target was not found".into(),
+                    ),
+                ));
+            }
             Ok(())
         }
     }

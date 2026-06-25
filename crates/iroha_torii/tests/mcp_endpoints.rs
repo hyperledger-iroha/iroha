@@ -2320,6 +2320,12 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "expected account transaction MCP tool"
     );
     assert!(
+        names
+            .iter()
+            .any(|name| name == "torii.get_v1_accounts_account_id_history"),
+        "expected account history MCP tool"
+    );
+    assert!(
         names.iter().any(|name| name == "iroha.health"),
         "expected agent-friendly node health MCP tool"
     );
@@ -2800,6 +2806,10 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "expected agent-friendly account transactions MCP tool"
     );
     assert!(
+        names.iter().any(|name| name == "iroha.accounts.history"),
+        "expected agent-friendly account history MCP tool"
+    );
+    assert!(
         names
             .iter()
             .any(|name| name == "iroha.accounts.transactions.query"),
@@ -3137,6 +3147,49 @@ async fn mcp_jsonrpc_tools_call_account_transactions_uses_path_and_query_argumen
             .and_then(Value::as_u64)
             .is_some_and(|status| status >= 400),
         "expected invalid `limit=0` query argument to be rejected"
+    );
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_account_history_uses_path_and_query_arguments() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 10450,
+            "method": "tools/call",
+            "params": {
+                "name": "torii.get_v1_accounts_account_id_history",
+                "arguments": {
+                    "path": {
+                        "account_id": TEST_ACCOUNT_I105
+                    },
+                    "query": {
+                        "limit": 0
+                    }
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        tool_is_error(&call),
+        "invalid account history query should be marked as MCP tool error"
+    );
+    let structured = structured_content(&call);
+    assert!(
+        structured
+            .get("status")
+            .and_then(Value::as_u64)
+            .is_some_and(|status| status >= 400),
+        "expected invalid `limit=0` account history query argument to be rejected"
     );
 }
 
@@ -4165,6 +4218,45 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_transactions_accepts_flat_ar
             .and_then(Value::as_u64)
             .is_some_and(|status| status >= 400),
         "expected invalid flat limit to be rejected"
+    );
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_account_history_accepts_flat_arguments() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 10621,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.accounts.history",
+                "arguments": {
+                    "account_id": TEST_ACCOUNT_I105,
+                    "limit": 0
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        tool_is_error(&call),
+        "invalid flat account history query should be marked as MCP tool error"
+    );
+    let structured = structured_content(&call);
+    assert!(
+        structured
+            .get("status")
+            .and_then(Value::as_u64)
+            .is_some_and(|status| status >= 400),
+        "expected invalid flat account history limit to be rejected"
     );
 }
 

@@ -438,6 +438,21 @@ impl ProofToken {
             .map_err(|_| VerificationError::InvalidSignature)
     }
 
+    /// Verify the detached Ed25519 signature using raw public-key bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VerificationError::InvalidSignature`] when the verifying key
+    /// bytes are malformed, weak, or do not verify the token body.
+    pub fn verify_signature_bytes(
+        &self,
+        verifying_key: &[u8; 32],
+    ) -> Result<(), VerificationError> {
+        let verifying_key = VerifyingKey::from_bytes(verifying_key)
+            .map_err(|_| VerificationError::InvalidSignature)?;
+        self.verify_signature(&verifying_key)
+    }
+
     /// Recompute the blinded digest using the shared secret and evidence hash.
     ///
     /// # Errors
@@ -810,6 +825,9 @@ mod tests {
         assert_eq!(token, decoded);
         decoded.verify_signature(&verifying).unwrap();
         decoded
+            .verify_signature_bytes(&verifying.to_bytes())
+            .unwrap();
+        decoded
             .verify_blinded_digest(&digest_key, &evidence)
             .unwrap();
     }
@@ -1079,6 +1097,12 @@ mod tests {
         let err = token
             .verify_signature(&test_signing_key().verifying_key())
             .expect_err("all-zero proof-token signature must fail verification");
+
+        assert!(matches!(err, VerificationError::InertSignature));
+
+        let err = token
+            .verify_signature_bytes(&test_signing_key().verifying_key().to_bytes())
+            .expect_err("all-zero proof-token signature must fail byte verification");
 
         assert!(matches!(err, VerificationError::InertSignature));
     }

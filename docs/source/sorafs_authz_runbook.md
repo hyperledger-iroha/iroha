@@ -9,6 +9,7 @@ This note summarises the authorization and abuse controls around SoraFS control-
 - Provider→account bindings must be present before issuing replication orders or submitting capacity telemetry; use the governance config seed or the `RegisterProviderOwner`/`UnregisterProviderOwner` instructions to manage bindings.
 - Repair worker endpoints (`/v1/sorafs/audit/repair/{claim,heartbeat,complete,fail}`) require signed `RepairWorkerSignaturePayloadV1` requests from a worker account (i105 account id/signatory key) that holds `CanOperateSorafsRepair { provider_id }`. The signed payload includes `manifest_digest` and must match `manifest_digest_hex` in the request; provider owners are auto-granted this permission and may delegate it via `GrantPermission`; revoke with `RevokePermission` during rotation.
 - The SoraFS storage pin API (`/v1/sorafs/storage/pin`) requires a matching approved paid pin registry record for the manifest digest, chunk profile, content length, policy, chunk plan digest, and fee payer. The recorded fee asset, treasury, and amount are treated as the committed on-chain receipt, so later governance pricing or treasury changes do not invalidate an already-paid manifest. It no longer treats bearer tokens or CIDR allow-lists as the source of admission authority; quota limits still apply before ingest.
+- Local moderation quarantine review, release, and encrypted object store/read endpoints require canonical request signatures from accounts holding the `sorafs_moderation_operator` role. Keep this as a dedicated empty role for the Torii API gate; do not attach broad ledger permissions to it unless a separate governance change requires them.
 - SoraNet privacy ingest endpoints (`/v1/soranet/privacy/{event,share}`) require `X-SoraNet-Privacy-Token` (or `X-API-Token`), a non-empty CIDR allow-list, and the token/burst limits under `torii.soranet_privacy_ingest`; requests outside the namespace or over budget are rejected before metrics ingestion.
 
 ## Telemetry submitters and provider overrides
@@ -65,13 +66,47 @@ per_provider_submitters = { "deadbeef..." = ["<i105-account-id>"] }
   iroha_cli ledger query --config /etc/iroha/config.toml \
     --name governance.sorafs_telemetry.submitters
   ```
+- Register the moderation operator role once per network. Registration grants
+  the role to the registrant, so use a governance/admin account that should be
+  allowed to bootstrap the operator roster:
+  ```bash
+  iroha_cli ledger role register \
+    --id sorafs_moderation_operator \
+    --config /etc/iroha/config.toml
+  ```
+- Grant the role to each canonical moderation operator account before enabling
+  quarantine review/release or encrypted payload readback. The role gate uses
+  canonical `AccountId` membership, so bind any human-readable aliases
+  separately from this step:
+  ```bash
+  iroha_cli ledger account role grant \
+    --id <i105-account-id> \
+    --role sorafs_moderation_operator \
+    --config /etc/iroha/config.toml
+  ```
+- Verify the roster before opening operator traffic:
+  ```bash
+  iroha_cli ledger account role list \
+    --id <i105-account-id> \
+    --config /etc/iroha/config.toml
+  ```
+- Rotate or suspend an operator by revoking the role, then confirm signed
+  quarantine review/release and object readback calls return `403 Forbidden`
+  for the retired account:
+  ```bash
+  iroha_cli ledger account role revoke \
+    --id <i105-account-id> \
+    --role sorafs_moderation_operator \
+    --config /etc/iroha/config.toml
+  ```
 
 ## Operator checklist
 
 1. Bind provider owners in genesis or via `RegisterProviderOwner`; confirm with the provider-owner query before accepting telemetry.
 2. Set `governance.sorafs_telemetry.submitters` and any `per_provider_submitters` overrides; keep `require_nonce=true` unless running a controlled replay drill.
 3. Delegate `CanOperateSorafsRepair` to repair worker accounts before enabling automation, and rotate by revoking the permission plus reissuing worker keys (no admin-only bypass for repair actions).
-4. Confirm submitters are funded with the configured SoraFS public pin-fee asset and that `governance.sorafs_pin_fee_*` points at the expected treasury before opening storage ingest.
-5. Enable `torii.soranet_privacy_ingest` only after populating `tokens` and `allow_cidrs`; rotate credentials by reloading the config and watch `soranet_privacy_ingest_reject_total` for namespace/token rejects.
-6. Verify ingress with a signed sample request (e.g., `curl -H "X-SoraNet-Privacy-Token: privacy-prod-token" …/v1/soranet/privacy/event`) and confirm the endpoint returns `202 Accepted`.
-7. Monitor `soranet_privacy_ingest_reject_total{reason}`, `soranet_privacy_throttles_total`, and the SoraFS quota metrics to catch abuse early; keep the checklist alongside change tickets for token/allow-list rotations.
+4. Register `sorafs_moderation_operator`, grant it only to reviewed canonical operator accounts, and confirm unsigned quarantine calls return `401` while signed non-operator calls return `403`.
+5. Confirm submitters are funded with the configured SoraFS public pin-fee asset and that `governance.sorafs_pin_fee_*` points at the expected treasury before opening storage ingest.
+6. Enable `torii.soranet_privacy_ingest` only after populating `tokens` and `allow_cidrs`; rotate credentials by reloading the config and watch `soranet_privacy_ingest_reject_total` for namespace/token rejects.
+7. Verify ingress with a signed sample request (e.g., `curl -H "X-SoraNet-Privacy-Token: privacy-prod-token" …/v1/soranet/privacy/event`) and confirm the endpoint returns `202 Accepted`.
+8. Monitor `soranet_privacy_ingest_reject_total{reason}`, `soranet_privacy_throttles_total`, and the SoraFS quota metrics to catch abuse early; keep the checklist alongside change tickets for token/allow-list rotations.

@@ -869,6 +869,7 @@ mod tests {
                 api_high_load_subscription_threshold: None,
                 ram_lfe: None,
                 tx_history: None,
+                recipient_lookup: iroha_config::parameters::actual::ToriiRecipientLookup::default(),
                 events_buffer_capacity: NonZeroUsize::new(
                     iroha_config::parameters::defaults::torii::EVENTS_BUFFER_CAPACITY,
                 )
@@ -960,6 +961,15 @@ mod tests {
                     iroha_config::parameters::actual::SorafsAliasCachePolicy::default(),
                 sorafs_gateway: iroha_config::parameters::actual::SorafsGateway::default(),
                 sorafs_por: iroha_config::parameters::actual::SorafsPor::default(),
+                sorafs_appeal_finance_settlement:
+                    iroha_config::parameters::actual::SorafsAppealFinanceSettlement {
+                        submitter_signers: Vec::new(),
+                        worker_scan_interval: Duration::from_millis(
+                            iroha_config::parameters::defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_SCAN_INTERVAL_MS,
+                        ),
+                        worker_max_retry_attempts:
+                            iroha_config::parameters::defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_RETRY_ATTEMPTS,
+                    },
                 transport: iroha_config::parameters::actual::ToriiTransport::default(),
                 mcp: iroha_config::parameters::actual::ToriiMcp::default(),
                 onboarding: None,

@@ -5,6 +5,9 @@ use norito::derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use norito::json::JsonSerialize as NoritoJsonSerialize;
 use thiserror::Error;
 
+/// Maximum `sample_count` accepted for PoR/PDP proof-stream requests.
+pub const MAX_PROOF_STREAM_SAMPLE_COUNT: u32 = 500;
+
 /// Streaming proof request envelope (PoR / PDP / PoTR).
 #[derive(
     Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq, Hash,
@@ -49,6 +52,9 @@ impl ProofStreamRequestV1 {
                     .ok_or(ProofStreamRequestError::MissingSampleCount)?;
                 if count == 0 {
                     return Err(ProofStreamRequestError::ZeroSampleCount);
+                }
+                if count > MAX_PROOF_STREAM_SAMPLE_COUNT {
+                    return Err(ProofStreamRequestError::SampleCountTooLarge);
                 }
             }
             ProofStreamKind::Potr => {
@@ -123,6 +129,8 @@ pub enum ProofStreamRequestError {
     MissingDeadlineMs,
     #[error("sample count must be greater than zero")]
     ZeroSampleCount,
+    #[error("sample count exceeds maximum")]
+    SampleCountTooLarge,
     #[error("deadline must be greater than zero milliseconds")]
     ZeroDeadlineMs,
 }
@@ -160,6 +168,16 @@ mod tests {
         assert_eq!(
             request.validate(),
             Err(ProofStreamRequestError::MissingSampleCount)
+        );
+    }
+
+    #[test]
+    fn oversized_sample_count_rejected() {
+        let mut request = base_request();
+        request.sample_count = Some(MAX_PROOF_STREAM_SAMPLE_COUNT + 1);
+        assert_eq!(
+            request.validate(),
+            Err(ProofStreamRequestError::SampleCountTooLarge)
         );
     }
 

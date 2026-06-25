@@ -18,8 +18,8 @@ use nonzero_ext::nonzero;
 
 const SCCP_AUDITED_SOLANA_PROOF_MAX_BYTES: u32 = 8 * 1024 * 1024;
 
-fn hex32(bytes: [u8; 32]) -> String {
-    format!("0x{}", hex::encode(bytes))
+fn hex_0x(bytes: impl AsRef<[u8]>) -> String {
+    format!("0x{}", hex::encode(bytes.as_ref()))
 }
 
 fn checked_seeded_keypair(
@@ -1313,9 +1313,9 @@ fn configured_ton_destination_rollout() -> iroha_sccp::SccpDestinationRolloutV1 
     let rollout = iroha_sccp::sccp_ton_mainnet_destination_rollout_with_live_evidence_v1(
         format!("0:{}", "11".repeat(32)),
         "0x49725ad44ef5ed5feaa27f88679cabae427209a6bea318cb9b66030131aae6fe".to_owned(),
-        hex32([0x67; 32]),
+        hex_0x([0x67; 32]),
         "123456".to_owned(),
-        hex32([0x68; 32]),
+        hex_0x([0x68; 32]),
         "0xb5ee9c720101020100070001020101000202".to_owned(),
     )
     .expect("TON destination rollout");
@@ -1331,9 +1331,9 @@ fn configured_tron_destination_rollout(
 ) -> iroha_sccp::SccpDestinationRolloutV1 {
     let rollout = iroha_sccp::sccp_tron_mainnet_destination_rollout_with_binding_v1(
         "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_owned(),
-        hex32([0x66; 32]),
-        hex32([0x67; 32]),
-        hex32(material.source_bridge_network_id),
+        hex_0x([0x66; 32]),
+        hex_0x([0x67; 32]),
+        hex_0x(material.source_bridge_network_id),
     )
     .expect("TRON destination rollout");
     assert!(iroha_sccp::sccp_destination_rollout_is_production_ready(
@@ -1347,9 +1347,9 @@ fn configured_bsc_destination_rollout() -> iroha_sccp::SccpDestinationRolloutV1 
     let rollout = iroha_sccp::sccp_evm_mainnet_destination_rollout_with_binding_v1(
         iroha_sccp::SCCP_DOMAIN_BSC,
         "0x3333333333333333333333333333333333333333".to_owned(),
-        hex32([0x44; 32]),
-        hex32([0x55; 32]),
-        hex32(iroha_sccp::sccp_bsc_mainnet_network_id_word_v1()),
+        hex_0x([0x44; 32]),
+        hex_0x([0x55; 32]),
+        hex_0x(iroha_sccp::sccp_bsc_mainnet_network_id_word_v1()),
         "0x2222222222222222222222222222222222222222".to_owned(),
     )
     .expect("BSC destination rollout");
@@ -1364,9 +1364,9 @@ fn configured_eth_destination_rollout() -> iroha_sccp::SccpDestinationRolloutV1 
     let rollout = iroha_sccp::sccp_evm_mainnet_destination_rollout_with_binding_v1(
         iroha_sccp::SCCP_DOMAIN_ETH,
         "0x3333333333333333333333333333333333333333".to_owned(),
-        hex32([0x44; 32]),
-        hex32([0x55; 32]),
-        hex32(iroha_sccp::sccp_eth_mainnet_network_id_word_v1()),
+        hex_0x([0x44; 32]),
+        hex_0x([0x55; 32]),
+        hex_0x(iroha_sccp::sccp_eth_mainnet_network_id_word_v1()),
         "0x2222222222222222222222222222222222222222".to_owned(),
     )
     .expect("ETH destination rollout");
@@ -4534,7 +4534,7 @@ fn submit_sccp_inbound_message_rejects_replayed_route_allowlist_material_behind_
     let destination_rollout = configured_sol_destination_rollout();
     let mut route_allowlist = iroha_sccp::sccp_profiled_route_allowlist_v1(
         iroha_sccp::SCCP_DOMAIN_SOL,
-        hex32([0x62; 32]),
+        hex_0x([0x62; 32]),
     )
     .expect("standalone SOL route allowlist for source-gate regression");
     route_allowlist.route_allowlist_id = Some("sccp:bsc:route-allowlist:bsc-mainnet:v1".to_owned());
@@ -4591,7 +4591,7 @@ fn submit_sccp_inbound_message_waits_for_sol_lane_launch_before_route_allowlist_
     let destination_rollout = configured_sol_destination_rollout();
     let mut route_allowlist =
         configured_sol_route_allowlist(&material, &audited_deployment, &destination_rollout);
-    route_allowlist.route_allowlist_hash = Some(hex32([0xde; 32]));
+    route_allowlist.route_canary_evidence_hash = Some(hex_0x([0xde; 32]));
     state
         .zk
         .sccp_source_verifier_materials
@@ -4648,7 +4648,7 @@ fn submit_sccp_inbound_message_waits_for_tron_lane_launch_before_route_allowlist
     let destination_rollout = configured_tron_destination_rollout(&material);
     let mut route_allowlist =
         configured_tron_route_allowlist(&material, &deployment, &destination_rollout);
-    route_allowlist.route_allowlist_hash = Some(hex32([0xde; 32]));
+    route_allowlist.route_canary_evidence_hash = Some(hex_0x([0xde; 32]));
     state
         .zk
         .sccp_source_verifier_materials
@@ -4755,37 +4755,37 @@ fn submit_sccp_inbound_message_waits_for_tron_lane_launch_before_route_canary_dr
     assert_tron_canary_drift_waits_for_lane_launch!(
         "call-data hash",
         tron_route_canary_call_data_sha256,
-        Some(hex32([0x01; 32])),
+        Some(hex_0x([0x01; 32])),
         123
     );
     assert_tron_canary_drift_waits_for_lane_launch!(
         "payload hash",
         tron_route_canary_payload_hash,
-        Some(hex32([0x02; 32])),
+        Some(hex_0x([0x02; 32])),
         124
     );
     assert_tron_canary_drift_waits_for_lane_launch!(
         "statement hash",
         tron_route_canary_statement_hash,
-        Some(hex32([0x03; 32])),
+        Some(hex_0x([0x03; 32])),
         125
     );
     assert_tron_canary_drift_waits_for_lane_launch!(
         "commitment root",
         tron_route_canary_commitment_root,
-        Some(hex32([0x04; 32])),
+        Some(hex_0x([0x04; 32])),
         126
     );
     assert_tron_canary_drift_waits_for_lane_launch!(
         "finality height",
         tron_route_canary_finality_height,
-        Some(hex32([0x05; 32])),
+        Some(hex_0x([0x05; 32])),
         127
     );
     assert_tron_canary_drift_waits_for_lane_launch!(
         "finality block hash",
         tron_route_canary_finality_block_hash,
-        Some(hex32([0x06; 32])),
+        Some(hex_0x([0x06; 32])),
         128
     );
     assert_tron_canary_drift_waits_for_lane_launch!(
@@ -4815,9 +4815,9 @@ fn submit_sccp_inbound_message_waits_for_tron_lane_launch_before_destination_net
     let drifted_destination_rollout =
         iroha_sccp::sccp_tron_mainnet_destination_rollout_with_binding_v1(
             "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_owned(),
-            hex32([0x66; 32]),
-            hex32([0x67; 32]),
-            hex32([0x77; 32]),
+            hex_0x([0x66; 32]),
+            hex_0x([0x67; 32]),
+            hex_0x([0x77; 32]),
         )
         .expect("TRON destination rollout with mismatched network id");
     assert!(
@@ -4829,7 +4829,7 @@ fn submit_sccp_inbound_message_waits_for_tron_lane_launch_before_destination_net
     );
     let route_allowlist = iroha_sccp::sccp_profiled_route_allowlist_v1(
         iroha_sccp::SCCP_DOMAIN_TRON,
-        hex32([0x78; 32]),
+        hex_0x([0x78; 32]),
     )
     .expect("standalone TRON route allowlist for destination-drift regression");
     state
@@ -5050,6 +5050,7 @@ fn submit_sccp_inbound_message_rejects_generic_source_verifier_material() {
     let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
     state.zk.max_proof_size_bytes = 4 * 1024 * 1024;
     let material = generic_sol_source_verifier_material();
+    let proof_material = configured_sol_source_verifier_material();
     state
         .zk
         .sccp_source_verifier_materials
@@ -5060,7 +5061,8 @@ fn submit_sccp_inbound_message_rejects_generic_source_verifier_material() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
 
-    let proof = make_sccp_sol_to_sora_message_bridge_proof_with_material(100, Some(&material));
+    let proof =
+        make_sccp_sol_to_sora_message_bridge_proof_with_material(100, Some(&proof_material));
     let submit: InstructionBox =
         iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof.clone()).into();
     let err = exec

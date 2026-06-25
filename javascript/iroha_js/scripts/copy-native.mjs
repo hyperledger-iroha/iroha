@@ -39,7 +39,12 @@ if (!existsSync(source)) {
   );
 }
 
-const destDir = join(repoRoot, "javascript", "iroha_js", "native");
+const configuredDestDir = process.env.IROHA_JS_NATIVE_DIR;
+const destDir = configuredDestDir
+  ? isAbsolute(configuredDestDir)
+    ? configuredDestDir
+    : join(repoRoot, configuredDestDir)
+  : join(repoRoot, "javascript", "iroha_js", "native");
 mkdirSync(destDir, { recursive: true });
 const dest = join(destDir, "iroha_js_host.node");
 const checksumManifestPath = join(destDir, "iroha_js_host.checksums.json");

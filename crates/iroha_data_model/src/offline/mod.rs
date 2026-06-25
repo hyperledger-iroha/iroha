@@ -153,10 +153,6 @@ pub const KAGEMUSHA_AGGREGATION_MODE_CHECKED_PREFOLD_V1: u16 = 1;
 /// Kagemusha aggregation mode for compact tokens whose private-hop verifier is proven in-circuit.
 pub const KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1: u16 = 2;
 /// SDK-facing Kagemusha spend mode for recursive compact tokens.
-///
-/// This mode is intentionally not selected by production defaults until the
-/// public compact-token proof uses the composed private-hop verifier-slice
-/// circuit instead of the standalone semantic aggregation circuit.
 pub const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1: &str = "recursive_compact_v1";
 /// SDK-facing Kagemusha spend mode for recursive spend-again-offline cash.
 pub const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: &str = "recursive_spend_v1";
@@ -185,16 +181,18 @@ pub const fn preferred_kagemusha_offline_spend_mode(
 
 /// Return the default SDK Kagemusha spend mode for advertised native capabilities.
 ///
-/// ABI-6 recursive spend remains the production default when available. The
-/// `recursive_compact_available` argument is accepted for source compatibility,
-/// but recursive compact mode is not auto-selected until compact-token proofs
-/// compose the private-hop verifier-slice relation in-circuit.
+/// Prefer ABI-7 recursive compact when both the compact prover and verifier are
+/// linked, then fall back to ABI-6 recursive spend. Checked pre-fold remains the
+/// compatibility fallback for runtimes that only link the older record-backed
+/// compact-token surface.
 #[must_use]
 pub const fn preferred_kagemusha_offline_spend_mode_for_capabilities(
-    _recursive_compact_available: bool,
+    recursive_compact_available: bool,
     recursive_spend_available: bool,
 ) -> &'static str {
-    if recursive_spend_available {
+    if recursive_compact_available {
+        KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1
+    } else if recursive_spend_available {
         KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
     } else {
         KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1
@@ -4307,6 +4305,10 @@ fn hash_bytes_from_hash(hash: Hash) -> [u8; Hash::LENGTH] {
     hash.into()
 }
 
+fn is_zero_prehash_hash(hash: Hash) -> bool {
+    hash == Hash::prehashed([0u8; Hash::LENGTH])
+}
+
 fn kagemusha_recursive_spend_step_statement(
     hop_index: u32,
     step: &KagemushaFoldStep,
@@ -5760,7 +5762,7 @@ fn validate_kagemusha_recursive_spend_lineage_append_opening_preflight_preimage(
             return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch { field });
         }
     }
-    if hash_bytes_from_hash(preflight.current_hop_proof_hash) == [0u8; Hash::LENGTH] {
+    if is_zero_prehash_hash(preflight.current_hop_proof_hash) {
         return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
             field: "append_opening_preflight.current_hop_proof_hash",
         });
@@ -5946,12 +5948,12 @@ fn validate_kagemusha_recursive_spend_lineage_append_boundary_preimage(
             return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch { field });
         }
     }
-    if hash_bytes_from_hash(boundary.current_hop_proof_hash) == [0u8; Hash::LENGTH] {
+    if is_zero_prehash_hash(boundary.current_hop_proof_hash) {
         return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
             field: "append_boundary.current_hop_proof_hash",
         });
     }
-    if hash_bytes_from_hash(boundary.resulting_public_inputs_hash) == [0u8; Hash::LENGTH] {
+    if is_zero_prehash_hash(boundary.resulting_public_inputs_hash) {
         return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
             field: "append_boundary.resulting_public_inputs_hash",
         });
@@ -6323,20 +6325,18 @@ impl KagemushaRecursiveSpendTransitionProfileV1 {
                     return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch { field });
                 }
             }
-            if hash_bytes_from_hash(
+            if is_zero_prehash_hash(
                 self.previous_accumulator_public_inputs_hash
                     .expect("checked previous accumulator public-input hash presence"),
-            ) == [0u8; Hash::LENGTH]
-            {
+            ) {
                 return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
                     field: "previous_accumulator_public_inputs_hash",
                 });
             }
-            if hash_bytes_from_hash(
+            if is_zero_prehash_hash(
                 self.previous_recursive_proof_public_inputs_hash
                     .expect("checked previous proof public-input hash presence"),
-            ) == [0u8; Hash::LENGTH]
-            {
+            ) {
                 return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
                     field: "previous_recursive_proof_public_inputs_hash",
                 });
@@ -6549,7 +6549,7 @@ impl KagemushaRecursiveSpendTransitionProfileV1 {
                 self.resulting_public_inputs_hash,
             ),
         ] {
-            if hash_bytes_from_hash(digest) == [0u8; Hash::LENGTH] {
+            if is_zero_prehash_hash(digest) {
                 return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch { field });
             }
         }
@@ -6759,7 +6759,7 @@ impl KagemushaRecursiveSpendAccumulatorV1 {
             ("output_commitment_digest", self.output_commitment_digest),
             ("fold_digest", self.fold_digest),
         ] {
-            if hash_bytes_from_hash(digest) == [0u8; Hash::LENGTH] {
+            if is_zero_prehash_hash(digest) {
                 return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch { field });
             }
         }
@@ -10085,6 +10085,15 @@ impl KagemushaFoldedPublicInputs {
         if self.initial_root == self.final_root {
             return Err(KagemushaFoldError::UnchangedFoldedPublicRoots);
         }
+        for (field, digest) in [
+            ("nullifier_digest", self.nullifier_digest),
+            ("output_commitment_digest", self.output_commitment_digest),
+            ("fold_digest", self.fold_digest),
+        ] {
+            if is_zero_prehash_hash(digest) {
+                return Err(KagemushaFoldError::ZeroFoldedPublicInputDigest { field });
+            }
+        }
         if self.aggregation_transcript_digest == [0u8; Hash::LENGTH] {
             return Err(KagemushaFoldError::ZeroFoldedPublicInputDigest {
                 field: "aggregation_transcript_digest",
@@ -10143,23 +10152,18 @@ impl KagemushaFoldedPublicInputs {
             return Err(KagemushaFoldError::UnchangedFoldedPublicRoots);
         }
         for (field, digest) in [
-            (
-                "nullifier_digest",
-                hash_bytes_from_hash(self.nullifier_digest),
-            ),
-            (
-                "output_commitment_digest",
-                hash_bytes_from_hash(self.output_commitment_digest),
-            ),
-            ("fold_digest", hash_bytes_from_hash(self.fold_digest)),
-            (
-                "aggregation_transcript_digest",
-                self.aggregation_transcript_digest,
-            ),
+            ("nullifier_digest", self.nullifier_digest),
+            ("output_commitment_digest", self.output_commitment_digest),
+            ("fold_digest", self.fold_digest),
         ] {
-            if digest == [0u8; Hash::LENGTH] {
+            if is_zero_prehash_hash(digest) {
                 return Err(KagemushaFoldError::ZeroFoldedPublicInputDigest { field });
             }
+        }
+        if self.aggregation_transcript_digest == [0u8; Hash::LENGTH] {
+            return Err(KagemushaFoldError::ZeroFoldedPublicInputDigest {
+                field: "aggregation_transcript_digest",
+            });
         }
         let encoded_len = self.norito_encoded_len()?;
         if encoded_len > KAGEMUSHA_FOLDED_PUBLIC_INPUTS_MAX_ENCODED_BYTES {
@@ -11939,7 +11943,7 @@ mod offline_note_tests {
     }
 
     #[test]
-    fn kagemusha_aggregation_mode_helpers_keep_recursive_mode_out_of_legacy_path() {
+    fn kagemusha_aggregation_mode_helpers_prefer_compact_when_available() {
         assert!(is_supported_kagemusha_aggregation_mode(
             KAGEMUSHA_AGGREGATION_MODE_CHECKED_PREFOLD_V1
         ));
@@ -11970,11 +11974,11 @@ mod offline_note_tests {
         );
         assert_eq!(
             preferred_kagemusha_offline_spend_mode_for_capabilities(true, true),
-            KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
+            KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1
         );
         assert_eq!(
             preferred_kagemusha_offline_spend_mode_for_capabilities(true, false),
-            KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1
+            KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1
         );
         assert_eq!(
             preferred_kagemusha_offline_spend_mode_for_capabilities(false, true),
@@ -12685,6 +12689,89 @@ mod offline_note_tests {
                 if actual == KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1
         ));
 
+        fn assert_zero_recursive_compact_hash_rejected(
+            source: &KagemushaFoldedPublicInputs,
+            recursive_proof: &KagemushaRecursiveAggregationProof,
+            field: &'static str,
+            mutate: impl FnOnce(&mut KagemushaFoldedPublicInputs),
+        ) {
+            let mut forged = source.clone();
+            mutate(&mut forged);
+            let err = forged
+                .validate_recursive_compact_context()
+                .expect_err("zero-prehash recursive compact digest must be rejected");
+            assert!(
+                matches!(
+                    err,
+                    KagemushaFoldError::ZeroFoldedPublicInputDigest { field: actual }
+                    if actual == field
+                ),
+                "unexpected zero-prehash recursive compact digest error for {field}: {err:?}"
+            );
+            let err = KagemushaCompactPaymentToken::from_recursive_compact_projection(
+                forged,
+                recursive_proof.clone(),
+            )
+            .expect_err("zero-prehash recursive compact digest must reject token projection");
+            assert!(
+                matches!(
+                    err,
+                    KagemushaFoldError::ZeroFoldedPublicInputDigest { field: actual }
+                    if actual == field
+                ),
+                "unexpected zero-prehash recursive compact token error for {field}: {err:?}"
+            );
+        }
+        assert_zero_recursive_compact_hash_rejected(
+            &public_inputs,
+            &recursive_proof,
+            "nullifier_digest",
+            |public_inputs| public_inputs.nullifier_digest = Hash::prehashed([0u8; Hash::LENGTH]),
+        );
+        assert_zero_recursive_compact_hash_rejected(
+            &public_inputs,
+            &recursive_proof,
+            "output_commitment_digest",
+            |public_inputs| {
+                public_inputs.output_commitment_digest = Hash::prehashed([0u8; Hash::LENGTH]);
+            },
+        );
+        assert_zero_recursive_compact_hash_rejected(
+            &public_inputs,
+            &recursive_proof,
+            "fold_digest",
+            |public_inputs| public_inputs.fold_digest = Hash::prehashed([0u8; Hash::LENGTH]),
+        );
+
+        let mut zero_aggregation_digest = public_inputs.clone();
+        zero_aggregation_digest.aggregation_transcript_digest = [0u8; Hash::LENGTH];
+        let err = zero_aggregation_digest
+            .validate_recursive_compact_context()
+            .expect_err("zero recursive compact aggregation digest must be rejected");
+        assert!(
+            matches!(
+                err,
+                KagemushaFoldError::ZeroFoldedPublicInputDigest {
+                    field: "aggregation_transcript_digest"
+                }
+            ),
+            "unexpected zero recursive compact digest error: {err:?}"
+        );
+        let err = KagemushaCompactPaymentToken::from_recursive_compact_projection(
+            zero_aggregation_digest,
+            recursive_proof.clone(),
+        )
+        .expect_err("zero recursive compact aggregation digest must reject token projection");
+        assert!(
+            matches!(
+                err,
+                KagemushaFoldError::ZeroFoldedPublicInputDigest {
+                    field: "aggregation_transcript_digest"
+                }
+            ),
+            "unexpected zero recursive compact token error: {err:?}"
+        );
+
         let mut checked_mode = public_inputs.clone();
         checked_mode.aggregation_mode = KAGEMUSHA_AGGREGATION_MODE_CHECKED_PREFOLD_V1;
         assert!(matches!(
@@ -12733,6 +12820,140 @@ mod offline_note_tests {
             Err(
                 KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
                     field: "folded_public_inputs_hash"
+                }
+            )
+        ));
+
+        let mut unsupported_proof_backend = recursive_proof.clone();
+        unsupported_proof_backend.proof = ProofBox::new("groth16/bn254".to_owned(), vec![0xA5]);
+        assert!(matches!(
+            KagemushaCompactPaymentToken::from_recursive_compact_projection(
+                public_inputs.clone(),
+                unsupported_proof_backend,
+            ),
+            Err(KagemushaFoldError::UnsupportedProofBackend { backend })
+                if backend == "groth16/bn254"
+        ));
+
+        let mut unsupported_verifier_backend = recursive_proof.clone();
+        unsupported_verifier_backend.verifier_key_id = VerifyingKeyId::new(
+            "groth16/bn254",
+            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+        );
+        assert!(matches!(
+            KagemushaCompactPaymentToken::from_recursive_compact_projection(
+                public_inputs.clone(),
+                unsupported_verifier_backend,
+            ),
+            Err(KagemushaFoldError::UnsupportedProofBackend { backend })
+                if backend == "groth16/bn254"
+        ));
+
+        let mut backend_mismatch = recursive_proof.clone();
+        backend_mismatch.proof = ProofBox::new("stark/fri".to_owned(), vec![0xA5]);
+        assert!(matches!(
+            KagemushaCompactPaymentToken::from_recursive_compact_projection(
+                public_inputs.clone(),
+                backend_mismatch,
+            ),
+            Err(KagemushaFoldError::RecursiveAggregationProofBackendMismatch {
+                proof_backend,
+                verifier_key_backend,
+            }) if proof_backend == "stark/fri"
+                && verifier_key_backend == KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND
+        ));
+
+        let mut non_halo2_backend = recursive_proof.clone();
+        non_halo2_backend.verifier_key_id = VerifyingKeyId::new(
+            "stark/fri",
+            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+        );
+        non_halo2_backend.proof = ProofBox::new("stark/fri".to_owned(), vec![0xA5]);
+        assert!(matches!(
+            KagemushaCompactPaymentToken::from_recursive_compact_projection(
+                public_inputs.clone(),
+                non_halo2_backend,
+            ),
+            Err(KagemushaFoldError::InvalidRecursiveAggregationProof {
+                field: "proof.backend"
+            })
+        ));
+
+        let mut empty_proof = recursive_proof.clone();
+        empty_proof.proof = ProofBox::new(
+            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND.to_owned(),
+            Vec::new(),
+        );
+        assert!(matches!(
+            KagemushaCompactPaymentToken::from_recursive_compact_projection(
+                public_inputs.clone(),
+                empty_proof,
+            ),
+            Err(KagemushaFoldError::InvalidRecursiveAggregationProof {
+                field: "proof.bytes"
+            })
+        ));
+
+        let mut unsupported_circuit = recursive_proof.clone();
+        unsupported_circuit.verifier_key_id = VerifyingKeyId::new(
+            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            "halo2/ipa:kagemusha-recursive-unsupported",
+        );
+        assert!(matches!(
+            KagemushaCompactPaymentToken::from_recursive_compact_projection(
+                public_inputs.clone(),
+                unsupported_circuit,
+            ),
+            Err(KagemushaFoldError::InvalidRecursiveAggregationProof {
+                field: "verifier_key_id.name"
+            })
+        ));
+
+        let mut stale_public_hash = recursive_proof.clone();
+        stale_public_hash.public_inputs_hash = Hash::new(b"recursive-compact-stale-proof-hash");
+        assert!(matches!(
+            KagemushaCompactPaymentToken::from_recursive_compact_projection(
+                public_inputs.clone(),
+                stale_public_hash,
+            ),
+            Err(KagemushaFoldError::RecursiveAggregationProofPublicInputHashMismatch { .. })
+        ));
+
+        let mut transcript_splice = recursive_proof.clone();
+        transcript_splice
+            .public_inputs
+            .aggregation_transcript_digest = fixed_hash(b"recursive-compact-spliced-transcript");
+        transcript_splice.public_inputs_hash = transcript_splice
+            .public_inputs
+            .public_inputs_hash()
+            .expect("transcript-spliced public-input hash");
+        assert!(matches!(
+            KagemushaCompactPaymentToken::from_recursive_compact_projection(
+                public_inputs.clone(),
+                transcript_splice,
+            ),
+            Err(
+                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                    field: "aggregation_transcript_digest"
+                }
+            )
+        ));
+
+        let mut hop_count_splice = recursive_proof.clone();
+        hop_count_splice.public_inputs.hop_count = public_inputs.hop_count + 1;
+        hop_count_splice.public_inputs.verifier_witness_count = public_inputs.hop_count + 1;
+        hop_count_splice.public_inputs_hash = hop_count_splice
+            .public_inputs
+            .public_inputs_hash()
+            .expect("hop-count-spliced public-input hash");
+        assert!(matches!(
+            KagemushaCompactPaymentToken::from_recursive_compact_projection(
+                public_inputs.clone(),
+                hop_count_splice,
+            ),
+            Err(
+                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                    field: "hop_count"
                 }
             )
         ));
@@ -14676,6 +14897,31 @@ mod offline_note_tests {
         let accumulator0 =
             kagemusha_recursive_spend_accumulator_from_initial_evidence(&evidence0, &note0)
                 .expect("initial recursive spend accumulator");
+        let mut zero_accumulator_nullifier_digest = accumulator0.clone();
+        zero_accumulator_nullifier_digest.nullifier_digest = Hash::prehashed([0u8; Hash::LENGTH]);
+        assert!(matches!(
+            zero_accumulator_nullifier_digest.validate_context(),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "nullifier_digest"
+            })
+        ));
+        let mut zero_accumulator_output_commitment_digest = accumulator0.clone();
+        zero_accumulator_output_commitment_digest.output_commitment_digest =
+            Hash::prehashed([0u8; Hash::LENGTH]);
+        assert!(matches!(
+            zero_accumulator_output_commitment_digest.validate_context(),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "output_commitment_digest"
+            })
+        ));
+        let mut zero_accumulator_fold_digest = accumulator0.clone();
+        zero_accumulator_fold_digest.fold_digest = Hash::prehashed([0u8; Hash::LENGTH]);
+        assert!(matches!(
+            zero_accumulator_fold_digest.validate_context(),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "fold_digest"
+            })
+        ));
         let previous_proof0 = kagemusha_recursive_spend_proof(&accumulator0);
         let initial_profile =
             kagemusha_recursive_spend_transition_profile_from_initial_evidence(&evidence0, &note0)
@@ -14970,6 +15216,16 @@ mod offline_note_tests {
                 evidence1.aggregation_statement.steps[0].proof_hash,
             )
             .expect("append opening preflight contract");
+        let mut zero_append_opening_preflight_current_hop_proof_hash =
+            append_opening_preflight_contract.clone();
+        zero_append_opening_preflight_current_hop_proof_hash.current_hop_proof_hash =
+            Hash::prehashed([0u8; Hash::LENGTH]);
+        assert!(matches!(
+            zero_append_opening_preflight_current_hop_proof_hash.validate_context(),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "append_opening_preflight.current_hop_proof_hash"
+            })
+        ));
         let profile_with_append_opening_contract =
             kagemusha_recursive_spend_transition_profile_append_evidence_with_opening_preflight_contract(
                 &accumulator0,
@@ -15209,6 +15465,23 @@ mod offline_note_tests {
             stale_append_boundary.validate_context(),
             Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
                 field: "append_boundary.append_boundary_digest"
+            })
+        ));
+        let mut zero_current_hop_proof_hash = append_boundary.clone();
+        zero_current_hop_proof_hash.current_hop_proof_hash = Hash::prehashed([0u8; Hash::LENGTH]);
+        assert!(matches!(
+            zero_current_hop_proof_hash.validate_context(),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "append_boundary.current_hop_proof_hash"
+            })
+        ));
+        let mut zero_resulting_public_inputs_hash = append_boundary.clone();
+        zero_resulting_public_inputs_hash.resulting_public_inputs_hash =
+            Hash::prehashed([0u8; Hash::LENGTH]);
+        assert!(matches!(
+            zero_resulting_public_inputs_hash.validate_context(),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "append_boundary.resulting_public_inputs_hash"
             })
         ));
         let mut zero_append_boundary = append_boundary.clone();
@@ -15548,6 +15821,15 @@ mod offline_note_tests {
             original_digest,
             |_| {},
         );
+        let mut zero_previous_accumulator_pi = profile.clone();
+        zero_previous_accumulator_pi.previous_accumulator_public_inputs_hash =
+            Some(Hash::prehashed([0u8; Hash::LENGTH]));
+        assert!(matches!(
+            zero_previous_accumulator_pi.validate_context(),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "previous_accumulator_public_inputs_hash"
+            })
+        ));
         assert_transition_profile_mutation_changes_or_rejects(
             profile.clone(),
             original_digest,
@@ -15556,6 +15838,15 @@ mod offline_note_tests {
                     Some(Hash::new(b"forged-previous-public-inputs"));
             },
         );
+        let mut zero_previous_recursive_proof_pi = profile.clone();
+        zero_previous_recursive_proof_pi.previous_recursive_proof_public_inputs_hash =
+            Some(Hash::prehashed([0u8; Hash::LENGTH]));
+        assert!(matches!(
+            zero_previous_recursive_proof_pi.validate_context(),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "previous_recursive_proof_public_inputs_hash"
+            })
+        ));
         assert_transition_profile_mutation_changes_or_rejects(
             profile.clone(),
             original_digest,
@@ -15663,6 +15954,15 @@ mod offline_note_tests {
             original_digest,
             |profile| profile.resulting_nullifier_digest = Hash::new(b"forged-nullifier-digest"),
         );
+        let mut zero_profile_resulting_nullifier_digest = profile.clone();
+        zero_profile_resulting_nullifier_digest.resulting_nullifier_digest =
+            Hash::prehashed([0u8; Hash::LENGTH]);
+        assert!(matches!(
+            zero_profile_resulting_nullifier_digest.validate_context(),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "resulting_nullifier_digest"
+            })
+        ));
         assert_transition_profile_mutation_changes_or_rejects(
             profile.clone(),
             original_digest,
@@ -15671,21 +15971,48 @@ mod offline_note_tests {
                     Hash::new(b"forged-output-commitment-digest");
             },
         );
+        let mut zero_profile_resulting_output_commitment_digest = profile.clone();
+        zero_profile_resulting_output_commitment_digest.resulting_output_commitment_digest =
+            Hash::prehashed([0u8; Hash::LENGTH]);
+        assert!(matches!(
+            zero_profile_resulting_output_commitment_digest.validate_context(),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "resulting_output_commitment_digest"
+            })
+        ));
         assert_transition_profile_mutation_changes_or_rejects(
             profile.clone(),
             original_digest,
             |profile| profile.resulting_fold_digest = Hash::new(b"forged-fold-digest"),
         );
+        let mut zero_profile_resulting_fold_digest = profile.clone();
+        zero_profile_resulting_fold_digest.resulting_fold_digest =
+            Hash::prehashed([0u8; Hash::LENGTH]);
+        assert!(matches!(
+            zero_profile_resulting_fold_digest.validate_context(),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "resulting_fold_digest"
+            })
+        ));
         assert_transition_profile_mutation_changes_or_rejects(
             profile.clone(),
             original_digest,
             |profile| profile.resulting_accumulator_digest[0] ^= 0x01,
         );
         assert_transition_profile_mutation_changes_or_rejects(
-            profile,
+            profile.clone(),
             original_digest,
             |profile| profile.resulting_public_inputs_hash = Hash::new(b"forged-public-inputs"),
         );
+        let mut zero_profile_resulting_public_inputs_hash = profile;
+        zero_profile_resulting_public_inputs_hash.resulting_public_inputs_hash =
+            Hash::prehashed([0u8; Hash::LENGTH]);
+        assert!(matches!(
+            zero_profile_resulting_public_inputs_hash.validate_context(),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "resulting_public_inputs_hash"
+            })
+        ));
     }
 
     #[test]
@@ -19574,6 +19901,55 @@ mod offline_note_tests {
                 field: "aggregation_transcript_digest"
             })
         ));
+
+        fn assert_zero_legacy_compact_hash_rejected(
+            source: &KagemushaCompactPaymentToken,
+            field: &'static str,
+            mutate: impl FnOnce(&mut KagemushaFoldedPublicInputs),
+        ) {
+            let mut forged = source.clone();
+            mutate(&mut forged.public_inputs);
+            forged.folded_proof.public_inputs_hash = forged
+                .public_inputs
+                .public_inputs_hash()
+                .expect("self-consistent zero-prehash legacy compact hash");
+            let err = forged
+                .public_inputs
+                .validate_supported_context()
+                .expect_err("zero-prehash legacy compact digest must be rejected");
+            assert!(
+                matches!(
+                    err,
+                    KagemushaFoldError::ZeroFoldedPublicInputDigest { field: actual }
+                    if actual == field
+                ),
+                "unexpected zero-prehash legacy compact digest error for {field}: {err:?}"
+            );
+            let err = forged
+                .validate_public_input_binding()
+                .expect_err("zero-prehash legacy compact token must be rejected");
+            assert!(
+                matches!(
+                    err,
+                    KagemushaFoldError::ZeroFoldedPublicInputDigest { field: actual }
+                    if actual == field
+                ),
+                "unexpected zero-prehash legacy compact token error for {field}: {err:?}"
+            );
+        }
+        assert_zero_legacy_compact_hash_rejected(&token, "nullifier_digest", |public_inputs| {
+            public_inputs.nullifier_digest = Hash::prehashed([0u8; Hash::LENGTH]);
+        });
+        assert_zero_legacy_compact_hash_rejected(
+            &token,
+            "output_commitment_digest",
+            |public_inputs| {
+                public_inputs.output_commitment_digest = Hash::prehashed([0u8; Hash::LENGTH]);
+            },
+        );
+        assert_zero_legacy_compact_hash_rejected(&token, "fold_digest", |public_inputs| {
+            public_inputs.fold_digest = Hash::prehashed([0u8; Hash::LENGTH]);
+        });
 
         let mut forged_zero_initial_root = token.clone();
         forged_zero_initial_root.public_inputs.initial_root = [0u8; Hash::LENGTH];

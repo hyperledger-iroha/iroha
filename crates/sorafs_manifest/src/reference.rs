@@ -8,18 +8,22 @@
 // error so FFI/CLI callers can render identical diagnostics without side state.
 #![allow(clippy::result_large_err)]
 
-use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+use ed25519_dalek::SigningKey;
+use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+use thiserror::Error;
+
 use crate::{
-    AdmissionRecord, AdvertValidationError, AuditorSignatureVerificationError,
+    AdmissionRecord, AdvertValidationError, AuditorSignatureVerificationError, ByteRangeV1,
     GovernanceDagBlockV1, GovernanceDagBlockValidationError, GovernanceDagChainValidationError,
     GovernanceDagHeadChainValidationError, GovernanceDagHeadV1, GovernanceDagHeadValidationError,
     GovernanceLogNodeV1, GovernanceLogPayloadV1, GovernanceLogSignatureVerificationError,
-    GovernanceLogValidationError, GovernanceSignatureAlgorithm, OrderCancelReasonV1, OrderCancelV1,
-    OrderRequestV1, OrderSideV1, OrderTierV1, OrderbookValidationError, PdpChallengeV1,
-    PdpChallengeValidationError, PdpCommitmentV1, PdpCommitmentValidationError, PdpProofV1,
-    PdpProofValidationError, PorChallengeV1, PorChallengeValidationError, PorProofV1,
+    GovernanceLogValidationError, GovernanceSignatureAlgorithm, ORDERBOOK_CANCEL_VERSION_V1,
+    ORDERBOOK_ORDER_VERSION_V1, OrderCancelReasonV1, OrderCancelV1, OrderRequestV1, OrderSideV1,
+    OrderTierV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1, OrderbookValidationError,
+    PdpChallengeV1, PdpChallengeValidationError, PdpCommitmentV1, PdpCommitmentValidationError,
+    PdpProofV1, PdpProofValidationError, PorChallengeV1, PorChallengeValidationError, PorProofV1,
     PorProofValidationError, PotrReceiptV1, PotrReceiptValidationError, ProofStreamTier,
     ProviderAdmissionEnvelopeError, ProviderAdmissionEnvelopeV1, ProviderAdmissionRenewalError,
     ProviderAdmissionRenewalV1, ProviderAdmissionRevocationError, ProviderAdmissionRevocationV1,
@@ -28,10 +32,12 @@ use crate::{
     RepairSlashProposalV1, RepairTaskEventV1, RepairTaskRecordV1, RepairTaskStateV1,
     RepairValidationError, RepairWorkerActionV1, RepairWorkerSignaturePayloadV1,
     ReplicationOrderSignatureVerificationError, ReplicationOrderV1,
-    ReplicationOrderValidationError, SettlementChannelStatusV1, SettlementChannelV1,
-    SettlementReceiptV1, SignatureAlgorithm, SignedAuditorRequestPayloadV1, SignedAuditorRequestV1,
-    SignedReplicationOrderV1, SignedReplicationOrderValidationError, TradeEventV1,
-    validate_governance_dag_head_against_chain_v1, verify_envelope,
+    ReplicationOrderValidationError, SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelStatusV1,
+    SettlementChannelV1, SettlementReceiptV1, SignatureAlgorithm, SignedAuditorRequestPayloadV1,
+    SignedAuditorRequestV1, SignedReplicationOrderV1, SignedReplicationOrderValidationError,
+    TradeEventV1, XorAmount, sign_order_cancel_ed25519_v1, sign_order_request_ed25519_v1,
+    sign_settlement_receipt_ed25519_v1, validate_governance_dag_head_against_chain_v1,
+    verify_envelope,
 };
 
 /// Current schema version for [`ValidationOutcomeV1`].
@@ -223,6 +229,8 @@ pub enum FixtureBundlePayloadKindV1 {
     OrderbookSettlementChannel,
     /// [`SettlementReceiptV1`] orderbook payload.
     OrderbookSettlementReceipt,
+    /// [`OrderbookRuntimeSnapshotV1`] orderbook payload.
+    OrderbookRuntimeSnapshot,
 }
 
 impl FixtureBundlePayloadKindV1 {
@@ -247,6 +255,7 @@ impl FixtureBundlePayloadKindV1 {
             Self::OrderbookTradeEvent => "orderbook_trade_event",
             Self::OrderbookSettlementChannel => "settlement_channel",
             Self::OrderbookSettlementReceipt => "settlement_receipt",
+            Self::OrderbookRuntimeSnapshot => "orderbook_runtime_snapshot",
         }
     }
 
@@ -271,6 +280,7 @@ impl FixtureBundlePayloadKindV1 {
             Self::OrderbookTradeEvent => "TradeEventV1",
             Self::OrderbookSettlementChannel => "SettlementChannelV1",
             Self::OrderbookSettlementReceipt => "SettlementReceiptV1",
+            Self::OrderbookRuntimeSnapshot => "OrderbookRuntimeSnapshotV1",
         }
     }
 }
@@ -1081,6 +1091,11 @@ fn validate_fixture_bundle_payload(
                 generated_at,
             )?
         }
+        FixtureBundlePayloadKindV1::OrderbookRuntimeSnapshot => validate_orderbook_bundle_payload(
+            OrderbookValidationPayloadKindV1::RuntimeSnapshot,
+            payload,
+            generated_at,
+        )?,
     }
     Ok(())
 }
@@ -1836,6 +1851,31 @@ fn settlement_receipt_context(receipt: &SettlementReceiptV1) -> Vec<ValidationCo
     context
 }
 
+fn orderbook_runtime_snapshot_context(
+    snapshot: &OrderbookRuntimeSnapshotV1,
+) -> Vec<ValidationContextFieldV1> {
+    vec![
+        ValidationContextFieldV1::new("schema", "OrderbookRuntimeSnapshotV1"),
+        ValidationContextFieldV1::new("version", snapshot.version.to_string()),
+        ValidationContextFieldV1::new("next_sequence", snapshot.next_sequence.to_string()),
+        ValidationContextFieldV1::new("generated_at_unix", snapshot.generated_at_unix.to_string()),
+        ValidationContextFieldV1::new("open_order_count", snapshot.open_orders.len().to_string()),
+        ValidationContextFieldV1::new("trade_count", snapshot.trades.len().to_string()),
+        ValidationContextFieldV1::new(
+            "settlement_channel_count",
+            snapshot.settlement_channels.len().to_string(),
+        ),
+        ValidationContextFieldV1::new(
+            "settlement_receipt_count",
+            snapshot.settlement_receipts.len().to_string(),
+        ),
+        ValidationContextFieldV1::new(
+            "expired_order_count",
+            snapshot.expired_order_ids.len().to_string(),
+        ),
+    ]
+}
+
 fn append_orderbook_signature_context(
     context: &mut Vec<ValidationContextFieldV1>,
     signature: &crate::OrderbookSignatureV1,
@@ -1900,6 +1940,11 @@ fn governance_payload_kind(payload: &GovernanceLogPayloadV1) -> &'static str {
         GovernanceLogPayloadV1::ModerationBallotEvent(_) => "moderation_ballot_event",
         GovernanceLogPayloadV1::AppealFinanceReport(_) => "appeal_finance_report",
         GovernanceLogPayloadV1::AppealFinanceWeeklyRollup(_) => "appeal_finance_weekly_rollup",
+        GovernanceLogPayloadV1::AppealFinanceSettlementReceipt(_) => {
+            "appeal_finance_settlement_receipt"
+        }
+        GovernanceLogPayloadV1::OrderbookSettlementReceipt(_) => "orderbook_settlement_receipt",
+        GovernanceLogPayloadV1::ExternalPayload(_) => "external_payload",
     }
 }
 
@@ -1926,6 +1971,9 @@ fn governance_log_validation_code(error: &GovernanceLogValidationError) -> &'sta
         | GovernanceLogValidationError::ModerationBallotEvent(_)
         | GovernanceLogValidationError::AppealFinanceReport(_)
         | GovernanceLogValidationError::AppealFinanceWeeklyRollup(_)
+        | GovernanceLogValidationError::AppealFinanceSettlementReceipt(_)
+        | GovernanceLogValidationError::OrderbookSettlementReceipt(_)
+        | GovernanceLogValidationError::ExternalPayload(_)
         | GovernanceLogValidationError::MissingNodeCid
         | GovernanceLogValidationError::InvalidPrevCid
         | GovernanceLogValidationError::MissingPublisherPeerId => "SFS-GOV-001",
@@ -1950,6 +1998,9 @@ fn governance_log_validation_category(error: &GovernanceLogValidationError) -> &
         | GovernanceLogValidationError::ModerationBallotEvent(_)
         | GovernanceLogValidationError::AppealFinanceReport(_)
         | GovernanceLogValidationError::AppealFinanceWeeklyRollup(_)
+        | GovernanceLogValidationError::AppealFinanceSettlementReceipt(_)
+        | GovernanceLogValidationError::OrderbookSettlementReceipt(_)
+        | GovernanceLogValidationError::ExternalPayload(_)
         | GovernanceLogValidationError::MissingNodeCid
         | GovernanceLogValidationError::InvalidPrevCid
         | GovernanceLogValidationError::MissingPublisherPeerId => CATEGORY_VALIDATION,
@@ -2168,6 +2219,8 @@ pub enum OrderbookValidationPayloadKindV1 {
     SettlementChannel,
     /// [`SettlementReceiptV1`] payload.
     SettlementReceipt,
+    /// [`OrderbookRuntimeSnapshotV1`] payload.
+    RuntimeSnapshot,
 }
 
 impl OrderbookValidationPayloadKindV1 {
@@ -2178,6 +2231,7 @@ impl OrderbookValidationPayloadKindV1 {
             Self::TradeEvent => "orderbook_trade_event",
             Self::SettlementChannel => "settlement_channel",
             Self::SettlementReceipt => "settlement_receipt",
+            Self::RuntimeSnapshot => "orderbook_runtime_snapshot",
         }
     }
 
@@ -2188,6 +2242,7 @@ impl OrderbookValidationPayloadKindV1 {
             Self::TradeEvent => "TradeEventV1",
             Self::SettlementChannel => "SettlementChannelV1",
             Self::SettlementReceipt => "SettlementReceiptV1",
+            Self::RuntimeSnapshot => "OrderbookRuntimeSnapshotV1",
         }
     }
 
@@ -2198,6 +2253,7 @@ impl OrderbookValidationPayloadKindV1 {
             Self::TradeEvent => "trade_event",
             Self::SettlementChannel => "settlement_channel",
             Self::SettlementReceipt => "settlement_receipt",
+            Self::RuntimeSnapshot => "runtime_snapshot",
         }
     }
 
@@ -2208,6 +2264,7 @@ impl OrderbookValidationPayloadKindV1 {
             Self::TradeEvent => "orderbook trade event accepted",
             Self::SettlementChannel => "settlement channel accepted",
             Self::SettlementReceipt => "settlement receipt accepted",
+            Self::RuntimeSnapshot => "orderbook runtime snapshot accepted",
         }
     }
 }
@@ -2287,7 +2344,329 @@ pub fn validate_orderbook_payload_bytes(
                 Err(error) => orderbook_decode_error(kind, error.to_string(), inputs, generated_at),
             }
         }
+        OrderbookValidationPayloadKindV1::RuntimeSnapshot => {
+            match norito::decode_from_bytes::<OrderbookRuntimeSnapshotV1>(bytes) {
+                Ok(payload) => validate_orderbook_payload_value(
+                    kind,
+                    payload.validate(),
+                    orderbook_runtime_snapshot_context(&payload),
+                    inputs,
+                    generated_at,
+                ),
+                Err(error) => orderbook_decode_error(kind, error.to_string(), inputs, generated_at),
+            }
+        }
     }
+}
+
+/// Error returned while signing already-encoded orderbook payload bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum OrderbookPayloadSigningError {
+    /// Ed25519 signing key material has the wrong length.
+    #[error("Ed25519 signing key must be 32 bytes, got {length}")]
+    InvalidSigningKeyLength {
+        /// Observed signing-key byte length.
+        length: usize,
+    },
+    /// Ed25519 signing key material is all zero.
+    #[error("Ed25519 signing key material must not be all zero")]
+    InvalidSigningKeyMaterial,
+    /// Payload kind is not a user-signed orderbook input.
+    #[error("orderbook payload kind {kind:?} cannot be signed")]
+    UnsupportedPayloadKind {
+        /// Unsupported payload kind.
+        kind: OrderbookValidationPayloadKindV1,
+    },
+    /// Norito payload decoding failed.
+    #[error("failed to decode {schema}: {reason}")]
+    Decode {
+        /// Expected payload schema.
+        schema: &'static str,
+        /// Decode failure reason.
+        reason: String,
+    },
+    /// Payload signing failed.
+    #[error("failed to sign {schema}: {reason}")]
+    Sign {
+        /// Expected payload schema.
+        schema: &'static str,
+        /// Signing failure reason.
+        reason: String,
+    },
+    /// Signed Norito payload encoding failed.
+    #[error("failed to encode signed {schema}: {reason}")]
+    Encode {
+        /// Expected payload schema.
+        schema: &'static str,
+        /// Encode failure reason.
+        reason: String,
+    },
+}
+
+/// Field-level input for building a signed [`OrderRequestV1`] payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderbookOrderRequestFieldsV1 {
+    /// Unique order identifier.
+    pub order_id: [u8; 32],
+    /// Bid or ask.
+    pub side: OrderSideV1,
+    /// Storage tier priced by the order.
+    pub tier: OrderTierV1,
+    /// Price in micro-XOR per GiB.
+    pub price_per_gib_micro_xor: u128,
+    /// Total GiB requested/offered.
+    pub quantity_gib: u64,
+    /// Remaining GiB after partial fills.
+    pub remaining_gib: u64,
+    /// Canonical owner account bytes.
+    pub owner_account: Vec<u8>,
+    /// Unix timestamp (seconds) after which the order expires.
+    pub expiry_unix: u64,
+    /// Owner nonce used to prevent replay.
+    pub nonce: u64,
+    /// Maker fee in basis points.
+    pub maker_fee_bps: u16,
+    /// Taker fee in basis points.
+    pub taker_fee_bps: u16,
+}
+
+/// Field-level input for building a signed [`OrderCancelV1`] payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderbookOrderCancelFieldsV1 {
+    /// Order being cancelled.
+    pub order_id: [u8; 32],
+    /// Canonical owner account bytes.
+    pub owner_account: Vec<u8>,
+    /// Cancellation reason.
+    pub reason: OrderCancelReasonV1,
+    /// Owner nonce used to prevent replay.
+    pub nonce: u64,
+}
+
+/// Field-level input for building a signed [`SettlementReceiptV1`] payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderbookSettlementReceiptFieldsV1 {
+    /// Unique receipt identifier.
+    pub receipt_id: [u8; 32],
+    /// Channel being settled.
+    pub channel_id: [u8; 32],
+    /// Trade associated with the channel.
+    pub trade_id: [u8; 32],
+    /// Delivered range start offset, inclusive.
+    pub range_start: u64,
+    /// Delivered range end offset, exclusive.
+    pub range_end: u64,
+    /// Chunk/content digest for the delivered range.
+    pub chunk_hash: [u8; 32],
+    /// Delivered byte count.
+    pub bytes_delivered: u64,
+    /// XOR debited from buyer escrow, in micro-XOR.
+    pub xor_debited_micro_xor: u128,
+    /// XOR credited to the provider, in micro-XOR.
+    pub provider_credit_micro_xor: u128,
+    /// XOR retained as fee, in micro-XOR.
+    pub fee_amount_micro_xor: u128,
+    /// Unix timestamp (seconds) when the receipt was issued.
+    pub issued_at_unix: u64,
+}
+
+fn empty_sdk_orderbook_signature() -> OrderbookSignatureV1 {
+    OrderbookSignatureV1 {
+        algorithm: SignatureAlgorithm::Ed25519,
+        public_key: Vec::new(),
+        signature: Vec::new(),
+    }
+}
+
+fn encode_signed_orderbook_builder_payload<T: norito::core::NoritoSerialize>(
+    schema: &'static str,
+    value: &T,
+) -> Result<Vec<u8>, OrderbookPayloadSigningError> {
+    encode_signed_orderbook_payload(schema, value)
+}
+
+/// Build, sign, validate, and encode a field-level order request payload.
+pub fn build_signed_orderbook_order_request_bytes_ed25519_v1(
+    fields: OrderbookOrderRequestFieldsV1,
+    signing_key_bytes: &[u8],
+) -> Result<Vec<u8>, OrderbookPayloadSigningError> {
+    let signing_key = orderbook_signing_key_from_bytes(signing_key_bytes)?;
+    let payload = OrderRequestV1 {
+        version: ORDERBOOK_ORDER_VERSION_V1,
+        order_id: fields.order_id,
+        side: fields.side,
+        tier: fields.tier,
+        price_per_gib: XorAmount::from_micro(fields.price_per_gib_micro_xor),
+        quantity_gib: fields.quantity_gib,
+        remaining_gib: fields.remaining_gib,
+        owner_account: fields.owner_account,
+        expiry_unix: fields.expiry_unix,
+        nonce: fields.nonce,
+        maker_fee_bps: fields.maker_fee_bps,
+        taker_fee_bps: fields.taker_fee_bps,
+        signature: empty_sdk_orderbook_signature(),
+    };
+    let schema = OrderbookValidationPayloadKindV1::OrderRequest.schema();
+    let signed = sign_order_request_ed25519_v1(payload, &signing_key).map_err(|err| {
+        OrderbookPayloadSigningError::Sign {
+            schema,
+            reason: err.to_string(),
+        }
+    })?;
+    encode_signed_orderbook_builder_payload(schema, &signed)
+}
+
+/// Build, sign, validate, and encode a field-level order-cancel payload.
+pub fn build_signed_orderbook_order_cancel_bytes_ed25519_v1(
+    fields: OrderbookOrderCancelFieldsV1,
+    signing_key_bytes: &[u8],
+) -> Result<Vec<u8>, OrderbookPayloadSigningError> {
+    let signing_key = orderbook_signing_key_from_bytes(signing_key_bytes)?;
+    let payload = OrderCancelV1 {
+        version: ORDERBOOK_CANCEL_VERSION_V1,
+        order_id: fields.order_id,
+        owner_account: fields.owner_account,
+        reason: fields.reason,
+        nonce: fields.nonce,
+        signature: empty_sdk_orderbook_signature(),
+    };
+    let schema = OrderbookValidationPayloadKindV1::OrderCancel.schema();
+    let signed = sign_order_cancel_ed25519_v1(payload, &signing_key).map_err(|err| {
+        OrderbookPayloadSigningError::Sign {
+            schema,
+            reason: err.to_string(),
+        }
+    })?;
+    encode_signed_orderbook_builder_payload(schema, &signed)
+}
+
+/// Build, sign, validate, and encode a field-level settlement receipt payload.
+pub fn build_signed_orderbook_settlement_receipt_bytes_ed25519_v1(
+    fields: OrderbookSettlementReceiptFieldsV1,
+    signing_key_bytes: &[u8],
+) -> Result<Vec<u8>, OrderbookPayloadSigningError> {
+    let signing_key = orderbook_signing_key_from_bytes(signing_key_bytes)?;
+    let payload = SettlementReceiptV1 {
+        version: SETTLEMENT_RECEIPT_VERSION_V1,
+        receipt_id: fields.receipt_id,
+        channel_id: fields.channel_id,
+        trade_id: fields.trade_id,
+        range: ByteRangeV1 {
+            start: fields.range_start,
+            end: fields.range_end,
+        },
+        chunk_hash: fields.chunk_hash,
+        bytes_delivered: fields.bytes_delivered,
+        xor_debited: XorAmount::from_micro(fields.xor_debited_micro_xor),
+        provider_credit: XorAmount::from_micro(fields.provider_credit_micro_xor),
+        fee_amount: XorAmount::from_micro(fields.fee_amount_micro_xor),
+        issued_at_unix: fields.issued_at_unix,
+        settlement_signature: empty_sdk_orderbook_signature(),
+    };
+    let schema = OrderbookValidationPayloadKindV1::SettlementReceipt.schema();
+    let signed = sign_settlement_receipt_ed25519_v1(payload, &signing_key).map_err(|err| {
+        OrderbookPayloadSigningError::Sign {
+            schema,
+            reason: err.to_string(),
+        }
+    })?;
+    encode_signed_orderbook_builder_payload(schema, &signed)
+}
+
+/// Signs an already-encoded mutable orderbook payload and returns signed Norito bytes.
+///
+/// This helper accepts `OrderRequestV1`, `OrderCancelV1`, and
+/// `SettlementReceiptV1` payloads. Runtime-generated trade events, settlement
+/// channels, and snapshots are intentionally not accepted because they are not
+/// directly signed by SDK users.
+pub fn sign_orderbook_payload_bytes_ed25519_v1(
+    kind: OrderbookValidationPayloadKindV1,
+    bytes: &[u8],
+    signing_key_bytes: &[u8],
+) -> Result<Vec<u8>, OrderbookPayloadSigningError> {
+    let signing_key = orderbook_signing_key_from_bytes(signing_key_bytes)?;
+    match kind {
+        OrderbookValidationPayloadKindV1::OrderRequest => {
+            let schema = kind.schema();
+            let payload = norito::decode_from_bytes::<OrderRequestV1>(bytes).map_err(|err| {
+                OrderbookPayloadSigningError::Decode {
+                    schema,
+                    reason: err.to_string(),
+                }
+            })?;
+            let signed = sign_order_request_ed25519_v1(payload, &signing_key).map_err(|err| {
+                OrderbookPayloadSigningError::Sign {
+                    schema,
+                    reason: err.to_string(),
+                }
+            })?;
+            encode_signed_orderbook_payload(schema, &signed)
+        }
+        OrderbookValidationPayloadKindV1::OrderCancel => {
+            let schema = kind.schema();
+            let payload = norito::decode_from_bytes::<OrderCancelV1>(bytes).map_err(|err| {
+                OrderbookPayloadSigningError::Decode {
+                    schema,
+                    reason: err.to_string(),
+                }
+            })?;
+            let signed = sign_order_cancel_ed25519_v1(payload, &signing_key).map_err(|err| {
+                OrderbookPayloadSigningError::Sign {
+                    schema,
+                    reason: err.to_string(),
+                }
+            })?;
+            encode_signed_orderbook_payload(schema, &signed)
+        }
+        OrderbookValidationPayloadKindV1::SettlementReceipt => {
+            let schema = kind.schema();
+            let payload =
+                norito::decode_from_bytes::<SettlementReceiptV1>(bytes).map_err(|err| {
+                    OrderbookPayloadSigningError::Decode {
+                        schema,
+                        reason: err.to_string(),
+                    }
+                })?;
+            let signed =
+                sign_settlement_receipt_ed25519_v1(payload, &signing_key).map_err(|err| {
+                    OrderbookPayloadSigningError::Sign {
+                        schema,
+                        reason: err.to_string(),
+                    }
+                })?;
+            encode_signed_orderbook_payload(schema, &signed)
+        }
+        other => Err(OrderbookPayloadSigningError::UnsupportedPayloadKind { kind: other }),
+    }
+}
+
+fn orderbook_signing_key_from_bytes(
+    bytes: &[u8],
+) -> Result<SigningKey, OrderbookPayloadSigningError> {
+    if bytes.len() != 32 {
+        return Err(OrderbookPayloadSigningError::InvalidSigningKeyLength {
+            length: bytes.len(),
+        });
+    }
+    if bytes.iter().all(|byte| *byte == 0) {
+        return Err(OrderbookPayloadSigningError::InvalidSigningKeyMaterial);
+    }
+    let mut signing_key = [0u8; 32];
+    signing_key.copy_from_slice(bytes);
+    Ok(SigningKey::from_bytes(&signing_key))
+}
+
+fn encode_signed_orderbook_payload<T>(
+    schema: &'static str,
+    payload: &T,
+) -> Result<Vec<u8>, OrderbookPayloadSigningError>
+where
+    T: norito::core::NoritoSerialize,
+{
+    norito::to_bytes(payload).map_err(|err| OrderbookPayloadSigningError::Encode {
+        schema,
+        reason: err.to_string(),
+    })
 }
 
 fn validate_orderbook_payload_value(
@@ -4602,7 +4981,8 @@ fn orderbook_validation_code(error: &OrderbookValidationError) -> &'static str {
         | OrderbookValidationError::UnsupportedCancelVersion { .. }
         | OrderbookValidationError::UnsupportedTradeVersion { .. }
         | OrderbookValidationError::UnsupportedChannelVersion { .. }
-        | OrderbookValidationError::UnsupportedReceiptVersion { .. } => "SFS-VAL-002",
+        | OrderbookValidationError::UnsupportedReceiptVersion { .. }
+        | OrderbookValidationError::UnsupportedSnapshotVersion { .. } => "SFS-VAL-002",
         OrderbookValidationError::InvalidOrderId
         | OrderbookValidationError::InvalidMakerOrderId
         | OrderbookValidationError::InvalidTakerOrderId
@@ -5223,6 +5603,17 @@ mod tests {
         }
     }
 
+    fn orderbook_order_cancel() -> OrderCancelV1 {
+        OrderCancelV1 {
+            version: crate::ORDERBOOK_CANCEL_VERSION_V1,
+            order_id: [0x71; 32],
+            owner_account: b"buyer@sora".to_vec(),
+            reason: OrderCancelReasonV1::OwnerRequested,
+            nonce: 9,
+            signature: orderbook_signature(),
+        }
+    }
+
     fn orderbook_settlement_receipt() -> SettlementReceiptV1 {
         SettlementReceiptV1 {
             version: crate::SETTLEMENT_RECEIPT_VERSION_V1,
@@ -5240,6 +5631,65 @@ mod tests {
             fee_amount: crate::XorAmount::from_micro(10),
             issued_at_unix: 1_800_000_010,
             settlement_signature: orderbook_signature(),
+        }
+    }
+
+    fn orderbook_trade_event() -> TradeEventV1 {
+        TradeEventV1 {
+            version: crate::ORDERBOOK_TRADE_EVENT_VERSION_V1,
+            trade_id: [0x83; 32],
+            maker_order_id: [0x71; 32],
+            taker_order_id: [0x72; 32],
+            tier: OrderTierV1::Hot,
+            price_per_gib: crate::XorAmount::from_micro(1_250_000),
+            filled_gib: 2,
+            maker_fee: crate::XorAmount::from_micro(2_500),
+            taker_fee: crate::XorAmount::from_micro(3_750),
+            timestamp_unix: 1_800_000_005,
+        }
+    }
+
+    fn orderbook_settlement_channel(trade: &TradeEventV1) -> SettlementChannelV1 {
+        SettlementChannelV1 {
+            version: crate::SETTLEMENT_CHANNEL_VERSION_V1,
+            channel_id: [0x82; 32],
+            trade_id: trade.trade_id,
+            buyer_account: b"buyer@sora".to_vec(),
+            provider_id: [0x91; 32],
+            total_bytes: 512,
+            remaining_bytes: 256,
+            xor_locked: crate::XorAmount::from_micro(900),
+            status: SettlementChannelStatusV1::Open,
+            opened_at_unix: 1_800_000_005,
+            updated_at_unix: 1_800_000_010,
+        }
+    }
+
+    fn orderbook_runtime_snapshot() -> OrderbookRuntimeSnapshotV1 {
+        let mut open = orderbook_order_request();
+        open.order_id = [0x73; 32];
+        open.side = OrderSideV1::Ask;
+        open.owner_account = b"provider@sora".to_vec();
+        open.expiry_unix = 1_800_000_500;
+        open.nonce = 8;
+        let trade = orderbook_trade_event();
+        let channel = orderbook_settlement_channel(&trade);
+        let mut receipt = orderbook_settlement_receipt();
+        receipt.channel_id = channel.channel_id;
+        receipt.trade_id = channel.trade_id;
+        receipt.issued_at_unix = channel.updated_at_unix;
+        OrderbookRuntimeSnapshotV1 {
+            version: crate::ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
+            next_sequence: 4,
+            generated_at_unix: 1_800_000_020,
+            open_orders: vec![crate::OrderBookEntryV1 {
+                order: open,
+                sequence: 3,
+            }],
+            trades: vec![trade],
+            settlement_channels: vec![channel],
+            settlement_receipts: vec![receipt],
+            expired_order_ids: vec![[0x74; 32]],
         }
     }
 
@@ -5537,11 +5987,13 @@ mod tests {
         let order = replication_order();
         let orderbook_order = orderbook_order_request();
         let receipt = orderbook_settlement_receipt();
+        let snapshot = orderbook_runtime_snapshot();
         let advert_bytes = to_bytes(&advert).expect("encode advert");
         let order_bytes = to_bytes(&order).expect("encode order");
         let orderbook_order_bytes =
             to_bytes(&orderbook_order).expect("encode orderbook order request");
         let receipt_bytes = to_bytes(&receipt).expect("encode settlement receipt");
+        let snapshot_bytes = to_bytes(&snapshot).expect("encode runtime snapshot");
         let payloads = [
             FixtureBundlePayloadV1::new(
                 FixtureBundlePayloadKindV1::ProviderAdvert,
@@ -5563,6 +6015,11 @@ mod tests {
                 "orderbook/settlement_receipt_v1.to",
                 &receipt_bytes,
             ),
+            FixtureBundlePayloadV1::new(
+                FixtureBundlePayloadKindV1::OrderbookRuntimeSnapshot,
+                "orderbook/runtime_snapshot_v1.to",
+                &snapshot_bytes,
+            ),
         ];
 
         let outcome = validate_fixture_bundle_payloads(&payloads, 1_700_000_001, 46);
@@ -5572,7 +6029,7 @@ mod tests {
             outcome
                 .context
                 .iter()
-                .any(|field| field.key == "artifact_count" && field.value == "4"),
+                .any(|field| field.key == "artifact_count" && field.value == "5"),
             "{outcome:?}"
         );
         assert!(
@@ -5586,6 +6043,13 @@ mod tests {
             outcome.inputs.iter().any(|input| {
                 input.kind == "settlement_receipt"
                     && input.path == "orderbook/settlement_receipt_v1.to"
+            }),
+            "{outcome:?}"
+        );
+        assert!(
+            outcome.inputs.iter().any(|input| {
+                input.kind == "orderbook_runtime_snapshot"
+                    && input.path == "orderbook/runtime_snapshot_v1.to"
             }),
             "{outcome:?}"
         );
@@ -6354,6 +6818,207 @@ mod tests {
             decode_from_bytes(&to_bytes(&outcome).expect("encode outcome"))
                 .expect("decode outcome");
         assert_eq!(roundtrip, outcome);
+    }
+
+    #[test]
+    fn sign_orderbook_payload_bytes_ed25519_v1_signs_mutable_payloads() {
+        let seed = [0xB7; 32];
+        let expected_public_key = SigningKey::from_bytes(&seed)
+            .verifying_key()
+            .to_bytes()
+            .to_vec();
+
+        let order_bytes =
+            to_bytes(&orderbook_order_request()).expect("encode orderbook order request");
+        let signed_order_bytes = sign_orderbook_payload_bytes_ed25519_v1(
+            OrderbookValidationPayloadKindV1::OrderRequest,
+            &order_bytes,
+            &seed,
+        )
+        .expect("sign order request bytes");
+        let signed_order: OrderRequestV1 =
+            decode_from_bytes(&signed_order_bytes).expect("decode signed order request");
+        assert_eq!(signed_order.signature.public_key, expected_public_key);
+        crate::verify_order_request_signature_v1(&signed_order).expect("valid order signature");
+
+        let cancel_bytes = to_bytes(&orderbook_order_cancel()).expect("encode orderbook cancel");
+        let signed_cancel_bytes = sign_orderbook_payload_bytes_ed25519_v1(
+            OrderbookValidationPayloadKindV1::OrderCancel,
+            &cancel_bytes,
+            &seed,
+        )
+        .expect("sign order cancel bytes");
+        let signed_cancel: OrderCancelV1 =
+            decode_from_bytes(&signed_cancel_bytes).expect("decode signed order cancel");
+        assert_eq!(signed_cancel.signature.public_key, expected_public_key);
+        crate::verify_order_cancel_signature_v1(&signed_cancel).expect("valid cancel signature");
+
+        let receipt_bytes =
+            to_bytes(&orderbook_settlement_receipt()).expect("encode settlement receipt");
+        let signed_receipt_bytes = sign_orderbook_payload_bytes_ed25519_v1(
+            OrderbookValidationPayloadKindV1::SettlementReceipt,
+            &receipt_bytes,
+            &seed,
+        )
+        .expect("sign settlement receipt bytes");
+        let signed_receipt: SettlementReceiptV1 =
+            decode_from_bytes(&signed_receipt_bytes).expect("decode signed settlement receipt");
+        assert_eq!(
+            signed_receipt.settlement_signature.public_key,
+            expected_public_key
+        );
+        crate::verify_settlement_receipt_signature_v1(&signed_receipt)
+            .expect("valid receipt signature");
+    }
+
+    #[test]
+    fn build_signed_orderbook_payload_bytes_ed25519_v1_builds_field_level_payloads() {
+        let seed = [0xB7; 32];
+        let expected_public_key = SigningKey::from_bytes(&seed)
+            .verifying_key()
+            .to_bytes()
+            .to_vec();
+
+        let order_bytes = build_signed_orderbook_order_request_bytes_ed25519_v1(
+            OrderbookOrderRequestFieldsV1 {
+                order_id: [0x01; 32],
+                side: OrderSideV1::Bid,
+                tier: OrderTierV1::Hot,
+                price_per_gib_micro_xor: 1_500_000,
+                quantity_gib: 10,
+                remaining_gib: 10,
+                owner_account: vec![0x03; 32],
+                expiry_unix: 1_800_000_000,
+                nonce: 1,
+                maker_fee_bps: 5,
+                taker_fee_bps: 10,
+            },
+            &seed,
+        )
+        .expect("build signed order request");
+        let order: OrderRequestV1 =
+            decode_from_bytes(&order_bytes).expect("decode built order request");
+        assert_eq!(order.signature.public_key, expected_public_key);
+        crate::verify_order_request_signature_v1(&order).expect("valid built order request");
+
+        let cancel_bytes = build_signed_orderbook_order_cancel_bytes_ed25519_v1(
+            OrderbookOrderCancelFieldsV1 {
+                order_id: [0x01; 32],
+                owner_account: vec![0x03; 32],
+                reason: OrderCancelReasonV1::OwnerRequested,
+                nonce: 2,
+            },
+            &seed,
+        )
+        .expect("build signed order cancel");
+        let cancel: OrderCancelV1 =
+            decode_from_bytes(&cancel_bytes).expect("decode built order cancel");
+        assert_eq!(cancel.signature.public_key, expected_public_key);
+        crate::verify_order_cancel_signature_v1(&cancel).expect("valid built order cancel");
+
+        let receipt_bytes = build_signed_orderbook_settlement_receipt_bytes_ed25519_v1(
+            OrderbookSettlementReceiptFieldsV1 {
+                receipt_id: [0x07; 32],
+                channel_id: [0x05; 32],
+                trade_id: [0x04; 32],
+                range_start: 10,
+                range_end: 42,
+                chunk_hash: [0x08; 32],
+                bytes_delivered: 32,
+                xor_debited_micro_xor: 100,
+                provider_credit_micro_xor: 90,
+                fee_amount_micro_xor: 10,
+                issued_at_unix: 1_800_000_200,
+            },
+            &seed,
+        )
+        .expect("build signed settlement receipt");
+        let receipt: SettlementReceiptV1 =
+            decode_from_bytes(&receipt_bytes).expect("decode built settlement receipt");
+        assert_eq!(receipt.settlement_signature.public_key, expected_public_key);
+        crate::verify_settlement_receipt_signature_v1(&receipt)
+            .expect("valid built settlement receipt");
+    }
+
+    #[test]
+    fn build_signed_orderbook_payload_bytes_ed25519_v1_rejects_invalid_fields() {
+        let err = build_signed_orderbook_settlement_receipt_bytes_ed25519_v1(
+            OrderbookSettlementReceiptFieldsV1 {
+                receipt_id: [0x07; 32],
+                channel_id: [0x05; 32],
+                trade_id: [0x04; 32],
+                range_start: 10,
+                range_end: 42,
+                chunk_hash: [0x08; 32],
+                bytes_delivered: 32,
+                xor_debited_micro_xor: 100,
+                provider_credit_micro_xor: 91,
+                fee_amount_micro_xor: 10,
+                issued_at_unix: 1_800_000_200,
+            },
+            &[0xB7; 32],
+        )
+        .expect_err("imbalanced settlement receipt must fail");
+        assert!(matches!(err, OrderbookPayloadSigningError::Sign { .. }));
+    }
+
+    #[test]
+    fn sign_orderbook_payload_bytes_ed25519_v1_rejects_bad_key_material() {
+        let order_bytes =
+            to_bytes(&orderbook_order_request()).expect("encode orderbook order request");
+
+        assert_eq!(
+            sign_orderbook_payload_bytes_ed25519_v1(
+                OrderbookValidationPayloadKindV1::OrderRequest,
+                &order_bytes,
+                &[0xB7; 31],
+            ),
+            Err(OrderbookPayloadSigningError::InvalidSigningKeyLength { length: 31 })
+        );
+        assert_eq!(
+            sign_orderbook_payload_bytes_ed25519_v1(
+                OrderbookValidationPayloadKindV1::OrderRequest,
+                &order_bytes,
+                &[0; 32],
+            ),
+            Err(OrderbookPayloadSigningError::InvalidSigningKeyMaterial)
+        );
+    }
+
+    #[test]
+    fn sign_orderbook_payload_bytes_ed25519_v1_rejects_runtime_payloads() {
+        let snapshot_bytes =
+            to_bytes(&orderbook_runtime_snapshot()).expect("encode orderbook runtime snapshot");
+
+        assert_eq!(
+            sign_orderbook_payload_bytes_ed25519_v1(
+                OrderbookValidationPayloadKindV1::RuntimeSnapshot,
+                &snapshot_bytes,
+                &[0xB7; 32],
+            ),
+            Err(OrderbookPayloadSigningError::UnsupportedPayloadKind {
+                kind: OrderbookValidationPayloadKindV1::RuntimeSnapshot
+            })
+        );
+    }
+
+    #[test]
+    fn validate_orderbook_payload_bytes_accepts_runtime_snapshot() {
+        let snapshot = orderbook_runtime_snapshot();
+        let bytes = to_bytes(&snapshot).expect("encode orderbook runtime snapshot");
+        let outcome = validate_orderbook_payload_bytes(
+            OrderbookValidationPayloadKindV1::RuntimeSnapshot,
+            &bytes,
+            "orderbook-runtime-snapshot.to",
+            32,
+        );
+
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert_eq!(outcome.code, "SFS-OK-000");
+        assert!(outcome.context.iter().any(|field| {
+            field.key == "settlement_receipt_count"
+                && field.value == snapshot.settlement_receipts.len().to_string()
+        }));
     }
 
     #[test]

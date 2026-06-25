@@ -23,6 +23,41 @@ struct SorafsLocalFetchOutput {
     let reportJSON: String
 }
 
+struct NativeSorafsOrderbookOrderRequestFields {
+    let orderId: Data
+    let side: UInt32
+    let tier: UInt32
+    let pricePerGibMicroXor: String
+    let quantityGib: UInt64
+    let remainingGib: UInt64
+    let ownerAccount: Data
+    let expiryUnix: UInt64
+    let nonce: UInt64
+    let makerFeeBps: UInt32
+    let takerFeeBps: UInt32
+}
+
+struct NativeSorafsOrderbookOrderCancelFields {
+    let orderId: Data
+    let ownerAccount: Data
+    let reason: UInt32
+    let nonce: UInt64
+}
+
+struct NativeSorafsOrderbookSettlementReceiptFields {
+    let receiptId: Data
+    let channelId: Data
+    let tradeId: Data
+    let rangeStart: UInt64
+    let rangeEnd: UInt64
+    let chunkHash: Data
+    let bytesDelivered: UInt64
+    let xorDebitedMicroXor: String
+    let providerCreditMicroXor: String
+    let feeAmountMicroXor: String
+    let issuedAtUnix: UInt64
+}
+
 enum NoritoBridgeLoader {
     enum ValidationStatus: Equatable {
         case valid(path: String, identifier: String)
@@ -56,7 +91,7 @@ enum NoritoBridgeLoader {
     }
 
     static func expectedBridgeAbiVersion(for identifier: String) -> UInt32 {
-        return 6
+        return 10
     }
 
     static func isSupportedBridgeAbiVersion(_ actual: UInt32?, for identifier: String = currentIdentifier()) -> Bool {
@@ -1739,6 +1774,69 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias SorafsReferencePayloadFn = @convention(c) (
+        UInt32,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias SorafsReferenceOrderbookSignFn = @convention(c) (
+        UInt32,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias SorafsReferenceOrderbookOrderRequestBuilderFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt32, UInt32,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64, UInt64,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64, UInt64,
+        UInt32, UInt32,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias SorafsReferenceOrderbookCancelBuilderFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt32, UInt64,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias SorafsReferenceOrderbookSettlementReceiptBuilderFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64, UInt64,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias SorafsReferencePdpPairFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias SorafsReferencePdpBundleFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
     private typealias Blake3HashFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
@@ -2001,6 +2099,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var decodeControlPingFn: DecodeControlPingFn? = nil
     private var decodeControlPongFn: DecodeControlPongFn? = nil
     private var sorafsLocalFetchFn: SorafsLocalFetchFn? = nil
+    private var sorafsReferenceValidateOrderbookFn: SorafsReferencePayloadFn? = nil
+    private var sorafsReferenceSignOrderbookFn: SorafsReferenceOrderbookSignFn? = nil
+    private var sorafsReferenceBuildOrderbookOrderRequestFn: SorafsReferenceOrderbookOrderRequestBuilderFn? = nil
+    private var sorafsReferenceBuildOrderbookOrderCancelFn: SorafsReferenceOrderbookCancelBuilderFn? = nil
+    private var sorafsReferenceBuildOrderbookSettlementReceiptFn: SorafsReferenceOrderbookSettlementReceiptBuilderFn? = nil
+    private var sorafsReferenceValidatePdpPayloadFn: SorafsReferencePayloadFn? = nil
+    private var sorafsReferenceValidatePdpCommitmentChallengeFn: SorafsReferencePdpPairFn? = nil
+    private var sorafsReferenceValidatePdpChallengeProofFn: SorafsReferencePdpPairFn? = nil
+    private var sorafsReferenceValidatePdpBundleFn: SorafsReferencePdpBundleFn? = nil
     private var daProofSummaryFn: DaProofSummaryFn? = nil
     private var blake3HashFn: Blake3HashFn? = nil
     private var kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn: KagemushaProveVerifiedCompactPaymentTokenWithRecordsFn? = nil
@@ -2143,6 +2250,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let decodeControlPingFn: Any? = nil
     private let decodeControlPongFn: Any? = nil
     private let sorafsLocalFetchFn: Any? = nil
+    private let sorafsReferenceValidateOrderbookFn: Any? = nil
+    private let sorafsReferenceSignOrderbookFn: Any? = nil
+    private let sorafsReferenceBuildOrderbookOrderRequestFn: Any? = nil
+    private let sorafsReferenceBuildOrderbookOrderCancelFn: Any? = nil
+    private let sorafsReferenceBuildOrderbookSettlementReceiptFn: Any? = nil
+    private let sorafsReferenceValidatePdpPayloadFn: Any? = nil
+    private let sorafsReferenceValidatePdpCommitmentChallengeFn: Any? = nil
+    private let sorafsReferenceValidatePdpChallengeProofFn: Any? = nil
+    private let sorafsReferenceValidatePdpBundleFn: Any? = nil
     private let daProofSummaryFn: Any? = nil
     private let blake3HashFn: Any? = nil
     private let kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn: Any? = nil
@@ -3009,6 +3125,60 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.sorafsLocalFetchFn = nil
             }
+            if let symbol = dlsym(handle, "connect_norito_sorafs_reference_validate_orderbook_json") {
+                self.sorafsReferenceValidateOrderbookFn = unsafeBitCast(symbol, to: SorafsReferencePayloadFn.self)
+            } else {
+                self.sorafsReferenceValidateOrderbookFn = nil
+            }
+            if let symbol = dlsym(handle, "connect_norito_sorafs_reference_sign_orderbook_payload") {
+                self.sorafsReferenceSignOrderbookFn = unsafeBitCast(symbol, to: SorafsReferenceOrderbookSignFn.self)
+            } else {
+                self.sorafsReferenceSignOrderbookFn = nil
+            }
+            if let symbol = dlsym(handle, "connect_norito_sorafs_reference_build_signed_orderbook_order_request") {
+                self.sorafsReferenceBuildOrderbookOrderRequestFn = unsafeBitCast(
+                    symbol,
+                    to: SorafsReferenceOrderbookOrderRequestBuilderFn.self
+                )
+            } else {
+                self.sorafsReferenceBuildOrderbookOrderRequestFn = nil
+            }
+            if let symbol = dlsym(handle, "connect_norito_sorafs_reference_build_signed_orderbook_order_cancel") {
+                self.sorafsReferenceBuildOrderbookOrderCancelFn = unsafeBitCast(
+                    symbol,
+                    to: SorafsReferenceOrderbookCancelBuilderFn.self
+                )
+            } else {
+                self.sorafsReferenceBuildOrderbookOrderCancelFn = nil
+            }
+            if let symbol = dlsym(handle, "connect_norito_sorafs_reference_build_signed_orderbook_settlement_receipt") {
+                self.sorafsReferenceBuildOrderbookSettlementReceiptFn = unsafeBitCast(
+                    symbol,
+                    to: SorafsReferenceOrderbookSettlementReceiptBuilderFn.self
+                )
+            } else {
+                self.sorafsReferenceBuildOrderbookSettlementReceiptFn = nil
+            }
+            if let symbol = dlsym(handle, "connect_norito_sorafs_reference_validate_pdp_payload_json") {
+                self.sorafsReferenceValidatePdpPayloadFn = unsafeBitCast(symbol, to: SorafsReferencePayloadFn.self)
+            } else {
+                self.sorafsReferenceValidatePdpPayloadFn = nil
+            }
+            if let symbol = dlsym(handle, "connect_norito_sorafs_reference_validate_pdp_commitment_challenge_json") {
+                self.sorafsReferenceValidatePdpCommitmentChallengeFn = unsafeBitCast(symbol, to: SorafsReferencePdpPairFn.self)
+            } else {
+                self.sorafsReferenceValidatePdpCommitmentChallengeFn = nil
+            }
+            if let symbol = dlsym(handle, "connect_norito_sorafs_reference_validate_pdp_challenge_proof_json") {
+                self.sorafsReferenceValidatePdpChallengeProofFn = unsafeBitCast(symbol, to: SorafsReferencePdpPairFn.self)
+            } else {
+                self.sorafsReferenceValidatePdpChallengeProofFn = nil
+            }
+            if let symbol = dlsym(handle, "connect_norito_sorafs_reference_validate_pdp_bundle_json") {
+                self.sorafsReferenceValidatePdpBundleFn = unsafeBitCast(symbol, to: SorafsReferencePdpBundleFn.self)
+            } else {
+                self.sorafsReferenceValidatePdpBundleFn = nil
+            }
             if let daProofSummarySymbol = dlsym(handle, "connect_norito_da_proof_summary") {
                 self.daProofSummaryFn = unsafeBitCast(daProofSummarySymbol, to: DaProofSummaryFn.self)
             } else {
@@ -3349,6 +3519,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.encodeControlPingFn = nil
             self.encodeControlPongFn = nil
             self.sorafsLocalFetchFn = nil
+            self.sorafsReferenceValidateOrderbookFn = nil
+            self.sorafsReferenceSignOrderbookFn = nil
+            self.sorafsReferenceBuildOrderbookOrderRequestFn = nil
+            self.sorafsReferenceBuildOrderbookOrderCancelFn = nil
+            self.sorafsReferenceBuildOrderbookSettlementReceiptFn = nil
+            self.sorafsReferenceValidatePdpPayloadFn = nil
+            self.sorafsReferenceValidatePdpCommitmentChallengeFn = nil
+            self.sorafsReferenceValidatePdpChallengeProofFn = nil
+            self.sorafsReferenceValidatePdpBundleFn = nil
             self.daProofSummaryFn = nil
             self.blake3HashFn = nil
             self.kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn = nil
@@ -3919,6 +4098,41 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
+    public var isSorafsReferenceValidationAvailable: Bool {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime else { return false }
+        return sorafsReferenceValidateOrderbookFn != nil
+            && sorafsReferenceValidatePdpPayloadFn != nil
+            && sorafsReferenceValidatePdpCommitmentChallengeFn != nil
+            && sorafsReferenceValidatePdpChallengeProofFn != nil
+            && sorafsReferenceValidatePdpBundleFn != nil
+            && freeFn != nil
+        #else
+        return false
+        #endif
+    }
+
+    public var isSorafsReferenceOrderbookSigningAvailable: Bool {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime else { return false }
+        return sorafsReferenceSignOrderbookFn != nil && freeFn != nil
+        #else
+        return false
+        #endif
+    }
+
+    public var isSorafsReferenceOrderbookFieldBuilderAvailable: Bool {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime else { return false }
+        return sorafsReferenceBuildOrderbookOrderRequestFn != nil
+            && sorafsReferenceBuildOrderbookOrderCancelFn != nil
+            && sorafsReferenceBuildOrderbookSettlementReceiptFn != nil
+            && freeFn != nil
+        #else
+        return false
+        #endif
+    }
+
     public var isKagemushaCompactPaymentTokenProverAvailable: Bool {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
@@ -4262,6 +4476,12 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             }
         } else {
             return body(nil, 0)
+        }
+    }
+
+    private func withDataPointer<R>(_ data: Data, _ body: (UnsafePointer<UInt8>?, CUnsignedLong) -> R) -> R {
+        data.withUnsafeBytes { buffer in
+            body(buffer.bindMemory(to: UInt8.self).baseAddress, CUnsignedLong(buffer.count))
         }
     }
 
@@ -8703,6 +8923,358 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }
 
         return SorafsLocalFetchOutput(payload: payload, reportJSON: report)
+        #else
+        return nil
+        #endif
+    }
+
+    func sorafsReferenceValidateOrderbook(kind: UInt32,
+                                          payload: Data,
+                                          label: String,
+                                          generatedAtUnix: UInt64) -> String? {
+        #if canImport(Darwin)
+        guard let function = sorafsReferenceValidateOrderbookFn,
+              let labelData = label.data(using: .utf8) else { return nil }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = withDataPointer(payload) { payloadPtr, payloadLen in
+            withDataPointer(labelData) { labelPtr, labelLen in
+                function(kind, payloadPtr, payloadLen, labelPtr, labelLen, generatedAtUnix, &outPtr, &outLen)
+            }
+        }
+        guard status == 0 else {
+            if let outPtr {
+                if let freeFn { freeFn(outPtr) } else { Darwin.free(outPtr) }
+            }
+            return nil
+        }
+        return takeString(pointer: outPtr, length: UInt(outLen))
+        #else
+        return nil
+        #endif
+    }
+
+    func sorafsReferenceSignOrderbook(kind: UInt32,
+                                      payload: Data,
+                                      privateKey: Data) -> Data? {
+        #if canImport(Darwin)
+        guard let function = sorafsReferenceSignOrderbookFn else { return nil }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = withDataPointer(payload) { payloadPtr, payloadLen in
+            withDataPointer(privateKey) { keyPtr, keyLen in
+                function(kind, payloadPtr, payloadLen, keyPtr, keyLen, &outPtr, &outLen)
+            }
+        }
+        guard status == 0 else {
+            if let outPtr {
+                if let freeFn { freeFn(outPtr) } else { Darwin.free(outPtr) }
+            }
+            return nil
+        }
+        return takeData(pointer: outPtr, length: UInt(outLen))
+        #else
+        return nil
+        #endif
+    }
+
+    func sorafsReferenceBuildSignedOrderbookOrderRequest(
+        fields: NativeSorafsOrderbookOrderRequestFields,
+        privateKey: Data
+    ) -> Data? {
+        #if canImport(Darwin)
+        guard let function = sorafsReferenceBuildOrderbookOrderRequestFn else { return nil }
+        guard let priceData = fields.pricePerGibMicroXor.data(using: .utf8) else { return nil }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = withDataPointer(fields.orderId) { orderIdPtr, orderIdLen in
+            withDataPointer(priceData) { pricePtr, priceLen in
+                withDataPointer(fields.ownerAccount) { ownerPtr, ownerLen in
+                    withDataPointer(privateKey) { keyPtr, keyLen in
+                        function(
+                            orderIdPtr,
+                            orderIdLen,
+                            fields.side,
+                            fields.tier,
+                            pricePtr,
+                            priceLen,
+                            fields.quantityGib,
+                            fields.remainingGib,
+                            ownerPtr,
+                            ownerLen,
+                            fields.expiryUnix,
+                            fields.nonce,
+                            fields.makerFeeBps,
+                            fields.takerFeeBps,
+                            keyPtr,
+                            keyLen,
+                            &outPtr,
+                            &outLen
+                        )
+                    }
+                }
+            }
+        }
+        guard status == 0 else {
+            if let outPtr {
+                if let freeFn { freeFn(outPtr) } else { Darwin.free(outPtr) }
+            }
+            return nil
+        }
+        return takeData(pointer: outPtr, length: UInt(outLen))
+        #else
+        return nil
+        #endif
+    }
+
+    func sorafsReferenceBuildSignedOrderbookOrderCancel(
+        fields: NativeSorafsOrderbookOrderCancelFields,
+        privateKey: Data
+    ) -> Data? {
+        #if canImport(Darwin)
+        guard let function = sorafsReferenceBuildOrderbookOrderCancelFn else { return nil }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = withDataPointer(fields.orderId) { orderIdPtr, orderIdLen in
+            withDataPointer(fields.ownerAccount) { ownerPtr, ownerLen in
+                withDataPointer(privateKey) { keyPtr, keyLen in
+                    function(
+                        orderIdPtr,
+                        orderIdLen,
+                        ownerPtr,
+                        ownerLen,
+                        fields.reason,
+                        fields.nonce,
+                        keyPtr,
+                        keyLen,
+                        &outPtr,
+                        &outLen
+                    )
+                }
+            }
+        }
+        guard status == 0 else {
+            if let outPtr {
+                if let freeFn { freeFn(outPtr) } else { Darwin.free(outPtr) }
+            }
+            return nil
+        }
+        return takeData(pointer: outPtr, length: UInt(outLen))
+        #else
+        return nil
+        #endif
+    }
+
+    func sorafsReferenceBuildSignedOrderbookSettlementReceipt(
+        fields: NativeSorafsOrderbookSettlementReceiptFields,
+        privateKey: Data
+    ) -> Data? {
+        #if canImport(Darwin)
+        guard let function = sorafsReferenceBuildOrderbookSettlementReceiptFn else { return nil }
+        guard let debitData = fields.xorDebitedMicroXor.data(using: .utf8),
+              let creditData = fields.providerCreditMicroXor.data(using: .utf8),
+              let feeData = fields.feeAmountMicroXor.data(using: .utf8) else { return nil }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = withDataPointer(fields.receiptId) { receiptPtr, receiptLen in
+            withDataPointer(fields.channelId) { channelPtr, channelLen in
+                withDataPointer(fields.tradeId) { tradePtr, tradeLen in
+                    withDataPointer(fields.chunkHash) { chunkPtr, chunkLen in
+                        withDataPointer(debitData) { debitPtr, debitLen in
+                            withDataPointer(creditData) { creditPtr, creditLen in
+                                withDataPointer(feeData) { feePtr, feeLen in
+                                    withDataPointer(privateKey) { keyPtr, keyLen in
+                                        function(
+                                            receiptPtr,
+                                            receiptLen,
+                                            channelPtr,
+                                            channelLen,
+                                            tradePtr,
+                                            tradeLen,
+                                            fields.rangeStart,
+                                            fields.rangeEnd,
+                                            chunkPtr,
+                                            chunkLen,
+                                            fields.bytesDelivered,
+                                            debitPtr,
+                                            debitLen,
+                                            creditPtr,
+                                            creditLen,
+                                            feePtr,
+                                            feeLen,
+                                            fields.issuedAtUnix,
+                                            keyPtr,
+                                            keyLen,
+                                            &outPtr,
+                                            &outLen
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        guard status == 0 else {
+            if let outPtr {
+                if let freeFn { freeFn(outPtr) } else { Darwin.free(outPtr) }
+            }
+            return nil
+        }
+        return takeData(pointer: outPtr, length: UInt(outLen))
+        #else
+        return nil
+        #endif
+    }
+
+    func sorafsReferenceValidatePdpPayload(kind: UInt32,
+                                           payload: Data,
+                                           label: String,
+                                           generatedAtUnix: UInt64) -> String? {
+        #if canImport(Darwin)
+        guard let function = sorafsReferenceValidatePdpPayloadFn,
+              let labelData = label.data(using: .utf8) else { return nil }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = withDataPointer(payload) { payloadPtr, payloadLen in
+            withDataPointer(labelData) { labelPtr, labelLen in
+                function(kind, payloadPtr, payloadLen, labelPtr, labelLen, generatedAtUnix, &outPtr, &outLen)
+            }
+        }
+        guard status == 0 else {
+            if let outPtr {
+                if let freeFn { freeFn(outPtr) } else { Darwin.free(outPtr) }
+            }
+            return nil
+        }
+        return takeString(pointer: outPtr, length: UInt(outLen))
+        #else
+        return nil
+        #endif
+    }
+
+    func sorafsReferenceValidatePdpCommitmentChallenge(commitment: Data,
+                                                       commitmentLabel: String,
+                                                       challenge: Data,
+                                                       challengeLabel: String,
+                                                       generatedAtUnix: UInt64) -> String? {
+        #if canImport(Darwin)
+        guard let function = sorafsReferenceValidatePdpCommitmentChallengeFn,
+              let commitmentLabelData = commitmentLabel.data(using: .utf8),
+              let challengeLabelData = challengeLabel.data(using: .utf8) else { return nil }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = withDataPointer(commitment) { commitmentPtr, commitmentLen in
+            withDataPointer(commitmentLabelData) { commitmentLabelPtr, commitmentLabelLen in
+                withDataPointer(challenge) { challengePtr, challengeLen in
+                    withDataPointer(challengeLabelData) { challengeLabelPtr, challengeLabelLen in
+                        function(
+                            commitmentPtr, commitmentLen,
+                            commitmentLabelPtr, commitmentLabelLen,
+                            challengePtr, challengeLen,
+                            challengeLabelPtr, challengeLabelLen,
+                            generatedAtUnix,
+                            &outPtr, &outLen
+                        )
+                    }
+                }
+            }
+        }
+        guard status == 0 else {
+            if let outPtr {
+                if let freeFn { freeFn(outPtr) } else { Darwin.free(outPtr) }
+            }
+            return nil
+        }
+        return takeString(pointer: outPtr, length: UInt(outLen))
+        #else
+        return nil
+        #endif
+    }
+
+    func sorafsReferenceValidatePdpChallengeProof(challenge: Data,
+                                                  challengeLabel: String,
+                                                  proof: Data,
+                                                  proofLabel: String,
+                                                  generatedAtUnix: UInt64) -> String? {
+        #if canImport(Darwin)
+        guard let function = sorafsReferenceValidatePdpChallengeProofFn,
+              let challengeLabelData = challengeLabel.data(using: .utf8),
+              let proofLabelData = proofLabel.data(using: .utf8) else { return nil }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = withDataPointer(challenge) { challengePtr, challengeLen in
+            withDataPointer(challengeLabelData) { challengeLabelPtr, challengeLabelLen in
+                withDataPointer(proof) { proofPtr, proofLen in
+                    withDataPointer(proofLabelData) { proofLabelPtr, proofLabelLen in
+                        function(
+                            challengePtr, challengeLen,
+                            challengeLabelPtr, challengeLabelLen,
+                            proofPtr, proofLen,
+                            proofLabelPtr, proofLabelLen,
+                            generatedAtUnix,
+                            &outPtr, &outLen
+                        )
+                    }
+                }
+            }
+        }
+        guard status == 0 else {
+            if let outPtr {
+                if let freeFn { freeFn(outPtr) } else { Darwin.free(outPtr) }
+            }
+            return nil
+        }
+        return takeString(pointer: outPtr, length: UInt(outLen))
+        #else
+        return nil
+        #endif
+    }
+
+    func sorafsReferenceValidatePdpBundle(commitment: Data,
+                                          commitmentLabel: String,
+                                          challenge: Data,
+                                          challengeLabel: String,
+                                          proof: Data,
+                                          proofLabel: String,
+                                          generatedAtUnix: UInt64) -> String? {
+        #if canImport(Darwin)
+        guard let function = sorafsReferenceValidatePdpBundleFn,
+              let commitmentLabelData = commitmentLabel.data(using: .utf8),
+              let challengeLabelData = challengeLabel.data(using: .utf8),
+              let proofLabelData = proofLabel.data(using: .utf8) else { return nil }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = withDataPointer(commitment) { commitmentPtr, commitmentLen in
+            withDataPointer(commitmentLabelData) { commitmentLabelPtr, commitmentLabelLen in
+                withDataPointer(challenge) { challengePtr, challengeLen in
+                    withDataPointer(challengeLabelData) { challengeLabelPtr, challengeLabelLen in
+                        withDataPointer(proof) { proofPtr, proofLen in
+                            withDataPointer(proofLabelData) { proofLabelPtr, proofLabelLen in
+                                function(
+                                    commitmentPtr, commitmentLen,
+                                    commitmentLabelPtr, commitmentLabelLen,
+                                    challengePtr, challengeLen,
+                                    challengeLabelPtr, challengeLabelLen,
+                                    proofPtr, proofLen,
+                                    proofLabelPtr, proofLabelLen,
+                                    generatedAtUnix,
+                                    &outPtr, &outLen
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        guard status == 0 else {
+            if let outPtr {
+                if let freeFn { freeFn(outPtr) } else { Darwin.free(outPtr) }
+            }
+            return nil
+        }
+        return takeString(pointer: outPtr, length: UInt(outLen))
         #else
         return nil
         #endif

@@ -9598,6 +9598,9 @@ const normalizeNativeEvmProverArtifactPath = (value, label) => {
       `${label} must not contain URI schemes or drive prefixes`,
     );
   }
+  if (value.includes("?") || value.includes("#")) {
+    throw new TypeError(`${label} must not contain query strings or fragments`);
+  }
   if (value.includes("%")) {
     throw new TypeError(
       `${label} must not contain percent-encoded path segments`,

@@ -573,6 +573,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             faucet: None,
             offline_issuer: None,
             tx_history: None,
+            recipient_lookup: Default::default(),
             webhooks_enabled: defaults::torii::WEBHOOKS_ENABLED,
             zk_attachments_enabled: defaults::torii::ZK_ATTACHMENTS_ENABLED,
             events_buffer_capacity: defaults::torii::events_buffer_capacity(),
@@ -772,6 +773,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 ..Default::default()
             },
             sorafs_por: Default::default(),
+            sorafs_appeal_finance_settlement: Default::default(),
             onboarding: None,
         },
         soracloud_runtime: A::SoracloudRuntime::default(),

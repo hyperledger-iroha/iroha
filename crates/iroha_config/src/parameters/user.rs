@@ -1069,6 +1069,7 @@ impl Root {
             sorafs_alias_cache,
             sorafs_gateway,
             sorafs_por,
+            sorafs_appeal_finance_settlement,
         ) = self.sorafs.parse();
         let (mut torii, live_query_store) = self.torii.parse(&mut emitter);
         let soracloud_runtime = self.soracloud_runtime.parse();
@@ -1120,6 +1121,7 @@ impl Root {
         torii.sorafs_alias_cache = sorafs_alias_cache;
         torii.sorafs_gateway = sorafs_gateway;
         torii.sorafs_por = sorafs_por;
+        torii.sorafs_appeal_finance_settlement = sorafs_appeal_finance_settlement;
         let crypto = self.crypto.parse(&mut emitter);
         let settlement = self.settlement.parse(&mut emitter);
         let hijiri = self.hijiri.parse(&mut emitter);
@@ -4359,6 +4361,134 @@ impl SccpRouteAllowlist {
     }
 }
 
+/// User-level route-bound browser prover manifest reference.
+#[derive(Debug, ReadConfig, Clone, norito::derive::JsonDeserialize)]
+pub struct SccpRouteBrowserProverManifestRef {
+    /// Browser-safe prover module URL.
+    pub module_url: String,
+    /// Optional package/module specifier for reproducible builds.
+    pub module_specifier: Option<String>,
+    /// Hex-encoded SHA-256 digest of the browser module bytes.
+    pub module_hash: String,
+    /// Hex-encoded SHA-256 digest of the public browser prover manifest.
+    pub manifest_hash: String,
+    /// Expected exported symbols in the browser module.
+    pub expected_exports: Vec<String>,
+    /// Hex-encoded route/deployment hash this prover manifest is bound to.
+    pub bound_route_hash: String,
+    /// Hex-encoded proof/material hash this prover manifest is bound to.
+    pub bound_proof_hash: String,
+}
+
+impl SccpRouteBrowserProverManifestRef {
+    fn parse_module_url(role: &str, value: &str) -> String {
+        let module_url = value.trim();
+        assert!(
+            !module_url.is_empty(),
+            "SCCP route manifest {role} browser prover module_url must not be empty"
+        );
+        assert!(
+            module_url == value,
+            "SCCP route manifest {role} browser prover module_url must not contain surrounding whitespace"
+        );
+        assert!(
+            !module_url.contains('?') && !module_url.contains('#'),
+            "SCCP route manifest {role} browser prover module_url must not contain query strings or fragments"
+        );
+        assert!(
+            !module_url.contains('\\')
+                && !module_url
+                    .bytes()
+                    .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control()),
+            "SCCP route manifest {role} browser prover module_url must be a deterministic module URL"
+        );
+
+        if let Ok(parsed) = Url::parse(module_url) {
+            assert!(
+                parsed.username().is_empty() && parsed.password().is_none(),
+                "SCCP route manifest {role} browser prover module_url must not contain credentials"
+            );
+            assert!(
+                parsed.query().is_none() && parsed.fragment().is_none(),
+                "SCCP route manifest {role} browser prover module_url must not contain query strings or fragments"
+            );
+            match parsed.scheme() {
+                "https" => {}
+                "http" => {
+                    let is_loopback = parsed.host().is_some_and(|host| match host {
+                        url::Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+                        url::Host::Ipv4(address) => address.is_loopback(),
+                        url::Host::Ipv6(address) => address.is_loopback(),
+                    });
+                    assert!(
+                        is_loopback,
+                        "SCCP route manifest {role} browser prover module_url may only use http for loopback hosts"
+                    );
+                }
+                _ => panic!(
+                    "SCCP route manifest {role} browser prover module_url must be HTTPS, loopback HTTP, or package-relative"
+                ),
+            }
+            return module_url.to_owned();
+        }
+
+        assert!(
+            (module_url.starts_with('/') || module_url.starts_with("./"))
+                && !module_url.starts_with("//")
+                && !module_url.split('/').any(|segment| segment == ".."),
+            "SCCP route manifest {role} browser prover module_url must be HTTPS, loopback HTTP, or package-relative"
+        );
+        module_url.to_owned()
+    }
+
+    fn parse(self, role: &str, strict_hashes: bool) -> actual::SccpRouteBrowserProverManifestRef {
+        let module_url = Self::parse_module_url(role, &self.module_url);
+        let module_specifier = self
+            .module_specifier
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let expected_exports = self
+            .expected_exports
+            .into_iter()
+            .map(|value| value.trim().to_owned())
+            .inspect(|value| {
+                assert!(
+                    !value.is_empty(),
+                    "SCCP route manifest {role} browser prover expected_exports must not contain empty values"
+                );
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !expected_exports.is_empty(),
+            "SCCP route manifest {role} browser prover expected_exports must not be empty"
+        );
+        let normalize_hash = |field: &str, value: &str| {
+            if strict_hashes {
+                SccpRouteManifest::normalize_hex32(field, value)
+            } else {
+                value.trim().to_owned()
+            }
+        };
+        actual::SccpRouteBrowserProverManifestRef {
+            module_url,
+            module_specifier,
+            module_hash: normalize_hash(&format!("{role}.module_hash"), &self.module_hash),
+            manifest_hash: normalize_hash(&format!("{role}.manifest_hash"), &self.manifest_hash),
+            expected_exports,
+            bound_route_hash: normalize_hash(
+                &format!("{role}.bound_route_hash"),
+                &self.bound_route_hash,
+            ),
+            bound_proof_hash: normalize_hash(
+                &format!("{role}.bound_proof_hash"),
+                &self.bound_proof_hash,
+            ),
+        }
+    }
+}
+
 /// User-level SCCP route manifest material advertised to wallet clients.
 #[derive(Debug, ReadConfig, Clone, norito::derive::JsonDeserialize)]
 pub struct SccpRouteManifest {
@@ -4422,6 +4552,12 @@ pub struct SccpRouteManifest {
     pub circuit_artifact_hash: Option<String>,
     /// Optional hex-encoded proving key digest.
     pub proving_key_hash: Option<String>,
+    /// Optional hex-encoded native EVM prover bundle digest.
+    pub native_evm_prover_bundle_hash: Option<String>,
+    /// Optional route-bound TAIRA-to-counterparty browser prover manifest reference.
+    pub destination_browser_prover: Option<SccpRouteBrowserProverManifestRef>,
+    /// Optional route-bound counterparty-to-TAIRA browser prover manifest reference.
+    pub source_browser_prover: Option<SccpRouteBrowserProverManifestRef>,
     /// Optional hash of the normalized deployment evidence used to build this route.
     pub deployment_evidence_sha256: Option<String>,
     /// Canonical destination binding key.
@@ -5099,7 +5235,8 @@ impl SccpRouteManifest {
         resolved.map(|(_, value)| value)
     }
 
-    fn parse(self) -> actual::SccpRouteManifest {
+    /// Parse and validate a user-level SCCP route manifest into the runtime form.
+    pub fn parse(self) -> actual::SccpRouteManifest {
         let is_bsc_route = self.counterparty_domain == Self::BSC_COUNTERPARTY_DOMAIN;
         let is_tron_route = self.counterparty_domain == Self::TRON_COUNTERPARTY_DOMAIN;
         let strict_route_hashes = is_bsc_route || is_tron_route;
@@ -5182,6 +5319,26 @@ impl SccpRouteManifest {
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned)
         };
+        let native_evm_prover_bundle_hash = if strict_route_hashes {
+            Self::normalize_optional_hex32(
+                "native_evm_prover_bundle_hash",
+                self.native_evm_prover_bundle_hash.as_deref(),
+            )
+        } else {
+            self.native_evm_prover_bundle_hash
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        };
+        let destination_browser_prover = self
+            .destination_browser_prover
+            .clone()
+            .map(|value| value.parse("destination_browser_prover", strict_route_hashes));
+        let source_browser_prover = self
+            .source_browser_prover
+            .clone()
+            .map(|value| value.parse("source_browser_prover", strict_route_hashes));
         let deployment_evidence_sha256 = if strict_route_hashes {
             Self::normalize_optional_hex32(
                 "deployment_evidence_sha256",
@@ -5286,6 +5443,33 @@ impl SccpRouteManifest {
                 );
             }
         }
+        if let Some(native_hash) = native_evm_prover_bundle_hash.as_deref() {
+            for (label, value) in [
+                ("verifier_code_hash", verifier_code_hash.as_str()),
+                ("verifier_key_hash", verifier_key_hash.as_str()),
+                (
+                    "destination_binding_hash",
+                    destination_binding_hash.as_str(),
+                ),
+                (
+                    "proof_artifact_hash",
+                    proof_artifact_hash.as_deref().unwrap_or_default(),
+                ),
+                (
+                    "proving_key_hash",
+                    proving_key_hash.as_deref().unwrap_or_default(),
+                ),
+                (
+                    "deployment_evidence_sha256",
+                    deployment_evidence_sha256.as_deref().unwrap_or_default(),
+                ),
+            ] {
+                assert!(
+                    !native_hash.trim().eq_ignore_ascii_case(value.trim()),
+                    "SCCP route manifest native_evm_prover_bundle_hash must not equal {label}"
+                );
+            }
+        }
         assert!(
             !(self.production_ready && uses_diagnostic_verifier_key_hash),
             "SCCP BSC route manifest production_ready cannot be true with diagnostic verifier material"
@@ -5300,6 +5484,39 @@ impl SccpRouteManifest {
                 && (proof_artifact_hash.is_none() || proving_key_hash.is_none())),
             "SCCP BSC route manifest production_ready requires proof_artifact_hash and proving_key_hash"
         );
+        assert!(
+            !(self.production_ready && is_bsc_route && native_evm_prover_bundle_hash.is_none()),
+            "SCCP BSC route manifest production_ready requires native_evm_prover_bundle_hash"
+        );
+        assert!(
+            !(self.production_ready
+                && is_bsc_route
+                && (destination_browser_prover.is_none() || source_browser_prover.is_none())),
+            "SCCP BSC route manifest production_ready requires destination_browser_prover and source_browser_prover"
+        );
+        if self.production_ready && is_bsc_route {
+            let expected_proof_hash = proof_artifact_hash
+                .as_deref()
+                .expect("production BSC proof_artifact_hash was required above");
+            for (label, reference) in [
+                (
+                    "destination_browser_prover",
+                    destination_browser_prover.as_ref(),
+                ),
+                ("source_browser_prover", source_browser_prover.as_ref()),
+            ] {
+                let reference =
+                    reference.expect("production BSC browser prover was required above");
+                assert!(
+                    reference.bound_route_hash == destination_binding_hash,
+                    "SCCP BSC route manifest {label}.bound_route_hash must match destination_binding_hash"
+                );
+                assert!(
+                    reference.bound_proof_hash == expected_proof_hash,
+                    "SCCP BSC route manifest {label}.bound_proof_hash must match proof_artifact_hash"
+                );
+            }
+        }
         assert!(
             !(self.production_ready && is_bsc_route && deployment_evidence_sha256.is_none()),
             "SCCP BSC route manifest production_ready requires deployment_evidence_sha256"
@@ -5454,6 +5671,9 @@ impl SccpRouteManifest {
             verifier_key_hash,
             proof_artifact_hash,
             proving_key_hash,
+            native_evm_prover_bundle_hash,
+            destination_browser_prover,
+            source_browser_prover,
             deployment_evidence_sha256,
             destination_binding_key: self.destination_binding_key,
             destination_binding_hash,
@@ -5481,10 +5701,27 @@ impl SccpRouteManifest {
 
 #[cfg(test)]
 mod sccp_route_manifest_user_config_tests {
-    use super::SccpRouteManifest;
+    use super::{SccpRouteBrowserProverManifestRef, SccpRouteManifest};
 
     const SOURCE_BRIDGE: &str = "0x3333333333333333333333333333333333333333";
     const VERIFIER: &str = "0x4444444444444444444444444444444444444444";
+
+    fn browser_prover_ref(role: &str, seed: &str) -> SccpRouteBrowserProverManifestRef {
+        let (manifest_seed, route_seed, proof_seed) = match seed {
+            "60" => ("61", "62", "63"),
+            "70" => ("71", "72", "73"),
+            _ => ("81", "82", "83"),
+        };
+        SccpRouteBrowserProverManifestRef {
+            module_url: format!("/sccp-bsc/{role}-prover.js"),
+            module_specifier: Some(format!("@sora/sccp-bsc-{role}-prover")),
+            module_hash: format!("0x{}", seed.repeat(32)),
+            manifest_hash: format!("0x{}", manifest_seed.repeat(32)),
+            expected_exports: vec!["bscSccpProve".to_owned(), "bscSccpSelfTest".to_owned()],
+            bound_route_hash: format!("0x{}", route_seed.repeat(32)),
+            bound_proof_hash: format!("0x{}", proof_seed.repeat(32)),
+        }
+    }
 
     fn route_manifest() -> SccpRouteManifest {
         SccpRouteManifest {
@@ -5517,6 +5754,9 @@ mod sccp_route_manifest_user_config_tests {
             prover_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
             circuit_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
             proving_key_hash: Some(format!("0x{}", "4d".repeat(32))),
+            native_evm_prover_bundle_hash: Some(format!("0x{}", "50".repeat(32))),
+            destination_browser_prover: Some(browser_prover_ref("destination", "60")),
+            source_browser_prover: Some(browser_prover_ref("source", "70")),
             deployment_evidence_sha256: Some(format!("0x{}", "4f".repeat(32))),
             destination_binding_key: "evm:0:2:test-binding".to_owned(),
             destination_binding_hash: format!("0x{}", "47".repeat(32)),
@@ -5547,12 +5787,29 @@ mod sccp_route_manifest_user_config_tests {
         }
     }
 
+    fn bind_bsc_browser_provers_to_route(manifest: &mut SccpRouteManifest) {
+        let route_hash = manifest.destination_binding_hash.clone();
+        let proof_hash = manifest
+            .proof_artifact_hash
+            .clone()
+            .expect("route manifest fixture has proof hash");
+        if let Some(reference) = manifest.destination_browser_prover.as_mut() {
+            reference.bound_route_hash = route_hash.clone();
+            reference.bound_proof_hash = proof_hash.clone();
+        }
+        if let Some(reference) = manifest.source_browser_prover.as_mut() {
+            reference.bound_route_hash = route_hash;
+            reference.bound_proof_hash = proof_hash;
+        }
+    }
+
     fn production_ready_route_manifest() -> SccpRouteManifest {
         let mut manifest = route_manifest();
         manifest.production_ready = true;
         manifest.disabled_reason = None;
         manifest.post_deploy_full_toml_ready = Some(true);
         manifest.post_deploy_offline_full_toml_sha256 = Some(format!("0x{}", "4e".repeat(32)));
+        bind_bsc_browser_provers_to_route(&mut manifest);
         manifest
     }
 
@@ -5603,6 +5860,9 @@ mod sccp_route_manifest_user_config_tests {
             prover_artifact_hash: None,
             circuit_artifact_hash: None,
             proving_key_hash: None,
+            native_evm_prover_bundle_hash: None,
+            destination_browser_prover: None,
+            source_browser_prover: None,
             deployment_evidence_sha256: None,
             destination_binding_key,
             destination_binding_hash,
@@ -5740,6 +6000,117 @@ mod sccp_route_manifest_user_config_tests {
     fn bsc_route_rejects_empty_chain_id_hex() {
         let mut manifest = route_manifest();
         manifest.chain_id_hex = "   ".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "module_url must not contain credentials")]
+    fn bsc_browser_prover_rejects_credentialed_module_url() {
+        let mut manifest = route_manifest();
+        manifest
+            .destination_browser_prover
+            .as_mut()
+            .expect("destination prover fixture")
+            .module_url = "https://operator:secret@provers.sora.org/bsc.js".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "module_url must not contain query strings or fragments")]
+    fn bsc_browser_prover_rejects_mutable_module_url() {
+        let mut manifest = route_manifest();
+        manifest
+            .destination_browser_prover
+            .as_mut()
+            .expect("destination prover fixture")
+            .module_url = "https://provers.sora.org/bsc.js?version=latest".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "module_url may only use http for loopback hosts")]
+    fn bsc_browser_prover_rejects_plain_http_non_loopback_module_url() {
+        let mut manifest = route_manifest();
+        manifest
+            .destination_browser_prover
+            .as_mut()
+            .expect("destination prover fixture")
+            .module_url = "http://provers.sora.org/bsc.js".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "module_url must be HTTPS, loopback HTTP, or package-relative")]
+    fn bsc_browser_prover_rejects_traversing_relative_module_url() {
+        let mut manifest = route_manifest();
+        manifest
+            .destination_browser_prover
+            .as_mut()
+            .expect("destination prover fixture")
+            .module_url = "../sccp-bsc/prover.js".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    fn bsc_browser_prover_accepts_loopback_http_module_url() {
+        let mut manifest = route_manifest();
+        manifest
+            .destination_browser_prover
+            .as_mut()
+            .expect("destination prover fixture")
+            .module_url = "http://127.0.0.1:5173/sccp-bsc/prover.js".to_owned();
+
+        let actual = manifest.parse();
+
+        assert_eq!(
+            actual
+                .destination_browser_prover
+                .expect("destination prover")
+                .module_url,
+            "http://127.0.0.1:5173/sccp-bsc/prover.js"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "expected_exports must not be empty")]
+    fn bsc_browser_prover_rejects_empty_export_list() {
+        let mut manifest = route_manifest();
+        manifest
+            .destination_browser_prover
+            .as_mut()
+            .expect("destination prover fixture")
+            .expected_exports = Vec::new();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "bound_route_hash must match destination_binding_hash")]
+    fn production_ready_bsc_browser_prover_must_bind_route_hash() {
+        let mut manifest = production_ready_route_manifest();
+        manifest
+            .destination_browser_prover
+            .as_mut()
+            .expect("destination prover fixture")
+            .bound_route_hash = format!("0x{}", "99".repeat(32));
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "bound_proof_hash must match proof_artifact_hash")]
+    fn production_ready_bsc_browser_prover_must_bind_proof_hash() {
+        let mut manifest = production_ready_route_manifest();
+        manifest
+            .source_browser_prover
+            .as_mut()
+            .expect("source prover fixture")
+            .bound_proof_hash = format!("0x{}", "98".repeat(32));
 
         let _ = manifest.parse();
     }
@@ -5914,6 +6285,7 @@ mod sccp_route_manifest_user_config_tests {
         manifest.prover_artifact_hash = Some(format!("0x{}", "d4".repeat(32)));
         manifest.circuit_artifact_hash = Some(format!("0x{}", "d4".repeat(32)));
         manifest.proving_key_hash = Some(format!("0x{}", "e5".repeat(32)));
+        bind_bsc_browser_provers_to_route(&mut manifest);
 
         let actual = manifest.parse();
 
@@ -18614,6 +18986,8 @@ pub struct Torii {
     pub ram_lfe: Option<ToriiRamLfe>,
     /// Optional transaction-history visibility/auth configuration for direct wallet reads.
     pub tx_history: Option<ToriiTxHistory>,
+    /// Retail recipient lookup routes used by Torii app API.
+    pub recipient_lookup: Option<ToriiRecipientLookup>,
 }
 
 /// Geo lookup configuration for peer telemetry.
@@ -19045,6 +19419,7 @@ impl Torii {
             sorafs_alias_cache,
             sorafs_gateway,
             sorafs_por,
+            sorafs_appeal_finance_settlement,
         ) = self.sorafs.parse();
         let receipt_signer = Self::parse_receipt_signer(
             self.receipt_public_key.as_ref(),
@@ -19215,6 +19590,7 @@ impl Torii {
             sorafs_alias_cache,
             sorafs_gateway,
             sorafs_por,
+            sorafs_appeal_finance_settlement,
             transport: self.transport.into(),
             mcp: self.mcp.into(),
             cors: self.cors.parse(emitter),
@@ -19226,6 +19602,10 @@ impl Torii {
             offline_issuer: self.offline_issuer.and_then(ToriiOfflineIssuer::parse),
             ram_lfe: self.ram_lfe.and_then(ToriiRamLfe::parse),
             tx_history: self.tx_history.map(ToriiTxHistory::parse),
+            recipient_lookup: self
+                .recipient_lookup
+                .map(ToriiRecipientLookup::parse)
+                .unwrap_or_default(),
             app_api: actual::AppApi {
                 default_list_limit,
                 max_list_limit,
@@ -19313,6 +19693,99 @@ impl ToriiTxHistory {
             allowed_asset_definition_id,
             jwt: self.jwt.map(ToriiTxHistoryJwt::parse),
         }
+    }
+}
+
+/// Retail recipient lookup route configuration for Torii app API.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct ToriiRecipientLookup {
+    /// HTTP request timeout applied to configured bank Core API calls.
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::torii::recipient_lookup::REQUEST_TIMEOUT_MS))"
+    )]
+    pub request_timeout_ms: DurationMs,
+    /// Configured bank Core API routes keyed by canonical FI id.
+    #[config(default)]
+    pub routes: Vec<ToriiRecipientLookupRoute>,
+}
+
+impl ToriiRecipientLookup {
+    fn parse(self) -> actual::ToriiRecipientLookup {
+        actual::ToriiRecipientLookup {
+            request_timeout: self.request_timeout_ms.get(),
+            routes: self
+                .routes
+                .into_iter()
+                .enumerate()
+                .map(|(index, route)| route.parse(index))
+                .collect(),
+        }
+    }
+}
+
+/// Single bank Core API route used by the retail recipient lookup endpoint.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct ToriiRecipientLookupRoute {
+    /// Canonical FI identifier, for example `hbl.sbp` or `ubl.sbp`.
+    pub fi_id: String,
+    /// Bank Core API base URL.
+    pub base_url: Url,
+    /// Service bearer token used only by Torii when calling the bank Core API.
+    pub bearer_token: String,
+}
+
+impl ToriiRecipientLookupRoute {
+    fn parse(self, index: usize) -> actual::ToriiRecipientLookupRoute {
+        let fi_id = match self.fi_id.trim().to_ascii_lowercase().as_str() {
+            "hbl.sbp" => "hbl.sbp".to_owned(),
+            "ubl.sbp" => "ubl.sbp".to_owned(),
+            other => panic!(
+                "invalid torii.recipient_lookup.routes[{index}].fi_id `{other}`; expected `hbl.sbp` or `ubl.sbp`"
+            ),
+        };
+        let bearer_token = self.bearer_token.trim().to_owned();
+        if bearer_token.is_empty() {
+            panic!("torii.recipient_lookup.routes[{index}].bearer_token must not be empty");
+        }
+        actual::ToriiRecipientLookupRoute {
+            fi_id,
+            base_url: self.base_url,
+            bearer_token,
+        }
+    }
+}
+
+#[cfg(test)]
+mod torii_recipient_lookup_tests {
+    use super::*;
+
+    #[test]
+    fn torii_recipient_lookup_parse_accepts_canonical_fi_routes() {
+        let parsed = ToriiRecipientLookup {
+            request_timeout_ms: DurationMs(Duration::from_millis(750)),
+            routes: vec![ToriiRecipientLookupRoute {
+                fi_id: " HBL.SBP ".to_owned(),
+                base_url: Url::parse("https://core-api.example/hbl.sbp").expect("valid URL"),
+                bearer_token: " service-token ".to_owned(),
+            }],
+        }
+        .parse();
+
+        assert_eq!(parsed.request_timeout, Duration::from_millis(750));
+        assert_eq!(parsed.routes[0].fi_id, "hbl.sbp");
+        assert_eq!(parsed.routes[0].bearer_token, "service-token");
+    }
+
+    #[test]
+    fn torii_recipient_lookup_parse_rejects_short_fi_routes() {
+        let route = ToriiRecipientLookupRoute {
+            fi_id: "hbl".to_owned(),
+            base_url: Url::parse("https://core-api.example/hbl").expect("valid URL"),
+            bearer_token: "service-token".to_owned(),
+        };
+
+        let panic = std::panic::catch_unwind(|| route.parse(0));
+        assert!(panic.is_err(), "expected short FI id to panic");
     }
 }
 
@@ -21436,6 +21909,9 @@ pub struct Sorafs {
     /// Proof-of-Retrievability coordinator configuration.
     #[config(nested)]
     pub por: SorafsPor,
+    /// Appeal-finance settlement submitter configuration.
+    #[config(nested)]
+    pub appeal_finance_settlement: SorafsAppealFinanceSettlement,
 }
 
 impl Sorafs {
@@ -21450,6 +21926,7 @@ impl Sorafs {
         actual::SorafsAliasCachePolicy,
         actual::SorafsGateway,
         actual::SorafsPor,
+        actual::SorafsAppealFinanceSettlement,
     ) {
         (
             self.storage.parse(),
@@ -21460,7 +21937,64 @@ impl Sorafs {
             self.alias_cache.parse(),
             self.gateway.parse(),
             self.por.parse(),
+            self.appeal_finance_settlement.parse(),
         )
+    }
+}
+
+/// User-level SoraFS appeal-finance settlement submitter configuration.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsAppealFinanceSettlement {
+    /// Runtime signer private keys allowed to submit settlement transactions.
+    ///
+    /// Each key is mapped to its canonical `AccountId`; the submitter only signs
+    /// a settlement step when that step's required authority exactly matches one
+    /// configured signer.
+    #[config(default)]
+    pub submitter_private_keys: Vec<ExposedPrivateKey>,
+    /// Interval between worker reconciliation scans for follow-up settlement steps.
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_SCAN_INTERVAL_MS))"
+    )]
+    pub worker_scan_interval_ms: DurationMs,
+    /// Maximum queue attempts for one unchanged worker settlement state.
+    #[config(
+        default = "defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_RETRY_ATTEMPTS"
+    )]
+    pub worker_max_retry_attempts: u32,
+}
+
+impl Default for SorafsAppealFinanceSettlement {
+    fn default() -> Self {
+        Self {
+            submitter_private_keys: Vec::new(),
+            worker_scan_interval_ms: DurationMs(std::time::Duration::from_millis(
+                defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_SCAN_INTERVAL_MS,
+            )),
+            worker_max_retry_attempts:
+                defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_RETRY_ATTEMPTS,
+        }
+    }
+}
+
+impl SorafsAppealFinanceSettlement {
+    fn parse(self) -> actual::SorafsAppealFinanceSettlement {
+        actual::SorafsAppealFinanceSettlement {
+            submitter_signers: self
+                .submitter_private_keys
+                .into_iter()
+                .map(|private_key| {
+                    KeyPair::from_private_key(private_key.0).unwrap_or_else(|err| {
+                        panic!("invalid torii.sorafs.appeal_finance_settlement submitter private key: {err}")
+                    })
+                })
+                .collect(),
+            worker_scan_interval: self
+                .worker_scan_interval_ms
+                .get()
+                .max(std::time::Duration::from_millis(1)),
+            worker_max_retry_attempts: self.worker_max_retry_attempts.max(1),
+        }
     }
 }
 
@@ -21502,6 +22036,12 @@ pub struct SorafsStorage {
     /// Stream-token issuance configuration for chunk-range gateways.
     #[config(nested)]
     pub stream_tokens: SorafsStreamTokenConfig,
+    /// Local orderbook admission policy.
+    #[config(nested)]
+    pub orderbook: SorafsOrderbookConfig,
+    /// Local SFM-4c privacy aggregate publication scheduler.
+    #[config(nested)]
+    pub privacy_aggregates: SorafsPrivacyAggregateScheduleConfig,
     /// Authentication and rate limits for manifest pin submissions.
     #[config(nested)]
     pub pin: SorafsStoragePin,
@@ -21528,6 +22068,8 @@ impl Default for SorafsStorage {
             adverts: SorafsAdvertOverrides::default(),
             metering_smoothing: SorafsMeteringSmoothing::default(),
             stream_tokens: SorafsStreamTokenConfig::default(),
+            orderbook: SorafsOrderbookConfig::default(),
+            privacy_aggregates: SorafsPrivacyAggregateScheduleConfig::default(),
             pin: SorafsStoragePin::default(),
             governance_dag_dir: defaults::sorafs::storage::governance_dir(),
             governance_dag_publisher_peer_id:
@@ -21550,10 +22092,76 @@ impl SorafsStorage {
             adverts: self.adverts.parse(),
             metering_smoothing: self.metering_smoothing.parse(),
             stream_tokens: self.stream_tokens.parse(),
+            orderbook: self.orderbook.parse(),
+            privacy_aggregates: self.privacy_aggregates.parse(),
             pin: self.pin.parse(),
             governance_dag_dir: self.governance_dag_dir,
             governance_dag_publisher_peer_id: self.governance_dag_publisher_peer_id,
             governance_dag_signing_key_path: self.governance_dag_signing_key_path,
+        }
+    }
+}
+
+/// Local orderbook admission policy.
+#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+pub struct SorafsOrderbookConfig {
+    /// Minimum accepted order quantity in GiB.
+    #[config(default = "defaults::sorafs::storage::orderbook::MIN_ORDER_GIB")]
+    pub min_order_gib: u64,
+    /// Accepted price tick in micro-XOR per GiB.
+    #[config(default = "defaults::sorafs::storage::orderbook::PRICE_TICK_MICRO_XOR")]
+    pub price_tick_micro_xor: u64,
+}
+
+impl Default for SorafsOrderbookConfig {
+    fn default() -> Self {
+        Self {
+            min_order_gib: defaults::sorafs::storage::orderbook::MIN_ORDER_GIB,
+            price_tick_micro_xor: defaults::sorafs::storage::orderbook::PRICE_TICK_MICRO_XOR,
+        }
+    }
+}
+
+impl SorafsOrderbookConfig {
+    fn parse(self) -> actual::SorafsOrderbook {
+        actual::SorafsOrderbook {
+            min_order_gib: self.min_order_gib.max(1),
+            price_tick_micro_xor: self.price_tick_micro_xor.max(1),
+        }
+    }
+}
+
+/// Local SFM-4c privacy aggregate publication scheduler.
+#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+pub struct SorafsPrivacyAggregateScheduleConfig {
+    /// Whether config-backed due-cycle publication is enabled.
+    #[config(default = "defaults::sorafs::storage::privacy_aggregates::ENABLED")]
+    pub enabled: bool,
+    /// Width of each privacy aggregate cycle, in seconds.
+    #[config(default = "defaults::sorafs::storage::privacy_aggregates::CYCLE_SECONDS")]
+    pub cycle_seconds: u64,
+    /// Delay after a cycle closes before publication, in seconds.
+    #[config(default = "defaults::sorafs::storage::privacy_aggregates::PUBLISH_DELAY_SECONDS")]
+    pub publish_delay_seconds: u64,
+}
+
+impl Default for SorafsPrivacyAggregateScheduleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sorafs::storage::privacy_aggregates::ENABLED,
+            cycle_seconds: defaults::sorafs::storage::privacy_aggregates::CYCLE_SECONDS,
+            publish_delay_seconds:
+                defaults::sorafs::storage::privacy_aggregates::PUBLISH_DELAY_SECONDS,
+        }
+    }
+}
+
+impl SorafsPrivacyAggregateScheduleConfig {
+    fn parse(self) -> actual::SorafsPrivacyAggregateSchedule {
+        actual::SorafsPrivacyAggregateSchedule {
+            enabled: self.enabled,
+            cycle_seconds: self.cycle_seconds.max(1),
+            publish_delay_seconds: self.publish_delay_seconds,
         }
     }
 }
@@ -21806,6 +22414,30 @@ mod sorafs_repair_gc_tests {
         assert_eq!(actual_gc.max_deletions_per_run, 1);
         assert_eq!(actual_gc.retention_grace_secs, 42);
         assert!(!actual_gc.pre_admission_sweep);
+    }
+
+    #[test]
+    fn sorafs_appeal_finance_settlement_parse_derives_submitter_accounts() {
+        let key_pair = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
+            .expect("derive settlement submitter keypair");
+        let config = SorafsAppealFinanceSettlement {
+            submitter_private_keys: vec![ExposedPrivateKey(key_pair.private_key().clone())],
+            worker_scan_interval_ms: DurationMs(std::time::Duration::from_millis(30_000)),
+            worker_max_retry_attempts: 3,
+        };
+
+        let actual = config.parse();
+
+        assert_eq!(actual.submitter_signers.len(), 1);
+        assert_eq!(
+            actual.submitter_signers[0].public_key(),
+            key_pair.public_key()
+        );
+        assert_eq!(
+            actual.worker_scan_interval,
+            std::time::Duration::from_millis(30_000)
+        );
+        assert_eq!(actual.worker_max_retry_attempts, 3);
     }
 }
 
@@ -23543,6 +24175,46 @@ pin_torii_urls = [
                 "https://taira-validator-2.sora.org".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn sorafs_storage_orderbook_policy_parses_and_clamps_nonzero() {
+        let mut table = base_table();
+        let sorafs: Table = toml::from_str(
+            r"
+[storage.orderbook]
+min_order_gib = 0
+price_tick_micro_xor = 0
+",
+        )
+        .expect("parse sorafs orderbook policy");
+        table.insert("sorafs".into(), Value::Table(sorafs));
+
+        let actual = load_root(table);
+        let policy = actual.torii.sorafs_storage.orderbook;
+        assert_eq!(policy.min_order_gib, 1);
+        assert_eq!(policy.price_tick_micro_xor, 1);
+    }
+
+    #[test]
+    fn sorafs_storage_privacy_aggregate_schedule_parses_and_clamps_cycle() {
+        let mut table = base_table();
+        let sorafs: Table = toml::from_str(
+            r"
+[storage.privacy_aggregates]
+enabled = true
+cycle_seconds = 0
+publish_delay_seconds = 17
+",
+        )
+        .expect("parse sorafs privacy aggregate schedule");
+        table.insert("sorafs".into(), Value::Table(sorafs));
+
+        let actual = load_root(table);
+        let schedule = actual.torii.sorafs_storage.privacy_aggregates;
+        assert!(schedule.enabled);
+        assert_eq!(schedule.cycle_seconds, 1);
+        assert_eq!(schedule.publish_delay_seconds, 17);
     }
 
     #[test]
