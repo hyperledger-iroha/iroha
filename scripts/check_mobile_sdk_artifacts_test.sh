@@ -183,6 +183,21 @@ missing_android_outputs="$TMP_DIR/missing-android-outputs"
 make_fixture "$missing_android_outputs"
 run_expect_fail "$missing_android_outputs" "missing core-jvm built jar" --require-built-android
 
+missing_client_android_aar="$TMP_DIR/missing-client-android-aar"
+make_fixture "$missing_client_android_aar"
+mkdir -p "$missing_client_android_aar/kotlin/core-jvm/build/libs"
+printf 'jar\n' >"$missing_client_android_aar/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
+run_expect_fail "$missing_client_android_aar" "missing client-android release aar" --require-built-android
+
+missing_offline_wallet_android_aar="$TMP_DIR/missing-offline-wallet-android-aar"
+make_fixture "$missing_offline_wallet_android_aar"
+mkdir -p \
+  "$missing_offline_wallet_android_aar/kotlin/core-jvm/build/libs" \
+  "$missing_offline_wallet_android_aar/kotlin/client-android/build/outputs/aar"
+printf 'jar\n' >"$missing_offline_wallet_android_aar/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
+printf 'aar\n' >"$missing_offline_wallet_android_aar/kotlin/client-android/build/outputs/aar/client-android-release.aar"
+run_expect_fail "$missing_offline_wallet_android_aar" "missing offline-wallet-android release aar" --require-built-android
+
 with_android_outputs="$TMP_DIR/with-android-outputs"
 make_fixture "$with_android_outputs"
 mkdir -p \

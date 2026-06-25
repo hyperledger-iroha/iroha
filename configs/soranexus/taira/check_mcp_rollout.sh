@@ -452,7 +452,6 @@ print_sumeragi_route_diagnostics() {
 
   python3 - "$last_body" <<'PY' >&2
 import json
-import re
 import sys
 
 def dig(obj, *path):
@@ -609,32 +608,9 @@ import sys
 
 label = sys.argv[1]
 path = sys.argv[2]
-min_validator_set_len = int(sys.argv[3])
-allow_pending_commit_qc = sys.argv[4] == "1"
 expected_git_sha = sys.argv[5].strip()
 with open(path, "r", encoding="utf-8") as handle:
     payload = json.load(handle)
-
-def dig(obj, *path):
-    cur = obj
-    for key in path:
-        if not isinstance(cur, dict):
-            return None
-        cur = cur.get(key)
-    return cur
-
-def first_int(*values):
-    for value in values:
-        if isinstance(value, bool):
-            continue
-        if isinstance(value, int):
-            return value
-        if isinstance(value, str):
-            try:
-                return int(value)
-            except ValueError:
-                continue
-    return None
 
 blocks = payload.get("blocks")
 queue_size = payload.get("queue_size")
@@ -678,48 +654,6 @@ if expected_git_sha:
             file=sys.stderr,
         )
         sys.exit(1)
-sumeragi = payload.get("sumeragi")
-if isinstance(sumeragi, dict):
-    commit_qc_height = first_int(
-        sumeragi.get("commit_qc_height"),
-        dig(sumeragi, "commit_qc", "height"),
-        payload.get("commit_qc_height"),
-        dig(payload, "commit_qc", "height"),
-    )
-    highest_qc_height = first_int(
-        sumeragi.get("highest_qc_height"),
-        dig(sumeragi, "highest_qc", "height"),
-        payload.get("highest_qc_height"),
-        dig(payload, "highest_qc", "height"),
-    )
-    locked_qc_height = first_int(
-        sumeragi.get("locked_qc_height"),
-        dig(sumeragi, "locked_qc", "height"),
-        payload.get("locked_qc_height"),
-        dig(payload, "locked_qc", "height"),
-    )
-    if (
-        highest_qc_height is not None
-        and commit_qc_height is not None
-        and highest_qc_height < commit_qc_height
-    ):
-        print(
-            f"{label}: /status Sumeragi highest QC height {highest_qc_height} "
-            f"is behind commit QC height {commit_qc_height}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    if (
-        locked_qc_height is not None
-        and commit_qc_height is not None
-        and locked_qc_height < commit_qc_height
-    ):
-        print(
-            f"{label}: /status Sumeragi locked QC height {locked_qc_height} "
-            f"is behind commit QC height {commit_qc_height}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
 PY
 }
 
@@ -746,6 +680,14 @@ def dig(obj, *path):
             return None
         cur = cur.get(key)
     return cur
+
+def has_path(obj, *path):
+    cur = obj
+    for key in path:
+        if not isinstance(cur, dict) or key not in cur:
+            return False
+        cur = cur[key]
+    return True
 
 def first_int(*values):
     for value in values:
@@ -778,7 +720,26 @@ locked_qc_height = first_int(
     payload.get("locked_qc_height"),
     dig(payload, "locked_qc", "height"),
 )
-canonical_height = first_int(dig(payload, "canonical", "height"))
+canonical_height = first_int(
+    payload.get("canonical_height"),
+    dig(payload, "canonical", "height"),
+)
+canonical_phase = str(
+    dig(payload, "canonical", "phase") or payload.get("canonical_phase") or ""
+).strip().lower()
+canonical_pending_finality_published = has_path(payload, "canonical", "pending_finality") or (
+    "canonical_pending_finality" in payload
+)
+canonical_pending_finality = (
+    dig(payload, "canonical", "pending_finality")
+    if has_path(payload, "canonical", "pending_finality")
+    else payload.get("canonical_pending_finality")
+)
+canonical_rbc_status = str(
+    dig(payload, "canonical", "rbc_status")
+    or payload.get("canonical_rbc_status")
+    or ""
+).strip().lower()
 membership_height = first_int(
     payload.get("membership_height"),
     dig(payload, "membership", "height"),
@@ -812,6 +773,10 @@ tx_queue_oldest_queued_age_ms = first_int(
     dig(payload, "tx_queue", "oldest_queued_age_ms"),
 )
 view_change_last_cause = dig(payload, "view_change_causes", "last_cause")
+pending_rbc_sessions = first_int(
+    payload.get("pending_rbc_sessions"),
+    dig(payload, "pending_rbc", "sessions"),
+)
 
 if commit_qc_height is None or commit_qc_height < 1:
     if allow_pending_commit_qc:
@@ -867,6 +832,21 @@ if validator_set_len < min_validator_set_len:
         file=sys.stderr,
     )
     sys.exit(1)
+
+missing_finality_fields = []
+if highest_qc_height is None:
+    missing_finality_fields.append("highest_qc_height")
+if locked_qc_height is None:
+    missing_finality_fields.append("locked_qc_height")
+if canonical_height is None:
+    missing_finality_fields.append("canonical_height")
+if membership_height is None:
+    missing_finality_fields.append("membership_height")
+if pending_rbc_sessions is None:
+    missing_finality_fields.append("pending_rbc.sessions")
+if not canonical_pending_finality_published:
+    missing_finality_fields.append("canonical.pending_finality")
+
 legacy_count_saturated = (
     tx_queue_saturated is True
     and tx_queue_saturated_by_age is not True
@@ -882,14 +862,70 @@ if (
     and membership_height > commit_qc_height
 ):
     cause = view_change_last_cause or "unknown"
+    pending_finality_present = canonical_pending_finality not in (None, False, "", "false", "0")
+    rbc_waiting = canonical_rbc_status not in (
+        "",
+        "0",
+        "false",
+        "none",
+        "null",
+        "idle",
+        "disabled",
+        "ready",
+        "complete",
+        "completed",
+        "delivered",
+    )
+    one_ahead_prepare = (
+        canonical_phase == "prepare"
+        and canonical_height == membership_height == commit_qc_height + 1
+        and highest_qc_height == commit_qc_height
+        and locked_qc_height == commit_qc_height
+    )
+    if (
+        one_ahead_prepare
+        and not pending_finality_present
+        and not rbc_waiting
+        and (pending_rbc_sessions in (None, 0))
+        and cause not in ("missing_qc", "quorum_timeout", "stake_quorum_timeout")
+    ):
+        pass
+    else:
+        detail = "membership height ahead of commit QC"
+        if one_ahead_prepare:
+            detail = "one-block-ahead prepare did not settle"
+        pending_rbc_text = (
+            f", pending_rbc_sessions={pending_rbc_sessions!r}"
+            if pending_rbc_sessions is not None
+            else ""
+        )
+        pending_finality_text = (
+            f", pending_finality={canonical_pending_finality!r}"
+            if pending_finality_present
+            else ""
+        )
+        rbc_text = (
+            f", rbc_status={canonical_rbc_status!r}"
+            if canonical_rbc_status
+            else ""
+        )
+        phase_text = f", phase={canonical_phase!r}" if canonical_phase else ""
+        print(
+            f"{label}: /v1/sumeragi/status reports a finality fault "
+            f"({cause}) with {detail} "
+            f"({membership_height} > {commit_qc_height}); "
+            f"queue depth={tx_queue_depth!r}, capacity={tx_queue_capacity!r}, "
+            f"saturated_by_count={tx_queue_saturated_by_count!r}, "
+            f"saturated_by_age={tx_queue_saturated_by_age!r}, "
+            f"oldest_queued_age_ms={tx_queue_oldest_queued_age_ms!r}"
+            f"{phase_text}{pending_finality_text}{rbc_text}{pending_rbc_text}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+if missing_finality_fields:
     print(
-        f"{label}: /v1/sumeragi/status reports a finality fault "
-        f"({cause}) with membership height ahead of commit QC "
-        f"({membership_height} > {commit_qc_height}); "
-        f"queue depth={tx_queue_depth!r}, capacity={tx_queue_capacity!r}, "
-        f"saturated_by_count={tx_queue_saturated_by_count!r}, "
-        f"saturated_by_age={tx_queue_saturated_by_age!r}, "
-        f"oldest_queued_age_ms={tx_queue_oldest_queued_age_ms!r}",
+        f"{label}: /v1/sumeragi/status did not publish required finality field(s): "
+        + ", ".join(missing_finality_fields),
         file=sys.stderr,
     )
     sys.exit(1)

@@ -125,9 +125,9 @@ require_glob() {
   local pattern="$1"
   local label="$2"
   local matches=()
-  shopt -s nullglob
-  matches=($pattern)
-  shopt -u nullglob
+  while IFS= read -r match; do
+    matches+=("$match")
+  done < <(compgen -G "$pattern" || true)
   if [[ ${#matches[@]} -eq 0 ]]; then
     fail "missing $label: $pattern"
   fi
