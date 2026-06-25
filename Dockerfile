@@ -30,14 +30,29 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
             chmod 755 "/outbin/${bin}"; \
         done; \
     else \
-        set -- cargo ${CARGOFLAGS} build --profile "${PROFILE}" --features "${FEATURES}"; \
+        regular_bins=""; \
+        build_kagami=0; \
         for bin in ${BINARIES}; do \
-            set -- "$@" --bin "$bin"; \
+            if [ "${bin}" = "kagami" ]; then \
+                build_kagami=1; \
+            else \
+                regular_bins="${regular_bins} ${bin}"; \
+            fi; \
         done; \
-        CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" mold --run "$@"; \
-        for bin in ${BINARIES}; do \
-            cp "/app/target/${PROFILE}/${bin}" "/outbin/${bin}"; \
-        done; \
+        if [ -n "${regular_bins}" ]; then \
+            set -- cargo ${CARGOFLAGS} build --profile "${PROFILE}" --features "${FEATURES}"; \
+            for bin in ${regular_bins}; do \
+                set -- "$@" --bin "$bin"; \
+            done; \
+            CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" mold --run "$@"; \
+            for bin in ${regular_bins}; do \
+                cp "/app/target/${PROFILE}/${bin}" "/outbin/${bin}"; \
+            done; \
+        fi; \
+        if [ "${build_kagami}" = "1" ]; then \
+            CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" mold --run cargo ${CARGOFLAGS} build --profile "${PROFILE}" -p iroha_kagami --bin kagami; \
+            cp "/app/target/${PROFILE}/kagami" "/outbin/kagami"; \
+        fi; \
     fi
 
 # final image

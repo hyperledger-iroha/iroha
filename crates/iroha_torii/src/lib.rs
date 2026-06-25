@@ -6136,7 +6136,7 @@ async fn handler_offline_note_readiness(
     State(app): State<SharedAppState>,
 ) -> Result<impl IntoResponse, Error> {
     let offline = &app.state.settlement.offline;
-    let offline_kagemusha_abi7 = offline.kagemusha_enabled && !offline.kagemusha_force_legacy;
+    let offline_kagemusha_abi7 = offline.kagemusha_enabled;
     json_ok(json_object([
         json_entry("offline_telemetry", true),
         json_entry("offline_kagemusha_abi7", offline_kagemusha_abi7),
@@ -6176,7 +6176,7 @@ async fn handler_offline_v2_note_readiness(
     State(app): State<SharedAppState>,
 ) -> Result<impl IntoResponse, Error> {
     let offline = &app.state.settlement.offline;
-    let offline_kagemusha_abi7 = offline.kagemusha_enabled && !offline.kagemusha_force_legacy;
+    let offline_kagemusha_abi7 = offline.kagemusha_enabled;
     json_ok(json_object([
         json_entry("offline_telemetry", true),
         json_entry("offline_kagemusha_abi7", offline_kagemusha_abi7),

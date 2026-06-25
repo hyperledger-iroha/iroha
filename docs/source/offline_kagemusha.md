@@ -1,12 +1,11 @@
 # Offline Kagemusha
 
-Kagemusha is the default direction for offline-offline payments. Nodes expose it
-through `settlement.offline.kagemusha_enabled`, which defaults to `true`; the
-legacy bearer-audit path remains available only as an explicit migration fallback
-through `settlement.offline.kagemusha_force_legacy`, which defaults to `false`.
-The real chain execution fixture asserts those defaults before running a
-Kagemusha transfer, so default-disabled regressions are caught by focused core
-tests.
+Kagemusha is the only active chain implementation for offline payments. Nodes
+expose offline-offline payments through `settlement.offline.kagemusha_enabled`,
+which defaults to `true`; there is no runtime legacy bearer-audit fallback.
+Classic `IssueOfflineNote`, `AuditOfflineNote`, and `RedeemOfflineNote` payloads
+are retained only as historical data-model compatibility fixtures and are not
+registered or dispatched by the node's default instruction surface.
 
 The current hardening keeps the production `AuditOfflineNote` lineage anchored to
 the original online-to-offline topup. Audit submitters no longer need to be the
@@ -1961,8 +1960,7 @@ bundles whose hop count is inside
 witnesslessly when they carry the active lineage verifier record and pass
 chain admission. Semantic v1 recursive bundles still carry a record-backed
 lineage witness for online redemption.
-Chain admission first honors the config gates (`kagemusha_enabled = true` and
-`kagemusha_force_legacy = false`), validates the recursive proof envelope,
+Chain admission first honors the `kagemusha_enabled = true` config gate, validates the recursive proof envelope,
 checks the bundle chain id, and checks the final root and note commitment
 against the final unshield proof public inputs. If a semantic lineage witness is
 present, admission verifies every private hop against the supplied verifier

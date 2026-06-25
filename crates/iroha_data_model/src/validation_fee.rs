@@ -544,14 +544,30 @@ impl ValidationFeePolicyV1 {
         if self.policy_version > 1 && self.previous_policy_hash.is_none() {
             return Some("non-initial validation-fee policy must carry a previous policy hash");
         }
+        if self.network_id.trim().is_empty() || self.network_id.trim() != self.network_id {
+            return Some("validation-fee policy network id must be a non-empty trimmed string");
+        }
         if self.fee_asset_scale != VALIDATION_FEE_SBD_SCALE {
             return Some("validation-fee policy asset scale must be 2");
         }
         if self.fee_minor_units != VALIDATION_FEE_INITIAL_MINOR_UNITS {
             return Some("validation-fee policy amount must be 10 minor units");
         }
-        if self.governance_keyset_id.trim().is_empty() {
-            return Some("validation-fee policy governance keyset id must be non-empty");
+        if self.governance_keyset_id.trim().is_empty()
+            || self.governance_keyset_id.trim() != self.governance_keyset_id
+        {
+            return Some(
+                "validation-fee policy governance keyset id must be a non-empty trimmed string",
+            );
+        }
+        let mut exemption_classes = BTreeSet::new();
+        for class in &self.exemption_classes {
+            if class.trim().is_empty() || class.trim() != class || !exemption_classes.insert(class)
+            {
+                return Some(
+                    "validation-fee policy exemption classes must be unique non-empty trimmed strings",
+                );
+            }
         }
         if !matches!(
             self.charging_mode,
@@ -1087,7 +1103,46 @@ mod tests {
 
         assert_eq!(
             policy.policy_invariant_error(),
-            Some("validation-fee policy governance keyset id must be non-empty")
+            Some("validation-fee policy governance keyset id must be a non-empty trimmed string")
         );
+    }
+
+    #[test]
+    fn policy_invariants_reject_untrimmed_identifiers() {
+        let mut padded_network_policy = policy();
+        padded_network_policy.network_id = format!("{} ", padded_network_policy.network_id);
+
+        assert_eq!(
+            padded_network_policy.policy_invariant_error(),
+            Some("validation-fee policy network id must be a non-empty trimmed string")
+        );
+
+        let mut padded_keyset_policy = policy();
+        padded_keyset_policy.governance_keyset_id =
+            format!("{} ", padded_keyset_policy.governance_keyset_id);
+
+        assert_eq!(
+            padded_keyset_policy.policy_invariant_error(),
+            Some("validation-fee policy governance keyset id must be a non-empty trimmed string")
+        );
+    }
+
+    #[test]
+    fn policy_invariants_reject_invalid_exemption_classes() {
+        for exemption_classes in [
+            vec![String::new()],
+            vec![" SYSTEM_INSTRUCTION".to_string()],
+            vec!["TREASURY_PAYOUT".to_string(), "TREASURY_PAYOUT".to_string()],
+        ] {
+            let mut policy = policy();
+            policy.exemption_classes = exemption_classes;
+
+            assert_eq!(
+                policy.policy_invariant_error(),
+                Some(
+                    "validation-fee policy exemption classes must be unique non-empty trimmed strings"
+                )
+            );
+        }
     }
 }

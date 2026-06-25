@@ -660,21 +660,25 @@ fn nexus_protocol_fee_exempt_instruction(instruction: &InstructionBox) -> bool {
             .is_some()
 }
 
-fn nexus_protocol_fee_exempt_instructions(instructions: &[InstructionBox]) -> bool {
-    !instructions.is_empty()
-        && instructions
-            .iter()
-            .all(nexus_protocol_fee_exempt_instruction)
+fn nexus_fee_exempt_instruction(instruction: &InstructionBox) -> bool {
+    nexus_protocol_fee_exempt_instruction(instruction)
+        || instruction
+            .as_any()
+            .is::<iroha_data_model::isi::offline::KagemushaTransfer>()
 }
 
-fn nexus_protocol_fee_exempt_transaction(transaction: &SignedTransaction) -> bool {
+fn nexus_fee_exempt_instructions(instructions: &[InstructionBox]) -> bool {
+    !instructions.is_empty() && instructions.iter().all(nexus_fee_exempt_instruction)
+}
+
+fn nexus_fee_exempt_transaction(transaction: &SignedTransaction) -> bool {
     if crate::tx::is_heartbeat_transaction(transaction) {
         return true;
     }
     let Executable::Instructions(instructions) = transaction.instructions() else {
         return false;
     };
-    nexus_protocol_fee_exempt_instructions(instructions.as_ref())
+    nexus_fee_exempt_instructions(instructions.as_ref())
 }
 
 fn parse_account_id_literal(
@@ -1577,7 +1581,7 @@ pub(crate) fn check_external_nexus_fee_admission(
     if !nexus.enabled {
         return Ok(());
     }
-    if nexus_protocol_fee_exempt_transaction(transaction) {
+    if nexus_fee_exempt_transaction(transaction) {
         return Ok(());
     }
     if successful_claim_fee_exempt_transaction(world, nexus, transaction, observation_time_ms) {
@@ -1760,7 +1764,7 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
         md,
         state_transaction.current_dataspace_id,
     )?;
-    let skip_nexus_fee = nexus_protocol_fee_exempt_transaction(transaction)
+    let skip_nexus_fee = nexus_fee_exempt_transaction(transaction)
         || successful_claim_fee_exempt_instructions(
             &state_transaction.world,
             &state_transaction.nexus,
@@ -2694,7 +2698,7 @@ impl Executor {
             transaction.metadata(),
             state_transaction.current_dataspace_id,
         )?;
-        let skip_nexus_fee = nexus_protocol_fee_exempt_transaction(&transaction)
+        let skip_nexus_fee = nexus_fee_exempt_transaction(&transaction)
             || successful_claim_fee_exempt_transaction(
                 &state_transaction.world,
                 &state_transaction.nexus,
@@ -8062,6 +8066,139 @@ mod tests {
         sign_sponsored_fixture_transaction(fixture, Executable::from(instructions), metadata)
     }
 
+    fn nexus_fee_lane_relay_burn_admission_fixture()
+    -> (State, AccountId, KeyPair, AssetDefinitionId) {
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority = Account::new(authority_id.clone()).build(&authority_id);
+        let asset_def_id =
+            AssetDefinitionId::new(domain_id, "shield".parse().expect("asset definition name"));
+        let world = World::with([domain], [authority], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = "xor#universal".to_owned();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+            nexus.fees.settlement_mode =
+                iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
+            nexus.fees.fee_receipts_activation_height = 1;
+            nexus.fees.canonical_sponsor_account_id = Some(authority_id.to_string());
+        }
+
+        (state, authority_id, authority_kp, asset_def_id)
+    }
+
+    fn kagemusha_fee_test_proof_attachment(
+        label: &str,
+    ) -> iroha_data_model::proof::ProofAttachment {
+        use iroha_data_model::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
+
+        let backend = "halo2/ipa".parse().expect("backend ident");
+        let proof = ProofBox::new(backend, vec![0xA5; 32]);
+        ProofAttachment::new_ref(
+            proof.backend.clone(),
+            proof,
+            VerifyingKeyId::new("halo2/ipa", label),
+        )
+    }
+
+    fn kagemusha_fee_test_recursive_bundle(
+        asset: AssetDefinitionId,
+    ) -> iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+        use iroha_data_model::offline::{
+            KagemushaRecursiveAggregationProof, KagemushaRecursiveAggregationProofPublicInputs,
+            KagemushaRecursiveSpendAccumulatorV1, KagemushaRecursiveSpendBundleV1,
+            KagemushaSpendableNoteDescriptorV1,
+        };
+        use iroha_data_model::proof::{ProofBox, VerifyingKeyId};
+
+        KagemushaRecursiveSpendBundleV1 {
+            accumulator: KagemushaRecursiveSpendAccumulatorV1 {
+                domain: "iroha:kagemusha:v1:recursive-spend-accumulator".to_owned(),
+                chain_id: ChainId::from("fee-policy-chain"),
+                asset,
+                initial_root: [0x10; 32],
+                final_root: [0x11; 32],
+                topup_anchor_nullifiers: vec![[0x12; 32]],
+                hop_count: 1,
+                lineage_digest: [0x13; 32],
+                aggregation_transcript_digest: [0x14; 32],
+                nullifier_digest: Hash::new("fee-policy:nullifiers"),
+                output_commitment_digest: Hash::new("fee-policy:outputs"),
+                fold_digest: Hash::new("fee-policy:fold"),
+                recursive_proof_chain_digest: [0x15; 32],
+                transition_profile_binding_digest: [0x16; 32],
+                append_opening_preflight_digest: [0x17; 32],
+                append_boundary_digest: [0x18; 32],
+                verifier_params_fingerprint: [0x19; 32],
+                fixed_window_table_schedule_digest: [0x1A; 32],
+                fixed_window_shared_table_manifest_digest: [0x1B; 32],
+                fixed_window_table_base_digest: [0x1C; 32],
+                verifier_witness_batch_digest: [0x1D; 32],
+                verifier_opening_len: 4,
+                current_note: KagemushaSpendableNoteDescriptorV1 {
+                    note_commitment: [0x20; 32],
+                    spend_nullifier: [0x21; 32],
+                    amount: Numeric::new(1, 0),
+                },
+            },
+            recursive_proof: KagemushaRecursiveAggregationProof {
+                verifier_key_id: VerifyingKeyId::new("halo2/ipa", "fee-policy-recursive"),
+                public_inputs: KagemushaRecursiveAggregationProofPublicInputs {
+                    domain: "fee-policy-recursive".to_owned(),
+                    evidence_digest: [0x30; 32],
+                    folded_public_inputs_hash: [0x31; 32],
+                    aggregation_transcript_digest: [0x32; 32],
+                    verifier_params_fingerprint: [0x33; 32],
+                    fixed_window_table_schedule_digest: [0x34; 32],
+                    fixed_window_shared_table_manifest_digest: [0x35; 32],
+                    fixed_window_table_base_digest: [0x36; 32],
+                    verifier_witness_batch_digest: [0x37; 32],
+                    recursive_proof_chain_digest: [0x38; 32],
+                    transition_profile_binding_digest: [0x39; 32],
+                    append_opening_preflight_digest: [0x3A; 32],
+                    append_boundary_digest: [0x3B; 32],
+                    recursive_verifier_scalar_projection_digest: [0x3C; 32],
+                    verifier_opening_len: 4,
+                    verifier_witness_count: 1,
+                    hop_count: 1,
+                },
+                public_inputs_hash: Hash::new("fee-policy:recursive-inputs"),
+                proof: ProofBox::new("halo2/ipa".parse().expect("backend ident"), vec![0x5A; 32]),
+            },
+        }
+    }
+
+    fn signed_fee_policy_transaction(
+        authority_id: AccountId,
+        authority_kp: &KeyPair,
+        instruction: InstructionBox,
+    ) -> SignedTransaction {
+        let chain: ChainId = "fee-policy-chain".parse().unwrap();
+        TransactionBuilder::new(chain, authority_id)
+            .with_executable(Executable::from(core::iter::once(instruction)))
+            .sign(authority_kp.private_key())
+    }
+
+    fn assert_lane_relay_burn_requires_fee_budget(state: &State, tx: &SignedTransaction) {
+        let view = state.view();
+        let err = check_external_nexus_fee_admission(&view.world, &view.nexus, tx, 0, 2, None)
+            .expect_err("fee-paying transaction must require a verified Nexus budget");
+        assert!(
+            matches!(err, NexusFeeAdmissionError::Rejected(ref reason) if reason.contains("missing verified Nexus fee budget")),
+            "unexpected Nexus fee admission error: {err:?}"
+        );
+    }
+
     #[test]
     fn nexus_fee_sponsor_accepts_configured_dpn_contract_call() {
         let fixture = sponsored_fee_admission_fixture(true);
@@ -9144,6 +9281,56 @@ mod tests {
         let view = state.view();
         check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 2, None)
             .expect("protocol proof registration must not require a fee receipt");
+    }
+
+    #[test]
+    fn nexus_fee_kagemusha_transfer_is_fee_exempt_offline_offline() {
+        let (state, authority_id, authority_kp, asset_def_id) =
+            nexus_fee_lane_relay_burn_admission_fixture();
+        let transfer = iroha_data_model::isi::offline::KagemushaTransfer::new(
+            asset_def_id,
+            vec![[0x11; 32]],
+            vec![[0x22; 32]],
+            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-transfer"),
+            Some([0x33; 32]),
+        );
+        let tx = signed_fee_policy_transaction(
+            authority_id,
+            &authority_kp,
+            InstructionBox::from(transfer),
+        );
+        let view = state.view();
+        check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 2, None)
+            .expect("offline-offline Kagemusha transfer must not require a fee budget");
+    }
+
+    #[test]
+    fn nexus_fee_online_to_offline_shield_requires_fee_budget() {
+        let (state, authority_id, authority_kp, asset_def_id) =
+            nexus_fee_lane_relay_burn_admission_fixture();
+        let shield = iroha_data_model::isi::zk::Shield::new(
+            asset_def_id,
+            authority_id.clone(),
+            1,
+            [0x44; 32],
+            iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
+        );
+        let tx = signed_fee_policy_transaction(authority_id, &authority_kp, shield.into());
+        assert_lane_relay_burn_requires_fee_budget(&state, &tx);
+    }
+
+    #[test]
+    fn nexus_fee_kagemusha_recursive_redeem_requires_fee_budget() {
+        let (state, authority_id, authority_kp, asset_def_id) =
+            nexus_fee_lane_relay_burn_admission_fixture();
+        let redeem = iroha_data_model::isi::offline::RedeemKagemushaRecursive::new(
+            kagemusha_fee_test_recursive_bundle(asset_def_id),
+            authority_id.clone(),
+            1,
+            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-redeem"),
+        );
+        let tx = signed_fee_policy_transaction(authority_id, &authority_kp, redeem.into());
+        assert_lane_relay_burn_requires_fee_budget(&state, &tx);
     }
 
     #[test]

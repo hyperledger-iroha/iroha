@@ -12634,9 +12634,6 @@ pub struct Offline {
     /// Enable Kagemusha shielded offline-offline payments.
     #[config(default = "defaults::settlement::offline::KAGEMUSHA_ENABLED")]
     pub kagemusha_enabled: bool,
-    /// Force legacy bearer-audit lineage instead of Kagemusha during migration fallback.
-    #[config(default = "defaults::settlement::offline::KAGEMUSHA_FORCE_LEGACY")]
-    pub kagemusha_force_legacy: bool,
 }
 
 impl Default for Offline {
@@ -12649,7 +12646,6 @@ impl Default for Offline {
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
             kagemusha_enabled: defaults::settlement::offline::KAGEMUSHA_ENABLED,
-            kagemusha_force_legacy: defaults::settlement::offline::KAGEMUSHA_FORCE_LEGACY,
         }
     }
 }
@@ -12876,7 +12872,6 @@ impl Offline {
             escrow_required,
             escrow_accounts,
             kagemusha_enabled,
-            kagemusha_force_legacy,
         } = self;
         if hot_retention_blocks == 0 {
             emitter.emit(ParseError::InvalidSettlementConfig.into());
@@ -12931,7 +12926,6 @@ impl Offline {
             escrow_required,
             escrow_accounts: escrow_bindings,
             kagemusha_enabled,
-            kagemusha_force_legacy,
         }
     }
 }
@@ -24891,26 +24885,6 @@ mod settlement_offline_tests {
             actual.kagemusha_enabled,
             "Kagemusha must remain enabled after user-config parsing"
         );
-        assert!(
-            !actual.kagemusha_force_legacy,
-            "legacy Kagemusha fallback must remain opt-in after user-config parsing"
-        );
-    }
-
-    #[test]
-    fn offline_parse_preserves_explicit_kagemusha_legacy_opt_in() {
-        let user = Offline {
-            kagemusha_enabled: false,
-            kagemusha_force_legacy: true,
-            ..Offline::default()
-        };
-
-        let mut emitter = Emitter::new();
-        let actual = user.parse(&mut emitter);
-
-        assert!(emitter.into_result().is_ok());
-        assert!(!actual.kagemusha_enabled);
-        assert!(actual.kagemusha_force_legacy);
     }
 }
 

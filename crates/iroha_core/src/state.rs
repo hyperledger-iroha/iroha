@@ -54416,6 +54416,7 @@ mod tests {
             verifier_key_hash: format!("0x{}", hex::encode([0x53; 32])),
             proof_artifact_hash: None,
             proving_key_hash: None,
+            deployment_evidence_sha256: None,
             destination_binding_key: "iroha:sccp:tron-destination-binding:v1:0:5:nile".to_owned(),
             destination_binding_hash: format!("0x{}", hex::encode([0x54; 32])),
             taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"

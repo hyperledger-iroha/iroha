@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-24
+Last updated: 2026-06-25
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -11,6 +11,10 @@ and completed history lives in [`status.md`](./status.md).
 
 **Status:** active.
 
+- Kagemusha is now the only active chain implementation for offline payments.
+  The remaining cleanup is to remove or clearly archive legacy Offline Note
+  helper APIs from SDKs and bridge utilities that still expose historical
+  issue/audit/redeem builders.
 - Offline Note V2 device attestation now supports both the centralized
   middleware certificate flow and a receiptless on-chain registration flow. The
   middleware path preserves signed receipt admission while rejecting

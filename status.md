@@ -1,6 +1,21 @@
 # Status
 
-Last updated: 2026-06-24
+Last updated: 2026-06-25
+
+## 2026-06-25 Kagemusha-only offline payment fee policy
+
+- Offline payment admission now treats Kagemusha as the only active chain
+  implementation: classic Offline Note issue/audit/redeem instructions are no
+  longer registered in the default instruction registry, routed by the queue, or
+  dispatched by the core executor. Their core `Execute` impls are retained only
+  for historical unit fixtures under `cfg(test)`.
+- Nexus fee admission now exempts pure offline-offline `KagemushaTransfer`
+  batches only. Online-to-offline shield top-ups and offline-to-online
+  `RedeemKagemushaRecursive` redemptions stay on the normal fee-budget/receipt
+  path. The removed `settlement.offline.kagemusha_force_legacy` config knob can
+  no longer force a legacy bearer-audit fallback.
+- Validation status for this checkpoint is recorded in the PR summary after
+  focused formatter and test runs.
 
 ## 2026-06-24 SoraFS moderation screening and quarantine checkpoint foundation
 

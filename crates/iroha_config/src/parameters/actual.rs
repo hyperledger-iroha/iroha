@@ -8611,8 +8611,6 @@ pub struct Offline {
     /// `KagemushaTransfer` enforces this gate before forwarding to the shared
     /// shielded ZK asset accumulator.
     pub kagemusha_enabled: bool,
-    /// Whether nodes force legacy bearer-audit lineage during migration.
-    pub kagemusha_force_legacy: bool,
 }
 
 impl Default for Offline {
@@ -8625,7 +8623,6 @@ impl Default for Offline {
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
             kagemusha_enabled: defaults::settlement::offline::KAGEMUSHA_ENABLED,
-            kagemusha_force_legacy: defaults::settlement::offline::KAGEMUSHA_FORCE_LEGACY,
         }
     }
 }
@@ -9782,10 +9779,6 @@ mod tests {
         assert!(
             offline.kagemusha_enabled,
             "Kagemusha must remain enabled by default"
-        );
-        assert!(
-            !offline.kagemusha_force_legacy,
-            "legacy Kagemusha fallback must remain opt-in"
         );
     }
 

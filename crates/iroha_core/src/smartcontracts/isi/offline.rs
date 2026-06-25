@@ -4313,6 +4313,7 @@ pub mod isi {
         }
     }
 
+    #[cfg(test)]
     impl Execute for IssueOfflineNote {
         fn execute(
             self,
@@ -4418,6 +4419,7 @@ pub mod isi {
         }
     }
 
+    #[cfg(test)]
     impl Execute for RedeemOfflineNote {
         fn execute(
             self,
@@ -4578,6 +4580,7 @@ pub mod isi {
         }
     }
 
+    #[cfg(test)]
     impl Execute for AuditOfflineNote {
         fn execute(
             self,
@@ -5038,13 +5041,6 @@ pub mod isi {
                 )
                 .into());
             }
-            if state_transaction.settlement.offline.kagemusha_force_legacy {
-                return Err(labeled_invariant(
-                    "kagemusha_legacy_forced",
-                    "Kagemusha offline-offline settlement is bypassed by explicit legacy fallback",
-                )
-                .into());
-            }
             if self.inputs.is_empty()
                 || self.inputs.len() > 2
                 || self.outputs.is_empty()
@@ -5110,13 +5106,6 @@ pub mod isi {
                 return Err(labeled_invariant(
                     "kagemusha_disabled",
                     "Kagemusha recursive redemption is disabled by configuration",
-                )
-                .into());
-            }
-            if state_transaction.settlement.offline.kagemusha_force_legacy {
-                return Err(labeled_invariant(
-                    "kagemusha_legacy_forced",
-                    "Kagemusha recursive redemption is bypassed by explicit legacy fallback",
                 )
                 .into());
             }
@@ -7364,10 +7353,6 @@ pub mod isi {
             assert!(
                 state.settlement.offline.kagemusha_enabled,
                 "Kagemusha must remain enabled by default"
-            );
-            assert!(
-                !state.settlement.offline.kagemusha_force_legacy,
-                "Kagemusha legacy fallback must not be forced by default"
             );
             let mut zk = state.zk.clone();
             zk.halo2.enabled = true;
@@ -12367,26 +12352,20 @@ pub mod isi {
         }
 
         #[test]
-        fn kagemusha_transfer_rejects_disabled_or_legacy_forced_config() {
+        fn kagemusha_transfer_rejects_disabled_config() {
             let authority = sample_account(0x41);
-            for (enabled, force_legacy, label) in [
-                (false, false, "kagemusha_disabled"),
-                (true, true, "kagemusha_legacy_forced"),
-            ] {
-                let kura = Kura::blank_kura_for_testing();
-                let query = LiveQueryStore::start_test();
-                let mut state = State::new(World::default(), Arc::clone(&kura), query);
-                state.settlement.offline.kagemusha_enabled = enabled;
-                state.settlement.offline.kagemusha_force_legacy = force_legacy;
-                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-                let mut block = state.block(header);
-                let mut transaction = block.transaction();
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(World::default(), Arc::clone(&kura), query);
+            state.settlement.offline.kagemusha_enabled = false;
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
 
-                let err = sample_kagemusha_transfer(crate::zk::ZK_BACKEND_HALO2_IPA)
-                    .execute(&authority, &mut transaction)
-                    .expect_err("Kagemusha config gate must reject");
-                assert_offline_rejection(err, label, "Kagemusha");
-            }
+            let err = sample_kagemusha_transfer(crate::zk::ZK_BACKEND_HALO2_IPA)
+                .execute(&authority, &mut transaction)
+                .expect_err("Kagemusha config gate must reject");
+            assert_offline_rejection(err, "kagemusha_disabled", "Kagemusha");
         }
 
         #[test]
@@ -12763,17 +12742,6 @@ pub mod isi {
                 .execute(&disabled_authority, &mut transaction)
                 .expect_err("disabled recursive Kagemusha must reject");
             assert_offline_rejection(err, "kagemusha_disabled", "disabled");
-
-            let (mut legacy_state, legacy_authority, _, _, legacy_instruction) =
-                real_recursive_kagemusha_redeem_test_state();
-            legacy_state.settlement.offline.kagemusha_force_legacy = true;
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = legacy_state.block(header);
-            let mut transaction = block.transaction();
-            let err = legacy_instruction
-                .execute(&legacy_authority, &mut transaction)
-                .expect_err("legacy-forced recursive Kagemusha must reject");
-            assert_offline_rejection(err, "kagemusha_legacy_forced", "legacy fallback");
 
             let (stale_state, stale_authority, _, stale_definition_id, stale_instruction) =
                 real_recursive_kagemusha_redeem_test_state();
