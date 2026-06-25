@@ -49,7 +49,8 @@ use x509_parser::{
     time::ASN1Time,
 };
 
-const CAN_MANAGE_OFFLINE_ESCROW_PERMISSION: &str = "CanManageOfflineEscrow";
+/// Permission required for accounts that manage offline note escrow settlement.
+pub(crate) const CAN_MANAGE_OFFLINE_ESCROW_PERMISSION: &str = "CanManageOfflineEscrow";
 const CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION: &str =
     "CanManageOfflineDeviceAttestationPolicy";
 static OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY: LazyLock<Name> = LazyLock::new(|| {

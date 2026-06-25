@@ -660,21 +660,59 @@ fn nexus_protocol_fee_exempt_instruction(instruction: &InstructionBox) -> bool {
             .is_some()
 }
 
-fn nexus_protocol_fee_exempt_instructions(instructions: &[InstructionBox]) -> bool {
-    !instructions.is_empty()
-        && instructions
-            .iter()
-            .all(nexus_protocol_fee_exempt_instruction)
+fn offline_note_settlement_fee_exempt_instruction(instruction: &InstructionBox) -> bool {
+    let any = instruction.as_any();
+    any.downcast_ref::<iroha_data_model::isi::offline::IssueOfflineNote>()
+        .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::offline::RedeemOfflineNote>()
+            .is_some()
 }
 
-fn nexus_protocol_fee_exempt_transaction(transaction: &SignedTransaction) -> bool {
+fn authority_can_manage_offline_escrow(world: &impl WorldReadOnly, authority: &AccountId) -> bool {
+    world
+        .account_permissions()
+        .get(authority)
+        .is_some_and(|permissions| {
+            permissions.iter().any(|permission| {
+                permission.name()
+                    == crate::smartcontracts::isi::offline::CAN_MANAGE_OFFLINE_ESCROW_PERMISSION
+            })
+        })
+}
+
+fn nexus_fee_exempt_instruction_for_authority(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    instruction: &InstructionBox,
+) -> bool {
+    nexus_protocol_fee_exempt_instruction(instruction)
+        || (authority_can_manage_offline_escrow(world, authority)
+            && offline_note_settlement_fee_exempt_instruction(instruction))
+}
+
+fn nexus_fee_exempt_instructions(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    instructions: &[InstructionBox],
+) -> bool {
+    !instructions.is_empty()
+        && instructions.iter().all(|instruction| {
+            nexus_fee_exempt_instruction_for_authority(world, authority, instruction)
+        })
+}
+
+fn nexus_fee_exempt_transaction(
+    world: &impl WorldReadOnly,
+    transaction: &SignedTransaction,
+) -> bool {
     if crate::tx::is_heartbeat_transaction(transaction) {
         return true;
     }
     let Executable::Instructions(instructions) = transaction.instructions() else {
         return false;
     };
-    nexus_protocol_fee_exempt_instructions(instructions.as_ref())
+    nexus_fee_exempt_instructions(world, transaction.authority(), instructions.as_ref())
 }
 
 fn parse_account_id_literal(
@@ -1577,7 +1615,7 @@ pub(crate) fn check_external_nexus_fee_admission(
     if !nexus.enabled {
         return Ok(());
     }
-    if nexus_protocol_fee_exempt_transaction(transaction) {
+    if nexus_fee_exempt_transaction(world, transaction) {
         return Ok(());
     }
     if successful_claim_fee_exempt_transaction(world, nexus, transaction, observation_time_ms) {
@@ -1760,7 +1798,7 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
         md,
         state_transaction.current_dataspace_id,
     )?;
-    let skip_nexus_fee = nexus_protocol_fee_exempt_transaction(transaction)
+    let skip_nexus_fee = nexus_fee_exempt_transaction(&state_transaction.world, transaction)
         || successful_claim_fee_exempt_instructions(
             &state_transaction.world,
             &state_transaction.nexus,
@@ -2694,7 +2732,7 @@ impl Executor {
             transaction.metadata(),
             state_transaction.current_dataspace_id,
         )?;
-        let skip_nexus_fee = nexus_protocol_fee_exempt_transaction(&transaction)
+        let skip_nexus_fee = nexus_fee_exempt_transaction(&state_transaction.world, &transaction)
             || successful_claim_fee_exempt_transaction(
                 &state_transaction.world,
                 &state_transaction.nexus,
@@ -6079,7 +6117,7 @@ pub mod executor_norito {
 mod tests {
     #[cfg(feature = "telemetry")]
     use iroha_config::parameters::actual::{GasLiquidity, GasRate, GasVolatility};
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         executor::{self as data_model_executor, ExecutorDataModel},
         isi::Grant,
@@ -6126,6 +6164,108 @@ mod tests {
 
     fn checked_account_id() -> AccountId {
         AccountId::new(checked_keypair().public_key().clone())
+    }
+
+    fn offline_note_test_certificate(
+        account_id: AccountId,
+    ) -> iroha_data_model::offline::OfflineNoteKeyCertificate {
+        iroha_data_model::offline::OfflineNoteKeyCertificate {
+            version: iroha_data_model::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
+            platform: "android-keymint".to_owned(),
+            key_id: "executor-fee-exempt-key".to_owned(),
+            device_id: "executor-fee-exempt-device".to_owned(),
+            account_id,
+            public_key: vec![0x01, 0x02, 0x03],
+            assertion_scheme: "android-keymint-attestation".to_owned(),
+            assertion_key_algorithm: "ecdsa-p256-sha256".to_owned(),
+            assertion_public_key: vec![0x04; 65],
+            assertion_usage_count_limit: Some(1),
+            one_use: true,
+            issuer_signature: Signature::from_bytes(&[0xAB; 64]),
+        }
+    }
+
+    fn offline_note_test_asset_id(account_id: &AccountId) -> AssetId {
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "xor".parse().expect("asset name"),
+        );
+        AssetId::new(asset_definition_id, account_id.clone())
+    }
+
+    fn offline_note_test_proof() -> iroha_data_model::offline::OfflineNoteRecursiveProof {
+        iroha_data_model::offline::OfflineNoteRecursiveProof {
+            verifier_key_id: iroha_data_model::proof::VerifyingKeyId::new(
+                "halo2/ipa",
+                "offline-note-recursive",
+            ),
+            public_inputs_hash: Hash::new(b"executor-offline-note-public-inputs"),
+            proof: iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
+        }
+    }
+
+    fn offline_note_test_issue(
+        account_id: &AccountId,
+    ) -> iroha_data_model::offline::OfflineNoteIssue {
+        iroha_data_model::offline::OfflineNoteIssue {
+            note_commitment: Hash::new(b"executor-offline-note-commitment"),
+            key_certificate: offline_note_test_certificate(account_id.clone()),
+            asset: offline_note_test_asset_id(account_id),
+            amount: Numeric::new(10, 0),
+        }
+    }
+
+    fn offline_note_test_redeem(
+        account_id: &AccountId,
+    ) -> iroha_data_model::offline::OfflineNoteRedeem {
+        iroha_data_model::offline::OfflineNoteRedeem {
+            source_note_commitment: Hash::new(b"executor-offline-note-commitment"),
+            input_nullifiers: vec![Hash::new(b"executor-offline-note-nullifier")],
+            sender_key_certificate: offline_note_test_certificate(account_id.clone()),
+            recipient: account_id.clone(),
+            asset: offline_note_test_asset_id(account_id),
+            amount: Numeric::new(10, 0),
+            recursive_proof: offline_note_test_proof(),
+        }
+    }
+
+    fn offline_note_test_audit(
+        account_id: &AccountId,
+    ) -> iroha_data_model::offline::OfflineNoteAuditBundle {
+        iroha_data_model::offline::OfflineNoteAuditBundle {
+            token_id: Hash::new(b"executor-offline-note-token"),
+            sender_key_certificate: offline_note_test_certificate(account_id.clone()),
+            input_nullifiers: Vec::new(),
+            input_claims: Vec::new(),
+            output_commitments: Vec::new(),
+            output_claims: Vec::new(),
+            recursive_proof: offline_note_test_proof(),
+        }
+    }
+
+    fn configure_activated_lane_relay_burn_fees(state: &mut State, sponsor_id: &AccountId) {
+        let nexus = state.nexus.get_mut();
+        nexus.enabled = true;
+        nexus.fees.base_fee = Numeric::from(1_u32);
+        nexus.fees.per_byte_fee = Numeric::zero();
+        nexus.fees.per_instruction_fee = Numeric::zero();
+        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        nexus.fees.fee_asset_id = "xor#universal".to_owned();
+        nexus.fees.burn_from_unix_timestamp_ms = 0;
+        nexus.fees.settlement_mode =
+            iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
+        nexus.fees.fee_receipts_activation_height = 2;
+        nexus.fees.canonical_sponsor_account_id = Some(sponsor_id.to_string());
+    }
+
+    fn grant_offline_escrow_manager_permission(state: &mut State, account_id: &AccountId) {
+        state.world.account_permissions.insert(
+            account_id.clone(),
+            BTreeSet::from([Permission::new(
+                crate::smartcontracts::isi::offline::CAN_MANAGE_OFFLINE_ESCROW_PERMISSION.into(),
+                Json::new(()),
+            )]),
+        );
     }
 
     fn make_peer_id() -> crate::PeerId {
@@ -9109,21 +9249,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
-
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
-            nexus.fees.fee_asset_id = "xor#universal".to_owned();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
-            nexus.fees.settlement_mode =
-                iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
-            nexus.fees.fee_receipts_activation_height = 2;
-            nexus.fees.canonical_sponsor_account_id = Some(authority_id.to_string());
-        }
+        configure_activated_lane_relay_burn_fees(&mut state, &authority_id);
 
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedNexusFeeBudget {
             sponsor_account_id: authority_id.clone(),
@@ -9144,6 +9270,111 @@ mod tests {
         let view = state.view();
         check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 2, None)
             .expect("protocol proof registration must not require a fee receipt");
+    }
+
+    #[test]
+    fn nexus_fee_offline_note_issue_and_redeem_transactions_are_fee_exempt() {
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id).build(&authority_id);
+        let authority = Account::new(authority_id.clone()).build(&authority_id);
+        let world = World::with([domain], [authority], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+        configure_activated_lane_relay_burn_fees(&mut state, &authority_id);
+        grant_offline_escrow_manager_permission(&mut state, &authority_id);
+
+        let instructions = vec![
+            InstructionBox::from(iroha_data_model::isi::offline::IssueOfflineNote::new(
+                offline_note_test_issue(&authority_id),
+            )),
+            InstructionBox::from(iroha_data_model::isi::offline::RedeemOfflineNote::new(
+                offline_note_test_redeem(&authority_id),
+            )),
+        ];
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let view = state.view();
+
+        for instruction in instructions {
+            let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
+                .with_executable(Executable::from(core::iter::once(instruction)))
+                .sign(authority_kp.private_key());
+            check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 2, None)
+                .expect("offline note settlement instructions must not require a fee receipt");
+        }
+    }
+
+    #[test]
+    fn nexus_fee_offline_note_issue_and_redeem_from_non_manager_require_fee_admission() {
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id).build(&authority_id);
+        let authority = Account::new(authority_id.clone()).build(&authority_id);
+        let world = World::with([domain], [authority], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+        configure_activated_lane_relay_burn_fees(&mut state, &authority_id);
+
+        let instructions = vec![
+            InstructionBox::from(iroha_data_model::isi::offline::IssueOfflineNote::new(
+                offline_note_test_issue(&authority_id),
+            )),
+            InstructionBox::from(iroha_data_model::isi::offline::RedeemOfflineNote::new(
+                offline_note_test_redeem(&authority_id),
+            )),
+        ];
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let view = state.view();
+
+        for instruction in instructions {
+            let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
+                .with_executable(Executable::from(core::iter::once(instruction)))
+                .sign(authority_kp.private_key());
+            let err = check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 2, None)
+                .expect_err("non-manager offline note tx must still require Nexus fees");
+            assert!(matches!(
+                err,
+                NexusFeeAdmissionError::Rejected(message)
+                    if message.contains("missing verified Nexus fee budget")
+            ));
+        }
+    }
+
+    #[test]
+    fn nexus_fee_offline_note_audit_redeem_batch_is_not_fee_exempt() {
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id).build(&authority_id);
+        let authority = Account::new(authority_id.clone()).build(&authority_id);
+        let world = World::with([domain], [authority], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+        configure_activated_lane_relay_burn_fees(&mut state, &authority_id);
+        grant_offline_escrow_manager_permission(&mut state, &authority_id);
+
+        let instructions = vec![
+            InstructionBox::from(iroha_data_model::isi::offline::AuditOfflineNote::new(
+                offline_note_test_audit(&authority_id),
+            )),
+            InstructionBox::from(iroha_data_model::isi::offline::RedeemOfflineNote::new(
+                offline_note_test_redeem(&authority_id),
+            )),
+        ];
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, authority_id.clone())
+            .with_executable(Executable::from(instructions))
+            .sign(authority_kp.private_key());
+        let view = state.view();
+        let err = check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 2, None)
+            .expect_err("audit plus redeem must still go through normal Nexus fee admission");
+        assert!(matches!(
+            err,
+            NexusFeeAdmissionError::Rejected(message)
+                if message.contains("missing verified Nexus fee budget")
+        ));
     }
 
     #[test]
