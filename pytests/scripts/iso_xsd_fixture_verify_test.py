@@ -2641,6 +2641,49 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertEqual(summary["missing_schema_fixtures"], [])
             self.assertEqual(summary["schema_only_entries"], [])
 
+    def test_summary_emits_schemas_and_fixtures_in_canonical_order(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest = minimal_manifest()
+            manifest["schemas"].append(
+                {
+                    "path": "iso/barr.001.001.01.xsd",
+                    "message_def_id": "barr.001.001.01",
+                    "payload_root": "BarPayload",
+                    "source": source_provenance("barr.001.001.01", "BarPayload"),
+                }
+            )
+            manifest["fixtures"].append(
+                {
+                    "path": "../bar_fixture.xml",
+                    "message_def_id": "barr.001.001.01",
+                    "payload_root": "BarPayload",
+                    "schema": "iso/barr.001.001.01.xsd",
+                }
+            )
+            manifest_path = write_minimal_tree(root, manifest)
+            (root / "xsd" / "iso" / "barr.001.001.01.xsd").write_text(
+                xsd_text("barr.001.001.01", "BarPayload"),
+                encoding="utf-8",
+            )
+            (root / "bar_fixture.xml").write_text(
+                fixture_xml("barr.001.001.01", "BarPayload"),
+                encoding="utf-8",
+            )
+
+            rc, stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+            self.assertEqual(rc, 0, stderr)
+            summary = json.loads(stdout)
+            self.assertEqual(
+                [schema["message_def_id"] for schema in summary["schemas"]],
+                ["barr.001.001.01", "fooo.001.001.01"],
+            )
+            self.assertEqual(
+                [fixture["message_def_id"] for fixture in summary["fixtures"]],
+                ["barr.001.001.01", "fooo.001.001.01"],
+            )
+
     def test_manifest_verification_parses_and_hashes_each_checked_file_once(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -2945,6 +2988,76 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 stderr,
             )
             self.assertNotIn("fooo.001.001.02", stderr)
+
+    def test_profile_catalog_summary_arrays_are_canonical_order(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            profile_catalog = write_profile_catalog(
+                root / "profiles.rs",
+                catalog=[
+                    {
+                        "id": "z-profile",
+                        "rail": "generic-iso20022",
+                        "embedded_signature_policy": "record-only",
+                        "message_profiles": [
+                            {
+                                "message_type": "fooo.001",
+                                "direction": "inbound",
+                                "versions": ["fooo.001.001.02", "fooo.001"],
+                            }
+                        ],
+                    },
+                    {
+                        "id": "a-profile",
+                        "rail": "generic-iso20022",
+                        "embedded_signature_policy": "record-only",
+                        "message_profiles": [
+                            {
+                                "message_type": "fooo.001",
+                                "direction": "inbound",
+                                "versions": ["fooo.001.001.01", "fooo.001"],
+                            }
+                        ],
+                    },
+                ],
+            )
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--profile-catalog",
+                    str(profile_catalog),
+                ]
+            )
+
+            self.assertEqual(rc, 0, stderr)
+            summary = json.loads(stdout)
+            self.assertEqual(
+                [
+                    (entry["profile_id"], entry["message_def_id"])
+                    for entry in summary["profile_catalog"]["versions"]
+                ],
+                [
+                    ("a-profile", "fooo.001.001.01"),
+                    ("z-profile", "fooo.001.001.02"),
+                ],
+            )
+            self.assertEqual(
+                [
+                    (entry["profile_id"], entry["version"])
+                    for entry in summary["profile_catalog"]["skipped_family_versions"]
+                ],
+                [("a-profile", "fooo.001"), ("z-profile", "fooo.001")],
+            )
+            self.assertEqual(
+                [
+                    (entry["profile_id"], entry["message_def_id"])
+                    for entry in summary["missing_profile_schema_versions"]
+                ],
+                [("z-profile", "fooo.001.001.02")],
+            )
 
     def test_profile_catalog_shape_is_fail_closed(self):
         cases = []

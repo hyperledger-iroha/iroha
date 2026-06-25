@@ -10022,7 +10022,6 @@ export interface AssetHolderListOptions extends IterableListOptions {
 }
 
 export interface IterableQueryOptions extends IterableListOptions {
-  fetchSize?: NumericLike;
   fetch_size?: NumericLike;
   queryName?: string;
   query_name?: string;

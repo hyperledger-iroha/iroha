@@ -3243,6 +3243,56 @@ def _unreviewed_profile_schema_message_ids(
     ]
 
 
+def _schema_summary_order_key(schema: dict[str, Any]) -> tuple[str, str]:
+    return (schema["message_def_id"], schema["path"])
+
+
+def _fixture_summary_order_key(fixture: dict[str, Any]) -> tuple[str, str]:
+    return (fixture["message_def_id"], fixture["path"])
+
+
+def _blocked_schema_source_order_key(entry: dict[str, Any]) -> tuple[str, str, str, str]:
+    source = entry["source"]
+    return (
+        entry["message_def_id"],
+        source["repository"],
+        source["commit"],
+        source["path"],
+    )
+
+
+def _pending_schema_source_order_key(
+    entry: dict[str, Any],
+) -> tuple[str, str, str, str, str, str]:
+    source = entry["source"]
+    return (
+        entry["message_def_id"],
+        source["catalogue_url"],
+        source["download_url"],
+        source["download_type"],
+        source["message_name"],
+        source["submitting_organisation"],
+    )
+
+
+def _profile_catalog_version_order_key(entry: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        entry["profile_id"],
+        entry["message_type"],
+        entry["direction"],
+        entry["message_def_id"],
+    )
+
+
+def _profile_catalog_skipped_order_key(entry: dict[str, str]) -> tuple[str, str, str, str]:
+    return (
+        entry["profile_id"],
+        entry["message_type"],
+        entry["direction"],
+        entry["version"],
+    )
+
+
 def verify_manifest(
     path: Path,
     args: argparse.Namespace,
@@ -3496,6 +3546,19 @@ def verify_manifest(
         if profile_catalog_path is not None
         else None
     )
+    if profile_catalog is not None:
+        profile_catalog["versions"] = sorted(
+            profile_catalog["versions"],
+            key=_profile_catalog_version_order_key,
+        )
+        profile_catalog["missing_schema_versions"] = sorted(
+            profile_catalog["missing_schema_versions"],
+            key=_profile_catalog_version_order_key,
+        )
+        profile_catalog["skipped_family_versions"] = sorted(
+            profile_catalog["skipped_family_versions"],
+            key=_profile_catalog_skipped_order_key,
+        )
     missing_profile_schema_versions = (
         profile_catalog["missing_schema_versions"] if profile_catalog else []
     )
@@ -3557,6 +3620,22 @@ def verify_manifest(
     unreviewed_profile_schema_message_ids = _unreviewed_profile_schema_message_ids(
         missing_profile_schema_message_ids
     )
+    compact_schemas = sorted(schemas, key=_schema_summary_order_key)
+    compact_fixtures = sorted(fixtures, key=_fixture_summary_order_key)
+    compact_blocked_schema_sources = sorted(
+        blocked_schema_sources,
+        key=_blocked_schema_source_order_key,
+    )
+    compact_pending_schema_sources = sorted(
+        pending_schema_sources,
+        key=_pending_schema_source_order_key,
+    )
+    compact_missing_schema_fixtures = [
+        fixture for fixture in compact_fixtures if not fixture["schema_backed"]
+    ]
+    compact_schema_only = [
+        schema for schema in compact_schemas if schema["path"] not in backed_schema_paths
+    ]
     summary: dict[str, Any] = {
         "version": SUMMARY_VERSION,
         "verified_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
@@ -3582,7 +3661,7 @@ def verify_manifest(
                 "message_def_id": fixture["message_def_id"],
                 "reason": fixture["missing_schema_reason"],
             }
-            for fixture in missing_schema_fixtures
+            for fixture in compact_missing_schema_fixtures
         ],
         "schema_only_entries": [
             {
@@ -3590,7 +3669,7 @@ def verify_manifest(
                 "message_def_id": schema["message_def_id"],
                 "reason": schema["schema_only_reason"],
             }
-            for schema in schema_only
+            for schema in compact_schema_only
         ],
         "missing_profile_schema_versions": missing_profile_schema_versions,
         "missing_profile_schema_message_ids": missing_profile_schema_message_ids,
@@ -3598,10 +3677,10 @@ def verify_manifest(
             unreviewed_profile_schema_message_ids
         ),
         "unreviewed_profile_schema_message_ids": unreviewed_profile_schema_message_ids,
-        "blocked_schema_sources": blocked_schema_sources,
-        "pending_schema_sources": pending_schema_sources,
-        "schemas": schemas,
-        "fixtures": fixtures,
+        "blocked_schema_sources": compact_blocked_schema_sources,
+        "pending_schema_sources": compact_pending_schema_sources,
+        "schemas": compact_schemas,
+        "fixtures": compact_fixtures,
         "profile_catalog": profile_catalog,
         "strict": {
             "require_schema_backed_fixtures": args.require_schema_backed_fixtures,

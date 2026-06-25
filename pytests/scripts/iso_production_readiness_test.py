@@ -1858,6 +1858,140 @@ class IsoProductionReadinessTest(unittest.TestCase):
             digest = body.pop("summary_sha256")
             self.assertEqual(digest, READINESS.sha256_hex(READINESS._canonical_json_bytes(body)))
 
+    def test_readiness_diagnostics_are_emitted_in_canonical_order(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_checked_in_xsd_summary(
+                root / "xsd",
+                require_fixture_for_schema=True,
+            )
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+
+            rc, stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(evidence_summary)]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            blocked = json.loads(stdout)
+            self.assertGreater(len(blocked["blockers"]), 1)
+            self.assertEqual(
+                blocked["blockers"],
+                READINESS._canonical_diagnostics(blocked["blockers"]),
+            )
+            for blocker in blocked["blockers"]:
+                if "entries" in blocker:
+                    self.assertEqual(
+                        blocker["entries"],
+                        sorted(
+                            blocker["entries"],
+                            key=READINESS._canonical_diagnostic_entry_key,
+                        ),
+                    )
+
+            rc, stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(xsd_summary),
+                    "--evidence-summary",
+                    str(evidence_summary),
+                    "--allow-reviewed-xsd-gaps",
+                ]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            diagnostic = json.loads(stdout)
+            self.assertGreater(len(diagnostic["warnings"]), 1)
+            self.assertEqual(
+                diagnostic["warnings"],
+                READINESS._canonical_diagnostics(diagnostic["warnings"]),
+            )
+            for warning in diagnostic["warnings"]:
+                if "entries" in warning:
+                    self.assertEqual(
+                        warning["entries"],
+                        sorted(
+                            warning["entries"],
+                            key=READINESS._canonical_diagnostic_entry_key,
+                        ),
+                    )
+
+    def test_canonical_diagnostics_sort_nested_entries(self):
+        diagnostics = [
+            {
+                "code": "xsd.missing_profile_schema_versions",
+                "message": "two advertised profile message versions are not schema-backed",
+                "path": "/ops/iso/xsd.summary.json",
+                "entries": [
+                    {
+                        "profile_id": "swift-cbpr-plus",
+                        "message_type": "pacs.009",
+                        "direction": "outbound",
+                        "message_def_id": "pacs.009.001.08",
+                    },
+                    {
+                        "profile_id": "fedwire-funds",
+                        "message_type": "pacs.008",
+                        "direction": "inbound",
+                        "message_def_id": "pacs.008.001.08",
+                    },
+                ],
+            }
+        ]
+
+        canonical = READINESS._canonical_diagnostics(diagnostics)
+
+        self.assertEqual(
+            [entry["profile_id"] for entry in canonical[0]["entries"]],
+            ["fedwire-funds", "swift-cbpr-plus"],
+        )
+        self.assertEqual(
+            [entry["profile_id"] for entry in diagnostics[0]["entries"]],
+            ["swift-cbpr-plus", "fedwire-funds"],
+        )
+
+    def test_readiness_compact_summary_arrays_are_emitted_in_canonical_order(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_a = write_strict_xsd_summary(root / "a-xsd")
+            xsd_z = write_checked_in_xsd_summary(
+                root / "z-xsd",
+                require_fixture_for_schema=True,
+            )
+            evidence_a = add_archive_receipt_verification(
+                write_evidence_summary(root / "a-evidence")
+            )
+            evidence_z = add_archive_receipt_verification(
+                write_evidence_summary(root / "z-evidence")
+            )
+
+            rc, stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(xsd_z),
+                    "--xsd-summary",
+                    str(xsd_a),
+                    "--evidence-summary",
+                    str(evidence_z),
+                    "--evidence-summary",
+                    str(evidence_a),
+                ]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            summary = json.loads(stdout)
+            xsd_keys = [
+                (entry["path"], entry["summary_sha256"])
+                for entry in summary["xsd_summaries"]
+            ]
+            evidence_keys = [
+                (entry["path"], entry["summary_sha256"])
+                for entry in summary["evidence_summaries"]
+            ]
+            self.assertEqual(xsd_keys, sorted(xsd_keys))
+            self.assertEqual(evidence_keys, sorted(evidence_keys))
+
     def test_unused_local_readiness_overrides_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -4228,6 +4362,140 @@ class IsoProductionReadinessTest(unittest.TestCase):
                             "--evidence-summary",
                             str(evidence_summary),
                         ]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    self.assertIn(code, codes)
+
+    def test_xsd_compact_arrays_must_be_canonical_order(self):
+        def write_two_entry_xsd_summary(root):
+            manifest = xsd_test.minimal_manifest()
+            manifest["schemas"].append(
+                {
+                    "path": "iso/barr.001.001.01.xsd",
+                    "message_def_id": "barr.001.001.01",
+                    "payload_root": "BarPayload",
+                    "source": xsd_test.source_provenance(
+                        "barr.001.001.01",
+                        "BarPayload",
+                    ),
+                }
+            )
+            manifest["fixtures"].append(
+                {
+                    "path": "../bar_fixture.xml",
+                    "message_def_id": "barr.001.001.01",
+                    "payload_root": "BarPayload",
+                    "schema": "iso/barr.001.001.01.xsd",
+                }
+            )
+            manifest_path = xsd_test.write_minimal_tree(root / "xsd", manifest)
+            (root / "xsd" / "xsd" / "iso" / "barr.001.001.01.xsd").write_text(
+                xsd_test.xsd_text("barr.001.001.01", "BarPayload"),
+                encoding="utf-8",
+            )
+            (root / "xsd" / "bar_fixture.xml").write_text(
+                xsd_test.fixture_xml("barr.001.001.01", "BarPayload"),
+                encoding="utf-8",
+            )
+            profile_catalog = xsd_test.write_profile_catalog(
+                root / "xsd" / "profiles.rs",
+                catalog=[
+                    {
+                        "id": "minimal-profile",
+                        "rail": "generic-iso20022",
+                        "embedded_signature_policy": "record-only",
+                        "message_profiles": [
+                            {
+                                "message_type": "fooo.001",
+                                "direction": "inbound",
+                                "versions": ["fooo.001.001.01"],
+                            },
+                            {
+                                "message_type": "barr.001",
+                                "direction": "inbound",
+                                "versions": ["barr.001.001.01"],
+                            },
+                        ],
+                    }
+                ],
+            )
+            summary_path = root / "two-entry-xsd.summary.json"
+            rc, _stdout, stderr = xsd_test.run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--require-schema-backed-fixtures",
+                    "--require-fixture-for-schema",
+                    "--profile-catalog",
+                    str(profile_catalog),
+                    "--require-profile-schema-backed-versions",
+                    "--validate-xml-schema",
+                    "--summary-out",
+                    str(summary_path),
+                ]
+            )
+            if rc != 0:
+                raise AssertionError(stderr)
+            return summary_path
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            two_entry_summary = write_two_entry_xsd_summary(root / "two-entry")
+            checked_in_summary = write_checked_in_xsd_summary(root / "checked-in")
+
+            cases = (
+                (
+                    "schemas",
+                    two_entry_summary,
+                    lambda body: body["schemas"].reverse(),
+                    "xsd.schemas_not_canonical_order",
+                    [],
+                ),
+                (
+                    "fixtures",
+                    two_entry_summary,
+                    lambda body: body["fixtures"].reverse(),
+                    "xsd.fixtures_not_canonical_order",
+                    [],
+                ),
+                (
+                    "blocked-sources",
+                    checked_in_summary,
+                    lambda body: body["blocked_schema_sources"].reverse(),
+                    "xsd.blocked_sources_not_canonical_order",
+                    ["--allow-reviewed-xsd-gaps"],
+                ),
+                (
+                    "pending-sources",
+                    checked_in_summary,
+                    lambda body: body["pending_schema_sources"].reverse(),
+                    "xsd.pending_sources_not_canonical_order",
+                    ["--allow-reviewed-xsd-gaps"],
+                ),
+            )
+            for name, source_path, mutate, code, extra_args in cases:
+                with self.subTest(name=name):
+                    body = json.loads(source_path.read_text(encoding="utf-8"))
+                    mutate(body)
+                    refresh_digest(body)
+                    mutated_path = write_json(
+                        root / f"reordered-{name}.xsd.summary.json",
+                        body,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(mutated_path),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                        ]
+                        + extra_args
                     )
 
                     self.assertEqual(rc, 1, stderr)
@@ -7424,6 +7692,48 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 (
                     mismatched_skipped,
                     "xsd.profile_catalog_skipped_family_mismatch",
+                )
+            )
+
+            profile_versions_reordered = json.loads(
+                write_checked_in_xsd_summary(root / "checked-in-profile-order").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertGreater(
+                len(profile_versions_reordered["profile_catalog"]["versions"]),
+                1,
+            )
+            profile_versions_reordered["profile_catalog"]["versions"].reverse()
+            cases.append(
+                (
+                    profile_versions_reordered,
+                    "xsd.profile_catalog_versions_not_canonical_order",
+                )
+            )
+
+            skipped_versions_reordered = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            skipped_versions_reordered["profile_catalog"]["skipped_family_versions"] = [
+                {
+                    "profile_id": "z-profile",
+                    "message_type": "fooo.001",
+                    "direction": "inbound",
+                    "version": "fooo.001",
+                },
+                {
+                    "profile_id": "a-profile",
+                    "message_type": "fooo.001",
+                    "direction": "inbound",
+                    "version": "fooo.001",
+                },
+            ]
+            skipped_versions_reordered["profile_catalog"]["profiles"] = 3
+            cases.append(
+                (
+                    skipped_versions_reordered,
+                    "xsd.profile_catalog_skipped_not_canonical_order",
                 )
             )
 
@@ -11485,6 +11795,35 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
                     self.assertIn("trust.der_proof_reused_across_roles", codes)
 
+    def test_compact_trust_der_proofs_must_be_canonical_order(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            profile = evidence["trust_summaries"][0]["profiles"][0]
+            profile["x509_crl_count"] = 2
+            profile["x509_crl_der"] = [
+                {"sha256": "9" * 64, "byte_len": 12},
+                {"sha256": "8" * 64, "byte_len": 11},
+            ]
+            refresh_digest(evidence)
+            mutated_path = write_json(root / "unsorted-trust-der.summary.json", evidence)
+
+            rc, stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            blockers = json.loads(stdout)["blockers"]
+            codes = {blocker["code"] for blocker in blockers}
+            self.assertIn("trust.der_proof_not_canonical_order", codes)
+            self.assertTrue(
+                any("x509_crl_der must be sorted" in blocker["message"] for blocker in blockers)
+            )
+
     def test_trust_verified_bundle_count_must_match_profiles(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -11526,6 +11865,110 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertEqual(rc, 1, stderr)
             codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
             self.assertIn("trust.profile_id_duplicate", codes)
+
+    def test_trust_profiles_must_be_canonical_order(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            trust_summary = evidence["trust_summaries"][0]
+            copied_profile = json.loads(json.dumps(trust_summary["profiles"][0]))
+            copied_profile["profile_id"] = "fedwire-funds"
+            copied_profile["rail"] = "fedwire-funds"
+            copied_profile["path"] = "/ops/iso/trust/fedwire-funds.bundle.json"
+            copied_profile["bundle_sha256"] = "b" * 64
+            trust_summary["profiles"].append(copied_profile)
+            trust_summary["verified_bundles"] = 2
+            refresh_digest(evidence)
+            mutated_path = write_json(root / "unsorted-trust-profiles.summary.json", evidence)
+
+            rc, stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("trust.profiles_not_canonical_order", codes)
+            self.assertNotIn("trust.profile_id_duplicate", codes)
+            self.assertNotIn("trust.bundle_path_duplicate", codes)
+            self.assertNotIn("trust.bundle_digest_duplicate", codes)
+
+    def test_canary_and_trust_summary_arrays_must_be_canonical_order(self):
+        def write_two_summary_evidence(root):
+            root.mkdir(parents=True, exist_ok=True)
+            z_canary = evidence_test.plan_only_canary_summary()
+            z_canary["config_path"] = "/ops/iso/z-canary.json"
+            z_canary.pop("summary_sha256")
+            z_canary_path = write_json(
+                root / "z-canary.summary.json",
+                evidence_test.digest_summary(z_canary),
+            )
+            a_canary = evidence_test.plan_only_canary_summary()
+            a_canary["config_path"] = "/ops/iso/a-canary.json"
+            a_canary.pop("summary_sha256")
+            a_canary_path = write_json(
+                root / "a-canary.summary.json",
+                evidence_test.digest_summary(a_canary),
+            )
+            z_trust = evidence_test.write_trust_summary(
+                root / "z-trust",
+                profile_id="swift-cbpr-plus",
+            )
+            a_trust = evidence_test.write_trust_summary(
+                root / "a-trust",
+                profile_id="fedwire-funds",
+            )
+            summary_path = root / "evidence.summary.json"
+            rc, _stdout, stderr = evidence_test.run_evidence(
+                [
+                    "--canary-summary",
+                    str(z_canary_path),
+                    "--canary-summary",
+                    str(a_canary_path),
+                    "--trust-summary",
+                    str(z_trust),
+                    "--trust-summary",
+                    str(a_trust),
+                    "--allow-plan-only",
+                    "--allow-canary-stage-receipts-only",
+                    "--summary-out",
+                    str(summary_path),
+                ]
+            )
+            if rc != 0:
+                raise AssertionError(stderr)
+            return summary_path
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = write_two_summary_evidence(root / "evidence")
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            evidence["canary_summaries"].reverse()
+            evidence["trust_summaries"].reverse()
+            refresh_digest(evidence)
+            mutated_path = write_json(
+                root / "reordered-top-level-evidence.summary.json",
+                evidence,
+            )
+
+            rc, stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(xsd_summary),
+                    "--evidence-summary",
+                    str(mutated_path),
+                    "--allow-canary-stage-receipts-only",
+                ]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("evidence.canary_summaries_not_canonical_order", codes)
+            self.assertIn("evidence.trust_summaries_not_canonical_order", codes)
 
     def test_trust_bundle_digest_is_required_and_unique(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -13126,7 +13569,10 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 partial_body["planned_stages"][0],
                 partial_body["planned_stages"][2],
             ]
-            del partial_body["planned_stages"][1]["command"][4:6]
+            evidence_test.remove_verify_receipt_dir(
+                partial_body["planned_stages"][1]["command"],
+                "/ops/iso/notary-receipts",
+            )
             partial_body.pop("summary_sha256")
             partial_canary_path = write_json(
                 root / "partial-canary.summary.json",
@@ -13565,6 +14011,64 @@ class IsoProductionReadinessTest(unittest.TestCase):
             codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
             self.assertIn("evidence.receipt_kind_entry_mismatch", codes)
             self.assertIn("evidence.archive_receipt_kind_entry_mismatch", codes)
+
+    def test_receipt_summary_kind_lists_must_be_canonical_order(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            receipt_summary = evidence["canary_summaries"][0]["receipt_summary"]
+            receipt_summary["receipt_kind"] = list(reversed(receipt_summary["receipt_kind"]))
+            refresh_digest(receipt_summary)
+            archive = evidence["receipt_verification"]
+            archive["receipt_kind"] = list(reversed(archive["receipt_kind"]))
+            refresh_digest(archive)
+            refresh_digest(evidence)
+            mutated_path = write_json(
+                root / "noncanonical-receipt-kind-order.summary.json",
+                evidence,
+            )
+
+            rc, stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("evidence.receipt_kind_entry_mismatch", codes)
+            self.assertIn("evidence.archive_receipt_kind_entry_mismatch", codes)
+
+    def test_receipt_summary_entries_must_be_canonical_order(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            receipt_summary = evidence["canary_summaries"][0]["receipt_summary"]
+            receipt_summary["receipts"] = list(reversed(receipt_summary["receipts"]))
+            refresh_digest(receipt_summary)
+            archive = evidence["receipt_verification"]
+            archive["receipts"] = list(reversed(archive["receipts"]))
+            refresh_digest(archive)
+            refresh_digest(evidence)
+            mutated_path = write_json(
+                root / "noncanonical-receipt-entry-order.summary.json",
+                evidence,
+            )
+
+            rc, stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("evidence.receipt_entries_not_canonical_order", codes)
+            self.assertIn("evidence.archive_receipt_entries_not_canonical_order", codes)
 
     def test_receipt_entry_kinds_must_be_supported(self):
         with tempfile.TemporaryDirectory() as raw_root:

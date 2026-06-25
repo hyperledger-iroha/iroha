@@ -1515,6 +1515,7 @@ def _build_notary_stage(
             allow_insecure_http=allow_insecure_http,
             allow_template_canary=allow_template_canary_endpoints,
         )
+    endpoints = sorted(endpoints)
     receipt_dir_raw = _optional_string(notary, "receipt_dir", "notary")
     if require_explicit_policy and receipt_dir_raw is None:
         raise CanaryError(
@@ -1685,6 +1686,8 @@ def _build_verify_stage(
     _reject_receipts_from_stage_dirs(receipts, stage_receipt_dirs)
     if not receipt_dirs and not receipts:
         raise CanaryError("verify requires generated stage receipts or explicit receipts/receipt_dirs")
+    receipt_dirs = sorted(receipt_dirs, key=lambda path: str(path))
+    receipts = sorted(receipts, key=lambda path: str(path))
 
     argv = [
         sys.executable,

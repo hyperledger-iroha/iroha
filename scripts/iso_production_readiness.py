@@ -1627,6 +1627,15 @@ def _require_compact_der_entries(
     return result
 
 
+def _compact_der_order_keys(
+    entries: list[dict[str, int | str]],
+) -> list[tuple[str, int]]:
+    return [
+        (str(entry["sha256"]), int(entry["byte_len"]))
+        for entry in entries
+    ]
+
+
 def _block_compact_der_role_reuse(
     roles: tuple[tuple[str, list[dict[str, int | str]]], ...],
     label: str,
@@ -2302,6 +2311,10 @@ def _receipt_entry_content_metadata(receipt: dict[str, Any]) -> tuple[tuple[str,
     else:
         raise ReadinessError("unsupported receipt_kind")
     return tuple((key, receipt.get(key)) for key in (*generic_keys, *keys))
+
+
+def _receipt_summary_entry_order_key(entry: dict[str, Any]) -> tuple[str, str, str]:
+    return (entry["receipt_kind"], entry["path"], entry["receipt_sha256"])
 
 
 def _require_profile_direction(value: dict[str, Any], key: str, label: str) -> str:
@@ -3167,6 +3180,41 @@ def _blocker(blockers: list[dict[str, Any]], code: str, message: str, path: Path
     blockers.append({"code": code, "message": message, "path": str(path)})
 
 
+def _diagnostic_order_key(diagnostic: dict[str, Any]) -> tuple[str, str, str, str]:
+    def key_value(field: str) -> str:
+        value = diagnostic.get(field)
+        if isinstance(value, str):
+            return value
+        return _canonical_json_bytes(value).decode("utf-8")
+
+    return (
+        key_value("code"),
+        key_value("path"),
+        key_value("message"),
+        _canonical_json_bytes(diagnostic).decode("utf-8"),
+    )
+
+
+def _canonical_diagnostic_entry_key(entry: Any) -> str:
+    return _canonical_json_bytes(entry).decode("utf-8")
+
+
+def _canonical_diagnostic(diagnostic: dict[str, Any]) -> dict[str, Any]:
+    result = dict(diagnostic)
+    entries = result.get("entries")
+    if isinstance(entries, list):
+        result["entries"] = sorted(entries, key=_canonical_diagnostic_entry_key)
+    return result
+
+
+def _canonical_diagnostics(diagnostics: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        (_canonical_diagnostic(diagnostic) for diagnostic in diagnostics),
+        key=_diagnostic_order_key,
+    )
+
+
+
 def _block_if_stale(
     timestamp: dt.datetime,
     *,
@@ -3309,6 +3357,7 @@ def _verify_xsd_summary_entries(
     schema_sources: list[dict[str, str]] = []
     schema_ids_by_path: dict[str, str] = {}
     schema_payload_roots_by_path: dict[str, str] = {}
+    schema_order_keys: list[tuple[str, str]] = []
     for offset, schema_raw in enumerate(schemas_raw):
         label = f"{path}.schemas[{offset}]"
         schema = _require_object(schema_raw, label)
@@ -3319,6 +3368,7 @@ def _verify_xsd_summary_entries(
             f"{label}.path",
         )
         schema_paths.append(schema_path)
+        schema_order_keys.append((message_def_id, schema_path))
         if Path(schema_path).name != f"{message_def_id}.xsd":
             _blocker(
                 blockers,
@@ -3380,6 +3430,13 @@ def _verify_xsd_summary_entries(
             f"{source['repository']}@{source['commit']}:{source['path']}"
         )
         schema_sources.append(source)
+    if schema_order_keys != sorted(schema_order_keys):
+        _blocker(
+            blockers,
+            "xsd.schemas_not_canonical_order",
+            f"{path}.schemas must be sorted by message_def_id and path",
+            path,
+        )
     _block_duplicate_strings(
         schema_paths,
         label=f"{path}.schemas.path",
@@ -3424,6 +3481,7 @@ def _verify_xsd_summary_entries(
     blocked_source_digests: list[str] = []
     blocked_source_messages: list[str] = []
     blocked_sources: list[dict[str, Any]] = []
+    blocked_source_order_keys: list[tuple[str, str, str, str]] = []
     for offset, blocked_raw in enumerate(blocked_schema_sources):
         label = f"{path}.blocked_schema_sources[{offset}]"
         blocked = _verify_blocked_schema_source_summary(
@@ -3439,6 +3497,24 @@ def _verify_xsd_summary_entries(
         )
         blocked_source_digests.append(blocked["source"]["sha256"])
         blocked_sources.append(blocked)
+        blocked_source_order_keys.append(
+            (
+                blocked["message_def_id"],
+                blocked["source"]["repository"],
+                blocked["source"]["commit"],
+                blocked["source"]["path"],
+            )
+        )
+    if blocked_source_order_keys != sorted(blocked_source_order_keys):
+        _blocker(
+            blockers,
+            "xsd.blocked_sources_not_canonical_order",
+            (
+                f"{path}.blocked_schema_sources must be sorted by "
+                "message_def_id and source provenance"
+            ),
+            path,
+        )
     checked_schema_ids = set(schema_ids)
     for message_def_id in sorted(set(blocked_source_messages) & checked_schema_ids):
         _blocker(
@@ -3486,12 +3562,13 @@ def _verify_xsd_summary_entries(
             "xsd.pending_schema_source_count_mismatch",
             "XSD summary pending_schema_source_count does not match pending_schema_sources[] length",
             path,
-    )
+        )
     pending_source_refs: list[str] = []
     pending_source_download_urls: list[str] = []
     pending_source_messages: list[str] = []
     pending_source_message_names: list[str] = []
     pending_sources: list[dict[str, Any]] = []
+    pending_source_order_keys: list[tuple[str, str, str, str, str, str]] = []
     for offset, pending_raw in enumerate(pending_schema_sources):
         label = f"{path}.pending_schema_sources[{offset}]"
         pending = _verify_pending_schema_source_summary(pending_raw, label)
@@ -3506,6 +3583,26 @@ def _verify_xsd_summary_entries(
             f"{pending['source']['submitting_organisation']}"
         )
         pending_sources.append(pending)
+        pending_source_order_keys.append(
+            (
+                pending["message_def_id"],
+                pending["source"]["catalogue_url"],
+                pending["source"]["download_url"],
+                pending["source"]["download_type"],
+                pending["source"]["message_name"],
+                pending["source"]["submitting_organisation"],
+            )
+        )
+    if pending_source_order_keys != sorted(pending_source_order_keys):
+        _blocker(
+            blockers,
+            "xsd.pending_sources_not_canonical_order",
+            (
+                f"{path}.pending_schema_sources must be sorted by "
+                "message_def_id and source provenance"
+            ),
+            path,
+        )
     for message_def_id in sorted(set(pending_source_messages) & checked_schema_ids):
         _blocker(
             blockers,
@@ -3563,6 +3660,7 @@ def _verify_xsd_summary_entries(
     computed_schema_validated = 0
     computed_missing_schema = 0
     schema_path_set = set(schema_paths)
+    fixture_order_keys: list[tuple[str, str]] = []
     for offset, fixture_raw in enumerate(fixtures_raw):
         label = f"{path}.fixtures[{offset}]"
         fixture = _require_object(fixture_raw, label)
@@ -3574,6 +3672,7 @@ def _verify_xsd_summary_entries(
         fixture_paths.append(fixture_path)
         fixture_message_def_id = _require_message_def_id(fixture, "message_def_id", label)
         fixture_message_ids.append(fixture_message_def_id)
+        fixture_order_keys.append((fixture_message_def_id, fixture_path))
         fixture_payload_root = _require_xsd_identifier(fixture, "payload_root", label)
         fixture_digests.append(_require_nonzero_sha256(fixture, "sha256", label))
         schema_backed = _require_bool(fixture, "schema_backed", label)
@@ -3666,6 +3765,13 @@ def _verify_xsd_summary_entries(
                 computed_missing_schema_entries.append(
                     (fixture_path, fixture_message_def_id, missing_reason)
                 )
+    if fixture_order_keys != sorted(fixture_order_keys):
+        _blocker(
+            blockers,
+            "xsd.fixtures_not_canonical_order",
+            f"{path}.fixtures must be sorted by message_def_id and path",
+            path,
+        )
     _block_duplicate_strings(
         fixture_paths,
         label=f"{path}.fixtures.path",
@@ -3963,6 +4069,7 @@ def _verify_xsd_profile_catalog_entries(
     )
     represented_profile_ids: set[str] = set()
     seen_skipped: dict[tuple[str, str, str, str], int] = {}
+    skipped_order_keys: list[tuple[str, str, str, str]] = []
     for offset, raw_skipped in enumerate(skipped_raw):
         label = f"{path}.profile_catalog.skipped_family_versions[{offset}]"
         skipped = _require_object(raw_skipped, label)
@@ -3973,6 +4080,7 @@ def _verify_xsd_profile_catalog_entries(
             _require_profile_direction(skipped, "direction", label),
             _require_profile_catalog_version(skipped, "version", label),
         )
+        skipped_order_keys.append(key)
         represented_profile_ids.add(key[0])
         if MESSAGE_DEF_ID_RE.fullmatch(key[3]) is not None:
             _blocker(
@@ -4000,6 +4108,16 @@ def _verify_xsd_profile_catalog_entries(
             )
         else:
             seen_skipped[key] = offset
+    if skipped_order_keys != sorted(skipped_order_keys):
+        _blocker(
+            blockers,
+            "xsd.profile_catalog_skipped_not_canonical_order",
+            (
+                f"{path}.profile_catalog.skipped_family_versions must be sorted "
+                "by profile_id, message_type, direction, and version"
+            ),
+            path,
+        )
     versions_raw = _require_list(
         profile_catalog.get("versions"),
         f"{path}.profile_catalog.versions",
@@ -4014,11 +4132,13 @@ def _verify_xsd_profile_catalog_entries(
     computed_schema_backed = 0
     computed_missing: list[tuple[str, str, str, str]] = []
     seen_versions: dict[tuple[str, str, str, str], int] = {}
+    version_order_keys: list[tuple[str, str, str, str]] = []
     for offset, raw_version in enumerate(versions_raw):
         label = f"{path}.profile_catalog.versions[{offset}]"
         version = _require_object(raw_version, label)
         _reject_unknown_keys(version, XSD_PROFILE_VERSION_KEYS, label)
         key = _profile_version_key(version, label)
+        version_order_keys.append(key)
         represented_profile_ids.add(key[0])
         if key in seen_versions:
             _blocker(
@@ -4045,6 +4165,16 @@ def _verify_xsd_profile_catalog_entries(
             computed_schema_backed += 1
         else:
             computed_missing.append(key)
+    if version_order_keys != sorted(version_order_keys):
+        _blocker(
+            blockers,
+            "xsd.profile_catalog_versions_not_canonical_order",
+            (
+                f"{path}.profile_catalog.versions must be sorted by "
+                "profile_id, message_type, direction, and message_def_id"
+            ),
+            path,
+        )
     if computed_schema_backed != profile_schema_backed_versions:
         _blocker(
             blockers,
@@ -4426,6 +4556,7 @@ def _verify_receipt_summary(
     metadata_code: str,
     digest_role_reuse_code: str,
     kind_entry_mismatch_code: str,
+    receipt_entry_order_code: str,
     source_material_reuse_codes: tuple[tuple[str, str], ...],
 ) -> dict[str, Any]:
     digest = _require_summary_digest(receipt_obj, label)
@@ -4501,6 +4632,13 @@ def _verify_receipt_summary(
             "receipt verification contains unsupported receipt kinds",
             path,
         )
+    if receipt_kind_raw != sorted(receipt_kind_set):
+        _blocker(
+            blockers,
+            kind_entry_mismatch_code,
+            f"{label}.receipt_kind must be sorted in canonical order",
+            path,
+        )
     allow_failed = _require_bool(receipt_obj, "allow_failed", label)
     allow_insecure_http = _require_bool(receipt_obj, "allow_insecure_http", label)
     allow_legacy_colr007 = _require_bool(receipt_obj, "allow_legacy_colr007", label)
@@ -4526,6 +4664,7 @@ def _verify_receipt_summary(
     receipt_entry_kinds: set[str] = set()
     seen_receipt_paths: dict[str, int] = {}
     seen_receipt_digests: dict[str, int] = {}
+    receipt_order_keys: list[tuple[str, str, str]] = []
     source_material_code_by_field = dict(source_material_reuse_codes)
     seen_source_material_signatures: dict[tuple[str, tuple[tuple[str, str], ...]], int] = {}
     seen_source_material_fields: dict[tuple[str, str], dict[str, int]] = {}
@@ -4588,6 +4727,15 @@ def _verify_receipt_summary(
             )
         else:
             seen_receipt_digests[receipt_sha256] = offset
+            receipt_order_keys.append(
+                _receipt_summary_entry_order_key(
+                    {
+                        "receipt_kind": receipt_kind,
+                        "path": receipt_path,
+                        "receipt_sha256": receipt_sha256,
+                    }
+                )
+            )
         ok = receipt.get("ok")
         status_code = receipt.get("status_code")
         status_code_valid = True
@@ -4759,6 +4907,13 @@ def _verify_receipt_summary(
                 has_default_profile_receipt = True
         receipts.append(dict(receipt))
         receipt_entry_kinds.add(receipt_kind)
+    if receipt_order_keys != sorted(receipt_order_keys):
+        _blocker(
+            blockers,
+            receipt_entry_order_code,
+            f"{label}.receipts must be sorted by receipt_kind, path, and receipt_sha256",
+            path,
+        )
     if receipt_kind_set != receipt_entry_kinds:
         _blocker(
             blockers,
@@ -5526,6 +5681,7 @@ def _verify_canary(
             metadata_code="evidence.receipt_metadata_invalid",
             digest_role_reuse_code="evidence.receipt_digest_role_reuse",
             kind_entry_mismatch_code="evidence.receipt_kind_entry_mismatch",
+            receipt_entry_order_code="evidence.receipt_entries_not_canonical_order",
             source_material_reuse_codes=CANARY_RECEIPT_SOURCE_MATERIAL_REUSE_CODES,
         )
         expected_receipt_kinds = {
@@ -5669,6 +5825,20 @@ def _verify_trust_profile(
         path,
         blockers,
     )
+    for role, entries in (
+        ("x509_trust_anchor_der", trust_anchor_der),
+        ("revoked_certificate_der", revoked_der),
+        ("x509_crl_der", x509_crl_der),
+        ("x509_ocsp_response_der", x509_ocsp_response_der),
+    ):
+        order_keys = _compact_der_order_keys(entries)
+        if order_keys != sorted(order_keys):
+            _blocker(
+                blockers,
+                "trust.der_proof_not_canonical_order",
+                f"{label}.{role} must be sorted by sha256 and byte_len",
+                path,
+            )
     if "source" not in profile:
         raise ReadinessError(f"{label}.source must be a JSON object")
     source_raw = profile["source"]
@@ -5860,6 +6030,7 @@ def _verify_archive_receipts(
         metadata_code="evidence.archive_receipt_metadata_invalid",
         digest_role_reuse_code="evidence.archive_receipt_digest_role_reuse",
         kind_entry_mismatch_code="evidence.archive_receipt_kind_entry_mismatch",
+        receipt_entry_order_code="evidence.archive_receipt_entries_not_canonical_order",
         source_material_reuse_codes=ARCHIVE_RECEIPT_SOURCE_MATERIAL_REUSE_CODES,
     )
 
@@ -7745,6 +7916,14 @@ def verify_evidence_summary(
         )
         for offset, canary in enumerate(canary_summaries)
     ]
+    canary_order_keys = [_compact_summary_order_key(canary) for canary in canaries]
+    if canary_order_keys != sorted(canary_order_keys):
+        _blocker(
+            blockers,
+            "evidence.canary_summaries_not_canonical_order",
+            f"{path}.canary_summaries must be sorted by path and summary_sha256",
+            path,
+        )
     _block_if_archive_receipts_do_not_cover_canaries(
         canaries,
         archive_receipts,
@@ -7923,7 +8102,15 @@ def verify_evidence_summary(
                 "trust.profile_json_emitted_not_emittable",
                 "trust summary emitted profile JSON even though profile emission policy is not consistently emittable",
                 path,
-        )
+            )
+        profile_ids = [profile["profile_id"] for profile in profiles]
+        if profile_ids != sorted(profile_ids):
+            _blocker(
+                blockers,
+                "trust.profiles_not_canonical_order",
+                f"{label}.profiles must be sorted by profile_id in canonical order",
+                path,
+            )
         seen_profile_ids: dict[str, int] = {}
         seen_bundle_paths: dict[str, int] = {}
         seen_bundle_digests: dict[str, int] = {}
@@ -7991,6 +8178,14 @@ def verify_evidence_summary(
                 "summary_sha256": summary_sha256,
             }
         )
+    trust_order_keys = [_compact_summary_order_key(trust) for trust in trust_outputs]
+    if trust_order_keys != sorted(trust_order_keys):
+        _blocker(
+            blockers,
+            "evidence.trust_summaries_not_canonical_order",
+            f"{path}.trust_summaries must be sorted by path and summary_sha256",
+            path,
+        )
     _reject_duplicate_compact_summaries(canaries, f"{path}.canary_summaries")
     _reject_duplicate_compact_summaries(trust_outputs, f"{path}.trust_summaries")
     _block_canary_trust_summary_identity_reuse(canaries, trust_outputs, path, blockers)
@@ -8035,6 +8230,10 @@ def verify_evidence_summary(
 
 def _public_evidence_summary(summary: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in summary.items() if not key.startswith("_")}
+
+
+def _compact_summary_order_key(summary: dict[str, Any]) -> tuple[str, str]:
+    return (summary["path"], summary["summary_sha256"])
 
 
 def _require_policy_booleans(args: argparse.Namespace) -> None:
@@ -8183,15 +8382,24 @@ def run(args: argparse.Namespace) -> int:
         evidence_summaries,
         blockers,
     )
+    canonical_blockers = _canonical_diagnostics(blockers)
+    canonical_warnings = _canonical_diagnostics(warnings)
+    canonical_xsd_summaries = sorted(xsd_summaries, key=_compact_summary_order_key)
+    canonical_evidence_summaries = sorted(
+        evidence_summaries,
+        key=_compact_summary_order_key,
+    )
     output: dict[str, Any] = {
         "version": READINESS_VERSION,
         "checked_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
-        "ok": not blockers,
-        "blockers": blockers,
-        "warnings": warnings,
-        "xsd_summaries": [_public_xsd_summary(summary) for summary in xsd_summaries],
+        "ok": not canonical_blockers,
+        "blockers": canonical_blockers,
+        "warnings": canonical_warnings,
+        "xsd_summaries": [
+            _public_xsd_summary(summary) for summary in canonical_xsd_summaries
+        ],
         "evidence_summaries": [
-            _public_evidence_summary(summary) for summary in evidence_summaries
+            _public_evidence_summary(summary) for summary in canonical_evidence_summaries
         ],
         "policy": {
             "provider": args.provider,

@@ -298,6 +298,8 @@ pub enum ToriiReadFanoutMergeV1 {
     Singleton,
     /// Merge account-detail responses while preserving the requested response format.
     Account,
+    /// Merge account-history responses with global ordering and pagination.
+    AccountHistory,
     /// Merge account portfolio responses.
     Portfolio,
     /// Merge dataspace account summary responses.
