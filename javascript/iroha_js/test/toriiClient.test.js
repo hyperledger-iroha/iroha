@@ -14,6 +14,7 @@ import {
   TransactionTimeoutError,
   IsoMessageTimeoutError,
   buildRbcSampleRequest,
+  buildSorafsOrderbookEventsWebSocketUrl,
   statusLivenessElapsedMs,
   isStatusQueueStalled,
 } from "../src/toriiClient.js";
@@ -4485,6 +4486,23 @@ test("SoraFS orderbook WebSocket helper opens and normalizes event frames", asyn
 
   const receiptIdHex = "44".repeat(32);
   const client = new ToriiClient(BASE_URL);
+  const defaultWebSocketUrl = `${BASE_URL.replace("https:", "wss:")}/v1/sorafs/orderbook/events/ws`;
+  assert.equal(client.buildSorafsOrderbookEventsWebSocketUrl(), defaultWebSocketUrl);
+  assert.equal(buildSorafsOrderbookEventsWebSocketUrl(BASE_URL), defaultWebSocketUrl);
+
+  const defaultSocket = client.openSorafsOrderbookEventsWebSocket({
+    WebSocketImpl: FakeWebSocket,
+  });
+  assert.equal(defaultSocket.url, defaultWebSocketUrl);
+
+  const defaultStream = client.streamSorafsOrderbookEventsWebSocket({
+    WebSocketImpl: FakeWebSocket,
+  });
+  const defaultStreamSocket = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+  assert.equal(defaultStreamSocket.url, defaultWebSocketUrl);
+  await defaultStream.return();
+  FakeWebSocket.instances = [];
+
   assert.equal(
     client.buildSorafsOrderbookEventsWebSocketUrl({ since: 8, limit: 1 }),
     `${BASE_URL.replace("https:", "wss:")}/v1/sorafs/orderbook/events/ws?since=8&limit=1`,

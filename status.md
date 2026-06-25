@@ -1,6 +1,1150 @@
 # Status
 
-Last updated: 2026-06-24
+Last updated: 2026-06-25
+
+## 2026-06-25 SoraFS proof-token issuance producer tooling
+
+- `iroha::Client::post_sorafs_transparency_token_issuance_json(...)` and
+  `iroha sorafs transparency token-issuance submit --payload PATH` now wrap the
+  signed `/v1/sorafs/transparency/tokens/issuances` feed for deployed
+  proof-token issuance producer automation.
+- `iroha sorafs transparency token-issuance canary --issuance PATH
+  [--issuance PATH...] [--out PATH]` now submits canary proof-token issuance
+  payloads through the signed feed, records request/response sizes, statuses,
+  and BLAKE3 hashes, and emits
+  `sorafs.transparency.proof_token_issuance.canary.v1` evidence without
+  archiving proof-token frames, private digest-key material, or response
+  bodies.
+- SFM-4c docs and roadmap now count local proof-token issuance producer submit
+  and canary tooling as shipped while keeping captured deployed producer and
+  public explorer-linking rollout evidence open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-client cargo test -j 1 -p iroha sorafs_transparency_token_issuance --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli transparency_token_issuance -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_transparency_plan*.md`
+  - Mirror consistency check for 20 localized SFM-4c docs
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SFM-4c code/docs/status files
+  - Stale SFM-4c proof-token issuance canary wording scan across
+    `docs/source/sorafs_transparency_plan.md`, `roadmap.md`, and `status.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS source-entry producer canary
+
+- `iroha sorafs transparency source-entry canary --source-entry KIND=PATH
+  [--source-entry KIND=PATH...] [--out PATH]` now submits canary source-entry
+  producer payloads through the signed
+  `/v1/sorafs/transparency/source-entries/{source_kind}` feed, records
+  request/response sizes, statuses, and BLAKE3 hashes, and emits
+  `sorafs.transparency.source_entry.canary.v1` evidence without archiving source
+  payload fields, private payload material, or response bodies.
+- SFM-4c docs and roadmap now count local source-entry producer rollout canary
+  tooling as shipped while keeping captured deployed GAR/moderation/appeal/
+  legal-hold/redaction/evidence-viewer producer rollout evidence open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli transparency_source_entry_canary -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_transparency_plan*.md`
+  - Mirror consistency check for 20 localized SFM-4c docs
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SFM-4c code/docs/status files
+  - Stale SFM-4c source-entry canary wording scan across
+    `docs/source/sorafs_transparency_plan.md`, `roadmap.md`, and `status.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS privacy aggregate canary
+
+- `iroha sorafs transparency privacy-aggregate canary --source-event PATH
+  [--source-event PATH...] [--publish-due PATH...] [--out PATH]` now submits
+  canary privacy aggregate source-event and publish-due payloads through the
+  signed routes, records request/response sizes, statuses, and BLAKE3 hashes,
+  and emits `sorafs.transparency.privacy_aggregate.canary.v1` evidence without
+  archiving raw metric arrays, metric names, or response bodies.
+- SFM-4c docs and roadmap now count local privacy aggregate rollout canary
+  tooling as shipped while keeping captured deployed source-event producer and
+  scheduler job rollout evidence open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli transparency_privacy_aggregate_canary -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_transparency_plan*.md`
+  - Mirror consistency check for 20 localized SFM-4c docs
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SFM-4c code/docs/status files
+  - Stale SFM-4c privacy aggregate canary wording scan across
+    `docs/source/sorafs_transparency_plan.md`, `roadmap.md`, and `status.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation executor canary
+
+- `iroha sorafs moderation ballots executor-canary --bundle DIR
+  [--execution-summary PATH] [--out PATH]` now verifies generated
+  commit/reveal executor bundles and optional payload-free `ballots execute`
+  summaries, records artifact hashes, scheduler checks, summary hashes, and
+  pass/fail status, and emits
+  `sorafs.moderation.ballots.executor_canary.v1` evidence without archiving
+  private payload files or response bodies.
+- SFM-4a docs and roadmap now count local commit/reveal executor canary
+  evidence tooling as shipped while keeping captured deployed juror
+  notification transport evidence, captured deployed executor job rollout
+  evidence, live workflow evidence, and end-to-end release rollout open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli moderation_ballots_executor_canary -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - Mirror consistency check for 20 localized SFM-4a docs
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SFM-4a code/docs/status files
+  - Stale SFM-4a executor-canary wording scan across
+    `docs/source/sorafs_ai_prescreen_plan.md`, `roadmap.md`, and `status.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation executor bundle
+
+- `iroha sorafs moderation ballots executor-bundle --status PATH
+  --bundle-out DIR [--commit-payload PATH...] [--reveal-payload PATH...]
+  [--submit-tally]` now generates a payload-free scheduled executor job bundle
+  with `executor.env`, executable `run.sh`, systemd service/timer files,
+  launchd plist, README, and
+  `sorafs.moderation.ballots.executor_bundle.v1` metadata without copying
+  private commit/reveal payload files.
+- SFM-4a docs and roadmap now count local supervised commit/reveal executor
+  job bundle generation as shipped while keeping captured deployed juror
+  notification transport evidence, captured deployed executor job rollout
+  evidence, live workflow evidence, and end-to-end release rollout open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli moderation_ballots_executor_bundle -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - Mirror consistency check for 20 localized SFM-4a docs
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SFM-4a code/docs/status files
+  - Stale SFM-4a executor bundle wording scan across
+    `docs/source/sorafs_ai_prescreen_plan.md`, `roadmap.md`, and `status.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS juror notification transport canary
+
+- `iroha sorafs moderation quarantine notifications canary --manifest PATH
+  --webhook-url URL [--out PATH]` now probes deployed notification transport
+  webhooks using payload-free juror notification manifests, records passed or
+  failed probe status, notification hashes, and response body hashes, and can
+  write `sorafs.moderation.juror_notifications.transport_canary.v1` evidence
+  without archiving message or response bodies.
+- SFM-4a docs and roadmap now count local notification transport canary tooling
+  as shipped while keeping captured deployed transport evidence, deployed
+  commit/reveal executor job rollout evidence, live workflow evidence, and
+  end-to-end release rollout open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli moderation_quarantine_notifications_canary -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - Mirror consistency check for 20 localized SFM-4a docs
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SFM-4a code/docs/status files
+  - Stale SFM-4a notification canary wording scan across
+    `docs/source/sorafs_ai_prescreen_plan.md`, `roadmap.md`, and `status.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS juror notification delivery CLI
+
+- `iroha sorafs moderation quarantine notifications deliver --manifest PATH
+  [--out-dir DIR] [--webhook-url URL]` now consumes payload-free
+  `sorafs.moderation.quarantine.juror_notifications.v1` manifests, validates
+  private-payload flags remain disabled, writes canonical notification outbox
+  JSON files and/or POSTs each notification to a webhook, and emits
+  payload-free delivery evidence with notification and response body hashes.
+- SFM-4a docs and roadmap now count local outbox/webhook notification delivery
+  automation as shipped while keeping deployed notification transport service
+  rollout evidence, deployed commit/reveal executor job rollout evidence, live
+  workflow evidence, and end-to-end release rollout open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli moderation_quarantine_notifications_deliver -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - Mirror consistency check for 20 localized SFM-4a docs
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SFM-4a code/docs/status files
+  - Stale SFM-4a juror notification delivery wording scan across
+    `docs/source/sorafs_ai_prescreen_plan.md`, `roadmap.md`, and `status.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation commit/reveal executor CLI
+
+- `iroha sorafs moderation ballots execute --status PATH
+  [--commit-payload PATH...] [--reveal-payload PATH...] [--submit-tally]`
+  now consumes the payload-free operator commit/reveal status, validates local
+  commit/reveal payloads against pending juror lists, submits only pending
+  signed commit/reveal/tally requests, and emits response status/body hashes
+  without printing private reveal payload internals.
+- SFM-4a docs and roadmap now count local commit/reveal executor CLI automation
+  as shipped while keeping deployed juror notification transport, deployed
+  executor services, live workflow evidence, and end-to-end release rollout
+  open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli moderation_ballots_execute -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - Mirror consistency check for 20 localized SFM-4a docs
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SFM-4a code/docs/status files
+  - Stale SFM-4a commit/reveal executor wording scan across
+    `docs/source/sorafs_ai_prescreen_plan.md`, `roadmap.md`, and `status.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS privacy aggregate client and CLI tooling
+
+- `iroha::Client` now has signed JSON helpers for
+  `/v1/sorafs/transparency/privacy-aggregates/source-events` and
+  `/v1/sorafs/transparency/privacy-aggregates/publish-due`.
+- `iroha sorafs transparency privacy-aggregate source-event --payload PATH` and
+  `iroha sorafs transparency privacy-aggregate publish-due --payload PATH` now
+  load canonical JSON payload files and wrap those routes for producer and
+  scheduler automation.
+- SFM-4c docs and roadmap now count local client/CLI aggregate tooling as
+  shipped while keeping deployed source-event producers, deployed scheduler
+  jobs, and captured rollout evidence open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli transparency_privacy_aggregate -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-client cargo test -j 1 -p iroha sorafs_transparency_privacy_aggregate --lib -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_transparency_plan*.md`
+  - Mirror consistency check for 20 localized SFM-4c docs
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - Stale privacy aggregate client/CLI wording scan across
+    `docs/source/sorafs_transparency_plan.md`, `roadmap.md`, and `status.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS transparency explorer rollout canary tooling
+
+- `iroha sorafs transparency explorer-canary [--torii-url URL] [--limit N]
+  [--out PATH]` now probes deployed/public transparency explorer routes and
+  emits `sorafs.transparency.explorer_canary.v1` evidence for rollout archives.
+- The canary checks the explorer snapshot, browser UI, and proof-token issuance
+  index routes, verifies expected JSON schemas or UI markers, rejects ledger
+  payload bodies and private proof-token digest-key material, and records
+  status, content type, response size, and BLAKE3 body hash without archiving
+  response bodies.
+- SFM-4c docs and roadmap now count local canary tooling as shipped while
+  keeping actual deployed `explorer-canary` evidence capture, deployed proof API
+  hardening, and deployed producer/linking work open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli transparency_explorer_canary -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_transparency_plan*.md`
+  - Mirror consistency check for 20 localized SFM-4c docs
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - Stale SFM-4c explorer-canary outstanding wording scan across
+    `docs/source/sorafs_transparency_plan.md`, `roadmap.md`, and `status.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS transparency explorer browser UI
+
+- Torii now serves a local static browser explorer at
+  `/v1/sorafs/transparency/explorer/ui`. The page fetches the bounded
+  payload-free `/v1/sorafs/transparency/explorer` snapshot and renders cycle,
+  payload-kind, and proof-token issuance summaries without embedding ledger
+  payload bodies or private proof-token digest keys.
+- The handler returns `text/html; charset=utf-8` with `no-store`, `nosniff`,
+  and a restrictive content-security-policy header. OpenAPI now documents the
+  HTML route alongside the JSON explorer snapshot.
+- SFM-4c docs and roadmap now count the local browser UI as shipped while
+  keeping deployed proof API hardening, public rollout evidence, and deployed
+  producer/linking work open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/iroha_torii/src/openapi.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-torii cargo test -j 1 -p iroha_torii --features app_api transparency_explorer_ui -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-torii cargo test -j 1 -p iroha_torii --features app_api openapi_schemas_include_system_keys -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_transparency_plan*.md`
+  - Mirror consistency check for 20 localized SFM-4c docs
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - Stale SFM-4c explorer UI outstanding wording scan across
+    `docs/source/sorafs_transparency_plan.md` and `roadmap.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation operator workflow canary evidence
+
+- `iroha sorafs moderation quarantine operator-canary --operator-url URL
+  --quarantine-id HEX [--limit N] [--out PATH]` now probes a deployed
+  payload-free operator workflow service and emits
+  `sorafs.moderation.quarantine.operator_canary.v1` evidence for rollout
+  archives.
+- The canary checks health/status, browser UI, operator-panel, bridge-plan,
+  juror-plan, juror-notifications, and commit-reveal-status routes, verifies
+  expected schemas or UI markers, rejects `payload_b64` and payload-present
+  flags, and records status, content type, response size, and BLAKE3 body hash
+  without archiving response bodies.
+- SFM-4a docs and roadmap now count local operator workflow canary evidence
+  tooling as shipped while keeping actual deployed `operator-canary` evidence
+  capture, deployed juror notification transport, and commit/reveal execution
+  automation open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli moderation_quarantine_operator_canary -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli moderation_operator_service -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - Mirror consistency check for 20 localized SFM-4a docs
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - Stale SFM-4a operator-canary outstanding wording scan across
+    `docs/source/sorafs_ai_prescreen_plan.md` and `roadmap.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation commit/reveal coordination status
+
+- `iroha sorafs moderation quarantine operator-serve` now exposes
+  `GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/commit-reveal-status`
+  as a local payload-free coordination route backed by the signed Torii
+  operator-panel view and the juror-plan builder.
+- The route reports per-ballot commit/reveal quorum state, missing commit and
+  reveal jurors, next action, tally readiness, and a payload-free tally request
+  template once reveal quorum is met. Private commit/reveal payload flags remain
+  false, so juror-side payload construction stays outside operator tooling.
+- The browser operator UI and status route now advertise the
+  commit-reveal-status readback. SFM-4a docs/roadmap now count local
+  commit/reveal coordination status as shipped while keeping deployed
+  notification transport, secret-bearing commit/reveal execution automation,
+  and live evidence open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli moderation_operator_service -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - Mirror consistency check for 20 localized SFM-4a docs
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - Stale SFM-4a commit-reveal-status outstanding wording scan across
+    `docs/source/sorafs_ai_prescreen_plan.md` and `roadmap.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation juror notification delivery manifests
+
+- `iroha sorafs moderation quarantine operator-serve` now exposes
+  `GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-notifications`
+  as a local payload-free juror notification delivery manifest route backed by
+  the signed Torii operator-panel view and the local juror-plan builder.
+- The route emits deterministic operator-managed delivery records with BLAKE3
+  dedup ids, per-juror commit/reveal actions, signed Torii routes, CLI command
+  templates, subjects, and message bodies. It skips completed jurors and keeps
+  `payload_bytes_included` and private payload flags false, so commit/reveal
+  payload construction remains with the juror signer.
+- The browser operator UI and status route now advertise the
+  juror-notifications readback. SFM-4a docs/roadmap now distinguish this
+  shipped local delivery manifest from still-open deployed notification
+  transport, commit/reveal execution automation, and live evidence.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli moderation_operator_service -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - Mirror consistency check for 20 localized SFM-4a docs
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - Stale SFM-4a juror-notifications outstanding wording scan across
+    `docs/source/sorafs_ai_prescreen_plan.md` and `roadmap.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation juror notification planning
+
+- `iroha sorafs moderation quarantine operator-serve` now exposes
+  `GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-plan` as a
+  local payload-free juror notification planning route backed by the signed
+  Torii operator-panel view.
+- The juror-plan response reports per-ballot and per-juror commit/reveal
+  readiness, pending counts, signing accounts, signed Torii commit/reveal
+  routes, and CLI command templates while failing closed if upstream
+  operator-panel JSON includes `payload_b64`.
+- The local browser operator UI and status route now advertise the juror-plan
+  readback, and SFM-4a docs/roadmap distinguish this shipped local planning
+  from still-open deployed notification delivery, commit/reveal execution
+  automation, and live evidence.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli moderation_operator_service -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - Mirror consistency check for 20 localized SFM-4a docs
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - Stale SFM-4a juror-plan outstanding wording scan across
+    `docs/source/sorafs_ai_prescreen_plan.md` and `roadmap.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation operator browser UI
+
+- `iroha sorafs moderation quarantine operator-serve` now serves a local browser
+  operator UI at `/` and `/v1/sorafs/moderation/operator-panel/ui`. The UI uses
+  the existing payload-free operator-panel and bridge-plan routes, exposes the
+  signed review/release/appeal-handoff/appeal-ballot/ballot-tally workflows,
+  and renders responses through the local service without external assets.
+- Operator-service responses now carry explicit JSON or HTML content types and
+  `X-Content-Type-Options: nosniff`, while GET routes continue rejecting request
+  bodies and mutation routes continue enforcing server-side payload-byte
+  rejection.
+- SFM-4a docs and roadmap now count the local browser operator UI as shipped
+  while keeping deployed juror notification/commit/reveal automation and
+  end-to-end live workflow evidence outstanding.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli moderation_operator_service -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - Mirror consistency check for 20 localized SFM-4a docs
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - Stale SFM-4a browser-UI outstanding wording scan across
+    `docs/source/sorafs_ai_prescreen_plan.md`, `roadmap.md`, and `status.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation operator workflow ballot tally forwarding
+
+- `iroha sorafs moderation quarantine operator-serve` now exposes signed
+  `POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/ballot-tally`
+  forwarding for local moderation workflow tooling. Requests stay payload-free,
+  reject query parameters and `payload_b64`, accept explicit `case_id` and
+  `round_id` fields, or derive the first ballot reference from the payload-free
+  operator-panel view before forwarding through the signed Torii tally helper.
+- SFM-4a docs and roadmap now count local signed operator workflow
+  ballot-tally forwarding as shipped while keeping deployed juror notification/commit/reveal automation and end-to-end live
+  workflow evidence outstanding.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli moderation_operator_service -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli moderation_ballots_tally -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - Mirror consistency check for 20 localized SFM-4a docs
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - Stale SFM-4a operator ballot-tally outstanding wording scan across
+    `docs/source/sorafs_ai_prescreen_plan.md`, `roadmap.md`, and `status.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation operator workflow mutation forwarding
+
+- `iroha sorafs moderation quarantine operator-serve` now forwards local
+  operator workflow POST requests for review, release, appeal-handoff, and
+  appeal-ballot routes in addition to the existing health/status,
+  operator-panel, and bridge-plan GET routes.
+- Mutation routes require POST JSON bodies, reject query parameters, reject
+  `payload_b64`, canonicalize appeal-handoff and appeal-ballot JSON before
+  forwarding, use the configured CLI account as the default review/release
+  actor when omitted, and send requests through the existing signed Torii
+  `iroha::client` helpers.
+- SFM-4a docs and roadmap now count local signed operator workflow mutation
+  forwarding as shipped while keeping deployed juror notification/commit/reveal automation and end-to-end live workflow
+  evidence outstanding.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli moderation_operator_service -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli moderation_quarantine_ -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - Mirror consistency check for 20 localized SFM-4a docs
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - Stale SFM-4a operator mutation-forwarding outstanding wording scan across
+    `docs/source/sorafs_ai_prescreen_plan.md`, `roadmap.md`, and `status.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation operator workflow service
+
+- `iroha sorafs moderation quarantine operator-serve
+  [--listen HOST:PORT] [--limit N] [--max-body-bytes N]` now runs a local
+  payload-free HTTP operator workflow service for SFM-4a quarantine tooling.
+  The service exposes health/status, operator-panel, and bridge-plan GET
+  routes backed by the signed Torii operator-panel read model and defaults to
+  `127.0.0.1:9201`.
+- Successful operator-panel and bridge-plan responses are decoded with Norito
+  JSON, checked for unexpected `payload_b64`, and re-emitted without payload
+  bytes. Requests are GET-only, reject bodies, validate 16-byte quarantine ids,
+  support a bounded `limit` query, and relay upstream non-OK Torii responses.
+- SFM-4a docs and roadmap now count the local payload-free operator workflow
+  service as shipped while keeping deployed juror notification/commit/reveal automation and end-to-end live workflow
+  evidence outstanding.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli moderation_operator_service -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli moderation_quarantine_ -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - Mirror consistency check for 20 localized SFM-4a docs
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - Stale SFM-4a operator-service outstanding wording scan across
+    `docs/source/sorafs_ai_prescreen_plan.md`, `roadmap.md`, and `status.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation runner gRPC service
+
+- `sorafs_cli moderation runner-grpc-serve --manifest=PATH
+  [--format=json|norito] [--listen=HOST:PORT] [--max-body-bytes=N]` now runs a
+  production unary gRPC runner service for SFM-4a moderation screening. The
+  service exposes `sorafs.moderation.runner.v1.Runner/Status` and `/Screen`
+  over a locked governance-signed reproducibility manifest, accepts payload
+  bytes directly on the RPC surface, enforces the configured payload cap, and
+  returns deterministic screening-result DTOs backed by the same local runner
+  scoring/evidence-digest path as `run-local` and `runner-serve`.
+- The gRPC status DTO reports the manifest id/digest, runner hash, runtime
+  version, model count, maximum body bytes, listen address, and disabled
+  outbound-network posture. Screen requests reject empty subjects, empty
+  payloads, empty notes, and over-limit payloads before producing evidence.
+- SFM-4a docs and roadmap now count the production unary gRPC runner service as
+  shipped while keeping deployed juror notification/commit/reveal automation and end-to-end live workflow
+  evidence outstanding.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-runner-grpc cargo test -j 1 -p sorafs_orchestrator moderation_runner_grpc --bin sorafs_cli --features cli-orchestrator -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-runner-grpc cargo test -j 1 -p sorafs_orchestrator moderation_runner_ --bin sorafs_cli --features cli-orchestrator -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - Stale SFM-4a runner-gRPC outstanding wording scan across
+    `docs/source/sorafs_ai_prescreen_plan.md`, `roadmap.md`, and `status.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation model registry service
+
+- `sorafs_cli moderation registry-serve --state=PATH [--listen=HOST:PORT]
+  [--max-body-bytes=N] [--snapshot-limit=N]` now runs a standalone persistent
+  HTTP model-registry service for SFM-4a moderation manifests. The service backs
+  status, bounded snapshot readback, and repro/corpus admission endpoints with an
+  atomic Norito checkpoint and reports a state digest plus disabled
+  outbound-network posture.
+- The service mirrors the Torii model-registry route names:
+  `GET /v1/sorafs/moderation/model-registry/status`,
+  `GET /v1/sorafs/moderation/model-registry`,
+  `POST /v1/sorafs/moderation/model-registry/repro-manifests`, and
+  `POST /v1/sorafs/moderation/model-registry/corpora`. Mutation requests accept
+  base64 canonical Norito `manifest_b64`, validate via the data-model manifest
+  validators, reject payload bytes, reject conflicting manifest ids, and persist
+  accepted records before responding.
+- SFM-4a docs and roadmap now count the standalone persistent model-registry
+  HTTP service foundation as shipped while keeping deployed juror notification/commit/reveal automation and end-to-end
+  live workflow evidence outstanding.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p sorafs_orchestrator moderation_registry_ --bin sorafs_cli --features cli-orchestrator -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation committee bundle and canary
+
+- `sorafs_cli moderation committee-bundle --manifest=PATH
+  [--format=json|norito] --quorum=N --bundle-out=DIR [--listen=HOST:PORT]
+  [--max-body-bytes=N] [--binary=PATH] [--service-name=NAME]
+  [--service-user=USER] [--service-group=GROUP]` now validates the locked
+  governance-signed reproducibility manifest and writes a supervised HTTP
+  committee bundle: manifest copy, `committee.env`, executable `run.sh`, systemd
+  unit, launchd plist, README, and
+  `sorafs.moderation.committee.bundle.v1` metadata JSON.
+- `sorafs_cli moderation committee-canary --manifest=PATH
+  [--format=json|norito] --committee-url=URL --quorum=N --result=PATH
+  [--result=PATH...] [--checked-at=UNIX_SECS] [--notes=TEXT]
+  [--timeout-ms=N] [--json-out=PATH]` now captures payload-free HTTP committee
+  rollout evidence. The canary validates status and aggregate responses against
+  the locked manifest id, runner hash, quorum, deterministic local median
+  aggregate, score range, and threshold-derived verdict, then emits
+  `sorafs.moderation.committee.rollout_evidence.v1` JSON.
+- SFM-4a docs and roadmap now count supervised committee bundle generation and
+  HTTP committee canary rollout evidence tooling as shipped while keeping
+  deployed juror notification/commit/reveal automation and end-to-end live workflow evidence outstanding.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p sorafs_orchestrator moderation_committee_ --bin sorafs_cli --features cli-orchestrator -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation committee HTTP service
+
+- `sorafs_cli moderation committee-serve --manifest=PATH
+  [--format=json|norito] --quorum=N [--listen=HOST:PORT]
+  [--max-body-bytes=N]` now locks a governance-signed reproducibility manifest
+  and quorum into a bounded local HTTP committee service. `GET /healthz` and
+  `GET /v1/sorafs/moderation/committee/status` report the active manifest,
+  quorum, aggregation rule, and disabled outbound-network posture; `POST
+  /v1/sorafs/moderation/committee/aggregate` accepts payload-free runner result
+  arrays and emits the same deterministic committee aggregate JSON as
+  `committee-run`.
+- SFM-4a docs and roadmap now count the locked-manifest local committee HTTP
+  service as shipped while keeping deployed juror notification/commit/reveal automation and end-to-end live workflow
+  evidence outstanding.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p sorafs_orchestrator moderation_committee_ --bin sorafs_cli --features cli-orchestrator -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation runner canary evidence
+
+- `sorafs_cli moderation runner-canary --manifest=PATH [--format=json|norito]
+  --runner-url=URL --payload=PATH --subject=ID --screened-at=UNIX_SECS
+  [--checked-at=UNIX_SECS] [--notes=TEXT] [--timeout-ms=N]
+  [--json-out=PATH]` now captures payload-free HTTP runner rollout evidence.
+  The canary validates the locked manifest, calls the deployed runner status
+  and screening endpoints, verifies manifest id, runner hash, payload digest,
+  score range, and threshold-derived verdict, and emits
+  `sorafs.moderation.runner.rollout_evidence.v1` JSON.
+- SFM-4a docs and roadmap now count HTTP runner rollout evidence tooling as
+  shipped while keeping deployed juror notification/commit/reveal automation and end-to-end live workflow
+  evidence outstanding.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p sorafs_orchestrator moderation_runner_canary_ --bin sorafs_cli --features cli-orchestrator -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation runner supervised bundle
+
+- `sorafs_cli moderation runner-bundle --manifest=PATH [--format=json|norito]
+  --bundle-out=DIR [--listen=HOST:PORT] [--max-body-bytes=N] [--binary=PATH]
+  [--service-name=NAME] [--service-user=USER] [--service-group=GROUP]` now
+  validates the locked governance-signed reproducibility manifest and writes a
+  supervised HTTP runner bundle: manifest copy, `runner.env`, executable
+  `run.sh`, systemd unit, launchd plist, README, and
+  `sorafs.moderation.runner.bundle.v1` metadata JSON.
+- SFM-4a docs and roadmap now count supervised local HTTP runner bundle
+  generation as shipped while keeping deployed juror notification/commit/reveal automation and end-to-end live workflow
+  evidence outstanding.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p sorafs_orchestrator moderation_runner_bundle_ --bin sorafs_cli --features cli-orchestrator -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation committee aggregation CLI
+
+- `sorafs_cli moderation committee-run --manifest=PATH [--format=json|norito]
+  --quorum=N --result=PATH [--result=PATH...] [--notes=TEXT]
+  [--json-out=PATH]` now validates the locked governance-signed
+  reproducibility manifest, rejects payload-bearing runner result JSON,
+  verifies manifest id, runner hash, subject/digest consistency, score range,
+  and threshold-derived verdicts, and emits payload-free
+  `sorafs.moderation.committee.aggregate.v1` JSON using a deterministic median
+  score under the requested quorum.
+- SFM-4a docs and roadmap now count local committee aggregation as shipped
+  while keeping deployed juror notification/commit/reveal automation and end-to-end live workflow
+  evidence outstanding.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p sorafs_orchestrator moderation_committee_ --bin sorafs_cli --features cli-orchestrator -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation runner HTTP service mode
+
+- `sorafs_cli moderation runner-serve --manifest=PATH [--format=json|norito]
+  [--listen=HOST:PORT] [--max-body-bytes=N]` now locks a
+  governance-signed reproducibility manifest into a bounded local HTTP runner
+  service. `GET /healthz` and
+  `GET /v1/sorafs/moderation/runner/status` report the active manifest and
+  disabled outbound-network posture; `POST /v1/sorafs/moderation/runner/screen`
+  accepts `subject`, `payload_b64`, and explicit `screened_at_unix`, then
+  emits the same deterministic Torii-compatible screening-result JSON as
+  `run-local`.
+- SFM-4a docs and roadmap now count the locked-manifest HTTP runner service
+  mode as shipped while keeping deployed juror notification/commit/reveal automation and end-to-end live workflow
+  evidence outstanding.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p sorafs_orchestrator moderation_runner_ --bin sorafs_cli --features cli-orchestrator -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation bridge-plan CLI
+
+- `iroha sorafs moderation quarantine bridge-plan --quarantine-id <hex16>
+  [--limit N]` now reads the role-gated operator-panel view and emits a
+  payload-free `sorafs.moderation.quarantine.bridge_plan.v1` JSON plan. The
+  plan includes ordered local CLI actions for sealed-object review, appeal
+  handoff, confirmed-deposit ballot announcement, commit/reveal/tally followup,
+  and transparency source-entry publication.
+- The bridge planner fails closed if the operator-panel response unexpectedly
+  contains `payload_b64`, preserving the payload-free automation boundary for
+  production bridge tooling.
+- SFM-4a docs and roadmap now count the local bridge-plan CLI as shipped while
+  keeping the production bridge/operator service, live juror automation, live
+  producers, and end-to-end rollout evidence outstanding.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p iroha_cli moderation_quarantine_bridge_plan -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation operator-panel read model
+
+- Torii now exposes canonical-authenticated and
+  `sorafs_moderation_operator` role-gated
+  `GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel`.
+  The local read model bundles the quarantine record, encrypted-object
+  metadata status, matching local appeal ballots, operator route hints, and
+  next-action hints without returning quarantined payload bytes.
+- `iroha::client` and
+  `iroha sorafs moderation quarantine operator-panel --quarantine-id <hex16>
+  [--limit N]` now wrap that payload-free workflow view with signed GET
+  requests and 16-byte quarantine id validation.
+- SFM-4a docs and roadmap now count the local operator-panel read model as
+  shipped while keeping the production operator web/service workflow, live
+  producers, and end-to-end rollout evidence outstanding.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/iroha_torii/src/openapi.rs crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p iroha_torii moderation_quarantine_operator_panel --lib --features app_api -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p iroha sorafs_moderation_quarantine_operator_panel --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p iroha_cli moderation_quarantine_operator_panel -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p iroha_torii generated_spec_includes_documented_paths --lib --features app_api -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS reviewed-quarantine appeal ballot bridge
+
+- Torii now exposes canonical-authenticated
+  `POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-ballot`
+  for local reviewed quarantine records. The endpoint verifies a confirmed
+  appeal-finance asset-lock deposit, requires that its evidence hashes include
+  the deterministic reviewed-quarantine handoff hash, and announces the
+  existing local moderation ballot. Pending/released records and deposits not
+  bound to the quarantine handoff fail closed.
+- `iroha::client` and
+  `iroha sorafs moderation quarantine appeal-ballot --quarantine-id <hex16>
+  --input <json>` now bridge operator tooling to that local appeal-ballot
+  surface. Payloads are rejected when empty, re-encoded as canonical JSON, and
+  sent with canonical Iroha request signing.
+- SFM-4a docs and roadmap now count local confirmed-deposit ballot handoff as
+  shipped while keeping the production operator-panel or bridge service, juror
+  notification/commit/reveal/tally automation, live producers, and end-to-end
+  rollout evidence outstanding.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/iroha_torii/src/openapi.rs crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p iroha_torii moderation_quarantine_appeal_ballot --lib --features app_api -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p iroha sorafs_moderation_quarantine_appeal_ballot --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p iroha_cli moderation_quarantine_appeal_ballot -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p iroha_torii generated_spec_includes_documented_paths --lib --features app_api -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS reviewed-quarantine appeal handoff
+
+- Torii now exposes canonical-authenticated
+  `POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff`
+  for local reviewed quarantine records. Pending or released records fail
+  closed, and reviewed records return a baseline pricing quote, quote-bound
+  deposit request, and native `OpenAssetLock` instruction for payer signing.
+- `iroha::client` and
+  `iroha sorafs moderation quarantine appeal-handoff --quarantine-id <hex16>
+  --input <json>` now bridge operator tooling to that local handoff surface.
+  Payloads are rejected when empty, re-encoded as canonical JSON, and sent with
+  canonical Iroha request signing.
+- SFM-4a docs and roadmap now count the local reviewed-quarantine handoff
+  API/CLI as shipped while keeping the production operator-panel or bridge
+  service, confirmed-deposit ballot automation, live producers, and
+  end-to-end rollout evidence outstanding.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/iroha_torii/src/openapi.rs crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p iroha_torii moderation_quarantine_appeal_handoff --lib --features app_api -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p iroha sorafs_moderation_quarantine_appeal --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p iroha_cli moderation_quarantine_appeal_handoff -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p iroha_torii generated_spec_includes_documented_paths --lib --features app_api -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS code/docs/status files
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS appeal finance client and CLI bridge
+
+- `iroha::client` now exposes local SoraFS appeal helpers for
+  `GET /v1/sorafs/appeals/pricing/config`,
+  `GET /v1/sorafs/appeals/pricing/status`,
+  `POST /v1/sorafs/appeals/pricing/quote`, signed asset-lock deposit
+  create/confirm/get/settle/reconcile/submit-settlement calls under
+  `/v1/sorafs/appeals/finance/deposits`, and bounded finance
+  reports, weekly-rollups, and settlement-receipt readbacks. The helpers
+  reject empty JSON payloads, canonicalize JSON before submission, normalize
+  32-byte escrow ids, and sign finance mutations/readback with canonical Iroha
+  request authentication.
+- `iroha sorafs appeals pricing config|status|quote` and
+  `iroha sorafs appeals finance deposits
+  create|confirm|get|settle|reconcile|submit-settlement` now bridge operator
+  tooling to the local appeal pricing/deposit surface. `iroha sorafs appeals
+  finance reports|weekly-rollups|settlement-receipts` prints bounded finance
+  readback JSON for transparency/dashboard handoff.
+- SFM-4a docs and roadmap now count the appeal pricing/deposit/readback
+  client/CLI bridge as shipped local operator tooling while keeping the
+  automated reviewed-quarantine appeal handoff service, operator panel, live
+  producers, and end-to-end rollout evidence outstanding.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs crates/iroha_cli/src/main_shared.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p iroha sorafs_appeal --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-cli cargo test -j 1 -p iroha_cli appeals_ -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS client/CLI/docs/status files
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS transparency client and CLI bridge
+
+- `iroha::client` now exposes SoraFS transparency readback helpers for
+  `GET /v1/sorafs/transparency/cycles`,
+  `GET /v1/sorafs/transparency/cycles/{cycle_id_hex}`,
+  `GET /v1/sorafs/transparency/cycles/{cycle_id_hex}/entries/{entry_id_hex}`,
+  `GET /v1/sorafs/transparency/explorer`, and
+  `GET /v1/sorafs/transparency/tokens`, plus signed source-entry JSON
+  submission for
+  `POST /v1/sorafs/transparency/source-entries/{source_kind}`. The helpers
+  normalize 16-byte cycle/entry ids, bound readbacks with `limit`, reject empty
+  source-entry bodies, and canonicalize JSON before signing.
+- `iroha sorafs transparency cycles list|get|entry`,
+  `iroha sorafs transparency explorer`, `iroha sorafs transparency tokens`, and
+  `iroha sorafs transparency source-entry submit` now bridge operator tooling
+  to the local transparency readback and source-entry ingest surface. The
+  source-entry command trims the source kind, rejects empty payload files, and
+  validates JSON before invoking the signed client helper.
+- SFM-4a/SFM-4c docs and roadmap now count the transparency readback and
+  source-entry client/CLI bridge as shipped local operator tooling while
+  keeping deployed GAR/moderation/appeal producers, public explorer UI, and
+  end-to-end rollout evidence outstanding.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs crates/iroha_cli/src/main_shared.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-transparency-cli cargo test -j 1 -p iroha sorafs_transparency --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-transparency-cli cargo test -j 1 -p iroha_cli transparency -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_ai_prescreen_plan*.md` and
+    `docs/source/sorafs_transparency_plan*.md`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS client/CLI/docs/status files
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation ballot CLI bridge
+
+- `iroha::client` now exposes local moderation ballot helpers for
+  `GET /v1/sorafs/moderation/ballots`,
+  `GET /v1/sorafs/moderation/ballots/{case_id}/{round_id}`,
+  `GET /v1/sorafs/moderation/ballots/events`, and signed commit/reveal/tally
+  submission. Commit and reveal helpers validate the data-model payloads and
+  wrap canonical Norito bytes as base64 JSON before signing.
+- `iroha sorafs moderation ballots list|get|events|commit|reveal|tally` now
+  bridges operator tooling to the local ballot lifecycle. Commit/reveal
+  commands accept JSON or Norito payloads, validate them locally, and submit
+  canonical Norito bytes to Torii; tally trims case/round ids before signing.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-ballot-cli cargo test -j 1 -p iroha sorafs_moderation_ballot --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-ballot-cli cargo test -j 1 -p iroha_cli moderation_ballots -- --nocapture`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS client/CLI/docs/status files
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-25 SoraFS moderation model-registry CLI bridge
+
+- `iroha::client` now exposes `get_sorafs_moderation_model_registry` plus
+  signed `post_sorafs_moderation_model_registry_repro_manifest` and
+  `post_sorafs_moderation_model_registry_corpus` helpers for Torii's local
+  model-registry readback/admission endpoints. Admission helpers reject empty
+  payloads and wrap canonical Norito manifest bytes as base64 JSON before
+  signing.
+- `iroha sorafs moderation registry list --limit N`,
+  `iroha sorafs moderation registry submit-repro --manifest PATH
+  [--format=json|norito]`, and `iroha sorafs moderation registry submit-corpus
+  --manifest PATH [--format=json|norito]` now bridge operator tooling to the
+  model registry. Submit commands validate JSON or Norito manifests locally and
+  re-encode them as canonical Norito bytes before signed Torii admission.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-registry-cli cargo test -j 1 -p iroha sorafs_moderation_model_registry --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-registry-cli cargo test -j 1 -p iroha_cli moderation_registry -- --nocapture`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS client/CLI/docs/status files
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-24 SoraFS moderation screening CLI bridge
+
+- `iroha::client` now exposes `get_sorafs_moderation_screening_results` and
+  signed `post_sorafs_moderation_screening_result` helpers for Torii's local
+  screening-result readback/admission endpoints. The POST helper trims text,
+  normalizes hex digests, validates verdict labels, rejects zero explicit
+  timestamps, and enforces the `combined_score_bps <= 10000` runtime bound
+  before signing.
+- `iroha sorafs moderation screening submit --input screening-result.json`
+  reads the deterministic local runner JSON emitted by
+  `sorafs_cli moderation run-local --json-out`, validates required fields, and
+  submits it through the signed client helper. `iroha sorafs moderation
+  screening list --limit N` prints bounded readback JSON from Torii.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-screening-cli cargo test -j 1 -p iroha sorafs_moderation_screening --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-screening-cli cargo test -j 1 -p iroha_cli moderation_screening -- --nocapture`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SoraFS client/CLI/docs/status files
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-24 SoraFS deterministic local moderation runner CLI
+
+- `sorafs_cli moderation run-local` now validates governance-signed
+  reproducibility manifests, reads payload bytes, derives deterministic local
+  model scores from manifest seed/material and payload digest, and emits
+  Torii-compatible `POST /v1/sorafs/moderation/screening-results` JSON with
+  subject, runner, score, verdict, policy digest, and evidence digest fields.
+- The CLI validates local runner thresholds and model weights before producing
+  output. The SFM-4a docs and roadmap now count deterministic local runner CLI
+  output as shipped local tooling while keeping the production HTTP/gRPC runner
+  service, committee service, operator panel, and live workflow evidence
+  outstanding.
+- `governance_payload_kind_cli` now labels the newer
+  `AppealFinanceSettlementReceipt`, `OrderbookSettlementReceipt`, and
+  `ExternalPayload` Governance DAG payload variants so the `sorafs_cli` bin
+  test target compiles against the current manifest enum.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-local-runner cargo test -j 1 -p sorafs_orchestrator moderation_run_local --bin sorafs_cli -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-local-runner cargo test -j 1 -p sorafs_orchestrator --bin sorafs_cli -- --nocapture`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched CLI/docs/status files
+  - Stale SFM-4a runner/role-policy wording scan across docs/status/roadmap
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-24 SoraFS moderation operator role provisioning runbook
+
+- `docs/source/sorafs_authz_runbook.md` and its localized mirrors now document
+  the production provisioning workflow for the `sorafs_moderation_operator`
+  role: one-time role registration, per-account grants, roster verification,
+  revocation, and expected `401`/`403` checks around the role-gated quarantine
+  endpoints.
+- SFM-4a docs and roadmap now treat the role-provisioning runbook as shipped
+documentation, while keeping the operator panel workflow, deterministic
+runner/committee services, and live ingest/quarantine/appeal/transparency
+evidence outstanding.
+- Validation passed:
+  - `git diff --check`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_authz_runbook*.md` and
+    `docs/source/sorafs_ai_prescreen_plan*.md`
+  - Exact conflict-marker scan across touched docs/status files
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-24 SoraFS moderation quarantine operator role gate
+
+- Torii now requires canonical-authenticated accounts to hold the
+  `sorafs_moderation_operator` role before they can review or release local
+  moderation quarantine records, or store/read encrypted local quarantine
+  payload objects. Missing signatures still return `401`; signed accounts
+  without the role return `403`.
+- Focused Torii coverage now grants the role only to the positive moderation
+  operator fixture and pins forbidden signed requests for quarantine
+  review/release plus object store/read. Model-registry admission and ballot
+  lifecycle checks remain canonical-authenticated without this quarantine role
+  gate.
+- The SFM-4a source docs, localized mirrors, and roadmap now document the
+  shipped local role gate and keep remaining work focused on operator panel
+  workflow, production deterministic runner/committee services, and live
+  ingest/quarantine/appeal/transparency evidence.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/sorafs/api.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-moderation-role cargo test -j 1 -p iroha_torii moderation_quarantine --lib --features app_api -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-moderation-role cargo test -j 1 -p iroha_torii moderation_model_registry --lib --features app_api -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-moderation-role cargo test -j 1 -p iroha_torii moderation_ballot_handlers_accept_lifecycle_and_events --lib --features app_api -- --nocapture`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Stale-obsolete phrase scan across `docs/source/sorafs_ai_prescreen_plan*.md`
+  - Exact conflict-marker scan across touched Rust/docs/status files
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-24 SoraFS moderation quarantine object CLI workflow
+
+- `iroha::client` now has signed local SoraFS moderation quarantine object
+  helpers for `POST`/`GET
+  /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object`. The store
+  helper normalizes 16-byte quarantine ids, rejects empty payloads, emits
+  standard base64 `payload_b64`, trims optional content type and notes, and
+  signs both store and empty-body read requests with canonical app headers.
+- `iroha sorafs moderation quarantine object store|read` now wraps the local
+  encrypted payload object endpoints. Store reads payload bytes from
+  `--payload-file`, rejects empty files, accepts optional capture timestamp,
+  content type, and notes, and prints the accepted object metadata JSON. Read
+  signs the request and prints the verified `payload_b64` JSON response.
+- Remaining SFM-4a production gaps are still the production deterministic
+  runner service, committee service, operator panel workflow for quarantined
+  payloads, and live ingest/quarantine/appeal/transparency workflow evidence.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-quarantine-object-cli cargo test -j 1 -p iroha sorafs_moderation_quarantine_object --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-quarantine-object-cli cargo test -j 1 -p iroha_cli moderation_quarantine_object -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-quarantine-object-cli cargo test -j 1 -p iroha sorafs_moderation_quarantine --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-quarantine-object-cli cargo test -j 1 -p iroha_cli moderation_quarantine -- --nocapture`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Conflict-marker scan across touched Rust/docs/status files
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-24 SoraFS moderation quarantine object Torii API
+
+- Torii now exposes canonical-authenticated local quarantine object endpoints at
+  `POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object` and `GET`
+  on the same path. Stores accept base64 payload bytes, require the plaintext
+  BLAKE3 digest to match the local quarantine record, seal through the
+  node-local encrypted object store, and return object metadata. Reads verify
+  the sealed envelope and return `payload_b64` for authorized operators.
+- OpenAPI and Torii route-group coverage now include the object path. Focused
+  Torii tests cover signed store/readback, missing canonical auth, and digest
+  mismatch rejection on top of the existing node-level encrypted envelope
+  persistence and tamper checks.
+- Remaining SFM-4a production gaps are production deterministic runner service,
+  committee service, operator panel workflow for quarantined payloads, and live
+  ingest/quarantine/appeal/transparency workflow evidence.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/iroha_torii/src/openapi.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-quarantine-object-api cargo test -j 1 -p iroha_torii moderation_quarantine_object --lib --features app_api -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-quarantine-object-api cargo test -j 1 -p iroha_torii moderation_quarantine --lib --features app_api -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-quarantine-object-api cargo test -j 1 -p iroha_torii generated_spec_includes_documented_paths --lib --features app_api -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-quarantine-object-api cargo test -j 1 -p iroha_torii path_group_builders_expose_expected_routes --lib --features app_api -- --nocapture`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Conflict-marker scan across touched Rust/docs/status files
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-24 SoraFS moderation encrypted quarantine object foundation
+
+- `sorafs_node::NodeHandle` now has a local encrypted quarantine object store
+  for payload bytes associated with SFM-4a quarantine records. Stores require
+  the plaintext BLAKE3 digest to match the quarantine record
+  `subject_digest`, then seal the bytes into a Norito envelope under
+  `moderation-quarantine-objects/` with a node-local sealing key.
+- The object store persists a separate Norito object-index checkpoint, reloads
+  it after restart, keeps payload bytes out of the screening checkpoint, and
+  fails closed on digest mismatch, missing objects, malformed keys, or tampered
+  envelopes.
+- Remaining SFM-4a production gaps are production deterministic runner service,
+  committee service, operator panel workflow for quarantined payloads, and live
+  ingest/quarantine/appeal/transparency workflow evidence.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_node/src/moderation.rs crates/sorafs_node/src/lib.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-quarantine-objects cargo test -j 1 -p sorafs_node moderation_quarantine_object --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-quarantine-objects cargo test -j 1 -p sorafs_node moderation_quarantine --lib -- --nocapture`
+
+## 2026-06-24 SoraFS moderation quarantine CLI workflow
+
+- `iroha::client` now has local SoraFS moderation quarantine helpers for
+  bounded queue readback plus canonical-signed review and release transitions.
+  The transition helpers normalize and validate 16-byte quarantine ids before
+  constructing Torii paths.
+- `iroha sorafs moderation quarantine list|review|release` now wraps the local
+  Torii queue endpoints, validates quarantine ids, trims operator notes,
+  defaults `--reviewed-by`/`--release-authority` to the configured CLI account,
+  sends explicit transition timestamps, and accepts Torii `200`/`202` JSON
+  transition responses.
+- Remaining SFM-4a production gaps are production deterministic runner service,
+  committee service, operator panel workflow for quarantined payloads, and live
+  ingest/quarantine/appeal/transparency workflow evidence.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs crates/iroha_cli/src/main_shared.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-cli cargo test -j 1 -p iroha sorafs_moderation_quarantine --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-cli cargo test -j 1 -p iroha_cli moderation_quarantine -- --nocapture`
+
+## 2026-06-24 SoraFS moderation quarantine review/release API
+
+- `sorafs_node` now advances local moderation quarantine records through the
+  deterministic `pending_review -> reviewed -> released` state machine, while
+  keeping quarantine ids and immutable evidence linkage derived from the
+  original screening record. Review and release operator metadata is persisted
+  in the Norito screening checkpoint, and snapshot restore validates both the
+  immutable screening linkage and the state-specific review/release fields.
+- Torii now exposes canonical-authenticated local transition endpoints at
+  `POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review` and
+  `POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release`.
+  Release-before-review fails closed, unknown quarantine ids return `404`, and
+  invalid state transitions return `409`. Quarantine readback includes the
+  checkpointed review/release metadata.
+- Remaining production gaps for SFM-4a include operator panel workflow for
+  quarantined payloads, the production deterministic runner service, committee
+  service, and live workflow evidence.
+- Validation passed:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-quarantine cargo test -j 1 -p sorafs_node moderation_quarantine --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-quarantine cargo test -j 1 -p iroha_torii moderation_quarantine --lib --features app_api -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-quarantine cargo test -j 1 -p iroha_torii generated_spec_includes_documented_paths --lib --features app_api -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-quarantine cargo test -j 1 -p iroha_torii path_group_builders_expose_expected_routes --lib --features app_api -- --nocapture`
 
 ## 2026-06-24 SoraFS moderation screening and quarantine checkpoint foundation
 
@@ -9,17 +1153,18 @@ Last updated: 2026-06-24
   local quarantine records for `quarantine` and `escalate` verdicts, keeps
   duplicate-checked export/restore snapshots, and persists/reloads the Norito
   checkpoint at `moderation-screening/screening-snapshot.to` when SoraFS storage
-  is enabled. The checkpoint stores metadata and digests only; encrypted
-  quarantine object storage plus review/release workflow services remain
-  outstanding.
+  is enabled. The checkpoint stores metadata and digests only; payload bytes now
+  live in the separate local encrypted quarantine object store/API, while
+  operator panel and live workflow services remain outstanding.
 - Torii now exposes canonical-authenticated local screening admission through
   `POST /v1/sorafs/moderation/screening-results`, bounded screening readback
   through `GET /v1/sorafs/moderation/screening-results?limit=N`, and bounded
   pending quarantine readback through
   `GET /v1/sorafs/moderation/quarantine?limit=N`. OpenAPI coverage and the
   SFM-4a docs/roadmap now distinguish this shipped local evidence foundation
-  from the still-outstanding deterministic runner, committee service,
-  encrypted quarantine store, operator panel, and live workflow evidence.
+  from the still-outstanding production deterministic runner service,
+  committee service, operator panel workflow for quarantined payloads, and live
+  workflow evidence.
 - Validation passed:
   - `rustfmt --edition 2024 crates/sorafs_node/src/moderation.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/iroha_torii/src/openapi.rs`
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-screening cargo test -j 1 -p sorafs_node moderation_screening --lib -- --nocapture`
@@ -45,8 +1190,8 @@ Last updated: 2026-06-24
   registry readback at `/v1/sorafs/moderation/model-registry?limit=N`.
 - The SoraFS AI pre-screen plan and `roadmap.md` now distinguish this shipped
   local registry-admission/checkpoint/API foundation from the still-outstanding
-  persistent production `ai_model_registry`, deterministic runner, committee,
-  quarantine, operator panel, and live workflow services.
+  production deterministic runner service, committee, quarantine, operator
+  panel, and live workflow services.
 - Validation passed:
   - `rustfmt --edition 2024 crates/sorafs_node/src/moderation.rs crates/sorafs_node/src/lib.rs`
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-moderation-registry cargo test -j 1 -p sorafs_node moderation_model_registry --lib -- --nocapture`
@@ -194,8 +1339,8 @@ Last updated: 2026-06-24
   content serving complete.
 - The SoraFS AI prescreen plan, portal publish runbook/source mirror, and
   `roadmap.md` now document bounded site metadata readback while keeping the
-  remaining production model registry, runner, committee, quarantine, operator
-  panel, and live workflow evidence work outstanding.
+  remaining runner, committee, quarantine, operator panel, and live workflow
+  evidence work outstanding.
 - Validation passed:
   - `rustfmt --edition 2024 crates/iroha_torii/src/sorafs/api.rs`
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-publish-index-limit cargo test -j 1 -p iroha_torii site_file_list_readback_query_parses_limits --lib --features app_api -- --nocapture`
@@ -214,8 +1359,8 @@ Last updated: 2026-06-24
   for the bounded `packs`, `opt_out_packs`, and `extra_packs` arrays.
 - OpenAPI now documents the denylist catalog and pack metadata routes, and the
   SoraFS AI prescreen plan plus `roadmap.md` record bounded local gateway
-  denylist catalog readback while keeping production registry/runner/committee,
-  quarantine, operator panel, and live evidence work outstanding.
+  denylist catalog readback while keeping production operator panel and live
+  evidence work outstanding.
 - Validation passed:
   - `rustfmt --edition 2024 crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/openapi.rs`
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-publish-index-limit cargo test -j 1 -p iroha_torii denylist_catalog --lib --features app_api -- --nocapture`
@@ -448,7 +1593,8 @@ Last updated: 2026-06-24
   publish-index; only the returned entry arrays are truncated.
 - OpenAPI, `docs/source/sorafs_transparency_plan.md`, and `roadmap.md` now
   distinguish shipped local bounded readback from the still-open deployed proof
-  API hardening, public receipt explorer UI, and rollout evidence gates.
+  API hardening, public receipt explorer canary evidence capture, and rollout
+  evidence gates.
 - Validation passed:
   - `rustfmt --edition 2024 crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/iroha_torii/src/openapi.rs`
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-transparency-readback-limit cargo test -j 1 -p iroha_torii transparency_readback --lib --features app_api -- --nocapture`
@@ -470,8 +1616,9 @@ Last updated: 2026-06-24
   proof-token issuance summaries, source paths, index digests, and payload
   counts without exposing private proof-token digest keys.
 - OpenAPI and route-group coverage now include the explorer path. Remaining
-  SFM-4c explorer work is the public UI, deployed service hardening, and rollout
-  evidence around the shipped local readback and explorer snapshot endpoints.
+  SFM-4c explorer work is deployed service hardening and captured public
+  rollout evidence around the shipped local readback, browser UI, and
+  explorer-canary tooling.
 - Validation passed:
   - `rustfmt --edition 2024 crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/iroha_torii/src/openapi.rs`
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-transparency-explorer-api cargo test -j 1 -p iroha_torii transparency_explorer_snapshot --lib --features app_api -- --nocapture`

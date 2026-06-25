@@ -1,6 +1,9 @@
 //! Local SoraFS moderation ballot lifecycle runtime.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Component, Path},
+};
 
 use iroha_data_model::sorafs::moderation::{
     AdversarialCorpusManifestV1, ModerationReproManifestV1, SoraFsModerationBallotCommitV1,
@@ -20,6 +23,24 @@ const MODERATION_ROSTER_HASH_DOMAIN_V1: &[u8] = b"sorafs.moderation.local.panel-
 const MODERATION_SCREENING_RECORD_DOMAIN_V1: &[u8] = b"sorafs.moderation.local.screening-record.v1";
 const MODERATION_QUARANTINE_RECORD_DOMAIN_V1: &[u8] =
     b"sorafs.moderation.local.quarantine-record.v1";
+const MODERATION_QUARANTINE_OBJECT_ID_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.local.quarantine-object-id.v1";
+const MODERATION_QUARANTINE_OBJECT_NONCE_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.local.quarantine-object-nonce.v1";
+const MODERATION_QUARANTINE_OBJECT_KEY_ID_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.local.quarantine-object-key-id.v1";
+const MODERATION_QUARANTINE_OBJECT_ENCRYPTION_KEY_DOMAIN_V1: &str =
+    "sorafs.moderation.local.quarantine-object.encryption-key.v1";
+const MODERATION_QUARANTINE_OBJECT_AUTH_KEY_DOMAIN_V1: &str =
+    "sorafs.moderation.local.quarantine-object.auth-key.v1";
+const MODERATION_QUARANTINE_OBJECT_KEYSTREAM_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.local.quarantine-object.keystream.v1";
+const MODERATION_QUARANTINE_OBJECT_AUTH_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.local.quarantine-object.auth.v1";
+pub(crate) const MODERATION_QUARANTINE_OBJECT_ENVELOPE_VERSION_V1: u16 = 1;
+pub(crate) const MODERATION_QUARANTINE_OBJECT_ALGORITHM_V1: &str = "blake3-xof-local-seal-v1";
+pub(crate) const MODERATION_QUARANTINE_OBJECTS_DIR: &str = "objects";
+pub(crate) const MODERATION_QUARANTINE_OBJECT_EXT: &str = "qobj";
 
 /// Derive the local moderation panel roster hash for an ordered juror roster.
 ///
@@ -302,6 +323,64 @@ pub struct ModerationQuarantineRecord {
     pub release_notes: Option<String>,
 }
 
+/// Candidate quarantined payload bytes to store in the local encrypted object store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModerationQuarantineObjectInput {
+    /// Stable quarantine id that owns this payload object.
+    pub quarantine_id: [u8; 16],
+    /// Plaintext payload bytes to seal locally.
+    pub payload: Vec<u8>,
+    /// Unix timestamp (seconds) when the payload was captured.
+    pub captured_at_unix: u64,
+    /// Optional media/content type label for operator review.
+    pub content_type: Option<String>,
+    /// Optional object-store note.
+    pub notes: Option<String>,
+}
+
+/// Persisted index record for one encrypted local quarantine payload object.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ModerationQuarantineObjectRecord {
+    /// Stable quarantine id that owns this payload object.
+    pub quarantine_id: [u8; 16],
+    /// Stable object id derived from the sealed payload metadata and ciphertext digest.
+    pub object_id: [u8; 16],
+    /// BLAKE3 digest of the plaintext payload.
+    pub payload_digest: [u8; 32],
+    /// BLAKE3 digest of the ciphertext payload bytes.
+    pub ciphertext_digest: [u8; 32],
+    /// Plaintext payload length in bytes.
+    pub payload_len: u64,
+    /// Unix timestamp (seconds) when the payload was captured.
+    pub captured_at_unix: u64,
+    /// Optional media/content type label for operator review.
+    pub content_type: Option<String>,
+    /// Optional object-store note.
+    pub notes: Option<String>,
+    /// Local at-rest encryption algorithm label.
+    pub encryption_algorithm: String,
+    /// Stable key identifier derived from the node-local sealing key.
+    pub key_id: [u8; 16],
+    /// Relative path of the Norito object envelope under the object-store root.
+    pub envelope_path: String,
+}
+
+/// Decrypted local quarantine object payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModerationQuarantineObjectPayload {
+    /// Persisted object index record.
+    pub record: ModerationQuarantineObjectRecord,
+    /// Decrypted payload bytes.
+    pub payload: Vec<u8>,
+}
+
+/// Snapshot of local encrypted quarantine object index records.
+#[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ModerationQuarantineObjectSnapshot {
+    /// Object records sorted by quarantine id.
+    pub objects: Vec<ModerationQuarantineObjectRecord>,
+}
+
 /// Outcome of recording one local screening result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationScreeningOutcome {
@@ -357,6 +436,79 @@ pub enum ModerationScreeningError {
     },
     /// The local screening runtime lock was poisoned.
     #[error("moderation screening state lock poisoned")]
+    StateLockPoisoned,
+}
+
+/// Error raised by the local encrypted quarantine object store.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum ModerationQuarantineObjectError {
+    /// The local SoraFS storage backend is disabled.
+    #[error("SoraFS moderation quarantine object store is disabled")]
+    StorageDisabled,
+    /// Object input or checkpoint data is invalid.
+    #[error("invalid moderation quarantine object input: {message}")]
+    InvalidInput {
+        /// Validation detail.
+        message: String,
+    },
+    /// The referenced quarantine queue record does not exist.
+    #[error("moderation quarantine record `{quarantine_id_hex}` is unknown")]
+    UnknownQuarantine {
+        /// Unknown quarantine id as lowercase hex.
+        quarantine_id_hex: String,
+    },
+    /// A requested encrypted object does not exist locally.
+    #[error("moderation quarantine object for `{quarantine_id_hex}` is missing")]
+    MissingObject {
+        /// Quarantine id as lowercase hex.
+        quarantine_id_hex: String,
+    },
+    /// Plaintext bytes do not match the quarantine record subject digest.
+    #[error(
+        "moderation quarantine object digest mismatch for `{quarantine_id_hex}`: expected {expected_digest_hex}, got {actual_digest_hex}"
+    )]
+    DigestMismatch {
+        /// Quarantine id as lowercase hex.
+        quarantine_id_hex: String,
+        /// Expected lowercase BLAKE3 digest.
+        expected_digest_hex: String,
+        /// Actual lowercase BLAKE3 digest.
+        actual_digest_hex: String,
+    },
+    /// The object index already contains a different record for this quarantine id.
+    #[error("moderation quarantine object for `{quarantine_id_hex}` conflicts with local index")]
+    ConflictingObject {
+        /// Quarantine id as lowercase hex.
+        quarantine_id_hex: String,
+    },
+    /// The encrypted envelope failed authentication.
+    #[error("moderation quarantine object `{quarantine_id_hex}` failed authentication")]
+    AuthenticationFailed {
+        /// Quarantine id as lowercase hex.
+        quarantine_id_hex: String,
+    },
+    /// The object index checkpoint is internally inconsistent.
+    #[error("moderation quarantine object snapshot is invalid: {message}")]
+    InvalidSnapshot {
+        /// Validation detail.
+        message: String,
+    },
+    /// Filesystem operation failed.
+    #[error("moderation quarantine object I/O failed at `{path}`: {message}")]
+    Io {
+        /// Path involved in the failed operation.
+        path: String,
+        /// Underlying error message.
+        message: String,
+    },
+    /// Norito encoding or decoding failed.
+    #[error("moderation quarantine object codec failed: {message}")]
+    Codec {
+        /// Underlying codec error message.
+        message: String,
+    },
+    /// The local object-store lock was poisoned.
+    #[error("moderation quarantine object state lock poisoned")]
     StateLockPoisoned,
 }
 
@@ -550,6 +702,62 @@ impl ModerationModelRegistry {
     }
 }
 
+/// Local in-memory index for encrypted moderation quarantine payload objects.
+#[derive(Debug, Default)]
+pub(crate) struct ModerationQuarantineObjectRuntime {
+    objects: BTreeMap<[u8; 16], ModerationQuarantineObjectRecord>,
+}
+
+impl ModerationQuarantineObjectRuntime {
+    pub(crate) fn get(&self, quarantine_id: &[u8; 16]) -> Option<ModerationQuarantineObjectRecord> {
+        self.objects.get(quarantine_id).cloned()
+    }
+
+    pub(crate) fn insert(
+        &mut self,
+        record: ModerationQuarantineObjectRecord,
+    ) -> Result<ModerationQuarantineObjectRecord, ModerationQuarantineObjectError> {
+        validate_quarantine_object_record(&record)
+            .map_err(|message| ModerationQuarantineObjectError::InvalidInput { message })?;
+        match self.objects.get(&record.quarantine_id) {
+            Some(existing) if existing != &record => {
+                Err(ModerationQuarantineObjectError::ConflictingObject {
+                    quarantine_id_hex: hex::encode(record.quarantine_id),
+                })
+            }
+            Some(existing) => Ok(existing.clone()),
+            None => {
+                self.objects.insert(record.quarantine_id, record.clone());
+                Ok(record)
+            }
+        }
+    }
+
+    pub(crate) fn snapshot(&self) -> ModerationQuarantineObjectSnapshot {
+        ModerationQuarantineObjectSnapshot {
+            objects: self.objects.values().cloned().collect(),
+        }
+    }
+
+    pub(crate) fn restore_snapshot(
+        &mut self,
+        snapshot: ModerationQuarantineObjectSnapshot,
+    ) -> Result<(), ModerationQuarantineObjectError> {
+        let mut objects = BTreeMap::new();
+        for record in snapshot.objects {
+            validate_quarantine_object_record(&record)
+                .map_err(|message| ModerationQuarantineObjectError::InvalidSnapshot { message })?;
+            if objects.insert(record.quarantine_id, record).is_some() {
+                return Err(ModerationQuarantineObjectError::InvalidSnapshot {
+                    message: "duplicate moderation quarantine object id".to_string(),
+                });
+            }
+        }
+        self.objects = objects;
+        Ok(())
+    }
+}
+
 /// Local in-memory runtime for SFM-4a screening and quarantine evidence.
 #[derive(Debug, Default)]
 pub(crate) struct ModerationScreeningRuntime {
@@ -603,6 +811,13 @@ impl ModerationScreeningRuntime {
             screening_records: self.screening_records.values().cloned().collect(),
             quarantine_records: self.quarantine_records.values().cloned().collect(),
         }
+    }
+
+    pub(crate) fn quarantine_record(
+        &self,
+        quarantine_id: &[u8; 16],
+    ) -> Option<ModerationQuarantineRecord> {
+        self.quarantine_records.get(quarantine_id).cloned()
     }
 
     pub(crate) fn review_quarantine(
@@ -1100,6 +1315,418 @@ fn clean_optional_text(value: Option<String>) -> Option<String> {
         let value = value.trim().to_string();
         (!value.is_empty()).then_some(value)
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub(crate) struct ModerationQuarantineObjectEnvelopeV1 {
+    pub version: u16,
+    pub algorithm: String,
+    pub quarantine_id: [u8; 16],
+    pub object_id: [u8; 16],
+    pub payload_digest: [u8; 32],
+    pub ciphertext_digest: [u8; 32],
+    pub payload_len: u64,
+    pub captured_at_unix: u64,
+    pub content_type: Option<String>,
+    pub notes: Option<String>,
+    pub key_id: [u8; 16],
+    pub nonce: [u8; 16],
+    pub ciphertext: Vec<u8>,
+    pub auth_tag: [u8; 32],
+}
+
+pub(crate) fn seal_moderation_quarantine_object(
+    input: ModerationQuarantineObjectInput,
+    local_key: [u8; 32],
+) -> Result<(ModerationQuarantineObjectRecord, Vec<u8>), ModerationQuarantineObjectError> {
+    let cleaned = clean_quarantine_object_input(input)?;
+    let payload_digest = *blake3::hash(&cleaned.payload).as_bytes();
+    let payload_len = len_to_u64(cleaned.payload.len());
+    let key_id = moderation_quarantine_object_key_id(local_key);
+    let nonce = moderation_quarantine_object_nonce(
+        cleaned.quarantine_id,
+        payload_digest,
+        cleaned.captured_at_unix,
+        cleaned.content_type.as_deref(),
+        cleaned.notes.as_deref(),
+    );
+    let encryption_key = blake3::derive_key(
+        MODERATION_QUARANTINE_OBJECT_ENCRYPTION_KEY_DOMAIN_V1,
+        &local_key,
+    );
+    let ciphertext = xor_quarantine_object_keystream(&cleaned.payload, encryption_key, nonce);
+    let ciphertext_digest = *blake3::hash(&ciphertext).as_bytes();
+    let object_id = moderation_quarantine_object_id(
+        cleaned.quarantine_id,
+        payload_digest,
+        ciphertext_digest,
+        payload_len,
+        cleaned.captured_at_unix,
+        cleaned.content_type.as_deref(),
+        cleaned.notes.as_deref(),
+        key_id,
+    );
+    let envelope_path =
+        moderation_quarantine_object_relative_path(cleaned.quarantine_id, object_id);
+    let mut envelope = ModerationQuarantineObjectEnvelopeV1 {
+        version: MODERATION_QUARANTINE_OBJECT_ENVELOPE_VERSION_V1,
+        algorithm: MODERATION_QUARANTINE_OBJECT_ALGORITHM_V1.to_string(),
+        quarantine_id: cleaned.quarantine_id,
+        object_id,
+        payload_digest,
+        ciphertext_digest,
+        payload_len,
+        captured_at_unix: cleaned.captured_at_unix,
+        content_type: cleaned.content_type,
+        notes: cleaned.notes,
+        key_id,
+        nonce,
+        ciphertext,
+        auth_tag: [0; 32],
+    };
+    let auth_key = blake3::derive_key(MODERATION_QUARANTINE_OBJECT_AUTH_KEY_DOMAIN_V1, &local_key);
+    envelope.auth_tag = moderation_quarantine_object_auth_tag(&envelope, auth_key);
+    let record = moderation_quarantine_object_record_from_envelope(&envelope, envelope_path)?;
+    let bytes =
+        norito::to_bytes(&envelope).map_err(|err| ModerationQuarantineObjectError::Codec {
+            message: err.to_string(),
+        })?;
+    Ok((record, bytes))
+}
+
+pub(crate) fn open_moderation_quarantine_object(
+    envelope: ModerationQuarantineObjectEnvelopeV1,
+    record: &ModerationQuarantineObjectRecord,
+    local_key: [u8; 32],
+) -> Result<Vec<u8>, ModerationQuarantineObjectError> {
+    validate_quarantine_object_envelope(&envelope)?;
+    let rebuilt = moderation_quarantine_object_record_from_envelope(
+        &envelope,
+        moderation_quarantine_object_relative_path(envelope.quarantine_id, envelope.object_id),
+    )?;
+    if &rebuilt != record {
+        return Err(ModerationQuarantineObjectError::InvalidSnapshot {
+            message: format!(
+                "object envelope `{}` does not match local index",
+                hex::encode(envelope.object_id)
+            ),
+        });
+    }
+    let auth_key = blake3::derive_key(MODERATION_QUARANTINE_OBJECT_AUTH_KEY_DOMAIN_V1, &local_key);
+    let expected_tag = moderation_quarantine_object_auth_tag(&envelope, auth_key);
+    if !constant_time_eq(&expected_tag, &envelope.auth_tag) {
+        return Err(ModerationQuarantineObjectError::AuthenticationFailed {
+            quarantine_id_hex: hex::encode(envelope.quarantine_id),
+        });
+    }
+    let encryption_key = blake3::derive_key(
+        MODERATION_QUARANTINE_OBJECT_ENCRYPTION_KEY_DOMAIN_V1,
+        &local_key,
+    );
+    let payload =
+        xor_quarantine_object_keystream(&envelope.ciphertext, encryption_key, envelope.nonce);
+    if len_to_u64(payload.len()) != envelope.payload_len {
+        return Err(ModerationQuarantineObjectError::AuthenticationFailed {
+            quarantine_id_hex: hex::encode(envelope.quarantine_id),
+        });
+    }
+    if *blake3::hash(&payload).as_bytes() != envelope.payload_digest {
+        return Err(ModerationQuarantineObjectError::AuthenticationFailed {
+            quarantine_id_hex: hex::encode(envelope.quarantine_id),
+        });
+    }
+    Ok(payload)
+}
+
+fn clean_quarantine_object_input(
+    input: ModerationQuarantineObjectInput,
+) -> Result<ModerationQuarantineObjectInput, ModerationQuarantineObjectError> {
+    if input.captured_at_unix == 0 {
+        return Err(ModerationQuarantineObjectError::InvalidInput {
+            message: "captured_at_unix must be non-zero".to_string(),
+        });
+    }
+    Ok(ModerationQuarantineObjectInput {
+        quarantine_id: input.quarantine_id,
+        payload: input.payload,
+        captured_at_unix: input.captured_at_unix,
+        content_type: clean_optional_object_text(input.content_type, "content_type")?,
+        notes: clean_optional_object_text(input.notes, "notes")?,
+    })
+}
+
+fn clean_optional_object_text(
+    value: Option<String>,
+    field: &str,
+) -> Result<Option<String>, ModerationQuarantineObjectError> {
+    value
+        .map(|value| {
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() {
+                return Err(ModerationQuarantineObjectError::InvalidInput {
+                    message: format!("{field} must not be blank when present"),
+                });
+            }
+            Ok(trimmed)
+        })
+        .transpose()
+}
+
+fn validate_quarantine_object_envelope(
+    envelope: &ModerationQuarantineObjectEnvelopeV1,
+) -> Result<(), ModerationQuarantineObjectError> {
+    if envelope.version != MODERATION_QUARANTINE_OBJECT_ENVELOPE_VERSION_V1 {
+        return Err(ModerationQuarantineObjectError::InvalidSnapshot {
+            message: format!("unsupported object envelope version {}", envelope.version),
+        });
+    }
+    if envelope.algorithm != MODERATION_QUARANTINE_OBJECT_ALGORITHM_V1 {
+        return Err(ModerationQuarantineObjectError::InvalidSnapshot {
+            message: format!(
+                "unsupported object envelope algorithm `{}`",
+                envelope.algorithm
+            ),
+        });
+    }
+    if len_to_u64(envelope.ciphertext.len()) != envelope.payload_len {
+        return Err(ModerationQuarantineObjectError::InvalidSnapshot {
+            message: format!(
+                "object envelope `{}` ciphertext length does not match payload_len",
+                hex::encode(envelope.object_id)
+            ),
+        });
+    }
+    if *blake3::hash(&envelope.ciphertext).as_bytes() != envelope.ciphertext_digest {
+        return Err(ModerationQuarantineObjectError::AuthenticationFailed {
+            quarantine_id_hex: hex::encode(envelope.quarantine_id),
+        });
+    }
+    Ok(())
+}
+
+fn moderation_quarantine_object_record_from_envelope(
+    envelope: &ModerationQuarantineObjectEnvelopeV1,
+    envelope_path: String,
+) -> Result<ModerationQuarantineObjectRecord, ModerationQuarantineObjectError> {
+    let record = ModerationQuarantineObjectRecord {
+        quarantine_id: envelope.quarantine_id,
+        object_id: envelope.object_id,
+        payload_digest: envelope.payload_digest,
+        ciphertext_digest: envelope.ciphertext_digest,
+        payload_len: envelope.payload_len,
+        captured_at_unix: envelope.captured_at_unix,
+        content_type: envelope.content_type.clone(),
+        notes: envelope.notes.clone(),
+        encryption_algorithm: envelope.algorithm.clone(),
+        key_id: envelope.key_id,
+        envelope_path,
+    };
+    validate_quarantine_object_record(&record)
+        .map_err(|message| ModerationQuarantineObjectError::InvalidSnapshot { message })?;
+    Ok(record)
+}
+
+fn validate_quarantine_object_record(
+    record: &ModerationQuarantineObjectRecord,
+) -> Result<(), String> {
+    if record.captured_at_unix == 0 {
+        return Err(format!(
+            "quarantine object `{}` has zero captured_at_unix",
+            hex::encode(record.object_id)
+        ));
+    }
+    if record.encryption_algorithm != MODERATION_QUARANTINE_OBJECT_ALGORITHM_V1 {
+        return Err(format!(
+            "quarantine object `{}` uses unsupported algorithm `{}`",
+            hex::encode(record.object_id),
+            record.encryption_algorithm
+        ));
+    }
+    validate_optional_object_record_text(record.object_id, "content_type", &record.content_type)?;
+    validate_optional_object_record_text(record.object_id, "notes", &record.notes)?;
+    let expected_id = moderation_quarantine_object_id(
+        record.quarantine_id,
+        record.payload_digest,
+        record.ciphertext_digest,
+        record.payload_len,
+        record.captured_at_unix,
+        record.content_type.as_deref(),
+        record.notes.as_deref(),
+        record.key_id,
+    );
+    if record.object_id != expected_id {
+        return Err(format!(
+            "quarantine object `{}` id does not match metadata",
+            hex::encode(record.object_id)
+        ));
+    }
+    let expected_path =
+        moderation_quarantine_object_relative_path(record.quarantine_id, record.object_id);
+    if record.envelope_path != expected_path {
+        return Err(format!(
+            "quarantine object `{}` has unexpected envelope path `{}`",
+            hex::encode(record.object_id),
+            record.envelope_path
+        ));
+    }
+    validate_relative_object_path(&record.envelope_path)?;
+    Ok(())
+}
+
+fn validate_optional_object_record_text(
+    object_id: [u8; 16],
+    field: &str,
+    value: &Option<String>,
+) -> Result<(), String> {
+    if value
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return Err(format!(
+            "quarantine object `{}` has blank {field}",
+            hex::encode(object_id)
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_relative_object_path(path: &str) -> Result<(), String> {
+    let path = Path::new(path);
+    if path.is_absolute() {
+        return Err("object envelope path must be relative".to_string());
+    }
+    if path
+        .components()
+        .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err("object envelope path must not contain traversal components".to_string());
+    }
+    Ok(())
+}
+
+pub(crate) fn moderation_quarantine_object_relative_path(
+    quarantine_id: [u8; 16],
+    object_id: [u8; 16],
+) -> String {
+    format!(
+        "{}/{}/{}.{}",
+        MODERATION_QUARANTINE_OBJECTS_DIR,
+        hex::encode(quarantine_id),
+        hex::encode(object_id),
+        MODERATION_QUARANTINE_OBJECT_EXT
+    )
+}
+
+fn moderation_quarantine_object_key_id(local_key: [u8; 32]) -> [u8; 16] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(MODERATION_QUARANTINE_OBJECT_KEY_ID_DOMAIN_V1);
+    hasher.update(&local_key);
+    let digest = hasher.finalize();
+    let mut key_id = [0u8; 16];
+    key_id.copy_from_slice(&digest.as_bytes()[..16]);
+    key_id
+}
+
+fn moderation_quarantine_object_nonce(
+    quarantine_id: [u8; 16],
+    payload_digest: [u8; 32],
+    captured_at_unix: u64,
+    content_type: Option<&str>,
+    notes: Option<&str>,
+) -> [u8; 16] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(MODERATION_QUARANTINE_OBJECT_NONCE_DOMAIN_V1);
+    hasher.update(&quarantine_id);
+    hasher.update(&payload_digest);
+    hasher.update(&captured_at_unix.to_le_bytes());
+    update_optional_string(&mut hasher, content_type);
+    update_optional_string(&mut hasher, notes);
+    let digest = hasher.finalize();
+    let mut nonce = [0u8; 16];
+    nonce.copy_from_slice(&digest.as_bytes()[..16]);
+    nonce
+}
+
+fn moderation_quarantine_object_id(
+    quarantine_id: [u8; 16],
+    payload_digest: [u8; 32],
+    ciphertext_digest: [u8; 32],
+    payload_len: u64,
+    captured_at_unix: u64,
+    content_type: Option<&str>,
+    notes: Option<&str>,
+    key_id: [u8; 16],
+) -> [u8; 16] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(MODERATION_QUARANTINE_OBJECT_ID_DOMAIN_V1);
+    hasher.update(&quarantine_id);
+    hasher.update(&payload_digest);
+    hasher.update(&ciphertext_digest);
+    hasher.update(&payload_len.to_le_bytes());
+    hasher.update(&captured_at_unix.to_le_bytes());
+    update_optional_string(&mut hasher, content_type);
+    update_optional_string(&mut hasher, notes);
+    hasher.update(&key_id);
+    let digest = hasher.finalize();
+    let mut object_id = [0u8; 16];
+    object_id.copy_from_slice(&digest.as_bytes()[..16]);
+    object_id
+}
+
+fn xor_quarantine_object_keystream(
+    input: &[u8],
+    encryption_key: [u8; 32],
+    nonce: [u8; 16],
+) -> Vec<u8> {
+    let mut output = Vec::with_capacity(input.len());
+    for (counter, chunk) in input.chunks(32).enumerate() {
+        let mut hasher = blake3::Hasher::new_keyed(&encryption_key);
+        hasher.update(MODERATION_QUARANTINE_OBJECT_KEYSTREAM_DOMAIN_V1);
+        hasher.update(&nonce);
+        hasher.update(&(counter as u64).to_le_bytes());
+        let block = hasher.finalize();
+        output.extend(
+            chunk
+                .iter()
+                .zip(block.as_bytes().iter())
+                .map(|(byte, mask)| *byte ^ *mask),
+        );
+    }
+    output
+}
+
+fn len_to_u64(len: usize) -> u64 {
+    u64::try_from(len).unwrap_or(u64::MAX)
+}
+
+fn moderation_quarantine_object_auth_tag(
+    envelope: &ModerationQuarantineObjectEnvelopeV1,
+    auth_key: [u8; 32],
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_keyed(&auth_key);
+    hasher.update(MODERATION_QUARANTINE_OBJECT_AUTH_DOMAIN_V1);
+    hasher.update(&envelope.version.to_le_bytes());
+    update_string(&mut hasher, &envelope.algorithm);
+    hasher.update(&envelope.quarantine_id);
+    hasher.update(&envelope.object_id);
+    hasher.update(&envelope.payload_digest);
+    hasher.update(&envelope.ciphertext_digest);
+    hasher.update(&envelope.payload_len.to_le_bytes());
+    hasher.update(&envelope.captured_at_unix.to_le_bytes());
+    update_optional_string(&mut hasher, envelope.content_type.as_deref());
+    update_optional_string(&mut hasher, envelope.notes.as_deref());
+    hasher.update(&envelope.key_id);
+    hasher.update(&envelope.nonce);
+    hasher.update(&(envelope.ciphertext.len() as u64).to_le_bytes());
+    hasher.update(&envelope.ciphertext);
+    *hasher.finalize().as_bytes()
+}
+
+fn constant_time_eq(left: &[u8; 32], right: &[u8; 32]) -> bool {
+    left.iter()
+        .zip(right.iter())
+        .fold(0u8, |acc, (left, right)| acc | (left ^ right))
+        == 0
 }
 
 #[allow(clippy::too_many_arguments)]

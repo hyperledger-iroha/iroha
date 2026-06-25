@@ -30600,7 +30600,7 @@ function buildSorafsOrderbookEventsWebSocketUrlInternal(baseUrl, options, contex
       limit: params.limit,
     },
     context,
-  );
+  ) ?? {};
   for (const [key, value] of Object.entries(query)) {
     endpoint.searchParams.set(key, String(value));
   }

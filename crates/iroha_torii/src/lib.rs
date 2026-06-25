@@ -36982,6 +36982,23 @@ impl Torii {
                 .route(
                     "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release",
                     post(sorafs::api::handle_post_sorafs_moderation_quarantine_release),
+                )
+                .route(
+                    "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff",
+                    post(sorafs::api::handle_post_sorafs_moderation_quarantine_appeal_handoff),
+                )
+                .route(
+                    "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-ballot",
+                    post(sorafs::api::handle_post_sorafs_moderation_quarantine_appeal_ballot),
+                )
+                .route(
+                    "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel",
+                    get(sorafs::api::handle_get_sorafs_moderation_quarantine_operator_panel),
+                )
+                .route(
+                    "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object",
+                    post(sorafs::api::handle_post_sorafs_moderation_quarantine_object)
+                        .get(sorafs::api::handle_get_sorafs_moderation_quarantine_object),
                 );
             let group = group
                 .route(
@@ -38037,6 +38054,12 @@ impl Torii {
                     .route(
                         "/v1/sorafs/transparency/explorer",
                         axum::routing::get(sorafs::api::handle_get_sorafs_transparency_explorer),
+                    )
+                    .route(
+                        "/v1/sorafs/transparency/explorer/ui",
+                        axum::routing::get(
+                            sorafs::api::handle_get_sorafs_transparency_explorer_ui,
+                        ),
                     )
                     .route(
                         "/v1/sorafs/transparency/source-entries/{source_kind}",

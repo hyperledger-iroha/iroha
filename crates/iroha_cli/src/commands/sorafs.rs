@@ -10,10 +10,12 @@ use std::{
     convert::TryFrom,
     fmt::{self, Write as _},
     fs,
-    io::{self, Write},
+    io::{self, Read, Write},
+    net::{TcpListener, TcpStream},
     num::{NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
+    sync::Arc,
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -28,10 +30,17 @@ use eyre::{Result, WrapErr, eyre};
 use hex::{decode, decode_to_slice, encode};
 use iroha::{
     client::{
-        Client, SorafsAliasListFilter, SorafsGatewayFetchOptions, SorafsGatewayScoreboardOptions,
+        Client, SorafsAliasListFilter, SorafsAppealFinanceReadbackFilter,
+        SorafsGatewayFetchOptions, SorafsGatewayScoreboardOptions,
+        SorafsModerationBallotEventsFilter, SorafsModerationBallotTallyRequest,
+        SorafsModerationBallotsFilter, SorafsModerationModelRegistryFilter,
+        SorafsModerationQuarantineFilter, SorafsModerationQuarantineObjectStoreRequest,
+        SorafsModerationQuarantineReleaseRequest, SorafsModerationQuarantineReviewRequest,
+        SorafsModerationScreeningResultRequest, SorafsModerationScreeningResultsFilter,
         SorafsPinAlias, SorafsPinListFilter, SorafsPinRegisterArgs, SorafsRepairStatusFilter,
         SorafsRepairWorkerClaimRequest, SorafsRepairWorkerCompleteRequest,
         SorafsRepairWorkerFailRequest, SorafsReplicationListFilter, SorafsTokenOverrides,
+        SorafsTransparencyReadbackFilter,
     },
     config::Config,
     http::{Response, StatusCode},
@@ -117,6 +126,10 @@ use iroha_data_model::{
     prelude::ChainId,
     sorafs::{
         gar::{GarEnforcementActionV1, GarEnforcementReceiptV1},
+        moderation::{
+            AdversarialCorpusManifestV1, ModerationReproManifestV1, SoraFsModerationBallotCommitV1,
+            SoraFsModerationBallotRevealV1,
+        },
         pin_registry::StorageClass,
         reserve::{
             ReserveDuration, ReserveLedgerProjection, ReservePolicyV1, ReserveQuote, ReserveTier,
@@ -446,9 +459,18 @@ pub enum Command {
     /// Reserve + rent policy helpers.
     #[command(subcommand)]
     Reserve(ReserveCommand),
+    /// Appeal pricing and finance handoff helpers.
+    #[command(subcommand)]
+    Appeals(AppealsCommand),
     /// GAR policy evidence helpers.
     #[command(subcommand)]
     Gar(GarCommand),
+    /// Transparency ledger readback and source-entry ingest helpers.
+    #[command(subcommand)]
+    Transparency(TransparencyCommand),
+    /// Moderation queue and quarantine workflow helpers.
+    #[command(subcommand)]
+    Moderation(ModerationCommand),
     /// Repair queue helpers (list, claim, close, escalate).
     #[command(subcommand)]
     Repair(RepairCommand),
@@ -477,6 +499,431 @@ impl Run for ReserveCommand {
 }
 
 #[derive(clap::Subcommand, Debug)]
+pub enum AppealsCommand {
+    /// Appeal pricing helpers.
+    #[command(subcommand)]
+    Pricing(AppealsPricingCommand),
+    /// Appeal finance helpers.
+    #[command(subcommand)]
+    Finance(AppealsFinanceCommand),
+}
+
+impl Run for AppealsCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::Pricing(cmd) => cmd.run(context),
+            Self::Finance(cmd) => cmd.run(context),
+        }
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum AppealsPricingCommand {
+    /// Print the active local appeal pricing config.
+    Config(AppealsPricingConfigArgs),
+    /// Print appeal pricing status and supported classes.
+    Status(AppealsPricingStatusArgs),
+    /// Quote a deposit from a Torii pricing quote JSON payload.
+    Quote(AppealsPricingQuoteArgs),
+}
+
+impl Run for AppealsPricingCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::Config(args) => args.run(context),
+            Self::Status(args) => args.run(context),
+            Self::Quote(args) => args.run(context),
+        }
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AppealsPricingConfigArgs;
+
+impl Run for AppealsPricingConfigArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let client = context.client_from_config();
+        render_json_response(context, client.get_sorafs_appeal_pricing_config()?)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AppealsPricingStatusArgs;
+
+impl Run for AppealsPricingStatusArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let client = context.client_from_config();
+        render_json_response(context, client.get_sorafs_appeal_pricing_status()?)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AppealsPricingQuoteArgs {
+    /// JSON quote request payload path.
+    #[arg(long = "input", value_name = "PATH")]
+    input: PathBuf,
+}
+
+impl Run for AppealsPricingQuoteArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_appeal_pricing_quote_json)
+    }
+}
+
+impl AppealsPricingQuoteArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        let payload = load_sorafs_json_payload(&self.input, "appeal pricing quote")?;
+        let client = context.client_from_config();
+        let response = submit(&client, &payload)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum AppealsFinanceCommand {
+    /// Runtime asset-lock deposit helpers.
+    #[command(subcommand)]
+    Deposits(AppealsFinanceDepositsCommand),
+    /// List published appeal finance reports.
+    Reports(AppealsFinanceReportsArgs),
+    /// List published weekly appeal finance rollups.
+    WeeklyRollups(AppealsFinanceWeeklyRollupsArgs),
+    /// List published appeal finance settlement receipts.
+    SettlementReceipts(AppealsFinanceSettlementReceiptsArgs),
+}
+
+impl Run for AppealsFinanceCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::Deposits(cmd) => cmd.run(context),
+            Self::Reports(args) => args.run(context),
+            Self::WeeklyRollups(args) => args.run(context),
+            Self::SettlementReceipts(args) => args.run(context),
+        }
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum AppealsFinanceDepositsCommand {
+    /// Build a runtime asset-lock deposit transaction request.
+    Create(AppealsFinanceDepositCreateArgs),
+    /// Confirm a runtime asset-lock deposit after ledger submission.
+    Confirm(AppealsFinanceDepositConfirmArgs),
+    /// Fetch one visible appeal deposit status.
+    Get(AppealsFinanceDepositGetArgs),
+    /// Settle a confirmed deposit locally.
+    Settle(AppealsFinanceDepositSettleArgs),
+    /// Reconcile a confirmed deposit against runtime ledger state.
+    Reconcile(AppealsFinanceDepositReconcileArgs),
+    /// Submit the next settlement transaction step.
+    SubmitSettlement(AppealsFinanceDepositSubmitSettlementArgs),
+}
+
+impl Run for AppealsFinanceDepositsCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::Create(args) => args.run(context),
+            Self::Confirm(args) => args.run(context),
+            Self::Get(args) => args.run(context),
+            Self::Settle(args) => args.run(context),
+            Self::Reconcile(args) => args.run(context),
+            Self::SubmitSettlement(args) => args.run(context),
+        }
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AppealsFinanceDepositCreateArgs {
+    /// JSON deposit request payload path.
+    #[arg(long = "input", value_name = "PATH")]
+    input: PathBuf,
+}
+
+impl Run for AppealsFinanceDepositCreateArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_appeal_finance_deposit_json)
+    }
+}
+
+impl AppealsFinanceDepositCreateArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        run_appeal_finance_json_submit(
+            context,
+            &self.input,
+            "appeal finance deposit",
+            submit,
+            StatusCode::OK,
+        )
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AppealsFinanceDepositConfirmArgs {
+    /// JSON deposit confirmation payload path.
+    #[arg(long = "input", value_name = "PATH")]
+    input: PathBuf,
+}
+
+impl Run for AppealsFinanceDepositConfirmArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(
+            context,
+            Client::post_sorafs_appeal_finance_deposit_confirm_json,
+        )
+    }
+}
+
+impl AppealsFinanceDepositConfirmArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        run_appeal_finance_json_submit(
+            context,
+            &self.input,
+            "appeal finance deposit confirmation",
+            submit,
+            StatusCode::OK,
+        )
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AppealsFinanceDepositGetArgs {
+    /// Hex-encoded asset-lock escrow id.
+    #[arg(long = "escrow-id", value_name = "HEX")]
+    escrow_id: String,
+}
+
+impl Run for AppealsFinanceDepositGetArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_appeal_finance_deposit)
+    }
+}
+
+impl AppealsFinanceDepositGetArgs {
+    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &str) -> Result<Response<Vec<u8>>>,
+    {
+        let escrow_id = required_trimmed_text(&self.escrow_id, "--escrow-id")?;
+        let client = context.client_from_config();
+        let response = get(&client, &escrow_id)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AppealsFinanceDepositSettleArgs {
+    /// JSON deposit settlement payload path.
+    #[arg(long = "input", value_name = "PATH")]
+    input: PathBuf,
+}
+
+impl Run for AppealsFinanceDepositSettleArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(
+            context,
+            Client::post_sorafs_appeal_finance_deposit_settle_json,
+        )
+    }
+}
+
+impl AppealsFinanceDepositSettleArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        run_appeal_finance_json_submit(
+            context,
+            &self.input,
+            "appeal finance deposit settlement",
+            submit,
+            StatusCode::OK,
+        )
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AppealsFinanceDepositReconcileArgs {
+    /// JSON deposit settlement reconciliation payload path.
+    #[arg(long = "input", value_name = "PATH")]
+    input: PathBuf,
+}
+
+impl Run for AppealsFinanceDepositReconcileArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(
+            context,
+            Client::post_sorafs_appeal_finance_deposit_reconcile_json,
+        )
+    }
+}
+
+impl AppealsFinanceDepositReconcileArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        run_appeal_finance_json_submit(
+            context,
+            &self.input,
+            "appeal finance deposit settlement reconciliation",
+            submit,
+            StatusCode::OK,
+        )
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AppealsFinanceDepositSubmitSettlementArgs {
+    /// JSON deposit settlement submission payload path.
+    #[arg(long = "input", value_name = "PATH")]
+    input: PathBuf,
+}
+
+impl Run for AppealsFinanceDepositSubmitSettlementArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(
+            context,
+            Client::post_sorafs_appeal_finance_deposit_submit_settlement_json,
+        )
+    }
+}
+
+impl AppealsFinanceDepositSubmitSettlementArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        run_appeal_finance_json_submit(
+            context,
+            &self.input,
+            "appeal finance deposit settlement submission",
+            submit,
+            StatusCode::ACCEPTED,
+        )
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AppealsFinanceReportsArgs {
+    /// Maximum number of report entries to return.
+    #[arg(long)]
+    limit: Option<u32>,
+}
+
+impl Run for AppealsFinanceReportsArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_appeal_finance_reports)
+    }
+}
+
+impl AppealsFinanceReportsArgs {
+    fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &SorafsAppealFinanceReadbackFilter) -> Result<Response<Vec<u8>>>,
+    {
+        let filter = SorafsAppealFinanceReadbackFilter { limit: self.limit };
+        let client = context.client_from_config();
+        let response = list(&client, &filter)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AppealsFinanceWeeklyRollupsArgs {
+    /// Maximum number of rollup entries to return.
+    #[arg(long)]
+    limit: Option<u32>,
+}
+
+impl Run for AppealsFinanceWeeklyRollupsArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_appeal_finance_weekly_rollups)
+    }
+}
+
+impl AppealsFinanceWeeklyRollupsArgs {
+    fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &SorafsAppealFinanceReadbackFilter) -> Result<Response<Vec<u8>>>,
+    {
+        let filter = SorafsAppealFinanceReadbackFilter { limit: self.limit };
+        let client = context.client_from_config();
+        let response = list(&client, &filter)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AppealsFinanceSettlementReceiptsArgs {
+    /// Maximum number of settlement receipt entries to return.
+    #[arg(long)]
+    limit: Option<u32>,
+}
+
+impl Run for AppealsFinanceSettlementReceiptsArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(
+            context,
+            Client::get_sorafs_appeal_finance_settlement_receipts,
+        )
+    }
+}
+
+impl AppealsFinanceSettlementReceiptsArgs {
+    fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &SorafsAppealFinanceReadbackFilter) -> Result<Response<Vec<u8>>>,
+    {
+        let filter = SorafsAppealFinanceReadbackFilter { limit: self.limit };
+        let client = context.client_from_config();
+        let response = list(&client, &filter)?;
+        render_json_response(context, response)
+    }
+}
+
+fn run_appeal_finance_json_submit<C, F>(
+    context: &mut C,
+    input: &Path,
+    payload_label: &str,
+    submit: F,
+    accepted_status: StatusCode,
+) -> Result<()>
+where
+    C: RunContext,
+    F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
+{
+    let payload = load_sorafs_json_payload(input, payload_label)?;
+    let client = context.client_from_config();
+    let response = submit(&client, &payload)?;
+    match accepted_status {
+        StatusCode::ACCEPTED => render_json_response_ok_or_accepted(context, response),
+        StatusCode::OK => render_json_response(context, response),
+        status => Err(eyre!(
+            "unsupported SoraFS appeal finance success status {status}"
+        )),
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
 pub enum GarCommand {
     /// Render a GAR enforcement receipt artefact (JSON + optional Norito bytes).
     Receipt(GarReceiptArgs),
@@ -487,6 +934,2317 @@ impl Run for GarCommand {
         match self {
             Self::Receipt(args) => args.run(context),
         }
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum TransparencyCommand {
+    /// Inspect published transparency cycles and entry proofs.
+    #[command(subcommand)]
+    Cycles(TransparencyCyclesCommand),
+    /// Fetch the explorer-ready transparency snapshot.
+    Explorer(TransparencyExplorerArgs),
+    /// Probe deployed transparency explorer routes and emit payload-free rollout evidence.
+    ExplorerCanary(TransparencyExplorerCanaryArgs),
+    /// Probe deployed transparency publication readback and emit payload-free evidence.
+    PublicationCanary(TransparencyPublicationCanaryArgs),
+    /// List published proof-token issuance summaries.
+    Tokens(TransparencyTokensArgs),
+    /// Submit proof-token issuance feed payloads and rollout canaries.
+    #[command(subcommand)]
+    TokenIssuance(TransparencyTokenIssuanceCommand),
+    /// Submit privacy aggregate source events and trigger configured due publication.
+    #[command(subcommand)]
+    PrivacyAggregate(TransparencyPrivacyAggregateCommand),
+    /// Submit typed transparency source entries for later publication.
+    #[command(subcommand)]
+    SourceEntry(TransparencySourceEntryCommand),
+}
+
+impl Run for TransparencyCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::Cycles(cmd) => cmd.run(context),
+            Self::Explorer(args) => args.run(context),
+            Self::ExplorerCanary(args) => args.run(context),
+            Self::PublicationCanary(args) => args.run(context),
+            Self::Tokens(args) => args.run(context),
+            Self::TokenIssuance(cmd) => cmd.run(context),
+            Self::PrivacyAggregate(cmd) => cmd.run(context),
+            Self::SourceEntry(cmd) => cmd.run(context),
+        }
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum TransparencyCyclesCommand {
+    /// List locally published transparency cycle summaries.
+    List(TransparencyCyclesListArgs),
+    /// Fetch and verify one published transparency cycle.
+    Get(TransparencyCyclesGetArgs),
+    /// Fetch and verify one published transparency entry proof.
+    Entry(TransparencyCyclesEntryArgs),
+}
+
+impl Run for TransparencyCyclesCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::List(args) => args.run(context),
+            Self::Get(args) => args.run(context),
+            Self::Entry(args) => args.run(context),
+        }
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct TransparencyCyclesListArgs {
+    /// Maximum number of cycle summaries to return.
+    #[arg(long)]
+    limit: Option<u32>,
+}
+
+impl Run for TransparencyCyclesListArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_transparency_cycles)
+    }
+}
+
+impl TransparencyCyclesListArgs {
+    fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
+    {
+        let filter = SorafsTransparencyReadbackFilter { limit: self.limit };
+        let client = context.client_from_config();
+        let response = list(&client, &filter)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct TransparencyCyclesGetArgs {
+    /// 16-byte cycle id encoded as hexadecimal.
+    #[arg(long = "cycle-id", value_name = "HEX")]
+    cycle_id: String,
+    /// Maximum number of publication proofs to return.
+    #[arg(long)]
+    limit: Option<u32>,
+}
+
+impl Run for TransparencyCyclesGetArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_transparency_cycle)
+    }
+}
+
+impl TransparencyCyclesGetArgs {
+    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &str, &SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
+    {
+        let cycle_id = required_trimmed_text(&self.cycle_id, "--cycle-id")?;
+        let filter = SorafsTransparencyReadbackFilter { limit: self.limit };
+        let client = context.client_from_config();
+        let response = get(&client, &cycle_id, &filter)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct TransparencyCyclesEntryArgs {
+    /// 16-byte cycle id encoded as hexadecimal.
+    #[arg(long = "cycle-id", value_name = "HEX")]
+    cycle_id: String,
+    /// 16-byte entry id encoded as hexadecimal.
+    #[arg(long = "entry-id", value_name = "HEX")]
+    entry_id: String,
+}
+
+impl Run for TransparencyCyclesEntryArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_transparency_cycle_entry)
+    }
+}
+
+impl TransparencyCyclesEntryArgs {
+    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &str, &str) -> Result<Response<Vec<u8>>>,
+    {
+        let cycle_id = required_trimmed_text(&self.cycle_id, "--cycle-id")?;
+        let entry_id = required_trimmed_text(&self.entry_id, "--entry-id")?;
+        let client = context.client_from_config();
+        let response = get(&client, &cycle_id, &entry_id)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct TransparencyExplorerArgs {
+    /// Maximum number of cycle summaries and token issuance entries per array.
+    #[arg(long)]
+    limit: Option<u32>,
+}
+
+impl Run for TransparencyExplorerArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_transparency_explorer)
+    }
+}
+
+impl TransparencyExplorerArgs {
+    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
+    {
+        let filter = SorafsTransparencyReadbackFilter { limit: self.limit };
+        let client = context.client_from_config();
+        let response = get(&client, &filter)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct TransparencyExplorerCanaryArgs {
+    /// Base URL of the deployed Torii or public explorer gateway.
+    #[arg(long = "torii-url", value_name = "URL")]
+    torii_url: Option<String>,
+    /// Maximum number of cycle and proof-token summaries to request.
+    #[arg(long)]
+    limit: Option<u32>,
+    /// HTTP timeout in seconds.
+    #[arg(long = "timeout-secs", default_value_t = 30)]
+    timeout_secs: u64,
+    /// Optional path where the canary evidence JSON will be written.
+    #[arg(long = "out", value_name = "PATH")]
+    out: Option<PathBuf>,
+}
+
+impl Run for TransparencyExplorerCanaryArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let timeout = Duration::from_secs(self.timeout_secs.max(1));
+        let client = BlockingHttpClient::builder()
+            .timeout(timeout)
+            .user_agent("sorafs-cli transparency-explorer-canary")
+            .build()
+            .wrap_err("failed to construct SoraFS transparency explorer canary HTTP client")?;
+        self.run_with_fetch(context, |url| {
+            transparency_explorer_canary_http_get(&client, url)
+        })
+    }
+}
+
+impl TransparencyExplorerCanaryArgs {
+    fn run_with_fetch<C, F>(&self, context: &mut C, mut fetch: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnMut(&str) -> Result<TransparencyExplorerCanaryHttpResponse>,
+    {
+        let torii_url = match self.torii_url.as_deref() {
+            Some(url) => required_trimmed_text(url, "--torii-url")?,
+            None => context.config().torii_api_url.as_str().trim().to_owned(),
+        };
+        if torii_url.is_empty() {
+            return Err(eyre!("configured Torii API URL must not be empty"));
+        }
+        let evidence =
+            transparency_explorer_canary_evidence_json(&torii_url, self.limit, &mut fetch)?;
+        if let Some(path) = &self.out {
+            ensure_parent_dir(path)?;
+            let bytes = norito::json::to_vec_pretty(&evidence)
+                .wrap_err("failed to serialize SoraFS transparency explorer canary evidence")?;
+            fs::write(path, bytes).wrap_err_with(|| {
+                format!(
+                    "failed to write SoraFS transparency explorer canary evidence to `{}`",
+                    path.display()
+                )
+            })?;
+        }
+        context.print_data(&evidence)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct TransparencyPublicationCanaryArgs {
+    /// Base URL of the deployed Torii or public transparency gateway.
+    #[arg(long = "torii-url", value_name = "URL")]
+    torii_url: Option<String>,
+    /// Published cycle id to verify through the cycle detail route.
+    #[arg(long = "cycle-id", value_name = "HEX")]
+    cycle_ids: Vec<String>,
+    /// Maximum number of cycle summaries or publication proofs to request.
+    #[arg(long)]
+    limit: Option<u32>,
+    /// HTTP timeout in seconds.
+    #[arg(long = "timeout-secs", default_value_t = 30)]
+    timeout_secs: u64,
+    /// Do not fail the canary when publisher identity fields are missing.
+    #[arg(long = "allow-missing-publisher-identity", default_value_t = false)]
+    allow_missing_publisher_identity: bool,
+    /// Optional path where the canary evidence JSON will be written.
+    #[arg(long = "out", value_name = "PATH")]
+    out: Option<PathBuf>,
+}
+
+impl Run for TransparencyPublicationCanaryArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let timeout = Duration::from_secs(self.timeout_secs.max(1));
+        let client = BlockingHttpClient::builder()
+            .timeout(timeout)
+            .user_agent("sorafs-cli transparency-publication-canary")
+            .build()
+            .wrap_err("failed to construct SoraFS transparency publication canary HTTP client")?;
+        self.run_with_fetch(context, |url| {
+            transparency_publication_canary_http_get(&client, url)
+        })
+    }
+}
+
+impl TransparencyPublicationCanaryArgs {
+    fn run_with_fetch<C, F>(&self, context: &mut C, mut fetch: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnMut(&str) -> Result<TransparencyExplorerCanaryHttpResponse>,
+    {
+        let torii_url = match self.torii_url.as_deref() {
+            Some(url) => required_trimmed_text(url, "--torii-url")?,
+            None => context.config().torii_api_url.as_str().trim().to_owned(),
+        };
+        if torii_url.is_empty() {
+            return Err(eyre!("configured Torii API URL must not be empty"));
+        }
+        let cycle_ids = self
+            .cycle_ids
+            .iter()
+            .map(|cycle_id| required_trimmed_text(cycle_id, "--cycle-id"))
+            .collect::<Result<Vec<_>>>()?;
+        let evidence = transparency_publication_canary_evidence_json(
+            &torii_url,
+            &cycle_ids,
+            self.limit,
+            !self.allow_missing_publisher_identity,
+            &mut fetch,
+        )?;
+        if let Some(path) = &self.out {
+            write_json_artifact(path, &evidence, "transparency publication canary evidence")?;
+        }
+        context.print_data(&evidence)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct TransparencyTokensArgs {
+    /// Maximum number of proof-token issuance entries to return.
+    #[arg(long)]
+    limit: Option<u32>,
+}
+
+impl Run for TransparencyTokensArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_transparency_token_issuances)
+    }
+}
+
+impl TransparencyTokensArgs {
+    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
+    {
+        let filter = SorafsTransparencyReadbackFilter { limit: self.limit };
+        let client = context.client_from_config();
+        let response = get(&client, &filter)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum TransparencyTokenIssuanceCommand {
+    /// Submit one proof-token issuance JSON payload.
+    Submit(TransparencyTokenIssuanceSubmitArgs),
+    /// Probe deployed proof-token issuance producer feed routes.
+    Canary(TransparencyTokenIssuanceCanaryArgs),
+}
+
+impl Run for TransparencyTokenIssuanceCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::Submit(args) => args.run(context),
+            Self::Canary(args) => args.run(context),
+        }
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct TransparencyTokenIssuanceSubmitArgs {
+    /// JSON proof-token issuance payload path.
+    #[arg(long = "payload", value_name = "PATH")]
+    payload: PathBuf,
+}
+
+impl Run for TransparencyTokenIssuanceSubmitArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(
+            context,
+            Client::post_sorafs_transparency_token_issuance_json,
+        )
+    }
+}
+
+impl TransparencyTokenIssuanceSubmitArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        let payload = load_sorafs_json_payload(&self.payload, "transparency proof-token issuance")?;
+        let client = context.client_from_config();
+        let response = submit(&client, &payload)?;
+        render_json_response_ok_or_accepted(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct TransparencyTokenIssuanceCanaryArgs {
+    /// Proof-token issuance JSON payload path to submit.
+    #[arg(long = "issuance", value_name = "PATH")]
+    issuances: Vec<PathBuf>,
+    /// Optional path where payload-free canary evidence JSON is written.
+    #[arg(long = "out", value_name = "PATH")]
+    out: Option<PathBuf>,
+}
+
+impl Run for TransparencyTokenIssuanceCanaryArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(
+            context,
+            Client::post_sorafs_transparency_token_issuance_json,
+        )
+    }
+}
+
+impl TransparencyTokenIssuanceCanaryArgs {
+    fn run_with<C, F>(&self, context: &mut C, mut submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnMut(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        if self.issuances.is_empty() {
+            return Err(eyre!("at least one --issuance payload is required"));
+        }
+
+        let client = context.client_from_config();
+        let mut probes = Vec::new();
+        for path in &self.issuances {
+            let payload =
+                load_sorafs_json_payload(path, "transparency proof-token issuance canary")?;
+            let response = submit(&client, &payload)?;
+            probes.push(transparency_token_issuance_canary_probe_json(
+                path, &payload, response,
+            ));
+        }
+
+        let passed_count = probes
+            .iter()
+            .filter(|probe| {
+                probe
+                    .get("response_success")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            })
+            .count();
+        let mut evidence = Map::new();
+        evidence.insert(
+            "schema".into(),
+            Value::from("sorafs.transparency.proof_token_issuance.canary.v1"),
+        );
+        evidence.insert("source".into(), Value::from("iroha_cli"));
+        evidence.insert(
+            "status".into(),
+            Value::from(if passed_count == probes.len() {
+                "passed"
+            } else {
+                "failed"
+            }),
+        );
+        evidence.insert(
+            "probe_count".into(),
+            Value::from(u64::try_from(probes.len()).unwrap_or(u64::MAX)),
+        );
+        evidence.insert(
+            "passed_probe_count".into(),
+            Value::from(u64::try_from(passed_count).unwrap_or(u64::MAX)),
+        );
+        evidence.insert(
+            "issuance_probe_count".into(),
+            Value::from(u64::try_from(self.issuances.len()).unwrap_or(u64::MAX)),
+        );
+        evidence.insert("payload_bytes_included".into(), Value::Bool(false));
+        evidence.insert("proof_token_frames_included".into(), Value::Bool(false));
+        evidence.insert("private_digest_keys_included".into(), Value::Bool(false));
+        evidence.insert("response_bodies_included".into(), Value::Bool(false));
+        evidence.insert("probes".into(), Value::Array(probes));
+        let evidence = Value::Object(evidence);
+        if let Some(path) = &self.out {
+            write_json_artifact(
+                path,
+                &evidence,
+                "transparency proof-token issuance canary evidence",
+            )?;
+        }
+        context.print_data(&evidence)
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum TransparencyPrivacyAggregateCommand {
+    /// Submit one privacy aggregate source-event JSON payload.
+    SourceEvent(TransparencyPrivacyAggregateSourceEventArgs),
+    /// Trigger configured due privacy aggregate publication.
+    PublishDue(TransparencyPrivacyAggregatePublishDueArgs),
+    /// Probe deployed privacy aggregate producer/scheduler routes.
+    Canary(TransparencyPrivacyAggregateCanaryArgs),
+}
+
+impl Run for TransparencyPrivacyAggregateCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::SourceEvent(args) => args.run(context),
+            Self::PublishDue(args) => args.run(context),
+            Self::Canary(args) => args.run(context),
+        }
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct TransparencyPrivacyAggregateSourceEventArgs {
+    /// JSON payload path.
+    #[arg(long = "payload", value_name = "PATH")]
+    payload: PathBuf,
+}
+
+impl Run for TransparencyPrivacyAggregateSourceEventArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(
+            context,
+            Client::post_sorafs_transparency_privacy_aggregate_source_event_json,
+        )
+    }
+}
+
+impl TransparencyPrivacyAggregateSourceEventArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        let payload =
+            load_sorafs_json_payload(&self.payload, "transparency privacy aggregate source-event")?;
+        let client = context.client_from_config();
+        let response = submit(&client, &payload)?;
+        render_json_response_ok_or_accepted(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct TransparencyPrivacyAggregatePublishDueArgs {
+    /// JSON payload path.
+    #[arg(long = "payload", value_name = "PATH")]
+    payload: PathBuf,
+}
+
+impl Run for TransparencyPrivacyAggregatePublishDueArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(
+            context,
+            Client::post_sorafs_transparency_privacy_aggregate_publish_due_json,
+        )
+    }
+}
+
+impl TransparencyPrivacyAggregatePublishDueArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        let payload =
+            load_sorafs_json_payload(&self.payload, "transparency privacy aggregate publish-due")?;
+        let client = context.client_from_config();
+        let response = submit(&client, &payload)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct TransparencyPrivacyAggregateCanaryArgs {
+    /// Privacy aggregate source-event JSON payload path to submit.
+    #[arg(long = "source-event", value_name = "PATH")]
+    source_events: Vec<PathBuf>,
+    /// Privacy aggregate publish-due JSON payload path to submit.
+    #[arg(long = "publish-due", value_name = "PATH")]
+    publish_due: Vec<PathBuf>,
+    /// Optional path where payload-free canary evidence JSON is written.
+    #[arg(long = "out", value_name = "PATH")]
+    out: Option<PathBuf>,
+}
+
+impl Run for TransparencyPrivacyAggregateCanaryArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(
+            context,
+            Client::post_sorafs_transparency_privacy_aggregate_source_event_json,
+            Client::post_sorafs_transparency_privacy_aggregate_publish_due_json,
+        )
+    }
+}
+
+impl TransparencyPrivacyAggregateCanaryArgs {
+    fn run_with<C, FSource, FPublish>(
+        &self,
+        context: &mut C,
+        mut submit_source_event: FSource,
+        mut submit_publish_due: FPublish,
+    ) -> Result<()>
+    where
+        C: RunContext,
+        FSource: FnMut(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
+        FPublish: FnMut(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        if self.source_events.is_empty() && self.publish_due.is_empty() {
+            return Err(eyre!(
+                "at least one --source-event or --publish-due payload is required"
+            ));
+        }
+
+        let client = context.client_from_config();
+        let mut probes = Vec::new();
+        for path in &self.source_events {
+            let payload = load_sorafs_json_payload(
+                path,
+                "transparency privacy aggregate canary source-event",
+            )?;
+            let response = submit_source_event(&client, &payload)?;
+            probes.push(transparency_privacy_aggregate_canary_probe_json(
+                "source_event",
+                path,
+                &payload,
+                response,
+            ));
+        }
+        for path in &self.publish_due {
+            let payload = load_sorafs_json_payload(
+                path,
+                "transparency privacy aggregate canary publish-due",
+            )?;
+            let response = submit_publish_due(&client, &payload)?;
+            probes.push(transparency_privacy_aggregate_canary_probe_json(
+                "publish_due",
+                path,
+                &payload,
+                response,
+            ));
+        }
+
+        let passed_count = probes
+            .iter()
+            .filter(|probe| {
+                probe
+                    .get("response_success")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            })
+            .count();
+        let mut evidence = Map::new();
+        evidence.insert(
+            "schema".into(),
+            Value::from("sorafs.transparency.privacy_aggregate.canary.v1"),
+        );
+        evidence.insert("source".into(), Value::from("iroha_cli"));
+        evidence.insert(
+            "status".into(),
+            Value::from(if passed_count == probes.len() {
+                "passed"
+            } else {
+                "failed"
+            }),
+        );
+        evidence.insert(
+            "probe_count".into(),
+            Value::from(u64::try_from(probes.len()).unwrap_or(u64::MAX)),
+        );
+        evidence.insert(
+            "passed_probe_count".into(),
+            Value::from(u64::try_from(passed_count).unwrap_or(u64::MAX)),
+        );
+        evidence.insert(
+            "source_event_probe_count".into(),
+            Value::from(u64::try_from(self.source_events.len()).unwrap_or(u64::MAX)),
+        );
+        evidence.insert(
+            "publish_due_probe_count".into(),
+            Value::from(u64::try_from(self.publish_due.len()).unwrap_or(u64::MAX)),
+        );
+        evidence.insert("payload_bytes_included".into(), Value::Bool(false));
+        evidence.insert("raw_metric_values_included".into(), Value::Bool(false));
+        evidence.insert("private_payloads_included".into(), Value::Bool(false));
+        evidence.insert("probes".into(), Value::Array(probes));
+        let evidence = Value::Object(evidence);
+        if let Some(path) = &self.out {
+            write_json_artifact(
+                path,
+                &evidence,
+                "transparency privacy aggregate canary evidence",
+            )?;
+        }
+        context.print_data(&evidence)
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum TransparencySourceEntryCommand {
+    /// Submit one typed source-entry JSON payload.
+    Submit(TransparencySourceEntrySubmitArgs),
+    /// Probe deployed source-entry producer routes.
+    Canary(TransparencySourceEntryCanaryArgs),
+}
+
+impl Run for TransparencySourceEntryCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::Submit(args) => args.run(context),
+            Self::Canary(args) => args.run(context),
+        }
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct TransparencySourceEntrySubmitArgs {
+    /// Source kind accepted by Torii, for example `legal-hold-notice`.
+    #[arg(long = "source-kind", value_name = "TEXT")]
+    source_kind: String,
+    /// JSON payload path.
+    #[arg(long = "payload", value_name = "PATH")]
+    payload: PathBuf,
+}
+
+impl Run for TransparencySourceEntrySubmitArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_transparency_source_entry_json)
+    }
+}
+
+impl TransparencySourceEntrySubmitArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &str, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        let source_kind = required_trimmed_text(&self.source_kind, "--source-kind")?;
+        let payload = load_transparency_source_entry_payload(&self.payload)?;
+        let client = context.client_from_config();
+        let response = submit(&client, &source_kind, &payload)?;
+        render_json_response_ok_or_accepted(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct TransparencySourceEntryCanaryArgs {
+    /// Source-entry canary probe in `source-kind=payload.json` form.
+    #[arg(long = "source-entry", value_name = "KIND=PATH")]
+    source_entries: Vec<String>,
+    /// Optional path where payload-free canary evidence JSON is written.
+    #[arg(long = "out", value_name = "PATH")]
+    out: Option<PathBuf>,
+}
+
+impl Run for TransparencySourceEntryCanaryArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_transparency_source_entry_json)
+    }
+}
+
+impl TransparencySourceEntryCanaryArgs {
+    fn run_with<C, F>(&self, context: &mut C, mut submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnMut(&Client, &str, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        let source_entries = parse_transparency_source_entry_canary_specs(&self.source_entries)?;
+        let client = context.client_from_config();
+        let mut probes = Vec::new();
+        for (source_kind, path) in &source_entries {
+            let payload = load_transparency_source_entry_payload(path)?;
+            let response = submit(&client, source_kind, &payload)?;
+            probes.push(transparency_source_entry_canary_probe_json(
+                source_kind,
+                path,
+                &payload,
+                response,
+            ));
+        }
+
+        let passed_count = probes
+            .iter()
+            .filter(|probe| {
+                probe
+                    .get("response_success")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            })
+            .count();
+        let mut evidence = Map::new();
+        evidence.insert(
+            "schema".into(),
+            Value::from("sorafs.transparency.source_entry.canary.v1"),
+        );
+        evidence.insert("source".into(), Value::from("iroha_cli"));
+        evidence.insert(
+            "status".into(),
+            Value::from(if passed_count == probes.len() {
+                "passed"
+            } else {
+                "failed"
+            }),
+        );
+        evidence.insert(
+            "probe_count".into(),
+            Value::from(u64::try_from(probes.len()).unwrap_or(u64::MAX)),
+        );
+        evidence.insert(
+            "passed_probe_count".into(),
+            Value::from(u64::try_from(passed_count).unwrap_or(u64::MAX)),
+        );
+        evidence.insert(
+            "source_entry_probe_count".into(),
+            Value::from(u64::try_from(source_entries.len()).unwrap_or(u64::MAX)),
+        );
+        evidence.insert("payload_bytes_included".into(), Value::Bool(false));
+        evidence.insert("private_payloads_included".into(), Value::Bool(false));
+        evidence.insert("response_bodies_included".into(), Value::Bool(false));
+        evidence.insert("probes".into(), Value::Array(probes));
+        let evidence = Value::Object(evidence);
+        if let Some(path) = &self.out {
+            write_json_artifact(path, &evidence, "transparency source-entry canary evidence")?;
+        }
+        context.print_data(&evidence)
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum ModerationCommand {
+    /// Inspect and advance local moderation committee ballots.
+    #[command(subcommand)]
+    Ballots(ModerationBallotsCommand),
+    /// Admit and inspect local moderation model registry records.
+    #[command(subcommand)]
+    Registry(ModerationRegistryCommand),
+    /// Submit and inspect deterministic local moderation screening results.
+    #[command(subcommand)]
+    Screening(ModerationScreeningCommand),
+    /// Inspect and advance local moderation quarantine records.
+    #[command(subcommand)]
+    Quarantine(ModerationQuarantineCommand),
+}
+
+impl Run for ModerationCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::Ballots(cmd) => cmd.run(context),
+            Self::Registry(cmd) => cmd.run(context),
+            Self::Screening(cmd) => cmd.run(context),
+            Self::Quarantine(cmd) => cmd.run(context),
+        }
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum ModerationBallotsCommand {
+    /// List local moderation ballot records.
+    List(ModerationBallotsListArgs),
+    /// Get one local moderation ballot record.
+    Get(ModerationBallotsGetArgs),
+    /// List local moderation ballot governance events.
+    Events(ModerationBallotsEventsArgs),
+    /// Submit a juror ballot commit payload.
+    Commit(ModerationBallotsCommitArgs),
+    /// Submit a juror ballot reveal payload.
+    Reveal(ModerationBallotsRevealArgs),
+    /// Finalize a local moderation ballot tally.
+    Tally(ModerationBallotsTallyArgs),
+    /// Execute pending commit/reveal/tally actions from a coordination status.
+    Execute(ModerationBallotsExecuteArgs),
+    /// Generate supervised commit/reveal executor deployment artifacts.
+    ExecutorBundle(ModerationBallotsExecutorBundleArgs),
+    /// Verify a deployed commit/reveal executor bundle and captured run summary.
+    ExecutorCanary(ModerationBallotsExecutorCanaryArgs),
+}
+
+impl Run for ModerationBallotsCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::List(args) => args.run(context),
+            Self::Get(args) => args.run(context),
+            Self::Events(args) => args.run(context),
+            Self::Commit(args) => args.run(context),
+            Self::Reveal(args) => args.run(context),
+            Self::Tally(args) => args.run(context),
+            Self::Execute(args) => args.run(context),
+            Self::ExecutorBundle(args) => args.run(context),
+            Self::ExecutorCanary(args) => args.run(context),
+        }
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationBallotsListArgs {
+    /// Maximum number of ballots, commits, and reveals to return.
+    #[arg(long)]
+    limit: Option<u32>,
+}
+
+impl Run for ModerationBallotsListArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_moderation_ballots)
+    }
+}
+
+impl ModerationBallotsListArgs {
+    fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &SorafsModerationBallotsFilter) -> Result<Response<Vec<u8>>>,
+    {
+        let filter = SorafsModerationBallotsFilter { limit: self.limit };
+        let client = context.client_from_config();
+        let response = list(&client, &filter)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationBallotsGetArgs {
+    /// Moderation or appeal case identifier.
+    #[arg(long = "case-id", value_name = "TEXT")]
+    case_id: String,
+    /// Moderation ballot round identifier.
+    #[arg(long = "round-id", value_name = "TEXT")]
+    round_id: String,
+    /// Maximum number of commits and reveals to return.
+    #[arg(long)]
+    limit: Option<u32>,
+}
+
+impl Run for ModerationBallotsGetArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_moderation_ballot)
+    }
+}
+
+impl ModerationBallotsGetArgs {
+    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &str, &str, &SorafsModerationBallotsFilter) -> Result<Response<Vec<u8>>>,
+    {
+        let case_id = required_trimmed_text(&self.case_id, "--case-id")?;
+        let round_id = required_trimmed_text(&self.round_id, "--round-id")?;
+        let filter = SorafsModerationBallotsFilter { limit: self.limit };
+        let client = context.client_from_config();
+        let response = get(&client, &case_id, &round_id, &filter)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationBallotsEventsArgs {
+    /// Optional event sequence to resume from.
+    #[arg(long)]
+    since: Option<u64>,
+    /// Maximum number of events to return.
+    #[arg(long)]
+    limit: Option<u32>,
+}
+
+impl Run for ModerationBallotsEventsArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_moderation_ballot_events)
+    }
+}
+
+impl ModerationBallotsEventsArgs {
+    fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &SorafsModerationBallotEventsFilter) -> Result<Response<Vec<u8>>>,
+    {
+        let filter = SorafsModerationBallotEventsFilter {
+            since: self.since,
+            limit: self.limit,
+        };
+        let client = context.client_from_config();
+        let response = list(&client, &filter)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationBallotsCommitArgs {
+    /// Commit payload path.
+    #[arg(long = "payload", value_name = "PATH")]
+    payload: PathBuf,
+    /// Input format: json or norito.
+    #[arg(long = "format", default_value = "json")]
+    format: String,
+}
+
+impl Run for ModerationBallotsCommitArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_moderation_ballot_commit)
+    }
+}
+
+impl ModerationBallotsCommitArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &SoraFsModerationBallotCommitV1) -> Result<Response<Vec<u8>>>,
+    {
+        let commit = load_moderation_ballot_commit_payload(&self.payload, self.format.as_str())?;
+        let client = context.client_from_config();
+        let response = submit(&client, &commit)?;
+        render_json_response_ok_or_accepted(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationBallotsRevealArgs {
+    /// Reveal payload path.
+    #[arg(long = "payload", value_name = "PATH")]
+    payload: PathBuf,
+    /// Input format: json or norito.
+    #[arg(long = "format", default_value = "json")]
+    format: String,
+}
+
+impl Run for ModerationBallotsRevealArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_moderation_ballot_reveal)
+    }
+}
+
+impl ModerationBallotsRevealArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &SoraFsModerationBallotRevealV1) -> Result<Response<Vec<u8>>>,
+    {
+        let reveal = load_moderation_ballot_reveal_payload(&self.payload, self.format.as_str())?;
+        let client = context.client_from_config();
+        let response = submit(&client, &reveal)?;
+        render_json_response_ok_or_accepted(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationBallotsTallyArgs {
+    /// Moderation or appeal case identifier.
+    #[arg(long = "case-id", value_name = "TEXT")]
+    case_id: String,
+    /// Moderation ballot round identifier.
+    #[arg(long = "round-id", value_name = "TEXT")]
+    round_id: String,
+}
+
+impl Run for ModerationBallotsTallyArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_moderation_ballot_tally)
+    }
+}
+
+impl ModerationBallotsTallyArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &SorafsModerationBallotTallyRequest<'_>) -> Result<Response<Vec<u8>>>,
+    {
+        let case_id = required_trimmed_text(&self.case_id, "--case-id")?;
+        let round_id = required_trimmed_text(&self.round_id, "--round-id")?;
+        let request = SorafsModerationBallotTallyRequest {
+            case_id: case_id.as_str(),
+            round_id: round_id.as_str(),
+        };
+        let client = context.client_from_config();
+        let response = submit(&client, &request)?;
+        render_json_response_ok_or_accepted(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationBallotsExecuteArgs {
+    /// Payload-free commit/reveal status JSON from the operator workflow service.
+    #[arg(long = "status", value_name = "PATH")]
+    status: PathBuf,
+    /// Commit payload path to submit if the status says the juror is pending.
+    #[arg(long = "commit-payload", value_name = "PATH")]
+    commit_payloads: Vec<PathBuf>,
+    /// Reveal payload path to submit if the status says the juror is pending.
+    #[arg(long = "reveal-payload", value_name = "PATH")]
+    reveal_payloads: Vec<PathBuf>,
+    /// Commit input format: json or norito.
+    #[arg(long = "commit-format", default_value = "json")]
+    commit_format: String,
+    /// Reveal input format: json or norito.
+    #[arg(long = "reveal-format", default_value = "json")]
+    reveal_format: String,
+    /// Submit tally requests for ballots already marked ready in the status.
+    #[arg(long = "submit-tally")]
+    submit_tally: bool,
+}
+
+impl Run for ModerationBallotsExecuteArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(
+            context,
+            Client::post_sorafs_moderation_ballot_commit,
+            Client::post_sorafs_moderation_ballot_reveal,
+            Client::post_sorafs_moderation_ballot_tally,
+        )
+    }
+}
+
+impl ModerationBallotsExecuteArgs {
+    fn run_with<C, FCommit, FReveal, FTally>(
+        &self,
+        context: &mut C,
+        mut submit_commit: FCommit,
+        mut submit_reveal: FReveal,
+        mut submit_tally: FTally,
+    ) -> Result<()>
+    where
+        C: RunContext,
+        FCommit: FnMut(&Client, &SoraFsModerationBallotCommitV1) -> Result<Response<Vec<u8>>>,
+        FReveal: FnMut(&Client, &SoraFsModerationBallotRevealV1) -> Result<Response<Vec<u8>>>,
+        FTally:
+            FnMut(&Client, &SorafsModerationBallotTallyRequest<'_>) -> Result<Response<Vec<u8>>>,
+    {
+        if self.commit_payloads.is_empty() && self.reveal_payloads.is_empty() && !self.submit_tally
+        {
+            return Err(eyre!(
+                "at least one --commit-payload, --reveal-payload, or --submit-tally is required"
+            ));
+        }
+
+        let status = load_moderation_commit_reveal_status_payload(&self.status)?;
+        let coordination = moderation_commit_reveal_coordination_from_status(&status)?;
+        let client = context.client_from_config();
+        let mut actions = Vec::new();
+
+        for path in &self.commit_payloads {
+            let commit = load_moderation_ballot_commit_payload(path, self.commit_format.as_str())?;
+            let key = ModerationBallotExecutionKey::from_commit(&commit);
+            if !coordination.pending_commits.contains(&key) {
+                return Err(eyre!(
+                    "commit payload for juror `{}` ballot `{}/{}` is not pending in --status",
+                    key.juror_id,
+                    key.case_id,
+                    key.round_id
+                ));
+            }
+            let response = submit_commit(&client, &commit)?;
+            actions.push(moderation_ballot_execution_action_json(
+                "commit",
+                &key.case_id,
+                &key.round_id,
+                Some(&key.juror_id),
+                response,
+            )?);
+        }
+
+        for path in &self.reveal_payloads {
+            let reveal = load_moderation_ballot_reveal_payload(path, self.reveal_format.as_str())?;
+            let key = ModerationBallotExecutionKey::from_reveal(&reveal);
+            if !coordination.pending_reveals.contains(&key) {
+                return Err(eyre!(
+                    "reveal payload for juror `{}` ballot `{}/{}` is not pending in --status",
+                    key.juror_id,
+                    key.case_id,
+                    key.round_id
+                ));
+            }
+            let response = submit_reveal(&client, &reveal)?;
+            actions.push(moderation_ballot_execution_action_json(
+                "reveal",
+                &key.case_id,
+                &key.round_id,
+                Some(&key.juror_id),
+                response,
+            )?);
+        }
+
+        if self.submit_tally {
+            for (case_id, round_id) in &coordination.tally_ready {
+                let request = SorafsModerationBallotTallyRequest {
+                    case_id: case_id.as_str(),
+                    round_id: round_id.as_str(),
+                };
+                let response = submit_tally(&client, &request)?;
+                actions.push(moderation_ballot_execution_action_json(
+                    "tally", case_id, round_id, None, response,
+                )?);
+            }
+        }
+
+        let mut output = Map::new();
+        output.insert(
+            "schema".into(),
+            Value::from("sorafs.moderation.ballots.execution.v1"),
+        );
+        output.insert("source".into(), Value::from("commit-reveal-status"));
+        output.insert("status".into(), Value::from("executed"));
+        output.insert("action_count".into(), Value::from(actions.len() as u64));
+        output.insert(
+            "commit_action_count".into(),
+            Value::from(self.commit_payloads.len() as u64),
+        );
+        output.insert(
+            "reveal_action_count".into(),
+            Value::from(self.reveal_payloads.len() as u64),
+        );
+        output.insert(
+            "tally_action_count".into(),
+            Value::from(if self.submit_tally {
+                coordination.tally_ready.len() as u64
+            } else {
+                0
+            }),
+        );
+        output.insert("payload_bytes_included".into(), Value::Bool(false));
+        output.insert("private_payloads_included".into(), Value::Bool(false));
+        output.insert("actions".into(), Value::Array(actions));
+        context.print_data(&Value::Object(output))
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationBallotsExecutorBundleArgs {
+    /// Runtime path to the payload-free commit/reveal status JSON.
+    #[arg(long = "status", value_name = "PATH")]
+    status: PathBuf,
+    /// Directory to write deployment artifacts into.
+    #[arg(long = "bundle-out", value_name = "DIR")]
+    bundle_out: PathBuf,
+    /// Runtime commit payload path to submit if the status says the juror is pending.
+    #[arg(long = "commit-payload", value_name = "PATH")]
+    commit_payloads: Vec<PathBuf>,
+    /// Runtime reveal payload path to submit if the status says the juror is pending.
+    #[arg(long = "reveal-payload", value_name = "PATH")]
+    reveal_payloads: Vec<PathBuf>,
+    /// Commit input format: json or norito.
+    #[arg(long = "commit-format", default_value = "json")]
+    commit_format: String,
+    /// Reveal input format: json or norito.
+    #[arg(long = "reveal-format", default_value = "json")]
+    reveal_format: String,
+    /// Submit tally requests for ballots already marked ready in the status.
+    #[arg(long = "submit-tally")]
+    submit_tally: bool,
+    /// Iroha CLI binary path used by the generated runner.
+    #[arg(long = "iroha-bin", default_value = "iroha", value_name = "PATH")]
+    iroha_bin: String,
+    /// Service label used for generated systemd and launchd artifacts.
+    #[arg(
+        long = "service-name",
+        default_value = "org.sora.sorafs.ballots-executor"
+    )]
+    service_name: String,
+    /// Service user for the generated systemd unit.
+    #[arg(long = "service-user", default_value = "sorafs-moderation")]
+    service_user: String,
+    /// Service group for the generated systemd unit.
+    #[arg(long = "service-group", default_value = "sorafs-moderation")]
+    service_group: String,
+    /// Scheduler interval for the generated systemd timer and launchd job.
+    #[arg(long = "interval-secs", default_value_t = 60)]
+    interval_secs: u64,
+}
+
+impl Run for ModerationBallotsExecutorBundleArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context)
+    }
+}
+
+impl ModerationBallotsExecutorBundleArgs {
+    fn run_with<C: RunContext>(&self, context: &mut C) -> Result<()> {
+        let summary = write_moderation_ballots_executor_bundle(self)?;
+        context.print_data(&summary)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationBallotsExecutorCanaryArgs {
+    /// Executor bundle directory produced by `executor-bundle`.
+    #[arg(long = "bundle", value_name = "DIR")]
+    bundle: PathBuf,
+    /// Optional payload-free `ballots execute` summary captured from a deployed job run.
+    #[arg(long = "execution-summary", value_name = "PATH")]
+    execution_summary: Option<PathBuf>,
+    /// Optional path to write canary evidence JSON.
+    #[arg(long = "out", value_name = "PATH")]
+    out: Option<PathBuf>,
+}
+
+impl Run for ModerationBallotsExecutorCanaryArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context)
+    }
+}
+
+impl ModerationBallotsExecutorCanaryArgs {
+    fn run_with<C: RunContext>(&self, context: &mut C) -> Result<()> {
+        let evidence = moderation_ballots_executor_canary_evidence(self)?;
+        if let Some(path) = &self.out {
+            write_json_artifact(
+                path,
+                &evidence,
+                "moderation ballots executor canary evidence",
+            )?;
+        }
+        context.print_data(&evidence)
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum ModerationRegistryCommand {
+    /// List local moderation model registry records.
+    List(ModerationRegistryListArgs),
+    /// Admit a governance-signed reproducibility manifest.
+    SubmitRepro(ModerationRegistrySubmitReproArgs),
+    /// Admit an adversarial corpus manifest.
+    SubmitCorpus(ModerationRegistrySubmitCorpusArgs),
+}
+
+impl Run for ModerationRegistryCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::List(args) => args.run(context),
+            Self::SubmitRepro(args) => args.run(context),
+            Self::SubmitCorpus(args) => args.run(context),
+        }
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationRegistryListArgs {
+    /// Maximum number of records to return from each registry section.
+    #[arg(long)]
+    limit: Option<u32>,
+}
+
+impl Run for ModerationRegistryListArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_moderation_model_registry)
+    }
+}
+
+impl ModerationRegistryListArgs {
+    fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &SorafsModerationModelRegistryFilter) -> Result<Response<Vec<u8>>>,
+    {
+        let filter = SorafsModerationModelRegistryFilter { limit: self.limit };
+        let client = context.client_from_config();
+        let response = list(&client, &filter)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationRegistrySubmitReproArgs {
+    /// Reproducibility manifest path.
+    #[arg(long = "manifest", value_name = "PATH")]
+    manifest: PathBuf,
+    /// Input format: json or norito.
+    #[arg(long = "format", default_value = "json")]
+    format: String,
+}
+
+impl Run for ModerationRegistrySubmitReproArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(
+            context,
+            Client::post_sorafs_moderation_model_registry_repro_manifest,
+        )
+    }
+}
+
+impl ModerationRegistrySubmitReproArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        let manifest_bytes =
+            load_moderation_registry_repro_manifest_bytes(&self.manifest, self.format.as_str())?;
+        let client = context.client_from_config();
+        let response = submit(&client, &manifest_bytes)?;
+        render_json_response_ok_or_accepted(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationRegistrySubmitCorpusArgs {
+    /// Adversarial corpus manifest path.
+    #[arg(long = "manifest", value_name = "PATH")]
+    manifest: PathBuf,
+    /// Input format: json or norito.
+    #[arg(long = "format", default_value = "json")]
+    format: String,
+}
+
+impl Run for ModerationRegistrySubmitCorpusArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(
+            context,
+            Client::post_sorafs_moderation_model_registry_corpus,
+        )
+    }
+}
+
+impl ModerationRegistrySubmitCorpusArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        let manifest_bytes =
+            load_moderation_registry_corpus_manifest_bytes(&self.manifest, self.format.as_str())?;
+        let client = context.client_from_config();
+        let response = submit(&client, &manifest_bytes)?;
+        render_json_response_ok_or_accepted(context, response)
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum ModerationScreeningCommand {
+    /// List local moderation screening records.
+    List(ModerationScreeningListArgs),
+    /// Submit one deterministic local screening result JSON file.
+    Submit(ModerationScreeningSubmitArgs),
+}
+
+impl Run for ModerationScreeningCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::List(args) => args.run(context),
+            Self::Submit(args) => args.run(context),
+        }
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationScreeningListArgs {
+    /// Maximum number of screening records to return.
+    #[arg(long)]
+    limit: Option<u32>,
+}
+
+impl Run for ModerationScreeningListArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_moderation_screening_results)
+    }
+}
+
+impl ModerationScreeningListArgs {
+    fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &SorafsModerationScreeningResultsFilter) -> Result<Response<Vec<u8>>>,
+    {
+        let filter = SorafsModerationScreeningResultsFilter { limit: self.limit };
+        let client = context.client_from_config();
+        let response = list(&client, &filter)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationScreeningSubmitArgs {
+    /// JSON file emitted by `sorafs_cli moderation run-local --json-out`.
+    #[arg(long = "input", value_name = "PATH")]
+    input: PathBuf,
+}
+
+impl Run for ModerationScreeningSubmitArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_moderation_screening_result)
+    }
+}
+
+impl ModerationScreeningSubmitArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(
+            &Client,
+            &SorafsModerationScreeningResultRequest<'_>,
+        ) -> Result<Response<Vec<u8>>>,
+    {
+        let payload = load_moderation_screening_submit_payload(&self.input)?;
+        let request = payload.as_request();
+        let client = context.client_from_config();
+        let response = submit(&client, &request)?;
+        render_json_response_ok_or_accepted(context, response)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ModerationScreeningSubmitPayload {
+    subject: String,
+    subject_digest_hex: String,
+    manifest_id_hex: String,
+    runner_hash_hex: String,
+    combined_score_bps: u16,
+    verdict: String,
+    screened_at_unix: Option<u64>,
+    evidence_digest_hex: Option<String>,
+    policy_digest_hex: Option<String>,
+    notes: Option<String>,
+}
+
+impl ModerationScreeningSubmitPayload {
+    fn as_request(&self) -> SorafsModerationScreeningResultRequest<'_> {
+        SorafsModerationScreeningResultRequest {
+            subject: self.subject.as_str(),
+            subject_digest_hex: self.subject_digest_hex.as_str(),
+            manifest_id_hex: self.manifest_id_hex.as_str(),
+            runner_hash_hex: self.runner_hash_hex.as_str(),
+            combined_score_bps: self.combined_score_bps,
+            verdict: self.verdict.as_str(),
+            screened_at_unix: self.screened_at_unix,
+            evidence_digest_hex: self.evidence_digest_hex.as_deref(),
+            policy_digest_hex: self.policy_digest_hex.as_deref(),
+            notes: self.notes.as_deref(),
+        }
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum ModerationQuarantineCommand {
+    /// List local moderation quarantine records.
+    List(ModerationQuarantineListArgs),
+    /// Store or read local encrypted quarantine payload objects.
+    #[command(subcommand)]
+    Object(ModerationQuarantineObjectCommand),
+    /// Deliver payload-free juror notification manifests.
+    #[command(subcommand)]
+    Notifications(ModerationQuarantineNotificationsCommand),
+    /// Mark a local moderation quarantine record reviewed.
+    Review(ModerationQuarantineReviewArgs),
+    /// Release a reviewed local moderation quarantine record.
+    Release(ModerationQuarantineReleaseArgs),
+    /// Build a reviewed quarantine appeal finance handoff.
+    AppealHandoff(ModerationQuarantineAppealHandoffArgs),
+    /// Announce a reviewed quarantine appeal ballot from a confirmed deposit.
+    AppealBallot(ModerationQuarantineAppealBallotArgs),
+    /// Read one role-gated local quarantine operator-panel workflow view.
+    OperatorPanel(ModerationQuarantineOperatorPanelArgs),
+    /// Build a payload-free bridge automation plan from the operator-panel view.
+    BridgePlan(ModerationQuarantineBridgePlanArgs),
+    /// Run a local payload-free operator-panel workflow service.
+    OperatorServe(ModerationQuarantineOperatorServeArgs),
+    /// Probe a deployed operator workflow service and emit payload-free evidence.
+    OperatorCanary(ModerationQuarantineOperatorCanaryArgs),
+}
+
+impl Run for ModerationQuarantineCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::List(args) => args.run(context),
+            Self::Object(cmd) => cmd.run(context),
+            Self::Notifications(cmd) => cmd.run(context),
+            Self::Review(args) => args.run(context),
+            Self::Release(args) => args.run(context),
+            Self::AppealHandoff(args) => args.run(context),
+            Self::AppealBallot(args) => args.run(context),
+            Self::OperatorPanel(args) => args.run(context),
+            Self::BridgePlan(args) => args.run(context),
+            Self::OperatorServe(args) => args.run(context),
+            Self::OperatorCanary(args) => args.run(context),
+        }
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationQuarantineListArgs {
+    /// Maximum number of quarantine records to return.
+    #[arg(long)]
+    limit: Option<u32>,
+}
+
+impl Run for ModerationQuarantineListArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_moderation_quarantine)
+    }
+}
+
+impl ModerationQuarantineListArgs {
+    fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &SorafsModerationQuarantineFilter) -> Result<Response<Vec<u8>>>,
+    {
+        let filter = SorafsModerationQuarantineFilter { limit: self.limit };
+        let client = context.client_from_config();
+        let response = list(&client, &filter)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum ModerationQuarantineObjectCommand {
+    /// Seal payload bytes into the local encrypted quarantine object store.
+    Store(ModerationQuarantineObjectStoreArgs),
+    /// Read and verify one local encrypted quarantine object.
+    Read(ModerationQuarantineObjectReadArgs),
+}
+
+impl Run for ModerationQuarantineObjectCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::Store(args) => args.run(context),
+            Self::Read(args) => args.run(context),
+        }
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationQuarantineObjectStoreArgs {
+    /// 16-byte local quarantine id encoded as hexadecimal.
+    #[arg(long = "quarantine-id", value_name = "HEX")]
+    quarantine_id: String,
+    /// Path to the quarantined payload bytes to seal.
+    #[arg(long = "payload-file", value_name = "PATH")]
+    payload_file: PathBuf,
+    /// Capture timestamp (RFC3339 or `@unix_seconds`; defaults to local now).
+    #[arg(long = "captured-at", value_name = "RFC3339|@UNIX")]
+    captured_at: Option<String>,
+    /// Optional content type label recorded with the object.
+    #[arg(long = "content-type", value_name = "TEXT")]
+    content_type: Option<String>,
+    /// Optional object-store notes recorded with the object.
+    #[arg(long = "notes", value_name = "TEXT")]
+    notes: Option<String>,
+}
+
+impl Run for ModerationQuarantineObjectStoreArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_moderation_quarantine_object)
+    }
+}
+
+impl ModerationQuarantineObjectStoreArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(
+            &Client,
+            &str,
+            &SorafsModerationQuarantineObjectStoreRequest<'_>,
+        ) -> Result<Response<Vec<u8>>>,
+    {
+        let quarantine_id = normalize_hex_digest::<16>(&self.quarantine_id, "--quarantine-id")?;
+        let payload = fs::read(&self.payload_file).wrap_err_with(|| {
+            format!(
+                "failed to read quarantine payload file `{}`",
+                self.payload_file.display()
+            )
+        })?;
+        if payload.is_empty() {
+            return Err(eyre!(
+                "--payload-file `{}` must not be empty",
+                self.payload_file.display()
+            ));
+        }
+        let captured_at_unix = parse_timestamp_or_now(self.captured_at.as_deref(), "captured-at")?;
+        let content_type = optional_trimmed_text(self.content_type.as_deref(), "--content-type")?;
+        let notes = optional_trimmed_text(self.notes.as_deref(), "--notes")?;
+        let request = SorafsModerationQuarantineObjectStoreRequest {
+            payload: &payload,
+            captured_at_unix: Some(captured_at_unix),
+            content_type: content_type.as_deref(),
+            notes: notes.as_deref(),
+        };
+        let client = context.client_from_config();
+        let response = submit(&client, &quarantine_id, &request)?;
+        render_json_response_ok_or_accepted(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationQuarantineObjectReadArgs {
+    /// 16-byte local quarantine id encoded as hexadecimal.
+    #[arg(long = "quarantine-id", value_name = "HEX")]
+    quarantine_id: String,
+}
+
+impl Run for ModerationQuarantineObjectReadArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_moderation_quarantine_object)
+    }
+}
+
+impl ModerationQuarantineObjectReadArgs {
+    fn run_with<C, F>(&self, context: &mut C, read: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &str) -> Result<Response<Vec<u8>>>,
+    {
+        let quarantine_id = normalize_hex_digest::<16>(&self.quarantine_id, "--quarantine-id")?;
+        let client = context.client_from_config();
+        let response = read(&client, &quarantine_id)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum ModerationQuarantineNotificationsCommand {
+    /// Deliver one payload-free juror notification manifest.
+    Deliver(ModerationQuarantineNotificationsDeliverArgs),
+    /// Probe a deployed juror notification transport and emit payload-free evidence.
+    Canary(ModerationQuarantineNotificationsCanaryArgs),
+}
+
+impl Run for ModerationQuarantineNotificationsCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::Deliver(args) => args.run(context),
+            Self::Canary(args) => args.run(context),
+        }
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationQuarantineNotificationsDeliverArgs {
+    /// Payload-free juror notification manifest JSON.
+    #[arg(long = "manifest", value_name = "PATH")]
+    manifest: PathBuf,
+    /// Directory where canonical notification JSON files are written.
+    #[arg(long = "out-dir", value_name = "DIR")]
+    out_dir: Option<PathBuf>,
+    /// Optional webhook endpoint that receives each notification JSON.
+    #[arg(long = "webhook-url", value_name = "URL")]
+    webhook_url: Option<String>,
+    /// Webhook request timeout in seconds.
+    #[arg(long = "timeout-secs", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl Run for ModerationQuarantineNotificationsDeliverArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let timeout = Duration::from_secs(self.timeout_secs.max(1));
+        let http_client = BlockingHttpClient::builder()
+            .timeout(timeout)
+            .user_agent("iroha-cli sorafs-moderation-notifications")
+            .build()
+            .wrap_err("failed to build SoraFS moderation notification HTTP client")?;
+        self.run_with(context, |url, body| {
+            post_moderation_juror_notification_webhook(&http_client, url, body)
+        })
+    }
+}
+
+impl ModerationQuarantineNotificationsDeliverArgs {
+    fn run_with<C, F>(&self, context: &mut C, mut post_webhook: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnMut(&str, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        if self.out_dir.is_none() && self.webhook_url.is_none() {
+            return Err(eyre!(
+                "at least one of --out-dir or --webhook-url is required"
+            ));
+        }
+        let webhook_url = self
+            .webhook_url
+            .as_deref()
+            .map(|url| required_trimmed_text(url, "--webhook-url"))
+            .transpose()?;
+        let manifest = load_moderation_juror_notifications_manifest(&self.manifest)?;
+        let notifications = moderation_juror_notification_entries(&manifest)?;
+        if notifications.is_empty() {
+            return Err(eyre!(
+                "juror notification manifest `{}` does not contain notifications to deliver",
+                self.manifest.display()
+            ));
+        }
+        if let Some(out_dir) = &self.out_dir {
+            fs::create_dir_all(out_dir).wrap_err_with(|| {
+                format!(
+                    "failed to create juror notification outbox `{}`",
+                    out_dir.display()
+                )
+            })?;
+        }
+
+        let mut deliveries = Vec::with_capacity(notifications.len());
+        for notification in notifications {
+            let canonical = norito::json::to_vec(notification.value)
+                .wrap_err("failed to encode juror notification JSON")?;
+            let mut outbox_path = Value::Null;
+            if let Some(out_dir) = &self.out_dir {
+                let path = out_dir.join(format!(
+                    "{}.json",
+                    safe_moderation_notification_filename(notification.delivery_id)
+                ));
+                fs::write(&path, &canonical).wrap_err_with(|| {
+                    format!(
+                        "failed to write juror notification outbox file `{}`",
+                        path.display()
+                    )
+                })?;
+                outbox_path = Value::from(path.to_string_lossy().into_owned());
+            }
+
+            let mut webhook_status = Value::Null;
+            let mut webhook_response_bytes = Value::Null;
+            let mut webhook_response_body_blake3 = Value::Null;
+            if let Some(url) = webhook_url.as_deref() {
+                let response = post_webhook(url, &canonical)?;
+                let status = response.status();
+                let body = response.into_body();
+                if !status.is_success() {
+                    return Err(make_http_error(status, &body));
+                }
+                webhook_status = Value::from(u64::from(status.as_u16()));
+                webhook_response_bytes = Value::from(u64::try_from(body.len()).unwrap_or(u64::MAX));
+                webhook_response_body_blake3 = Value::from(encode(blake3::hash(&body).as_bytes()));
+            }
+
+            deliveries.push(moderation_juror_notification_delivery_result_json(
+                notification,
+                canonical.len(),
+                &canonical,
+                outbox_path,
+                webhook_status,
+                webhook_response_bytes,
+                webhook_response_body_blake3,
+            ));
+        }
+
+        let mut output = Map::new();
+        output.insert(
+            "schema".into(),
+            Value::from("sorafs.moderation.juror_notifications.delivery.v1"),
+        );
+        output.insert("source".into(), Value::from("juror-notifications"));
+        output.insert("status".into(), Value::from("delivered"));
+        output.insert(
+            "manifest_path".into(),
+            Value::from(self.manifest.to_string_lossy().into_owned()),
+        );
+        output.insert(
+            "out_dir".into(),
+            self.out_dir.as_ref().map_or(Value::Null, |path| {
+                Value::from(path.to_string_lossy().into_owned())
+            }),
+        );
+        output.insert(
+            "webhook_url".into(),
+            webhook_url.as_deref().map_or(Value::Null, Value::from),
+        );
+        output.insert(
+            "delivery_count".into(),
+            Value::from(deliveries.len() as u64),
+        );
+        output.insert("payload_bytes_included".into(), Value::Bool(false));
+        output.insert("private_payloads_included".into(), Value::Bool(false));
+        output.insert("deliveries".into(), Value::Array(deliveries));
+        context.print_data(&Value::Object(output))
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationQuarantineNotificationsCanaryArgs {
+    /// Payload-free juror notification manifest JSON used as the canary probe.
+    #[arg(long = "manifest", value_name = "PATH")]
+    manifest: PathBuf,
+    /// Deployed webhook endpoint to probe.
+    #[arg(long = "webhook-url", value_name = "URL")]
+    webhook_url: String,
+    /// Optional path where payload-free canary evidence JSON is written.
+    #[arg(long = "out", value_name = "PATH")]
+    out: Option<PathBuf>,
+    /// Webhook request timeout in seconds.
+    #[arg(long = "timeout-secs", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl Run for ModerationQuarantineNotificationsCanaryArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let timeout = Duration::from_secs(self.timeout_secs.max(1));
+        let http_client = BlockingHttpClient::builder()
+            .timeout(timeout)
+            .user_agent("iroha-cli sorafs-moderation-notification-canary")
+            .build()
+            .wrap_err("failed to build SoraFS moderation notification canary HTTP client")?;
+        self.run_with(context, |url, body| {
+            post_moderation_juror_notification_webhook(&http_client, url, body)
+        })
+    }
+}
+
+impl ModerationQuarantineNotificationsCanaryArgs {
+    fn run_with<C, F>(&self, context: &mut C, mut post_webhook: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnMut(&str, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        let webhook_url = required_trimmed_text(&self.webhook_url, "--webhook-url")?;
+        let manifest = load_moderation_juror_notifications_manifest(&self.manifest)?;
+        let notifications = moderation_juror_notification_entries(&manifest)?;
+        if notifications.is_empty() {
+            return Err(eyre!(
+                "juror notification canary manifest `{}` does not contain notifications to probe",
+                self.manifest.display()
+            ));
+        }
+
+        let mut probes = Vec::with_capacity(notifications.len());
+        for notification in notifications {
+            let canonical = norito::json::to_vec(notification.value)
+                .wrap_err("failed to encode juror notification canary JSON")?;
+            let response = post_webhook(&webhook_url, &canonical)?;
+            probes.push(moderation_juror_notification_canary_probe_json(
+                notification,
+                &canonical,
+                response,
+            )?);
+        }
+
+        let status = if probes.iter().all(moderation_canary_probe_ok) {
+            "passed"
+        } else {
+            "failed"
+        };
+        let mut evidence = Map::new();
+        evidence.insert(
+            "schema".into(),
+            Value::from("sorafs.moderation.juror_notifications.transport_canary.v1"),
+        );
+        evidence.insert("source".into(), Value::from("juror-notifications"));
+        evidence.insert("status".into(), Value::from(status));
+        evidence.insert(
+            "manifest_path".into(),
+            Value::from(self.manifest.to_string_lossy().into_owned()),
+        );
+        evidence.insert(
+            "manifest_body_blake3".into(),
+            Value::from(encode(
+                blake3::hash(
+                    &norito::json::to_vec(&manifest)
+                        .wrap_err("failed to encode juror notification canary manifest")?,
+                )
+                .as_bytes(),
+            )),
+        );
+        evidence.insert("webhook_url".into(), Value::from(webhook_url));
+        evidence.insert("probe_count".into(), Value::from(probes.len() as u64));
+        evidence.insert(
+            "accepted_count".into(),
+            Value::from(
+                probes
+                    .iter()
+                    .filter(|probe| moderation_canary_probe_ok(probe))
+                    .count() as u64,
+            ),
+        );
+        evidence.insert("payload_bytes_included".into(), Value::Bool(false));
+        evidence.insert("private_payloads_included".into(), Value::Bool(false));
+        evidence.insert("probes".into(), Value::Array(probes));
+        let evidence = Value::Object(evidence);
+
+        if let Some(path) = &self.out {
+            write_json_artifact(path, &evidence, "juror notification canary evidence")?;
+        }
+        context.print_data(&evidence)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationQuarantineReviewArgs {
+    /// 16-byte local quarantine id encoded as hexadecimal.
+    #[arg(long = "quarantine-id", value_name = "HEX")]
+    quarantine_id: String,
+    /// Operator identity recorded in the checkpoint (defaults to the CLI account).
+    #[arg(long = "reviewed-by", value_name = "TEXT")]
+    reviewed_by: Option<String>,
+    /// Review timestamp (RFC3339 or `@unix_seconds`; defaults to local now).
+    #[arg(long = "reviewed-at", value_name = "RFC3339|@UNIX")]
+    reviewed_at: Option<String>,
+    /// Optional review notes recorded with the transition.
+    #[arg(long = "notes", value_name = "TEXT")]
+    notes: Option<String>,
+}
+
+impl Run for ModerationQuarantineReviewArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_moderation_quarantine_review)
+    }
+}
+
+impl ModerationQuarantineReviewArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(
+            &Client,
+            &str,
+            &SorafsModerationQuarantineReviewRequest<'_>,
+        ) -> Result<Response<Vec<u8>>>,
+    {
+        let quarantine_id = normalize_hex_digest::<16>(&self.quarantine_id, "--quarantine-id")?;
+        let reviewed_by =
+            moderation_actor_or_default(context, self.reviewed_by.as_deref(), "--reviewed-by")?;
+        let notes = optional_trimmed_text(self.notes.as_deref(), "--notes")?;
+        let reviewed_at_unix = parse_timestamp_or_now(self.reviewed_at.as_deref(), "reviewed-at")?;
+        let request = SorafsModerationQuarantineReviewRequest {
+            reviewed_by: reviewed_by.as_str(),
+            reviewed_at_unix: Some(reviewed_at_unix),
+            notes: notes.as_deref(),
+        };
+        let client = context.client_from_config();
+        let response = submit(&client, &quarantine_id, &request)?;
+        render_json_response_ok_or_accepted(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationQuarantineReleaseArgs {
+    /// 16-byte local quarantine id encoded as hexadecimal.
+    #[arg(long = "quarantine-id", value_name = "HEX")]
+    quarantine_id: String,
+    /// Release authority recorded in the checkpoint (defaults to the CLI account).
+    #[arg(long = "release-authority", value_name = "TEXT")]
+    release_authority: Option<String>,
+    /// Release timestamp (RFC3339 or `@unix_seconds`; defaults to local now).
+    #[arg(long = "released-at", value_name = "RFC3339|@UNIX")]
+    released_at: Option<String>,
+    /// Optional release notes recorded with the transition.
+    #[arg(long = "notes", value_name = "TEXT")]
+    notes: Option<String>,
+}
+
+impl Run for ModerationQuarantineReleaseArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_moderation_quarantine_release)
+    }
+}
+
+impl ModerationQuarantineReleaseArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(
+            &Client,
+            &str,
+            &SorafsModerationQuarantineReleaseRequest<'_>,
+        ) -> Result<Response<Vec<u8>>>,
+    {
+        let quarantine_id = normalize_hex_digest::<16>(&self.quarantine_id, "--quarantine-id")?;
+        let release_authority = moderation_actor_or_default(
+            context,
+            self.release_authority.as_deref(),
+            "--release-authority",
+        )?;
+        let notes = optional_trimmed_text(self.notes.as_deref(), "--notes")?;
+        let released_at_unix = parse_timestamp_or_now(self.released_at.as_deref(), "released-at")?;
+        let request = SorafsModerationQuarantineReleaseRequest {
+            release_authority: release_authority.as_str(),
+            released_at_unix: Some(released_at_unix),
+            notes: notes.as_deref(),
+        };
+        let client = context.client_from_config();
+        let response = submit(&client, &quarantine_id, &request)?;
+        render_json_response_ok_or_accepted(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationQuarantineAppealHandoffArgs {
+    /// 16-byte local quarantine id encoded as hexadecimal.
+    #[arg(long = "quarantine-id", value_name = "HEX")]
+    quarantine_id: String,
+    /// JSON appeal handoff request payload path.
+    #[arg(long = "input", value_name = "PATH")]
+    input: PathBuf,
+}
+
+impl Run for ModerationQuarantineAppealHandoffArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(
+            context,
+            Client::post_sorafs_moderation_quarantine_appeal_handoff_json,
+        )
+    }
+}
+
+impl ModerationQuarantineAppealHandoffArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &str, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        let quarantine_id = normalize_hex_digest::<16>(&self.quarantine_id, "--quarantine-id")?;
+        let payload =
+            load_sorafs_json_payload(&self.input, "moderation quarantine appeal handoff")?;
+        let client = context.client_from_config();
+        let response = submit(&client, &quarantine_id, &payload)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationQuarantineAppealBallotArgs {
+    /// 16-byte local quarantine id encoded as hexadecimal.
+    #[arg(long = "quarantine-id", value_name = "HEX")]
+    quarantine_id: String,
+    /// JSON appeal ballot announcement payload path.
+    #[arg(long = "input", value_name = "PATH")]
+    input: PathBuf,
+}
+
+impl Run for ModerationQuarantineAppealBallotArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(
+            context,
+            Client::post_sorafs_moderation_quarantine_appeal_ballot_json,
+        )
+    }
+}
+
+impl ModerationQuarantineAppealBallotArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &str, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        let quarantine_id = normalize_hex_digest::<16>(&self.quarantine_id, "--quarantine-id")?;
+        let payload = load_sorafs_json_payload(&self.input, "moderation quarantine appeal ballot")?;
+        let client = context.client_from_config();
+        let response = submit(&client, &quarantine_id, &payload)?;
+        render_json_response_ok_or_accepted(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationQuarantineOperatorPanelArgs {
+    /// 16-byte local quarantine id encoded as hexadecimal.
+    #[arg(long = "quarantine-id", value_name = "HEX")]
+    quarantine_id: String,
+    /// Maximum number of matching ballots to return.
+    #[arg(long)]
+    limit: Option<u32>,
+}
+
+impl Run for ModerationQuarantineOperatorPanelArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(
+            context,
+            Client::get_sorafs_moderation_quarantine_operator_panel,
+        )
+    }
+}
+
+impl ModerationQuarantineOperatorPanelArgs {
+    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &str, &SorafsModerationQuarantineFilter) -> Result<Response<Vec<u8>>>,
+    {
+        let quarantine_id = normalize_hex_digest::<16>(&self.quarantine_id, "--quarantine-id")?;
+        let filter = SorafsModerationQuarantineFilter { limit: self.limit };
+        let client = context.client_from_config();
+        let response = get(&client, &quarantine_id, &filter)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationQuarantineBridgePlanArgs {
+    /// 16-byte local quarantine id encoded as hexadecimal.
+    #[arg(long = "quarantine-id", value_name = "HEX")]
+    quarantine_id: String,
+    /// Maximum number of matching ballots to inspect.
+    #[arg(long)]
+    limit: Option<u32>,
+}
+
+impl Run for ModerationQuarantineBridgePlanArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(
+            context,
+            Client::get_sorafs_moderation_quarantine_operator_panel,
+        )
+    }
+}
+
+const MODERATION_OPERATOR_SERVICE_DEFAULT_LISTEN: &str = "127.0.0.1:9201";
+const MODERATION_OPERATOR_SERVICE_DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationQuarantineOperatorServeArgs {
+    /// Local host:port for the operator workflow service.
+    #[arg(long, default_value = MODERATION_OPERATOR_SERVICE_DEFAULT_LISTEN)]
+    listen: String,
+    /// Default ballot limit for operator-panel and bridge-plan reads.
+    #[arg(long)]
+    limit: Option<u32>,
+    /// Maximum accepted HTTP request body bytes.
+    #[arg(long, default_value_t = MODERATION_OPERATOR_SERVICE_DEFAULT_MAX_BODY_BYTES)]
+    max_body_bytes: usize,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationQuarantineOperatorCanaryArgs {
+    /// Base URL of the deployed operator workflow service.
+    #[arg(long = "operator-url", value_name = "URL")]
+    operator_url: String,
+    /// 16-byte local quarantine id encoded as hexadecimal.
+    #[arg(long = "quarantine-id", value_name = "HEX")]
+    quarantine_id: String,
+    /// Maximum number of matching ballots to request from readback routes.
+    #[arg(long)]
+    limit: Option<u32>,
+    /// HTTP timeout in seconds.
+    #[arg(long = "timeout-secs", default_value_t = 30)]
+    timeout_secs: u64,
+    /// Optional path where the canary evidence JSON will be written.
+    #[arg(long = "out", value_name = "PATH")]
+    out: Option<PathBuf>,
+}
+
+impl Run for ModerationQuarantineOperatorServeArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let client = context.client_from_config();
+        let service = self.service(
+            Arc::new(client),
+            context.config().torii_api_url.as_str().to_string(),
+            context.config().account.to_string(),
+        )?;
+        let listener = TcpListener::bind(&service.listen).wrap_err_with(|| {
+            format!(
+                "failed to bind SoraFS moderation operator service to `{}`",
+                service.listen
+            )
+        })?;
+        context.print_data(&service.status_json())?;
+        let service = Arc::new(service);
+        for stream in listener.incoming() {
+            let service = Arc::clone(&service);
+            match stream {
+                Ok(stream) => {
+                    thread::spawn(move || {
+                        if let Err(err) = moderation_operator_handle_stream(stream, &service) {
+                            eprintln!("SoraFS moderation operator service request failed: {err}");
+                        }
+                    });
+                }
+                Err(err) => {
+                    return Err(eyre!(
+                        "failed to accept SoraFS moderation operator service connection: {err}"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Run for ModerationQuarantineOperatorCanaryArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let timeout = Duration::from_secs(self.timeout_secs.max(1));
+        let client = BlockingHttpClient::builder()
+            .timeout(timeout)
+            .user_agent("sorafs-cli moderation-operator-canary")
+            .build()
+            .wrap_err("failed to construct SoraFS moderation operator canary HTTP client")?;
+        self.run_with_fetch(context, |url| {
+            moderation_operator_canary_http_get(&client, url)
+        })
+    }
+}
+
+impl ModerationQuarantineOperatorCanaryArgs {
+    fn run_with_fetch<C, F>(&self, context: &mut C, mut fetch: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnMut(&str) -> Result<ModerationOperatorCanaryHttpResponse>,
+    {
+        let operator_url = required_trimmed_text(&self.operator_url, "--operator-url")?;
+        let quarantine_id = normalize_hex_digest::<16>(&self.quarantine_id, "--quarantine-id")?;
+        let evidence = moderation_operator_canary_evidence_json(
+            &operator_url,
+            &quarantine_id,
+            self.limit,
+            &mut fetch,
+        )?;
+        if let Some(path) = &self.out {
+            ensure_parent_dir(path)?;
+            let bytes = norito::json::to_vec_pretty(&evidence)
+                .wrap_err("failed to serialize SoraFS moderation operator canary evidence")?;
+            fs::write(path, bytes).wrap_err_with(|| {
+                format!(
+                    "failed to write SoraFS moderation operator canary evidence to `{}`",
+                    path.display()
+                )
+            })?;
+        }
+        context.print_data(&evidence)
+    }
+}
+
+impl ModerationQuarantineOperatorServeArgs {
+    fn service(
+        &self,
+        workflow_source: Arc<dyn ModerationOperatorWorkflowSource>,
+        upstream: String,
+        default_actor: String,
+    ) -> Result<ModerationOperatorService> {
+        if self.listen.trim().is_empty() {
+            return Err(eyre!("--listen must not be empty"));
+        }
+        if self.max_body_bytes == 0 {
+            return Err(eyre!("--max-body-bytes must be greater than zero"));
+        }
+        Ok(ModerationOperatorService {
+            listen: self.listen.trim().to_string(),
+            default_limit: self.limit,
+            max_body_bytes: self.max_body_bytes,
+            upstream,
+            default_actor,
+            workflow_source,
+        })
+    }
+}
+
+impl ModerationQuarantineBridgePlanArgs {
+    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &str, &SorafsModerationQuarantineFilter) -> Result<Response<Vec<u8>>>,
+    {
+        let quarantine_id = normalize_hex_digest::<16>(&self.quarantine_id, "--quarantine-id")?;
+        let filter = SorafsModerationQuarantineFilter { limit: self.limit };
+        let client = context.client_from_config();
+        let response = get(&client, &quarantine_id, &filter)?;
+        render_moderation_quarantine_bridge_plan_response(context, response, &quarantine_id)
     }
 }
 
@@ -2817,7 +5575,10 @@ impl Run for Command {
             Command::Toolkit(cmd) => cmd.run(context),
             Command::GuardDirectory(cmd) => cmd.run(context),
             Command::Reserve(cmd) => cmd.run(context),
+            Command::Appeals(cmd) => cmd.run(context),
             Command::Gar(cmd) => cmd.run(context),
+            Command::Transparency(cmd) => cmd.run(context),
+            Command::Moderation(cmd) => cmd.run(context),
             Command::Repair(cmd) => cmd.run(context),
             Command::Gc(cmd) => cmd.run(context),
             Command::Fetch(args) => args.run(context),
@@ -6230,6 +8991,1724 @@ fn parse_account_id_str<C: RunContext>(context: &C, value: &str, flag: &str) -> 
     let trimmed = value.trim();
     crate::resolve_account_id(context, trimmed)
         .wrap_err_with(|| format!("{flag} must be a valid account identifier"))
+}
+
+fn moderation_actor_or_default<C: RunContext>(
+    context: &C,
+    value: Option<&str>,
+    flag: &str,
+) -> Result<String> {
+    match value {
+        Some(raw) => required_trimmed_text(raw, flag),
+        None => Ok(context.config().account.to_string()),
+    }
+}
+
+fn required_trimmed_text(value: &str, flag: &str) -> Result<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(eyre!("{flag} must not be empty"));
+    }
+    Ok(trimmed.to_owned())
+}
+
+fn optional_trimmed_text(value: Option<&str>, flag: &str) -> Result<Option<String>> {
+    value
+        .map(|text| required_trimmed_text(text, flag))
+        .transpose()
+}
+
+fn required_path_string(path: &Path, flag: &str) -> Result<String> {
+    required_trimmed_text(&path.display().to_string(), flag)
+}
+
+fn required_path_strings(paths: &[PathBuf], flag: &str) -> Result<Vec<String>> {
+    paths
+        .iter()
+        .map(|path| required_path_string(path, flag))
+        .collect()
+}
+
+fn shell_single_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn systemd_quote(value: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn xml_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn load_moderation_ballot_commit_payload(
+    path: &Path,
+    format: &str,
+) -> Result<SoraFsModerationBallotCommitV1> {
+    let format = normalize_moderation_ballot_payload_format(format)?;
+    let bytes = read_moderation_ballot_payload_file(path)?;
+    let commit: SoraFsModerationBallotCommitV1 = match format {
+        "json" => norito::json::from_slice(&bytes).wrap_err_with(|| {
+            format!(
+                "failed to parse moderation ballot commit JSON `{}`",
+                path.display()
+            )
+        })?,
+        "norito" => decode_from_bytes(&bytes).wrap_err_with(|| {
+            format!(
+                "failed to decode moderation ballot commit Norito `{}`",
+                path.display()
+            )
+        })?,
+        _ => unreachable!("format normalized"),
+    };
+    commit
+        .validate()
+        .wrap_err("moderation ballot commit validation failed")?;
+    Ok(commit)
+}
+
+fn load_moderation_ballot_reveal_payload(
+    path: &Path,
+    format: &str,
+) -> Result<SoraFsModerationBallotRevealV1> {
+    let format = normalize_moderation_ballot_payload_format(format)?;
+    let bytes = read_moderation_ballot_payload_file(path)?;
+    let reveal: SoraFsModerationBallotRevealV1 = match format {
+        "json" => norito::json::from_slice(&bytes).wrap_err_with(|| {
+            format!(
+                "failed to parse moderation ballot reveal JSON `{}`",
+                path.display()
+            )
+        })?,
+        "norito" => decode_from_bytes(&bytes).wrap_err_with(|| {
+            format!(
+                "failed to decode moderation ballot reveal Norito `{}`",
+                path.display()
+            )
+        })?,
+        _ => unreachable!("format normalized"),
+    };
+    reveal
+        .validate()
+        .wrap_err("moderation ballot reveal validation failed")?;
+    Ok(reveal)
+}
+
+fn read_moderation_ballot_payload_file(path: &Path) -> Result<Vec<u8>> {
+    let bytes = fs::read(path).wrap_err_with(|| {
+        format!(
+            "failed to read moderation ballot payload `{}`",
+            path.display()
+        )
+    })?;
+    if bytes.is_empty() {
+        return Err(eyre!(
+            "moderation ballot payload `{}` must not be empty",
+            path.display()
+        ));
+    }
+    Ok(bytes)
+}
+
+fn load_moderation_commit_reveal_status_payload(path: &Path) -> Result<Value> {
+    let bytes = fs::read(path).wrap_err_with(|| {
+        format!(
+            "failed to read moderation commit/reveal status `{}`",
+            path.display()
+        )
+    })?;
+    if bytes.is_empty() {
+        return Err(eyre!(
+            "moderation commit/reveal status `{}` must not be empty",
+            path.display()
+        ));
+    }
+    let status: Value = norito::json::from_slice(&bytes).wrap_err_with(|| {
+        format!(
+            "failed to parse moderation commit/reveal status JSON `{}`",
+            path.display()
+        )
+    })?;
+    ensure_moderation_bridge_plan_has_no_payload(&status)?;
+    Ok(status)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ModerationBallotExecutionKey {
+    case_id: String,
+    round_id: String,
+    juror_id: String,
+}
+
+impl ModerationBallotExecutionKey {
+    fn from_commit(commit: &SoraFsModerationBallotCommitV1) -> Self {
+        Self {
+            case_id: commit.context.case_id.clone(),
+            round_id: commit.round_id.clone(),
+            juror_id: commit.juror_id.clone(),
+        }
+    }
+
+    fn from_reveal(reveal: &SoraFsModerationBallotRevealV1) -> Self {
+        Self {
+            case_id: reveal.context.case_id.clone(),
+            round_id: reveal.round_id.clone(),
+            juror_id: reveal.juror_id.clone(),
+        }
+    }
+
+    fn new(case_id: &str, round_id: &str, juror_id: &str) -> Result<Self> {
+        Ok(Self {
+            case_id: required_trimmed_text(case_id, "case_id")?,
+            round_id: required_trimmed_text(round_id, "round_id")?,
+            juror_id: required_trimmed_text(juror_id, "juror_id")?,
+        })
+    }
+}
+
+#[derive(Debug, Default)]
+struct ModerationCommitRevealCoordination {
+    pending_commits: BTreeSet<ModerationBallotExecutionKey>,
+    pending_reveals: BTreeSet<ModerationBallotExecutionKey>,
+    tally_ready: BTreeSet<(String, String)>,
+}
+
+fn moderation_commit_reveal_coordination_from_status(
+    status: &Value,
+) -> Result<ModerationCommitRevealCoordination> {
+    let root = value_object(status, "commit/reveal execution status")?;
+    let schema = required_string_field(root, "schema", "commit/reveal execution status")?;
+    if schema != "sorafs.moderation.quarantine.commit_reveal_status.v1" {
+        return Err(eyre!(
+            "commit/reveal execution status schema `{schema}` is not supported"
+        ));
+    }
+    let ballots = root
+        .get("ballots")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let mut coordination = ModerationCommitRevealCoordination::default();
+    for ballot in ballots {
+        let ballot_obj = value_object(ballot, "commit/reveal execution ballot")?;
+        let case_id =
+            required_string_field(ballot_obj, "case_id", "commit/reveal execution ballot")?;
+        let round_id =
+            required_string_field(ballot_obj, "round_id", "commit/reveal execution ballot")?;
+        for juror_id in moderation_commit_reveal_juror_list(ballot_obj, "missing_commit_jurors")? {
+            coordination
+                .pending_commits
+                .insert(ModerationBallotExecutionKey::new(
+                    case_id, round_id, juror_id,
+                )?);
+        }
+        for juror_id in moderation_commit_reveal_juror_list(ballot_obj, "missing_reveal_jurors")? {
+            coordination
+                .pending_reveals
+                .insert(ModerationBallotExecutionKey::new(
+                    case_id, round_id, juror_id,
+                )?);
+        }
+        if ballot_obj
+            .get("ready_to_tally")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            coordination.tally_ready.insert((
+                required_trimmed_text(case_id, "case_id")?,
+                required_trimmed_text(round_id, "round_id")?,
+            ));
+        }
+    }
+    Ok(coordination)
+}
+
+fn moderation_commit_reveal_juror_list<'a>(
+    ballot_obj: &'a Map,
+    field: &str,
+) -> Result<Vec<&'a str>> {
+    let Some(values) = ballot_obj.get(field) else {
+        return Ok(Vec::new());
+    };
+    let values = values
+        .as_array()
+        .ok_or_else(|| eyre!("commit/reveal execution ballot `{field}` must be an array"))?;
+    values
+        .iter()
+        .map(|value| {
+            value.as_str().ok_or_else(|| {
+                eyre!("commit/reveal execution ballot `{field}` entries must be strings")
+            })
+        })
+        .collect()
+}
+
+fn moderation_ballot_execution_action_json(
+    action: &str,
+    case_id: &str,
+    round_id: &str,
+    juror_id: Option<&str>,
+    response: Response<Vec<u8>>,
+) -> Result<Value> {
+    let status = response.status();
+    let body = response.into_body();
+    if !matches!(status, StatusCode::OK | StatusCode::ACCEPTED) {
+        return Err(make_http_error(status, &body));
+    }
+    let mut fields = Map::new();
+    fields.insert("action".into(), Value::from(action.to_string()));
+    fields.insert("case_id".into(), Value::from(case_id.to_string()));
+    fields.insert("round_id".into(), Value::from(round_id.to_string()));
+    fields.insert(
+        "juror_id".into(),
+        juror_id.map_or(Value::Null, |value| Value::from(value.to_string())),
+    );
+    fields.insert(
+        "response_status".into(),
+        Value::from(u64::from(status.as_u16())),
+    );
+    fields.insert(
+        "response_bytes".into(),
+        Value::from(u64::try_from(body.len()).unwrap_or(u64::MAX)),
+    );
+    fields.insert(
+        "response_body_blake3".into(),
+        Value::from(encode(blake3::hash(&body).as_bytes())),
+    );
+    fields.insert("payload_bytes_included".into(), Value::Bool(false));
+    fields.insert("private_payloads_included".into(), Value::Bool(false));
+    Ok(Value::Object(fields))
+}
+
+fn write_moderation_ballots_executor_bundle(
+    args: &ModerationBallotsExecutorBundleArgs,
+) -> Result<Value> {
+    if args.commit_payloads.is_empty() && args.reveal_payloads.is_empty() && !args.submit_tally {
+        return Err(eyre!(
+            "at least one --commit-payload, --reveal-payload, or --submit-tally is required"
+        ));
+    }
+    if args.interval_secs == 0 {
+        return Err(eyre!("--interval-secs must be greater than zero"));
+    }
+    let status_path = required_path_string(&args.status, "--status")?;
+    let commit_format = normalize_moderation_ballot_payload_format(&args.commit_format)?;
+    let reveal_format = normalize_moderation_ballot_payload_format(&args.reveal_format)?;
+    let iroha_bin = required_trimmed_text(&args.iroha_bin, "--iroha-bin")?;
+    let service_name = required_trimmed_text(&args.service_name, "--service-name")?;
+    if service_name.contains('/') || service_name.contains('\\') {
+        return Err(eyre!("--service-name must not contain path separators"));
+    }
+    let service_user = required_trimmed_text(&args.service_user, "--service-user")?;
+    let service_group = required_trimmed_text(&args.service_group, "--service-group")?;
+    let commit_payloads = required_path_strings(&args.commit_payloads, "--commit-payload")?;
+    let reveal_payloads = required_path_strings(&args.reveal_payloads, "--reveal-payload")?;
+
+    fs::create_dir_all(&args.bundle_out).wrap_err_with(|| {
+        format!(
+            "failed to create moderation ballots executor bundle directory `{}`",
+            args.bundle_out.display()
+        )
+    })?;
+    let bundle_dir = args
+        .bundle_out
+        .canonicalize()
+        .unwrap_or_else(|_| args.bundle_out.clone());
+    let env_path = bundle_dir.join("executor.env");
+    let run_path = bundle_dir.join("run.sh");
+    let systemd_unit_name = format!("{service_name}.service");
+    let systemd_timer_name = format!("{service_name}.timer");
+    let launchd_plist_name = format!("{service_name}.plist");
+    let metadata_path = bundle_dir.join("bundle.json");
+    let readme_path = bundle_dir.join("README.md");
+
+    let env = moderation_ballots_executor_bundle_env(
+        &iroha_bin,
+        &status_path,
+        commit_format,
+        reveal_format,
+    );
+    write_text_artifact(&env_path, &env, "moderation ballots executor environment")?;
+    let run_script = moderation_ballots_executor_bundle_run_script(
+        &commit_payloads,
+        &reveal_payloads,
+        args.submit_tally,
+    );
+    write_text_artifact(
+        &run_path,
+        &run_script,
+        "moderation ballots executor run script",
+    )?;
+    set_executable_if_supported(&run_path)?;
+    let systemd_unit = moderation_ballots_executor_bundle_systemd_unit(
+        &service_name,
+        &service_user,
+        &service_group,
+        &bundle_dir,
+        &run_path,
+        &env_path,
+    );
+    write_text_artifact(
+        &bundle_dir.join(&systemd_unit_name),
+        &systemd_unit,
+        "moderation ballots executor systemd unit",
+    )?;
+    let systemd_timer =
+        moderation_ballots_executor_bundle_systemd_timer(&service_name, args.interval_secs);
+    write_text_artifact(
+        &bundle_dir.join(&systemd_timer_name),
+        &systemd_timer,
+        "moderation ballots executor systemd timer",
+    )?;
+    let launchd = moderation_ballots_executor_bundle_launchd_plist(
+        &service_name,
+        &bundle_dir,
+        &run_path,
+        args.interval_secs,
+    );
+    write_text_artifact(
+        &bundle_dir.join(&launchd_plist_name),
+        &launchd,
+        "moderation ballots executor launchd plist",
+    )?;
+    let readme = moderation_ballots_executor_bundle_readme(
+        &status_path,
+        commit_payloads.len(),
+        reveal_payloads.len(),
+        args.submit_tally,
+        args.interval_secs,
+        &systemd_unit_name,
+        &systemd_timer_name,
+        &launchd_plist_name,
+    );
+    write_text_artifact(
+        &readme_path,
+        &readme,
+        "moderation ballots executor bundle README",
+    )?;
+
+    let files = vec![
+        "executor.env",
+        "run.sh",
+        systemd_unit_name.as_str(),
+        systemd_timer_name.as_str(),
+        launchd_plist_name.as_str(),
+        "bundle.json",
+        "README.md",
+    ];
+    let summary = moderation_ballots_executor_bundle_summary_json(
+        &bundle_dir,
+        &status_path,
+        commit_format,
+        reveal_format,
+        commit_payloads.len(),
+        reveal_payloads.len(),
+        args.submit_tally,
+        args.interval_secs,
+        &iroha_bin,
+        &service_name,
+        &service_user,
+        &service_group,
+        &systemd_unit_name,
+        &systemd_timer_name,
+        &launchd_plist_name,
+        &files,
+    );
+    write_json_artifact(
+        &metadata_path,
+        &summary,
+        "moderation ballots executor bundle metadata",
+    )?;
+    Ok(summary)
+}
+
+fn moderation_ballots_executor_bundle_env(
+    iroha_bin: &str,
+    status_path: &str,
+    commit_format: &str,
+    reveal_format: &str,
+) -> String {
+    format!(
+        "IROHA_BIN={}\nSORAFS_BALLOTS_EXECUTOR_STATUS_PATH={}\nSORAFS_BALLOTS_EXECUTOR_COMMIT_FORMAT={}\nSORAFS_BALLOTS_EXECUTOR_REVEAL_FORMAT={}\n",
+        shell_single_quote(iroha_bin),
+        shell_single_quote(status_path),
+        shell_single_quote(commit_format),
+        shell_single_quote(reveal_format)
+    )
+}
+
+fn moderation_ballots_executor_bundle_run_script(
+    commit_payloads: &[String],
+    reveal_payloads: &[String],
+    submit_tally: bool,
+) -> String {
+    let mut command_args = vec![
+        "  --status=\"$SORAFS_BALLOTS_EXECUTOR_STATUS_PATH\"".to_string(),
+        "  --commit-format=\"$SORAFS_BALLOTS_EXECUTOR_COMMIT_FORMAT\"".to_string(),
+        "  --reveal-format=\"$SORAFS_BALLOTS_EXECUTOR_REVEAL_FORMAT\"".to_string(),
+    ];
+    command_args.extend(
+        commit_payloads
+            .iter()
+            .map(|path| format!("  --commit-payload={}", shell_single_quote(path))),
+    );
+    command_args.extend(
+        reveal_payloads
+            .iter()
+            .map(|path| format!("  --reveal-payload={}", shell_single_quote(path))),
+    );
+    if submit_tally {
+        command_args.push("  --submit-tally".to_string());
+    }
+
+    format!(
+        "#!/usr/bin/env sh\nset -eu\nSCRIPT_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nif [ -f \"$SCRIPT_DIR/executor.env\" ]; then\n  . \"$SCRIPT_DIR/executor.env\"\nfi\n: \"${{IROHA_BIN:=iroha}}\"\n: \"${{SORAFS_BALLOTS_EXECUTOR_STATUS_PATH:?set SORAFS_BALLOTS_EXECUTOR_STATUS_PATH in executor.env}}\"\n: \"${{SORAFS_BALLOTS_EXECUTOR_COMMIT_FORMAT:=json}}\"\n: \"${{SORAFS_BALLOTS_EXECUTOR_REVEAL_FORMAT:=json}}\"\nexec \"$IROHA_BIN\" sorafs moderation ballots execute \\\n{}\n",
+        command_args.join(" \\\n")
+    )
+}
+
+fn moderation_ballots_executor_bundle_systemd_unit(
+    service_name: &str,
+    service_user: &str,
+    service_group: &str,
+    bundle_dir: &Path,
+    run_path: &Path,
+    env_path: &Path,
+) -> String {
+    format!(
+        "[Unit]\nDescription=SoraFS moderation ballot executor ({})\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nType=oneshot\nUser={}\nGroup={}\nWorkingDirectory={}\nEnvironmentFile={}\nExecStart={}\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=full\n\n[Install]\nWantedBy=multi-user.target\n",
+        service_name,
+        service_user,
+        service_group,
+        systemd_quote(&bundle_dir.display().to_string()),
+        systemd_quote(&env_path.display().to_string()),
+        systemd_quote(&run_path.display().to_string())
+    )
+}
+
+fn moderation_ballots_executor_bundle_systemd_timer(
+    service_name: &str,
+    interval_secs: u64,
+) -> String {
+    format!(
+        "[Unit]\nDescription=Schedule SoraFS moderation ballot executor ({})\n\n[Timer]\nOnBootSec=30s\nOnUnitActiveSec={}s\nAccuracySec=5s\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n",
+        service_name, interval_secs
+    )
+}
+
+fn moderation_ballots_executor_bundle_launchd_plist(
+    service_name: &str,
+    bundle_dir: &Path,
+    run_path: &Path,
+    interval_secs: u64,
+) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>{}</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>{}</string>\n  </array>\n  <key>WorkingDirectory</key>\n  <string>{}</string>\n  <key>RunAtLoad</key>\n  <true/>\n  <key>StartInterval</key>\n  <integer>{}</integer>\n  <key>StandardOutPath</key>\n  <string>{}</string>\n  <key>StandardErrorPath</key>\n  <string>{}</string>\n</dict>\n</plist>\n",
+        xml_escape(service_name),
+        xml_escape(&run_path.display().to_string()),
+        xml_escape(&bundle_dir.display().to_string()),
+        interval_secs,
+        xml_escape(&bundle_dir.join("executor.out.log").display().to_string()),
+        xml_escape(&bundle_dir.join("executor.err.log").display().to_string())
+    )
+}
+
+fn moderation_ballots_executor_bundle_readme(
+    status_path: &str,
+    commit_payload_count: usize,
+    reveal_payload_count: usize,
+    submit_tally: bool,
+    interval_secs: u64,
+    systemd_unit_name: &str,
+    systemd_timer_name: &str,
+    launchd_plist_name: &str,
+) -> String {
+    format!(
+        "# SoraFS Moderation Ballot Executor Bundle\n\nThis bundle runs `iroha sorafs moderation ballots execute` as a scheduled local job. It does not copy private commit or reveal payload files; keep those files in an operator-controlled location and update `run.sh` only if their runtime paths change.\n\n- Status path: `{}`\n- Commit payload paths referenced: `{}`\n- Reveal payload paths referenced: `{}`\n- Submit tally requests: `{}`\n- Interval seconds: `{}`\n\nRun directly:\n\n```sh\n./run.sh\n```\n\nInstall with systemd:\n\n```sh\nsudo cp {} {} /etc/systemd/system/\nsudo systemctl daemon-reload\nsudo systemctl enable --now {}\n```\n\nInstall with launchd:\n\n```sh\ncp {} ~/Library/LaunchAgents/\nlaunchctl load ~/Library/LaunchAgents/{}\n```\n\nReplace `IROHA_BIN` in `executor.env` with the absolute path to the audited `iroha` binary on the target host before installing.\n",
+        status_path,
+        commit_payload_count,
+        reveal_payload_count,
+        submit_tally,
+        interval_secs,
+        systemd_unit_name,
+        systemd_timer_name,
+        systemd_timer_name,
+        launchd_plist_name,
+        launchd_plist_name
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn moderation_ballots_executor_bundle_summary_json(
+    bundle_dir: &Path,
+    status_path: &str,
+    commit_format: &str,
+    reveal_format: &str,
+    commit_payload_count: usize,
+    reveal_payload_count: usize,
+    submit_tally: bool,
+    interval_secs: u64,
+    iroha_bin: &str,
+    service_name: &str,
+    service_user: &str,
+    service_group: &str,
+    systemd_unit_name: &str,
+    systemd_timer_name: &str,
+    launchd_plist_name: &str,
+    files: &[&str],
+) -> Value {
+    let mut summary = Map::new();
+    summary.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.ballots.executor_bundle.v1"),
+    );
+    summary.insert("source".into(), Value::from("iroha_cli"));
+    summary.insert(
+        "bundle_dir".into(),
+        Value::from(bundle_dir.display().to_string()),
+    );
+    summary.insert("status_path".into(), Value::from(status_path.to_string()));
+    summary.insert(
+        "commit_format".into(),
+        Value::from(commit_format.to_string()),
+    );
+    summary.insert(
+        "reveal_format".into(),
+        Value::from(reveal_format.to_string()),
+    );
+    summary.insert(
+        "commit_payload_count".into(),
+        Value::from(u64::try_from(commit_payload_count).unwrap_or(u64::MAX)),
+    );
+    summary.insert(
+        "reveal_payload_count".into(),
+        Value::from(u64::try_from(reveal_payload_count).unwrap_or(u64::MAX)),
+    );
+    summary.insert("submit_tally".into(), Value::Bool(submit_tally));
+    summary.insert("interval_secs".into(), Value::from(interval_secs));
+    summary.insert("iroha_bin".into(), Value::from(iroha_bin.to_string()));
+    summary.insert("service_name".into(), Value::from(service_name.to_string()));
+    summary.insert("service_user".into(), Value::from(service_user.to_string()));
+    summary.insert(
+        "service_group".into(),
+        Value::from(service_group.to_string()),
+    );
+    summary.insert(
+        "systemd_unit".into(),
+        Value::from(systemd_unit_name.to_string()),
+    );
+    summary.insert(
+        "systemd_timer".into(),
+        Value::from(systemd_timer_name.to_string()),
+    );
+    summary.insert(
+        "launchd_plist".into(),
+        Value::from(launchd_plist_name.to_string()),
+    );
+    summary.insert(
+        "files".into(),
+        Value::Array(
+            files
+                .iter()
+                .map(|file| Value::from((*file).to_string()))
+                .collect(),
+        ),
+    );
+    summary.insert("payload_bytes_included".into(), Value::Bool(false));
+    summary.insert("private_payloads_included".into(), Value::Bool(false));
+    summary.insert("private_payload_files_copied".into(), Value::Bool(false));
+    Value::Object(summary)
+}
+
+fn moderation_ballots_executor_canary_evidence(
+    args: &ModerationBallotsExecutorCanaryArgs,
+) -> Result<Value> {
+    let bundle_dir = args
+        .bundle
+        .canonicalize()
+        .unwrap_or_else(|_| args.bundle.clone());
+    let metadata_path = bundle_dir.join("bundle.json");
+    let (metadata, metadata_bytes) = read_json_artifact(
+        &metadata_path,
+        "moderation ballots executor bundle metadata",
+    )?;
+    ensure_moderation_bridge_plan_has_no_payload(&metadata)?;
+    let metadata_fields = value_object(&metadata, "moderation ballots executor bundle metadata")?;
+    let schema = required_string_field(
+        metadata_fields,
+        "schema",
+        "moderation ballots executor bundle metadata",
+    )?;
+    if schema != "sorafs.moderation.ballots.executor_bundle.v1" {
+        return Err(eyre!(
+            "moderation ballots executor bundle metadata schema `{schema}` is not supported"
+        ));
+    }
+    require_json_bool_false(
+        metadata_fields,
+        "payload_bytes_included",
+        "moderation ballots executor bundle metadata",
+    )?;
+    require_json_bool_false(
+        metadata_fields,
+        "private_payloads_included",
+        "moderation ballots executor bundle metadata",
+    )?;
+    require_json_bool_false(
+        metadata_fields,
+        "private_payload_files_copied",
+        "moderation ballots executor bundle metadata",
+    )?;
+
+    let service_name = required_nonblank_string_field(
+        metadata_fields,
+        "service_name",
+        "moderation ballots executor bundle metadata",
+    )?;
+    let interval_secs = metadata_fields
+        .get("interval_secs")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let systemd_unit = required_nonblank_string_field(
+        metadata_fields,
+        "systemd_unit",
+        "moderation ballots executor bundle metadata",
+    )?;
+    let systemd_timer = required_nonblank_string_field(
+        metadata_fields,
+        "systemd_timer",
+        "moderation ballots executor bundle metadata",
+    )?;
+    let launchd_plist = required_nonblank_string_field(
+        metadata_fields,
+        "launchd_plist",
+        "moderation ballots executor bundle metadata",
+    )?;
+
+    let artifact_specs = [
+        ("executor.env", "env"),
+        ("run.sh", "run_script"),
+        (systemd_unit, "systemd_unit"),
+        (systemd_timer, "systemd_timer"),
+        (launchd_plist, "launchd_plist"),
+        ("README.md", "readme"),
+        ("bundle.json", "metadata"),
+    ];
+    let mut artifacts = Vec::new();
+    let mut passed_artifact_count = 0_u64;
+    for (name, kind) in artifact_specs {
+        let probe = moderation_ballots_executor_canary_artifact(&bundle_dir, name, kind)?;
+        if probe
+            .get("passed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            passed_artifact_count = passed_artifact_count.saturating_add(1);
+        }
+        artifacts.push(probe);
+    }
+
+    let execution_summary = args
+        .execution_summary
+        .as_deref()
+        .map(moderation_ballots_executor_canary_execution_summary)
+        .transpose()?;
+    let execution_summary_passed = execution_summary
+        .as_ref()
+        .and_then(|summary| summary.get("passed"))
+        .and_then(Value::as_bool)
+        .unwrap_or(args.execution_summary.is_none());
+    let artifact_count = u64::try_from(artifacts.len()).unwrap_or(u64::MAX);
+    let artifacts_passed = passed_artifact_count == artifact_count;
+    let status = if artifacts_passed && execution_summary_passed {
+        "passed"
+    } else {
+        "failed"
+    };
+
+    let mut evidence = Map::new();
+    evidence.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.ballots.executor_canary.v1"),
+    );
+    evidence.insert("source".into(), Value::from("executor-bundle"));
+    evidence.insert("status".into(), Value::from(status));
+    evidence.insert(
+        "bundle_dir".into(),
+        Value::from(bundle_dir.display().to_string()),
+    );
+    evidence.insert(
+        "bundle_metadata_bytes".into(),
+        Value::from(u64::try_from(metadata_bytes.len()).unwrap_or(u64::MAX)),
+    );
+    evidence.insert(
+        "bundle_metadata_blake3".into(),
+        Value::from(encode(blake3::hash(&metadata_bytes).as_bytes())),
+    );
+    evidence.insert("service_name".into(), Value::from(service_name.to_string()));
+    evidence.insert("interval_secs".into(), Value::from(interval_secs));
+    evidence.insert("artifact_count".into(), Value::from(artifact_count));
+    evidence.insert(
+        "passed_artifact_count".into(),
+        Value::from(passed_artifact_count),
+    );
+    evidence.insert(
+        "execution_summary_present".into(),
+        Value::Bool(args.execution_summary.is_some()),
+    );
+    evidence.insert(
+        "execution_summary".into(),
+        execution_summary.unwrap_or(Value::Null),
+    );
+    evidence.insert("payload_bytes_included".into(), Value::Bool(false));
+    evidence.insert("private_payloads_included".into(), Value::Bool(false));
+    evidence.insert("private_payload_files_copied".into(), Value::Bool(false));
+    evidence.insert("artifacts".into(), Value::Array(artifacts));
+    Ok(Value::Object(evidence))
+}
+
+fn moderation_ballots_executor_canary_artifact(
+    bundle_dir: &Path,
+    name: &str,
+    kind: &str,
+) -> Result<Value> {
+    let path = bundle_dir.join(name);
+    let mut fields = Map::new();
+    fields.insert("name".into(), Value::from(name.to_string()));
+    fields.insert("kind".into(), Value::from(kind.to_string()));
+    fields.insert("path".into(), Value::from(path.display().to_string()));
+    fields.insert("payload_bytes_included".into(), Value::Bool(false));
+    fields.insert("private_payloads_included".into(), Value::Bool(false));
+
+    if !path.exists() {
+        fields.insert("exists".into(), Value::Bool(false));
+        fields.insert("passed".into(), Value::Bool(false));
+        fields.insert("checks".into(), Value::Array(Vec::new()));
+        return Ok(Value::Object(fields));
+    }
+
+    let bytes = fs::read(&path).wrap_err_with(|| {
+        format!(
+            "failed to read executor canary artifact `{}`",
+            path.display()
+        )
+    })?;
+    let body = String::from_utf8_lossy(&bytes);
+    if body.contains("payload_b64") {
+        return Err(eyre!(
+            "executor canary artifact `{}` unexpectedly contains `payload_b64`",
+            path.display()
+        ));
+    }
+    let checks = moderation_ballots_executor_artifact_checks(kind, &body, &path)?;
+    let passed = checks.iter().all(|check| {
+        check
+            .get("passed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    });
+    fields.insert("exists".into(), Value::Bool(true));
+    fields.insert(
+        "bytes".into(),
+        Value::from(u64::try_from(bytes.len()).unwrap_or(u64::MAX)),
+    );
+    fields.insert(
+        "body_blake3".into(),
+        Value::from(encode(blake3::hash(&bytes).as_bytes())),
+    );
+    fields.insert("passed".into(), Value::Bool(passed));
+    fields.insert("checks".into(), Value::Array(checks));
+    Ok(Value::Object(fields))
+}
+
+fn moderation_ballots_executor_artifact_checks(
+    kind: &str,
+    body: &str,
+    path: &Path,
+) -> Result<Vec<Value>> {
+    let mut checks = Vec::new();
+    match kind {
+        "env" => {
+            checks.push(check_json(
+                "status_path_env",
+                body.contains("SORAFS_BALLOTS_EXECUTOR_STATUS_PATH="),
+            ));
+            checks.push(check_json(
+                "commit_format_env",
+                body.contains("SORAFS_BALLOTS_EXECUTOR_COMMIT_FORMAT="),
+            ));
+            checks.push(check_json(
+                "reveal_format_env",
+                body.contains("SORAFS_BALLOTS_EXECUTOR_REVEAL_FORMAT="),
+            ));
+        }
+        "run_script" => {
+            checks.push(check_json(
+                "executes_ballots_execute",
+                body.contains("sorafs moderation ballots execute"),
+            ));
+            checks.push(check_json(
+                "uses_status_env",
+                body.contains("--status=\"$SORAFS_BALLOTS_EXECUTOR_STATUS_PATH\""),
+            ));
+            checks.push(check_json("executable", file_is_executable(path)));
+        }
+        "systemd_unit" => {
+            checks.push(check_json("oneshot", body.contains("Type=oneshot")));
+            checks.push(check_json("exec_start", body.contains("ExecStart=")));
+            checks.push(check_json(
+                "no_new_privileges",
+                body.contains("NoNewPrivileges=true"),
+            ));
+        }
+        "systemd_timer" => {
+            checks.push(check_json(
+                "active_interval",
+                body.contains("OnUnitActiveSec="),
+            ));
+            checks.push(check_json("persistent", body.contains("Persistent=true")));
+        }
+        "launchd_plist" => {
+            checks.push(check_json("start_interval", body.contains("StartInterval")));
+            checks.push(check_json("run_at_load", body.contains("RunAtLoad")));
+        }
+        "readme" => {
+            checks.push(check_json(
+                "documents_private_payload_posture",
+                body.contains("does not copy private commit or reveal payload files"),
+            ));
+        }
+        "metadata" => {
+            checks.push(check_json(
+                "metadata_schema",
+                body.contains("sorafs.moderation.ballots.executor_bundle.v1"),
+            ));
+            checks.push(check_json(
+                "metadata_payload_free",
+                body.contains("\"payload_bytes_included\": false"),
+            ));
+        }
+        _ => checks.push(check_json("known_artifact_kind", false)),
+    }
+    Ok(checks)
+}
+
+fn moderation_ballots_executor_canary_execution_summary(path: &Path) -> Result<Value> {
+    let (summary, bytes) =
+        read_json_artifact(path, "moderation ballots executor execution summary")?;
+    ensure_moderation_bridge_plan_has_no_payload(&summary)?;
+    let fields = value_object(&summary, "moderation ballots executor execution summary")?;
+    let schema = required_string_field(
+        fields,
+        "schema",
+        "moderation ballots executor execution summary",
+    )?;
+    if schema != "sorafs.moderation.ballots.execution.v1" {
+        return Err(eyre!(
+            "moderation ballots executor execution summary schema `{schema}` is not supported"
+        ));
+    }
+    require_json_bool_false(
+        fields,
+        "payload_bytes_included",
+        "moderation ballots executor execution summary",
+    )?;
+    require_json_bool_false(
+        fields,
+        "private_payloads_included",
+        "moderation ballots executor execution summary",
+    )?;
+    let actions = fields
+        .get("actions")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    for action in actions {
+        let action_fields = value_object(action, "moderation ballots executor action summary")?;
+        require_json_bool_false(
+            action_fields,
+            "payload_bytes_included",
+            "moderation ballots executor action summary",
+        )?;
+        require_json_bool_false(
+            action_fields,
+            "private_payloads_included",
+            "moderation ballots executor action summary",
+        )?;
+    }
+
+    let mut evidence = Map::new();
+    evidence.insert("passed".into(), Value::Bool(true));
+    evidence.insert("path".into(), Value::from(path.display().to_string()));
+    evidence.insert(
+        "bytes".into(),
+        Value::from(u64::try_from(bytes.len()).unwrap_or(u64::MAX)),
+    );
+    evidence.insert(
+        "body_blake3".into(),
+        Value::from(encode(blake3::hash(&bytes).as_bytes())),
+    );
+    evidence.insert(
+        "action_count".into(),
+        fields.get("action_count").cloned().unwrap_or(Value::Null),
+    );
+    evidence.insert(
+        "commit_action_count".into(),
+        fields
+            .get("commit_action_count")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    evidence.insert(
+        "reveal_action_count".into(),
+        fields
+            .get("reveal_action_count")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    evidence.insert(
+        "tally_action_count".into(),
+        fields
+            .get("tally_action_count")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    evidence.insert("payload_bytes_included".into(), Value::Bool(false));
+    evidence.insert("private_payloads_included".into(), Value::Bool(false));
+    Ok(Value::Object(evidence))
+}
+
+fn check_json(name: &str, passed: bool) -> Value {
+    let mut fields = Map::new();
+    fields.insert("name".into(), Value::from(name.to_string()));
+    fields.insert("passed".into(), Value::Bool(passed));
+    Value::Object(fields)
+}
+
+fn file_is_executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fs::metadata(path)
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        path.is_file()
+    }
+}
+
+fn post_moderation_juror_notification_webhook(
+    client: &BlockingHttpClient,
+    url: &str,
+    body: &[u8],
+) -> Result<Response<Vec<u8>>> {
+    let response = client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .body(body.to_vec())
+        .send()
+        .wrap_err_with(|| format!("failed to deliver juror notification webhook `{url}`"))?;
+    let status = StatusCode::from_u16(response.status().as_u16())
+        .wrap_err("failed to convert juror notification webhook status")?;
+    let body = response
+        .bytes()
+        .wrap_err("failed to read juror notification webhook response body")?
+        .to_vec();
+    Ok(Response::builder().status(status).body(body).unwrap())
+}
+
+fn load_moderation_juror_notifications_manifest(path: &Path) -> Result<Value> {
+    let bytes = fs::read(path).wrap_err_with(|| {
+        format!(
+            "failed to read juror notification manifest `{}`",
+            path.display()
+        )
+    })?;
+    if bytes.is_empty() {
+        return Err(eyre!(
+            "juror notification manifest `{}` must not be empty",
+            path.display()
+        ));
+    }
+    let manifest: Value = norito::json::from_slice(&bytes).wrap_err_with(|| {
+        format!(
+            "failed to parse juror notification manifest JSON `{}`",
+            path.display()
+        )
+    })?;
+    ensure_moderation_bridge_plan_has_no_payload(&manifest)?;
+    Ok(manifest)
+}
+
+#[derive(Clone, Copy)]
+struct ModerationJurorNotificationEntry<'a> {
+    value: &'a Value,
+    delivery_id: &'a str,
+    dedup_key: &'a str,
+    action: &'a str,
+    case_id: &'a str,
+    round_id: &'a str,
+    juror_id: &'a str,
+}
+
+fn moderation_juror_notification_entries(
+    manifest: &Value,
+) -> Result<Vec<ModerationJurorNotificationEntry<'_>>> {
+    let root = value_object(manifest, "juror notification manifest")?;
+    let schema = required_string_field(root, "schema", "juror notification manifest")?;
+    if schema != "sorafs.moderation.quarantine.juror_notifications.v1" {
+        return Err(eyre!(
+            "juror notification manifest schema `{schema}` is not supported"
+        ));
+    }
+    require_json_bool_false(
+        root,
+        "payload_bytes_included",
+        "juror notification manifest",
+    )?;
+    require_json_bool_false(
+        root,
+        "private_payloads_included",
+        "juror notification manifest",
+    )?;
+    let notifications = root
+        .get("notifications")
+        .and_then(Value::as_array)
+        .ok_or_else(|| eyre!("juror notification manifest is missing `notifications` array"))?;
+    notifications
+        .iter()
+        .map(moderation_juror_notification_entry)
+        .collect()
+}
+
+fn moderation_juror_notification_entry(
+    value: &Value,
+) -> Result<ModerationJurorNotificationEntry<'_>> {
+    let fields = value_object(value, "juror notification entry")?;
+    let schema = required_string_field(fields, "schema", "juror notification entry")?;
+    if schema != "sorafs.moderation.juror_notification.v1" {
+        return Err(eyre!(
+            "juror notification entry schema `{schema}` is not supported"
+        ));
+    }
+    require_json_bool_false(fields, "payload_bytes_included", "juror notification entry")?;
+    require_json_bool_false(
+        fields,
+        "private_payload_included",
+        "juror notification entry",
+    )?;
+    Ok(ModerationJurorNotificationEntry {
+        value,
+        delivery_id: required_nonblank_string_field(
+            fields,
+            "delivery_id",
+            "juror notification entry",
+        )?,
+        dedup_key: required_nonblank_string_field(fields, "dedup_key", "juror notification entry")?,
+        action: required_nonblank_string_field(fields, "action", "juror notification entry")?,
+        case_id: required_nonblank_string_field(fields, "case_id", "juror notification entry")?,
+        round_id: required_nonblank_string_field(fields, "round_id", "juror notification entry")?,
+        juror_id: required_nonblank_string_field(fields, "juror_id", "juror notification entry")?,
+    })
+}
+
+fn require_json_bool_false(fields: &Map, field: &str, context: &str) -> Result<()> {
+    match fields.get(field).and_then(Value::as_bool) {
+        Some(false) => Ok(()),
+        Some(true) => Err(eyre!("{context} must set `{field}` to false")),
+        None => Err(eyre!("{context} is missing boolean `{field}`")),
+    }
+}
+
+fn required_nonblank_string_field<'a>(
+    fields: &'a Map,
+    field: &str,
+    context: &str,
+) -> Result<&'a str> {
+    let value = required_string_field(fields, field, context)?;
+    if value.trim().is_empty() {
+        return Err(eyre!("{context} string `{field}` must not be empty"));
+    }
+    Ok(value)
+}
+
+fn safe_moderation_notification_filename(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn moderation_juror_notification_delivery_result_json(
+    notification: ModerationJurorNotificationEntry<'_>,
+    notification_bytes: usize,
+    canonical: &[u8],
+    outbox_path: Value,
+    webhook_status: Value,
+    webhook_response_bytes: Value,
+    webhook_response_body_blake3: Value,
+) -> Value {
+    let mut fields = Map::new();
+    fields.insert(
+        "delivery_id".into(),
+        Value::from(notification.delivery_id.to_string()),
+    );
+    fields.insert(
+        "dedup_key".into(),
+        Value::from(notification.dedup_key.to_string()),
+    );
+    fields.insert(
+        "action".into(),
+        Value::from(notification.action.to_string()),
+    );
+    fields.insert(
+        "case_id".into(),
+        Value::from(notification.case_id.to_string()),
+    );
+    fields.insert(
+        "round_id".into(),
+        Value::from(notification.round_id.to_string()),
+    );
+    fields.insert(
+        "juror_id".into(),
+        Value::from(notification.juror_id.to_string()),
+    );
+    fields.insert(
+        "notification_bytes".into(),
+        Value::from(u64::try_from(notification_bytes).unwrap_or(u64::MAX)),
+    );
+    fields.insert(
+        "notification_body_blake3".into(),
+        Value::from(encode(blake3::hash(canonical).as_bytes())),
+    );
+    fields.insert("outbox_path".into(), outbox_path);
+    fields.insert("webhook_status".into(), webhook_status);
+    fields.insert("webhook_response_bytes".into(), webhook_response_bytes);
+    fields.insert(
+        "webhook_response_body_blake3".into(),
+        webhook_response_body_blake3,
+    );
+    fields.insert("payload_bytes_included".into(), Value::Bool(false));
+    fields.insert("private_payloads_included".into(), Value::Bool(false));
+    Value::Object(fields)
+}
+
+fn moderation_juror_notification_canary_probe_json(
+    notification: ModerationJurorNotificationEntry<'_>,
+    canonical: &[u8],
+    response: Response<Vec<u8>>,
+) -> Result<Value> {
+    let status = response.status();
+    let body = response.into_body();
+    let mut fields = Map::new();
+    fields.insert(
+        "delivery_id".into(),
+        Value::from(notification.delivery_id.to_string()),
+    );
+    fields.insert(
+        "dedup_key".into(),
+        Value::from(notification.dedup_key.to_string()),
+    );
+    fields.insert(
+        "action".into(),
+        Value::from(notification.action.to_string()),
+    );
+    fields.insert(
+        "case_id".into(),
+        Value::from(notification.case_id.to_string()),
+    );
+    fields.insert(
+        "round_id".into(),
+        Value::from(notification.round_id.to_string()),
+    );
+    fields.insert(
+        "juror_id".into(),
+        Value::from(notification.juror_id.to_string()),
+    );
+    fields.insert(
+        "notification_bytes".into(),
+        Value::from(u64::try_from(canonical.len()).unwrap_or(u64::MAX)),
+    );
+    fields.insert(
+        "notification_body_blake3".into(),
+        Value::from(encode(blake3::hash(canonical).as_bytes())),
+    );
+    fields.insert(
+        "response_status".into(),
+        Value::from(u64::from(status.as_u16())),
+    );
+    fields.insert("response_success".into(), Value::Bool(status.is_success()));
+    fields.insert(
+        "response_bytes".into(),
+        Value::from(u64::try_from(body.len()).unwrap_or(u64::MAX)),
+    );
+    fields.insert(
+        "response_body_blake3".into(),
+        Value::from(encode(blake3::hash(&body).as_bytes())),
+    );
+    fields.insert("payload_bytes_included".into(), Value::Bool(false));
+    fields.insert("private_payloads_included".into(), Value::Bool(false));
+    Ok(Value::Object(fields))
+}
+
+fn moderation_canary_probe_ok(probe: &Value) -> bool {
+    probe
+        .get("response_success")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn write_json_artifact(path: &Path, value: &Value, label: &str) -> Result<()> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).wrap_err_with(|| {
+            format!("failed to create {label} directory `{}`", parent.display())
+        })?;
+    }
+    fs::write(path, norito::json::to_vec_pretty(value)?)
+        .wrap_err_with(|| format!("failed to write {label} `{}`", path.display()))
+}
+
+fn read_json_artifact(path: &Path, label: &str) -> Result<(Value, Vec<u8>)> {
+    let bytes =
+        fs::read(path).wrap_err_with(|| format!("failed to read {label} `{}`", path.display()))?;
+    if bytes.is_empty() {
+        return Err(eyre!("{label} `{}` must not be empty", path.display()));
+    }
+    let value = norito::json::from_slice(&bytes)
+        .wrap_err_with(|| format!("failed to parse {label} JSON `{}`", path.display()))?;
+    Ok((value, bytes))
+}
+
+fn write_text_artifact(path: &Path, value: &str, label: &str) -> Result<()> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).wrap_err_with(|| {
+            format!("failed to create {label} directory `{}`", parent.display())
+        })?;
+    }
+    fs::write(path, value).wrap_err_with(|| format!("failed to write {label} `{}`", path.display()))
+}
+
+fn set_executable_if_supported(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let mut permissions = fs::metadata(path)
+            .wrap_err_with(|| format!("failed to stat `{}`", path.display()))?
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions)
+            .wrap_err_with(|| format!("failed to chmod `{}`", path.display()))?;
+    }
+    Ok(())
+}
+
+fn load_transparency_source_entry_payload(path: &Path) -> Result<Vec<u8>> {
+    load_sorafs_json_payload(path, "transparency source-entry")
+}
+
+fn parse_transparency_source_entry_canary_specs(
+    specs: &[String],
+) -> Result<Vec<(String, PathBuf)>> {
+    if specs.is_empty() {
+        return Err(eyre!(
+            "at least one --source-entry KIND=PATH probe is required"
+        ));
+    }
+    specs
+        .iter()
+        .map(|spec| {
+            let (source_kind, path) = spec
+                .split_once('=')
+                .ok_or_else(|| eyre!("--source-entry must use KIND=PATH form, got `{spec}`"))?;
+            let source_kind = required_trimmed_text(source_kind, "--source-entry source kind")?;
+            let path = required_trimmed_text(path, "--source-entry payload path")?;
+            Ok((source_kind, PathBuf::from(path)))
+        })
+        .collect()
+}
+
+fn transparency_source_entry_canary_probe_json(
+    source_kind: &str,
+    path: &Path,
+    payload: &[u8],
+    response: Response<Vec<u8>>,
+) -> Value {
+    let status = response.status();
+    let body = response.into_body();
+    let mut fields = Map::new();
+    fields.insert("source_kind".into(), Value::from(source_kind.to_string()));
+    fields.insert(
+        "payload_path".into(),
+        Value::from(path.display().to_string()),
+    );
+    fields.insert(
+        "request_bytes".into(),
+        Value::from(u64::try_from(payload.len()).unwrap_or(u64::MAX)),
+    );
+    fields.insert(
+        "request_body_blake3".into(),
+        Value::from(encode(blake3::hash(payload).as_bytes())),
+    );
+    fields.insert(
+        "response_status".into(),
+        Value::from(u64::from(status.as_u16())),
+    );
+    fields.insert("response_success".into(), Value::Bool(status.is_success()));
+    fields.insert(
+        "response_bytes".into(),
+        Value::from(u64::try_from(body.len()).unwrap_or(u64::MAX)),
+    );
+    fields.insert(
+        "response_body_blake3".into(),
+        Value::from(encode(blake3::hash(&body).as_bytes())),
+    );
+    fields.insert("payload_bytes_included".into(), Value::Bool(false));
+    fields.insert("private_payloads_included".into(), Value::Bool(false));
+    fields.insert("response_body_included".into(), Value::Bool(false));
+    Value::Object(fields)
+}
+
+fn transparency_token_issuance_canary_probe_json(
+    path: &Path,
+    payload: &[u8],
+    response: Response<Vec<u8>>,
+) -> Value {
+    let status = response.status();
+    let body = response.into_body();
+    let mut fields = Map::new();
+    fields.insert(
+        "payload_path".into(),
+        Value::from(path.display().to_string()),
+    );
+    fields.insert(
+        "request_bytes".into(),
+        Value::from(u64::try_from(payload.len()).unwrap_or(u64::MAX)),
+    );
+    fields.insert(
+        "request_body_blake3".into(),
+        Value::from(encode(blake3::hash(payload).as_bytes())),
+    );
+    fields.insert(
+        "response_status".into(),
+        Value::from(u64::from(status.as_u16())),
+    );
+    fields.insert("response_success".into(), Value::Bool(status.is_success()));
+    fields.insert(
+        "response_bytes".into(),
+        Value::from(u64::try_from(body.len()).unwrap_or(u64::MAX)),
+    );
+    fields.insert(
+        "response_body_blake3".into(),
+        Value::from(encode(blake3::hash(&body).as_bytes())),
+    );
+    fields.insert("payload_bytes_included".into(), Value::Bool(false));
+    fields.insert("proof_token_frame_included".into(), Value::Bool(false));
+    fields.insert("private_digest_keys_included".into(), Value::Bool(false));
+    fields.insert("response_body_included".into(), Value::Bool(false));
+    Value::Object(fields)
+}
+
+fn transparency_privacy_aggregate_canary_probe_json(
+    action: &str,
+    path: &Path,
+    payload: &[u8],
+    response: Response<Vec<u8>>,
+) -> Value {
+    let status = response.status();
+    let body = response.into_body();
+    let mut fields = Map::new();
+    fields.insert("action".into(), Value::from(action.to_string()));
+    fields.insert(
+        "payload_path".into(),
+        Value::from(path.display().to_string()),
+    );
+    fields.insert(
+        "request_bytes".into(),
+        Value::from(u64::try_from(payload.len()).unwrap_or(u64::MAX)),
+    );
+    fields.insert(
+        "request_body_blake3".into(),
+        Value::from(encode(blake3::hash(payload).as_bytes())),
+    );
+    fields.insert(
+        "response_status".into(),
+        Value::from(u64::from(status.as_u16())),
+    );
+    fields.insert("response_success".into(), Value::Bool(status.is_success()));
+    fields.insert(
+        "response_bytes".into(),
+        Value::from(u64::try_from(body.len()).unwrap_or(u64::MAX)),
+    );
+    fields.insert(
+        "response_body_blake3".into(),
+        Value::from(encode(blake3::hash(&body).as_bytes())),
+    );
+    fields.insert("payload_bytes_included".into(), Value::Bool(false));
+    fields.insert("raw_metric_values_included".into(), Value::Bool(false));
+    fields.insert("private_payloads_included".into(), Value::Bool(false));
+    Value::Object(fields)
+}
+
+fn load_sorafs_json_payload(path: &Path, label: &str) -> Result<Vec<u8>> {
+    let bytes = fs::read(path)
+        .wrap_err_with(|| format!("failed to read {label} payload `{}`", path.display(),))?;
+    if bytes.is_empty() {
+        return Err(eyre!(
+            "{label} payload `{}` must not be empty",
+            path.display()
+        ));
+    }
+    let value: Value = norito::json::from_slice(&bytes)
+        .wrap_err_with(|| format!("failed to parse {label} JSON `{}`", path.display()))?;
+    norito::json::to_vec(&value).wrap_err_with(|| format!("failed to encode {label} JSON"))
+}
+
+fn normalize_moderation_ballot_payload_format(format: &str) -> Result<&'static str> {
+    match format.trim().to_ascii_lowercase().as_str() {
+        "json" => Ok("json"),
+        "norito" => Ok("norito"),
+        other => Err(eyre!(
+            "--format must be `json` or `norito` for moderation ballot payloads, got `{other}`"
+        )),
+    }
+}
+
+fn load_moderation_registry_repro_manifest_bytes(path: &Path, format: &str) -> Result<Vec<u8>> {
+    let format = normalize_moderation_registry_manifest_format(format)?;
+    let bytes = read_moderation_registry_manifest_file(path)?;
+    let manifest: ModerationReproManifestV1 = match format {
+        "json" => norito::json::from_slice(&bytes).wrap_err_with(|| {
+            format!(
+                "failed to parse reproducibility manifest JSON `{}`",
+                path.display()
+            )
+        })?,
+        "norito" => decode_from_bytes(&bytes).wrap_err_with(|| {
+            format!(
+                "failed to decode reproducibility manifest Norito `{}`",
+                path.display()
+            )
+        })?,
+        _ => unreachable!("format normalized"),
+    };
+    manifest
+        .validate()
+        .wrap_err("reproducibility manifest validation failed")?;
+    norito::to_bytes(&manifest).wrap_err("failed to encode canonical reproducibility manifest")
+}
+
+fn load_moderation_registry_corpus_manifest_bytes(path: &Path, format: &str) -> Result<Vec<u8>> {
+    let format = normalize_moderation_registry_manifest_format(format)?;
+    let bytes = read_moderation_registry_manifest_file(path)?;
+    let manifest: AdversarialCorpusManifestV1 = match format {
+        "json" => norito::json::from_slice(&bytes).wrap_err_with(|| {
+            format!(
+                "failed to parse adversarial corpus manifest JSON `{}`",
+                path.display()
+            )
+        })?,
+        "norito" => decode_from_bytes(&bytes).wrap_err_with(|| {
+            format!(
+                "failed to decode adversarial corpus manifest Norito `{}`",
+                path.display()
+            )
+        })?,
+        _ => unreachable!("format normalized"),
+    };
+    manifest
+        .validate()
+        .wrap_err("adversarial corpus manifest validation failed")?;
+    norito::to_bytes(&manifest).wrap_err("failed to encode canonical adversarial corpus manifest")
+}
+
+fn read_moderation_registry_manifest_file(path: &Path) -> Result<Vec<u8>> {
+    let bytes = fs::read(path).wrap_err_with(|| {
+        format!(
+            "failed to read moderation registry manifest `{}`",
+            path.display()
+        )
+    })?;
+    if bytes.is_empty() {
+        return Err(eyre!(
+            "moderation registry manifest `{}` must not be empty",
+            path.display()
+        ));
+    }
+    Ok(bytes)
+}
+
+fn normalize_moderation_registry_manifest_format(format: &str) -> Result<&'static str> {
+    match format.trim().to_ascii_lowercase().as_str() {
+        "json" => Ok("json"),
+        "norito" => Ok("norito"),
+        other => Err(eyre!(
+            "--format must be `json` or `norito` for moderation registry manifests, got `{other}`"
+        )),
+    }
+}
+
+fn load_moderation_screening_submit_payload(
+    path: &Path,
+) -> Result<ModerationScreeningSubmitPayload> {
+    let bytes = fs::read(path).wrap_err_with(|| {
+        format!(
+            "failed to read moderation screening result JSON `{}`",
+            path.display()
+        )
+    })?;
+    let value: Value = norito::json::from_slice(&bytes).wrap_err_with(|| {
+        format!(
+            "failed to parse moderation screening result JSON `{}`",
+            path.display()
+        )
+    })?;
+    moderation_screening_submit_payload_from_json(&value)
+}
+
+fn moderation_screening_submit_payload_from_json(
+    value: &Value,
+) -> Result<ModerationScreeningSubmitPayload> {
+    let Value::Object(fields) = value else {
+        return Err(eyre!("--input must contain a JSON object"));
+    };
+    let subject = required_json_text(fields, "subject")?;
+    let subject_digest_hex = required_json_hex_digest::<32>(fields, "subject_digest_hex")?;
+    let manifest_id_hex = required_json_hex_digest::<16>(fields, "manifest_id_hex")?;
+    let runner_hash_hex = required_json_hex_digest::<32>(fields, "runner_hash_hex")?;
+    let combined_score_bps = required_json_u16(fields, "combined_score_bps")?;
+    if combined_score_bps > 10_000 {
+        return Err(eyre!("combined_score_bps must be <= 10000"));
+    }
+    let verdict = normalize_moderation_screening_verdict(
+        required_json_text(fields, "verdict")?.as_str(),
+        "verdict",
+    )?;
+    let screened_at_unix = optional_json_u64(fields, "screened_at_unix")?;
+    if screened_at_unix == Some(0) {
+        return Err(eyre!("screened_at_unix must be non-zero"));
+    }
+    let evidence_digest_hex = optional_json_hex_digest::<32>(fields, "evidence_digest_hex")?;
+    let policy_digest_hex = optional_json_hex_digest::<32>(fields, "policy_digest_hex")?;
+    let notes = optional_json_text(fields, "notes")?;
+    Ok(ModerationScreeningSubmitPayload {
+        subject,
+        subject_digest_hex,
+        manifest_id_hex,
+        runner_hash_hex,
+        combined_score_bps,
+        verdict,
+        screened_at_unix,
+        evidence_digest_hex,
+        policy_digest_hex,
+        notes,
+    })
+}
+
+fn required_json_text(fields: &Map, field: &str) -> Result<String> {
+    match fields.get(field) {
+        Some(Value::String(value)) => required_trimmed_text(value, field),
+        Some(_) => Err(eyre!("{field} must be a JSON string")),
+        None => Err(eyre!("{field} is required")),
+    }
+}
+
+fn optional_json_text(fields: &Map, field: &str) -> Result<Option<String>> {
+    match fields.get(field) {
+        Some(Value::String(value)) => optional_trimmed_text(Some(value), field),
+        Some(Value::Null) | None => Ok(None),
+        Some(_) => Err(eyre!("{field} must be a JSON string or null")),
+    }
+}
+
+fn required_json_hex_digest<const N: usize>(fields: &Map, field: &str) -> Result<String> {
+    let value = required_json_text(fields, field)?;
+    normalize_hex_digest::<N>(&value, field)
+}
+
+fn optional_json_hex_digest<const N: usize>(fields: &Map, field: &str) -> Result<Option<String>> {
+    match fields.get(field) {
+        Some(Value::String(value)) => Ok(Some(normalize_hex_digest::<N>(value, field)?)),
+        Some(Value::Null) | None => Ok(None),
+        Some(_) => Err(eyre!("{field} must be a JSON string or null")),
+    }
+}
+
+fn required_json_u16(fields: &Map, field: &str) -> Result<u16> {
+    let value = required_json_u64(fields, field)?;
+    u16::try_from(value).map_err(|_| eyre!("{field} must fit into u16"))
+}
+
+fn required_json_u64(fields: &Map, field: &str) -> Result<u64> {
+    match fields.get(field).and_then(Value::as_u64) {
+        Some(value) => Ok(value),
+        None if fields.contains_key(field) => Err(eyre!("{field} must be an unsigned integer")),
+        None => Err(eyre!("{field} is required")),
+    }
+}
+
+fn optional_json_u64(fields: &Map, field: &str) -> Result<Option<u64>> {
+    match fields.get(field) {
+        Some(Value::Null) | None => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| eyre!("{field} must be an unsigned integer or null")),
+    }
+}
+
+fn normalize_moderation_screening_verdict(value: &str, field: &str) -> Result<String> {
+    let verdict = required_trimmed_text(value, field)?.to_ascii_lowercase();
+    if matches!(
+        verdict.as_str(),
+        "pass" | "warn" | "quarantine" | "escalate" | "block"
+    ) {
+        Ok(verdict)
+    } else {
+        Err(eyre!(
+            "{field} must be pass, warn, quarantine, escalate, or block"
+        ))
+    }
 }
 
 fn parse_repair_ticket_id(value: &str, flag: &str) -> Result<RepairTicketId> {
@@ -11754,6 +16233,918 @@ fn format_datetime(value: OffsetDateTime) -> String {
         .expect("RFC3339 formatting should be infallible")
 }
 
+#[derive(Debug)]
+struct ModerationOperatorCanaryHttpResponse {
+    status: StatusCode,
+    content_type: Option<String>,
+    body: Vec<u8>,
+}
+
+#[derive(Clone)]
+struct ModerationOperatorCanaryRouteSpec {
+    name: &'static str,
+    path: String,
+    expected_schema: Option<&'static str>,
+    expect_html_marker: Option<&'static str>,
+    include_limit: bool,
+}
+
+fn moderation_operator_canary_http_get(
+    client: &BlockingHttpClient,
+    url: &str,
+) -> Result<ModerationOperatorCanaryHttpResponse> {
+    let response = client.get(url).send().wrap_err_with(|| {
+        format!("failed to GET SoraFS moderation operator canary route `{url}`")
+    })?;
+    let status = StatusCode::from_u16(response.status().as_u16()).map_err(|err| {
+        eyre!("SoraFS moderation operator canary route `{url}` returned unsupported status: {err}")
+    })?;
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned);
+    let body = response
+        .bytes()
+        .wrap_err_with(|| {
+            format!("failed to read SoraFS moderation operator canary route `{url}` body")
+        })?
+        .to_vec();
+    Ok(ModerationOperatorCanaryHttpResponse {
+        status,
+        content_type,
+        body,
+    })
+}
+
+#[derive(Debug)]
+struct TransparencyExplorerCanaryHttpResponse {
+    status: StatusCode,
+    content_type: Option<String>,
+    body: Vec<u8>,
+}
+
+#[derive(Clone)]
+struct TransparencyExplorerCanaryRouteSpec {
+    name: &'static str,
+    path: &'static str,
+    expected_schema: Option<&'static str>,
+    expect_html_marker: Option<&'static str>,
+    include_limit: bool,
+}
+
+fn transparency_explorer_canary_http_get(
+    client: &BlockingHttpClient,
+    url: &str,
+) -> Result<TransparencyExplorerCanaryHttpResponse> {
+    let response = client.get(url).send().wrap_err_with(|| {
+        format!("failed to GET SoraFS transparency explorer canary route `{url}`")
+    })?;
+    let status = StatusCode::from_u16(response.status().as_u16()).map_err(|err| {
+        eyre!(
+            "SoraFS transparency explorer canary route `{url}` returned unsupported status: {err}"
+        )
+    })?;
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned);
+    let body = response
+        .bytes()
+        .wrap_err_with(|| {
+            format!("failed to read SoraFS transparency explorer canary route `{url}` body")
+        })?
+        .to_vec();
+    Ok(TransparencyExplorerCanaryHttpResponse {
+        status,
+        content_type,
+        body,
+    })
+}
+
+fn transparency_publication_canary_http_get(
+    client: &BlockingHttpClient,
+    url: &str,
+) -> Result<TransparencyExplorerCanaryHttpResponse> {
+    let response = client.get(url).send().wrap_err_with(|| {
+        format!("failed to GET SoraFS transparency publication canary route `{url}`")
+    })?;
+    let status = StatusCode::from_u16(response.status().as_u16()).map_err(|err| {
+        eyre!(
+            "SoraFS transparency publication canary route `{url}` returned unsupported status: {err}"
+        )
+    })?;
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned);
+    let body = response
+        .bytes()
+        .wrap_err_with(|| {
+            format!("failed to read SoraFS transparency publication canary route `{url}` body")
+        })?
+        .to_vec();
+    Ok(TransparencyExplorerCanaryHttpResponse {
+        status,
+        content_type,
+        body,
+    })
+}
+
+fn transparency_explorer_canary_evidence_json<F>(
+    torii_url: &str,
+    limit: Option<u32>,
+    fetch: &mut F,
+) -> Result<Value>
+where
+    F: FnMut(&str) -> Result<TransparencyExplorerCanaryHttpResponse>,
+{
+    let route_specs = transparency_explorer_canary_route_specs();
+    let mut routes = Vec::with_capacity(route_specs.len());
+    for spec in &route_specs {
+        routes.push(transparency_explorer_canary_probe_route(
+            torii_url, spec, limit, fetch,
+        )?);
+    }
+    let mut evidence = Map::new();
+    evidence.insert(
+        "schema".into(),
+        Value::from("sorafs.transparency.explorer_canary.v1"),
+    );
+    evidence.insert("status".into(), Value::from("passed"));
+    evidence.insert("source".into(), Value::from("iroha_cli"));
+    evidence.insert("torii_url".into(), Value::from(torii_url.to_string()));
+    evidence.insert("limit".into(), limit.map_or(Value::Null, Value::from));
+    evidence.insert(
+        "generated_at_unix".into(),
+        Value::from(current_unix_timestamp()),
+    );
+    evidence.insert("route_count".into(), Value::from(routes.len() as u64));
+    evidence.insert("payload_bytes_included".into(), Value::Bool(false));
+    evidence.insert("private_digest_keys_included".into(), Value::Bool(false));
+    evidence.insert("routes".into(), Value::Array(routes));
+    Ok(Value::Object(evidence))
+}
+
+fn transparency_publication_canary_evidence_json<F>(
+    torii_url: &str,
+    cycle_ids: &[String],
+    limit: Option<u32>,
+    require_publisher_identity: bool,
+    fetch: &mut F,
+) -> Result<Value>
+where
+    F: FnMut(&str) -> Result<TransparencyExplorerCanaryHttpResponse>,
+{
+    let mut routes = Vec::with_capacity(1 + cycle_ids.len());
+    routes.push(transparency_publication_canary_probe_route(
+        torii_url,
+        "cycles_list",
+        None,
+        limit,
+        require_publisher_identity,
+        fetch,
+    )?);
+    for cycle_id in cycle_ids {
+        routes.push(transparency_publication_canary_probe_route(
+            torii_url,
+            "cycle_publication",
+            Some(cycle_id),
+            limit,
+            require_publisher_identity,
+            fetch,
+        )?);
+    }
+    let passed_count = routes
+        .iter()
+        .filter(|route| {
+            route
+                .get("passed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+        .count();
+    let mut evidence = Map::new();
+    evidence.insert(
+        "schema".into(),
+        Value::from("sorafs.transparency.publication_canary.v1"),
+    );
+    evidence.insert(
+        "status".into(),
+        Value::from(if passed_count == routes.len() {
+            "passed"
+        } else {
+            "failed"
+        }),
+    );
+    evidence.insert("source".into(), Value::from("iroha_cli"));
+    evidence.insert("torii_url".into(), Value::from(torii_url.to_string()));
+    evidence.insert("limit".into(), limit.map_or(Value::Null, Value::from));
+    evidence.insert(
+        "generated_at_unix".into(),
+        Value::from(current_unix_timestamp()),
+    );
+    evidence.insert("route_count".into(), Value::from(routes.len() as u64));
+    evidence.insert(
+        "passed_route_count".into(),
+        Value::from(passed_count as u64),
+    );
+    evidence.insert(
+        "cycle_detail_probe_count".into(),
+        Value::from(cycle_ids.len() as u64),
+    );
+    evidence.insert(
+        "publisher_identity_required".into(),
+        Value::Bool(require_publisher_identity),
+    );
+    evidence.insert("payload_bytes_included".into(), Value::Bool(false));
+    evidence.insert("publication_bodies_included".into(), Value::Bool(false));
+    evidence.insert("private_payloads_included".into(), Value::Bool(false));
+    evidence.insert("routes".into(), Value::Array(routes));
+    Ok(Value::Object(evidence))
+}
+
+fn transparency_publication_canary_probe_route<F>(
+    torii_url: &str,
+    route_name: &'static str,
+    cycle_id: Option<&str>,
+    limit: Option<u32>,
+    require_publisher_identity: bool,
+    fetch: &mut F,
+) -> Result<Value>
+where
+    F: FnMut(&str) -> Result<TransparencyExplorerCanaryHttpResponse>,
+{
+    let url = transparency_publication_canary_route_url(torii_url, cycle_id, limit)?;
+    let response = fetch(&url)?;
+    let status_success = response.status == StatusCode::OK;
+    let body_blake3_hex = blake3::hash(&response.body).to_hex().to_string();
+    let body_bytes = u64::try_from(response.body.len()).unwrap_or(u64::MAX);
+    let mut route = Map::new();
+    route.insert("name".into(), Value::from(route_name));
+    route.insert("method".into(), Value::from("GET"));
+    route.insert(
+        "path".into(),
+        Value::from(match cycle_id {
+            Some(_) => "/v1/sorafs/transparency/cycles/{cycle_id}",
+            None => "/v1/sorafs/transparency/cycles",
+        }),
+    );
+    route.insert("url".into(), Value::from(url));
+    if let Some(cycle_id) = cycle_id {
+        route.insert("cycle_id_hex".into(), Value::from(cycle_id.to_string()));
+    }
+    route.insert(
+        "status_code".into(),
+        Value::from(u64::from(response.status.as_u16())),
+    );
+    route.insert("http_success".into(), Value::Bool(status_success));
+    route.insert(
+        "content_type".into(),
+        response.content_type.map_or(Value::Null, Value::from),
+    );
+    route.insert("body_blake3_hex".into(), Value::from(body_blake3_hex));
+    route.insert("body_bytes".into(), Value::from(body_bytes));
+    route.insert("payload_bytes_included".into(), Value::Bool(false));
+    route.insert("publication_body_included".into(), Value::Bool(false));
+    route.insert("private_payloads_included".into(), Value::Bool(false));
+
+    if !status_success {
+        route.insert("passed".into(), Value::Bool(false));
+        return Ok(Value::Object(route));
+    }
+
+    let value: Value = norito::json::from_slice(&response.body).wrap_err_with(|| {
+        format!("failed to decode SoraFS transparency publication canary `{route_name}` JSON")
+    })?;
+    transparency_explorer_canary_ensure_payload_free(&value)?;
+    let expected_schema = if cycle_id.is_some() {
+        "sorafs.transparency.cycle_publication.v1"
+    } else {
+        "sorafs.transparency.cycles.v1"
+    };
+    let actual_schema = value
+        .get("schema")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let schema_ok = actual_schema == expected_schema;
+    let anchor_metadata_present =
+        transparency_publication_canary_anchor_metadata_present(&value, cycle_id.is_some());
+    let publisher_identity_present =
+        transparency_publication_canary_publisher_identity_present(&value);
+    let verification_valid = if cycle_id.is_some() {
+        value
+            .get("verification")
+            .and_then(|verification| verification.get("valid"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            && value
+                .get("verification")
+                .and_then(|verification| verification.get("all_proofs_verified"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+    } else {
+        true
+    };
+    let passed = schema_ok
+        && anchor_metadata_present
+        && verification_valid
+        && (!require_publisher_identity || publisher_identity_present);
+
+    route.insert("passed".into(), Value::Bool(passed));
+    route.insert("schema".into(), Value::from(actual_schema.to_string()));
+    route.insert("schema_ok".into(), Value::Bool(schema_ok));
+    route.insert(
+        "anchor_metadata_present".into(),
+        Value::Bool(anchor_metadata_present),
+    );
+    route.insert(
+        "publisher_identity_present".into(),
+        Value::Bool(publisher_identity_present),
+    );
+    route.insert("verification_valid".into(), Value::Bool(verification_valid));
+    if cycle_id.is_none() {
+        route.insert(
+            "published_cycle_count".into(),
+            value
+                .get("published_cycle_count")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+        route.insert(
+            "returned_cycle_count".into(),
+            value
+                .get("returned_cycle_count")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+        route.insert(
+            "truncated".into(),
+            value.get("truncated").cloned().unwrap_or(Value::Null),
+        );
+    } else {
+        route.insert(
+            "proof_count".into(),
+            value.get("proof_count").cloned().unwrap_or(Value::Null),
+        );
+        route.insert(
+            "returned_proof_count".into(),
+            value
+                .get("returned_proof_count")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+        route.insert(
+            "truncated_proofs".into(),
+            value
+                .get("truncated_proofs")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+    }
+    Ok(Value::Object(route))
+}
+
+fn transparency_explorer_canary_route_specs() -> Vec<TransparencyExplorerCanaryRouteSpec> {
+    vec![
+        TransparencyExplorerCanaryRouteSpec {
+            name: "explorer_snapshot",
+            path: "/v1/sorafs/transparency/explorer",
+            expected_schema: Some("sorafs.transparency.explorer_snapshot.v1"),
+            expect_html_marker: None,
+            include_limit: true,
+        },
+        TransparencyExplorerCanaryRouteSpec {
+            name: "browser_ui",
+            path: "/v1/sorafs/transparency/explorer/ui",
+            expected_schema: None,
+            expect_html_marker: Some("SoraFS Transparency Explorer"),
+            include_limit: false,
+        },
+        TransparencyExplorerCanaryRouteSpec {
+            name: "proof_token_issuance_index",
+            path: "/v1/sorafs/transparency/tokens",
+            expected_schema: Some("sorafs.transparency.proof_token_issuances.v1"),
+            expect_html_marker: None,
+            include_limit: true,
+        },
+    ]
+}
+
+fn transparency_explorer_canary_probe_route<F>(
+    torii_url: &str,
+    spec: &TransparencyExplorerCanaryRouteSpec,
+    limit: Option<u32>,
+    fetch: &mut F,
+) -> Result<Value>
+where
+    F: FnMut(&str) -> Result<TransparencyExplorerCanaryHttpResponse>,
+{
+    let url = transparency_explorer_canary_route_url(torii_url, spec, limit)?;
+    let response = fetch(&url)?;
+    if response.status != StatusCode::OK {
+        return Err(eyre!(
+            "SoraFS transparency explorer canary route `{}` returned status {}",
+            spec.name,
+            response.status
+        ));
+    }
+    let body_blake3_hex = blake3::hash(&response.body).to_hex().to_string();
+    let mut schema = None;
+    if let Some(expected_schema) = spec.expected_schema {
+        let value: Value = norito::json::from_slice(&response.body).wrap_err_with(|| {
+            format!(
+                "failed to decode SoraFS transparency explorer canary `{}` JSON response",
+                spec.name
+            )
+        })?;
+        transparency_explorer_canary_ensure_payload_free(&value)?;
+        let fields = value_object(&value, "transparency explorer canary JSON response")?;
+        let actual_schema = required_string_field(
+            fields,
+            "schema",
+            "transparency explorer canary JSON response",
+        )?;
+        if actual_schema != expected_schema {
+            return Err(eyre!(
+                "SoraFS transparency explorer canary route `{}` returned schema `{actual_schema}` (expected `{expected_schema}`)",
+                spec.name
+            ));
+        }
+        schema = Some(actual_schema.to_string());
+    }
+    if let Some(marker) = spec.expect_html_marker {
+        let body = std::str::from_utf8(&response.body).wrap_err_with(|| {
+            format!(
+                "SoraFS transparency explorer canary `{}` response is not UTF-8",
+                spec.name
+            )
+        })?;
+        if !body.contains(marker) {
+            return Err(eyre!(
+                "SoraFS transparency explorer canary route `{}` response is missing `{marker}`",
+                spec.name
+            ));
+        }
+        transparency_explorer_canary_ensure_html_payload_free(body, spec.name)?;
+    }
+    let mut route = Map::new();
+    route.insert("name".into(), Value::from(spec.name));
+    route.insert("method".into(), Value::from("GET"));
+    route.insert("path".into(), Value::from(spec.path));
+    route.insert("url".into(), Value::from(url));
+    route.insert(
+        "status_code".into(),
+        Value::from(u64::from(response.status.as_u16())),
+    );
+    route.insert(
+        "content_type".into(),
+        response.content_type.map_or(Value::Null, Value::from),
+    );
+    route.insert("schema".into(), schema.map_or(Value::Null, Value::from));
+    route.insert("body_blake3_hex".into(), Value::from(body_blake3_hex));
+    route.insert(
+        "body_bytes".into(),
+        Value::from(u64::try_from(response.body.len()).unwrap_or(u64::MAX)),
+    );
+    route.insert("payload_bytes_included".into(), Value::Bool(false));
+    route.insert("private_digest_keys_included".into(), Value::Bool(false));
+    Ok(Value::Object(route))
+}
+
+fn transparency_explorer_canary_route_url(
+    torii_url: &str,
+    spec: &TransparencyExplorerCanaryRouteSpec,
+    limit: Option<u32>,
+) -> Result<String> {
+    let base = format!("{}/", torii_url.trim_end_matches('/'));
+    let mut url = reqwest::Url::parse(&base)
+        .wrap_err_with(|| format!("failed to parse --torii-url `{torii_url}`"))?
+        .join(spec.path.trim_start_matches('/'))
+        .wrap_err_with(|| format!("failed to join transparency explorer route `{}`", spec.path))?;
+    if spec.include_limit
+        && let Some(limit) = limit
+    {
+        url.query_pairs_mut()
+            .append_pair("limit", &limit.to_string());
+    }
+    Ok(url.to_string())
+}
+
+fn transparency_publication_canary_route_url(
+    torii_url: &str,
+    cycle_id: Option<&str>,
+    limit: Option<u32>,
+) -> Result<String> {
+    let base = format!("{}/", torii_url.trim_end_matches('/'));
+    let mut url = reqwest::Url::parse(&base)
+        .wrap_err_with(|| format!("failed to parse --torii-url `{torii_url}`"))?
+        .join("v1/sorafs/transparency/cycles")
+        .wrap_err("failed to join transparency publication cycles route")?;
+    if let Some(cycle_id) = cycle_id {
+        url.path_segments_mut()
+            .map_err(|_| eyre!("failed to append transparency cycle id to --torii-url"))?
+            .push(cycle_id);
+    }
+    if let Some(limit) = limit {
+        url.query_pairs_mut()
+            .append_pair("limit", &limit.to_string());
+    }
+    Ok(url.to_string())
+}
+
+fn transparency_publication_canary_anchor_metadata_present(
+    value: &Value,
+    cycle_detail: bool,
+) -> bool {
+    fn has_string_field(fields: &Map, key: &str) -> bool {
+        fields
+            .get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty() && !matches!(value, "0" | "0x0"))
+    }
+
+    if cycle_detail {
+        let Some(fields) = value.as_object() else {
+            return false;
+        };
+        let Some(verification) = fields.get("verification").and_then(Value::as_object) else {
+            return false;
+        };
+        has_string_field(fields, "encoded_blake3")
+            && has_string_field(verification, "block_hash_hex")
+            && has_string_field(verification, "publication_hash_hex")
+            && has_string_field(verification, "entry_root_hex")
+    } else {
+        let Some(first_cycle) = value
+            .get("cycles")
+            .and_then(Value::as_array)
+            .and_then(|cycles| cycles.first())
+            .and_then(Value::as_object)
+        else {
+            return false;
+        };
+        has_string_field(first_cycle, "block_hash_hex")
+            && has_string_field(first_cycle, "publication_hash_hex")
+            && has_string_field(first_cycle, "entry_root_hex")
+            && has_string_field(first_cycle, "encoded_blake3")
+    }
+}
+
+fn transparency_publication_canary_publisher_identity_present(value: &Value) -> bool {
+    fn visit(value: &Value) -> bool {
+        match value {
+            Value::Object(fields) => {
+                for key in [
+                    "publisher_peer_id",
+                    "publisher_peer_id_hex",
+                    "publisher_public_key_hex",
+                ] {
+                    if fields
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| {
+                            !value.trim().is_empty() && !matches!(value, "0" | "0x0")
+                        })
+                    {
+                        return true;
+                    }
+                }
+                fields.values().any(visit)
+            }
+            Value::Array(values) => values.iter().any(visit),
+            _ => false,
+        }
+    }
+    visit(value)
+}
+
+fn transparency_explorer_canary_ensure_payload_free(value: &Value) -> Result<()> {
+    fn visit(path: &str, value: &Value) -> Result<()> {
+        match value {
+            Value::Object(fields) => {
+                for (key, child) in fields {
+                    let child_path = if path.is_empty() {
+                        key.to_string()
+                    } else {
+                        format!("{path}.{key}")
+                    };
+                    if matches!(
+                        key.as_str(),
+                        "payload_b64"
+                            | "payload_bytes"
+                            | "payload_body"
+                            | "blinded_digest_key"
+                            | "digest_key"
+                            | "proof_token_digest_key"
+                            | "private_digest_key"
+                    ) {
+                        return Err(eyre!(
+                            "transparency explorer canary response included private payload or digest-key material at `{child_path}`"
+                        ));
+                    }
+                    if matches!(
+                        key.as_str(),
+                        "payload_bytes_included"
+                            | "private_payloads_included"
+                            | "private_payload_included"
+                            | "private_digest_keys_included"
+                    ) && child.as_bool() == Some(true)
+                    {
+                        return Err(eyre!(
+                            "transparency explorer canary response advertised private payload or digest-key material at `{child_path}`"
+                        ));
+                    }
+                    visit(&child_path, child)?;
+                }
+            }
+            Value::Array(values) => {
+                for (index, child) in values.iter().enumerate() {
+                    visit(&format!("{path}[{index}]"), child)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    visit("", value)
+}
+
+fn transparency_explorer_canary_ensure_html_payload_free(
+    body: &str,
+    route_name: &str,
+) -> Result<()> {
+    for marker in [
+        "payload_b64",
+        "payload_bytes",
+        "blinded_digest_key",
+        "digest_key",
+        "proof_token_digest_key",
+        "private_digest_key",
+    ] {
+        if body.contains(marker) {
+            return Err(eyre!(
+                "SoraFS transparency explorer canary route `{route_name}` HTML included private marker `{marker}`"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn moderation_operator_canary_evidence_json<F>(
+    operator_url: &str,
+    quarantine_id_hex: &str,
+    limit: Option<u32>,
+    fetch: &mut F,
+) -> Result<Value>
+where
+    F: FnMut(&str) -> Result<ModerationOperatorCanaryHttpResponse>,
+{
+    let route_specs = moderation_operator_canary_route_specs(quarantine_id_hex);
+    let mut routes = Vec::with_capacity(route_specs.len());
+    for spec in &route_specs {
+        routes.push(moderation_operator_canary_probe_route(
+            operator_url,
+            spec,
+            limit,
+            fetch,
+        )?);
+    }
+    let mut evidence = Map::new();
+    evidence.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.quarantine.operator_canary.v1"),
+    );
+    evidence.insert("status".into(), Value::from("passed"));
+    evidence.insert("source".into(), Value::from("iroha_cli"));
+    evidence.insert("operator_url".into(), Value::from(operator_url.to_string()));
+    evidence.insert(
+        "quarantine_id_hex".into(),
+        Value::from(quarantine_id_hex.to_string()),
+    );
+    evidence.insert("limit".into(), limit.map_or(Value::Null, Value::from));
+    evidence.insert(
+        "generated_at_unix".into(),
+        Value::from(current_unix_timestamp()),
+    );
+    evidence.insert("route_count".into(), Value::from(routes.len() as u64));
+    evidence.insert("payload_bytes_included".into(), Value::Bool(false));
+    evidence.insert("private_payloads_included".into(), Value::Bool(false));
+    evidence.insert("routes".into(), Value::Array(routes));
+    Ok(Value::Object(evidence))
+}
+
+fn moderation_operator_canary_route_specs(
+    quarantine_id_hex: &str,
+) -> Vec<ModerationOperatorCanaryRouteSpec> {
+    let workflow =
+        |suffix: &str| format!("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/{suffix}");
+    vec![
+        ModerationOperatorCanaryRouteSpec {
+            name: "healthz",
+            path: "/healthz".to_string(),
+            expected_schema: Some("sorafs.moderation.quarantine.operator_service.status.v1"),
+            expect_html_marker: None,
+            include_limit: false,
+        },
+        ModerationOperatorCanaryRouteSpec {
+            name: "status",
+            path: "/v1/sorafs/moderation/operator-panel/status".to_string(),
+            expected_schema: Some("sorafs.moderation.quarantine.operator_service.status.v1"),
+            expect_html_marker: None,
+            include_limit: false,
+        },
+        ModerationOperatorCanaryRouteSpec {
+            name: "browser_ui",
+            path: "/v1/sorafs/moderation/operator-panel/ui".to_string(),
+            expected_schema: None,
+            expect_html_marker: Some("SoraFS Moderation Operator"),
+            include_limit: false,
+        },
+        ModerationOperatorCanaryRouteSpec {
+            name: "operator_panel",
+            path: workflow("operator-panel"),
+            expected_schema: Some("sorafs.moderation.quarantine.operator_panel.v1"),
+            expect_html_marker: None,
+            include_limit: true,
+        },
+        ModerationOperatorCanaryRouteSpec {
+            name: "bridge_plan",
+            path: workflow("bridge-plan"),
+            expected_schema: Some("sorafs.moderation.quarantine.bridge_plan.v1"),
+            expect_html_marker: None,
+            include_limit: true,
+        },
+        ModerationOperatorCanaryRouteSpec {
+            name: "juror_plan",
+            path: workflow("juror-plan"),
+            expected_schema: Some("sorafs.moderation.quarantine.juror_plan.v1"),
+            expect_html_marker: None,
+            include_limit: true,
+        },
+        ModerationOperatorCanaryRouteSpec {
+            name: "juror_notifications",
+            path: workflow("juror-notifications"),
+            expected_schema: Some("sorafs.moderation.quarantine.juror_notifications.v1"),
+            expect_html_marker: None,
+            include_limit: true,
+        },
+        ModerationOperatorCanaryRouteSpec {
+            name: "commit_reveal_status",
+            path: workflow("commit-reveal-status"),
+            expected_schema: Some("sorafs.moderation.quarantine.commit_reveal_status.v1"),
+            expect_html_marker: None,
+            include_limit: true,
+        },
+    ]
+}
+
+fn moderation_operator_canary_probe_route<F>(
+    operator_url: &str,
+    spec: &ModerationOperatorCanaryRouteSpec,
+    limit: Option<u32>,
+    fetch: &mut F,
+) -> Result<Value>
+where
+    F: FnMut(&str) -> Result<ModerationOperatorCanaryHttpResponse>,
+{
+    let url = moderation_operator_canary_route_url(operator_url, spec, limit)?;
+    let response = fetch(&url)?;
+    if response.status != StatusCode::OK {
+        return Err(eyre!(
+            "SoraFS moderation operator canary route `{}` returned status {}",
+            spec.name,
+            response.status
+        ));
+    }
+    let body_blake3_hex = blake3::hash(&response.body).to_hex().to_string();
+    let mut schema = None;
+    if let Some(expected_schema) = spec.expected_schema {
+        let value: Value = norito::json::from_slice(&response.body).wrap_err_with(|| {
+            format!(
+                "failed to decode SoraFS moderation operator canary `{}` JSON response",
+                spec.name
+            )
+        })?;
+        moderation_operator_canary_ensure_payload_free(&value)?;
+        let fields = value_object(&value, "operator canary JSON response")?;
+        let actual_schema =
+            required_string_field(fields, "schema", "operator canary JSON response")?;
+        if actual_schema != expected_schema {
+            return Err(eyre!(
+                "SoraFS moderation operator canary route `{}` returned schema `{actual_schema}` (expected `{expected_schema}`)",
+                spec.name
+            ));
+        }
+        schema = Some(actual_schema.to_string());
+    }
+    if let Some(marker) = spec.expect_html_marker {
+        let body = std::str::from_utf8(&response.body).wrap_err_with(|| {
+            format!(
+                "SoraFS moderation operator canary `{}` response is not UTF-8",
+                spec.name
+            )
+        })?;
+        if !body.contains(marker) {
+            return Err(eyre!(
+                "SoraFS moderation operator canary route `{}` response is missing `{marker}`",
+                spec.name
+            ));
+        }
+    }
+    let mut route = Map::new();
+    route.insert("name".into(), Value::from(spec.name));
+    route.insert("method".into(), Value::from("GET"));
+    route.insert("path".into(), Value::from(spec.path.clone()));
+    route.insert("url".into(), Value::from(url));
+    route.insert(
+        "status_code".into(),
+        Value::from(u64::from(response.status.as_u16())),
+    );
+    route.insert(
+        "content_type".into(),
+        response.content_type.map_or(Value::Null, Value::from),
+    );
+    route.insert("schema".into(), schema.map_or(Value::Null, Value::from));
+    route.insert("body_blake3_hex".into(), Value::from(body_blake3_hex));
+    route.insert(
+        "body_bytes".into(),
+        Value::from(u64::try_from(response.body.len()).unwrap_or(u64::MAX)),
+    );
+    route.insert("payload_bytes_included".into(), Value::Bool(false));
+    route.insert("private_payloads_included".into(), Value::Bool(false));
+    Ok(Value::Object(route))
+}
+
+fn moderation_operator_canary_route_url(
+    operator_url: &str,
+    spec: &ModerationOperatorCanaryRouteSpec,
+    limit: Option<u32>,
+) -> Result<String> {
+    let base = format!("{}/", operator_url.trim_end_matches('/'));
+    let mut url = reqwest::Url::parse(&base)
+        .wrap_err_with(|| format!("failed to parse --operator-url `{operator_url}`"))?
+        .join(spec.path.trim_start_matches('/'))
+        .wrap_err_with(|| format!("failed to join operator route `{}`", spec.path))?;
+    if spec.include_limit
+        && let Some(limit) = limit
+    {
+        url.query_pairs_mut()
+            .append_pair("limit", &limit.to_string());
+    }
+    Ok(url.to_string())
+}
+
+fn moderation_operator_canary_ensure_payload_free(value: &Value) -> Result<()> {
+    fn visit(path: &str, value: &Value) -> Result<()> {
+        match value {
+            Value::Object(fields) => {
+                for (key, child) in fields {
+                    let child_path = if path.is_empty() {
+                        key.to_string()
+                    } else {
+                        format!("{path}.{key}")
+                    };
+                    if key == "payload_b64" {
+                        return Err(eyre!(
+                            "operator canary response unexpectedly included payload bytes at `{child_path}`"
+                        ));
+                    }
+                    if matches!(
+                        key.as_str(),
+                        "payload_bytes_included"
+                            | "private_payloads_included"
+                            | "private_payload_included"
+                    ) && child.as_bool() == Some(true)
+                    {
+                        return Err(eyre!(
+                            "operator canary response advertised payload bytes at `{child_path}`"
+                        ));
+                    }
+                    visit(&child_path, child)?;
+                }
+            }
+            Value::Array(values) => {
+                for (index, child) in values.iter().enumerate() {
+                    visit(&format!("{path}[{index}]"), child)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    visit("", value)
+}
+
+fn current_unix_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 fn generate_nonce_hex(bytes: usize) -> Result<String> {
     generate_nonce_hex_with_rng(bytes, &mut OsRng)
 }
@@ -11774,14 +17165,2825 @@ fn render_json_response<C: RunContext>(context: &mut C, response: Response<Vec<u
     }
 }
 
+fn render_json_response_ok_or_accepted<C: RunContext>(
+    context: &mut C,
+    response: Response<Vec<u8>>,
+) -> Result<()> {
+    let status = response.status();
+    let body = response.into_body();
+    match status {
+        StatusCode::OK | StatusCode::ACCEPTED => render_json_body(context, &body),
+        status => Err(make_http_error(status, &body)),
+    }
+}
+
 fn render_json_body<C: RunContext>(context: &mut C, body: &[u8]) -> Result<()> {
     let value: norito::json::Value = norito::json::from_slice(body)?;
     context.print_data(&value)
 }
 
+fn render_moderation_quarantine_bridge_plan_response<C: RunContext>(
+    context: &mut C,
+    response: Response<Vec<u8>>,
+    quarantine_id_hex: &str,
+) -> Result<()> {
+    let status = response.status();
+    let body = response.into_body();
+    match status {
+        StatusCode::OK => {
+            let panel: Value = norito::json::from_slice(&body)
+                .wrap_err("failed to decode moderation operator-panel JSON")?;
+            let plan = moderation_quarantine_bridge_plan_json(quarantine_id_hex, &panel)?;
+            context.print_data(&plan)
+        }
+        status => Err(make_http_error(status, &body)),
+    }
+}
+
+fn moderation_quarantine_bridge_plan_json(quarantine_id_hex: &str, panel: &Value) -> Result<Value> {
+    ensure_moderation_bridge_plan_has_no_payload(panel)?;
+    let root = value_object(panel, "operator panel response")?;
+    let schema = required_string_field(root, "schema", "operator panel response")?;
+    if schema != "sorafs.moderation.quarantine.operator_panel.v1" {
+        return Err(eyre!(
+            "operator panel response schema `{schema}` is not supported by bridge-plan"
+        ));
+    }
+    let record = root
+        .get("record")
+        .ok_or_else(|| eyre!("operator panel response is missing `record`"))?;
+    let record_obj = value_object(record, "operator panel record")?;
+    let record_state = required_string_field(record_obj, "state", "operator panel record")?;
+    let object_status = required_string_field(root, "object_status", "operator panel response")?;
+    let ballot_count = root
+        .get("ballot_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let returned_ballot_count = root
+        .get("returned_ballot_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let next_actions = root
+        .get("next_actions")
+        .and_then(Value::as_array)
+        .ok_or_else(|| eyre!("operator panel response is missing `next_actions` array"))?;
+    let ballots = root
+        .get("ballots")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let ballot_ref = first_moderation_ballot_reference(ballots);
+    let mut actions = Vec::with_capacity(next_actions.len());
+    let mut required_count = 0_u64;
+    for (index, action) in next_actions.iter().enumerate() {
+        let planned =
+            moderation_quarantine_bridge_action_json(index, action, quarantine_id_hex, ballot_ref)?;
+        if planned
+            .as_object()
+            .and_then(|fields| fields.get("required"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            required_count += 1;
+        }
+        actions.push(planned);
+    }
+
+    let mut plan = Map::new();
+    plan.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.quarantine.bridge_plan.v1"),
+    );
+    plan.insert("source".into(), Value::from("operator-panel"));
+    plan.insert("status".into(), Value::from("planned"));
+    plan.insert(
+        "quarantine_id_hex".into(),
+        Value::from(quarantine_id_hex.to_string()),
+    );
+    plan.insert("record_state".into(), Value::from(record_state.to_string()));
+    plan.insert(
+        "object_status".into(),
+        Value::from(object_status.to_string()),
+    );
+    plan.insert("ballot_count".into(), Value::from(ballot_count));
+    plan.insert(
+        "returned_ballot_count".into(),
+        Value::from(returned_ballot_count),
+    );
+    plan.insert("action_count".into(), Value::from(actions.len() as u64));
+    plan.insert("required_action_count".into(), Value::from(required_count));
+    plan.insert("payload_bytes_included".into(), Value::Bool(false));
+    plan.insert("actions".into(), Value::Array(actions));
+    Ok(Value::Object(plan))
+}
+
+fn moderation_quarantine_bridge_action_json(
+    index: usize,
+    action: &Value,
+    quarantine_id_hex: &str,
+    ballot_ref: Option<(&str, &str)>,
+) -> Result<Value> {
+    let action_obj = value_object(action, "operator panel next action")?;
+    let action_name = required_string_field(action_obj, "action", "operator panel next action")?;
+    let route = required_string_field(action_obj, "route", "operator panel next action")?;
+    let required = action_obj
+        .get("required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let mut fields = Map::new();
+    fields.insert("order".into(), Value::from((index + 1) as u64));
+    fields.insert("action".into(), Value::from(action_name.to_string()));
+    fields.insert("required".into(), Value::Bool(required));
+    fields.insert("route".into(), Value::from(route.to_string()));
+    fields.insert(
+        "automation_status".into(),
+        Value::from(moderation_quarantine_bridge_action_status(
+            action_name,
+            required,
+        )),
+    );
+    fields.insert(
+        "cli".into(),
+        Value::Array(
+            moderation_quarantine_bridge_action_cli(action_name, quarantine_id_hex, ballot_ref)
+                .into_iter()
+                .map(Value::from)
+                .collect(),
+        ),
+    );
+    Ok(Value::Object(fields))
+}
+
+fn moderation_quarantine_bridge_action_status(action: &str, required: bool) -> &'static str {
+    match action {
+        "store_object" => "blocked_until_payload_is_sealed",
+        "read_object" => {
+            if required {
+                "required_payload_review"
+            } else {
+                "available_for_operator_review"
+            }
+        }
+        "review" => "operator_review_required",
+        "appeal_handoff" => "ready_for_appeal_finance_handoff",
+        "appeal_ballot" => "ready_after_confirmed_deposit",
+        "collect_commits_reveals_tally" => "waiting_for_commit_reveal_tally",
+        "publish_transparency_source_entry" => "ready_for_transparency_source_entry",
+        "release_complete" => "complete",
+        _ => "operator_attention_required",
+    }
+}
+
+fn moderation_quarantine_bridge_action_cli(
+    action: &str,
+    quarantine_id_hex: &str,
+    ballot_ref: Option<(&str, &str)>,
+) -> Vec<String> {
+    let command = |parts: &[&str]| parts.iter().map(|part| (*part).to_string()).collect();
+    match action {
+        "store_object" => command(&[
+            "iroha",
+            "sorafs",
+            "moderation",
+            "quarantine",
+            "object",
+            "store",
+            "--quarantine-id",
+            quarantine_id_hex,
+            "--payload-file",
+            "<payload>",
+        ]),
+        "read_object" => command(&[
+            "iroha",
+            "sorafs",
+            "moderation",
+            "quarantine",
+            "object",
+            "read",
+            "--quarantine-id",
+            quarantine_id_hex,
+        ]),
+        "review" => command(&[
+            "iroha",
+            "sorafs",
+            "moderation",
+            "quarantine",
+            "review",
+            "--quarantine-id",
+            quarantine_id_hex,
+        ]),
+        "appeal_handoff" => command(&[
+            "iroha",
+            "sorafs",
+            "moderation",
+            "quarantine",
+            "appeal-handoff",
+            "--quarantine-id",
+            quarantine_id_hex,
+            "--input",
+            "<appeal-handoff.json>",
+        ]),
+        "appeal_ballot" => command(&[
+            "iroha",
+            "sorafs",
+            "moderation",
+            "quarantine",
+            "appeal-ballot",
+            "--quarantine-id",
+            quarantine_id_hex,
+            "--input",
+            "<appeal-ballot.json>",
+        ]),
+        "collect_commits_reveals_tally" => {
+            if let Some((case_id, round_id)) = ballot_ref {
+                command(&[
+                    "iroha",
+                    "sorafs",
+                    "moderation",
+                    "ballots",
+                    "tally",
+                    "--case-id",
+                    case_id,
+                    "--round-id",
+                    round_id,
+                ])
+            } else {
+                command(&[
+                    "iroha",
+                    "sorafs",
+                    "moderation",
+                    "ballots",
+                    "events",
+                    "--limit",
+                    "25",
+                ])
+            }
+        }
+        "publish_transparency_source_entry" => command(&[
+            "iroha",
+            "sorafs",
+            "transparency",
+            "source-entry",
+            "submit",
+            "--source-kind",
+            "moderation-ballot-governance-event",
+            "--payload",
+            "<source-entry.json>",
+        ]),
+        "release_complete" => command(&[
+            "iroha",
+            "sorafs",
+            "moderation",
+            "quarantine",
+            "operator-panel",
+            "--quarantine-id",
+            quarantine_id_hex,
+        ]),
+        _ => command(&[
+            "iroha",
+            "sorafs",
+            "moderation",
+            "quarantine",
+            "operator-panel",
+            "--quarantine-id",
+            quarantine_id_hex,
+        ]),
+    }
+}
+
+fn moderation_quarantine_juror_plan_json(quarantine_id_hex: &str, panel: &Value) -> Result<Value> {
+    ensure_moderation_bridge_plan_has_no_payload(panel)?;
+    let root = value_object(panel, "operator panel response")?;
+    let schema = required_string_field(root, "schema", "operator panel response")?;
+    if schema != "sorafs.moderation.quarantine.operator_panel.v1" {
+        return Err(eyre!(
+            "operator panel response schema `{schema}` is not supported by juror-plan"
+        ));
+    }
+    let ballot_count = root
+        .get("ballot_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let returned_ballot_count = root
+        .get("returned_ballot_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let truncated_ballots = root
+        .get("truncated_ballots")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let ballots = root
+        .get("ballots")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let mut planned_ballots = Vec::with_capacity(ballots.len());
+    let mut notification_count = 0_u64;
+    let mut pending_commit_count = 0_u64;
+    let mut pending_reveal_count = 0_u64;
+    for ballot in ballots {
+        let (planned, counts) = moderation_quarantine_juror_plan_ballot_json(ballot)?;
+        notification_count = notification_count.saturating_add(counts.notification_count);
+        pending_commit_count = pending_commit_count.saturating_add(counts.pending_commit_count);
+        pending_reveal_count = pending_reveal_count.saturating_add(counts.pending_reveal_count);
+        planned_ballots.push(planned);
+    }
+    let mut plan = Map::new();
+    plan.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.quarantine.juror_plan.v1"),
+    );
+    plan.insert("source".into(), Value::from("operator-panel"));
+    plan.insert("status".into(), Value::from("planned"));
+    plan.insert(
+        "quarantine_id_hex".into(),
+        Value::from(quarantine_id_hex.to_string()),
+    );
+    plan.insert("ballot_count".into(), Value::from(ballot_count));
+    plan.insert(
+        "returned_ballot_count".into(),
+        Value::from(returned_ballot_count),
+    );
+    plan.insert("truncated_ballots".into(), Value::Bool(truncated_ballots));
+    plan.insert("notification_count".into(), Value::from(notification_count));
+    plan.insert(
+        "pending_commit_count".into(),
+        Value::from(pending_commit_count),
+    );
+    plan.insert(
+        "pending_reveal_count".into(),
+        Value::from(pending_reveal_count),
+    );
+    plan.insert("payload_bytes_included".into(), Value::Bool(false));
+    plan.insert("ballots".into(), Value::Array(planned_ballots));
+    Ok(Value::Object(plan))
+}
+
+fn moderation_quarantine_juror_notifications_json(
+    quarantine_id_hex: &str,
+    panel: &Value,
+) -> Result<Value> {
+    let plan = moderation_quarantine_juror_plan_json(quarantine_id_hex, panel)?;
+    moderation_quarantine_juror_notifications_from_plan(quarantine_id_hex, &plan)
+}
+
+fn moderation_quarantine_juror_notifications_from_plan(
+    quarantine_id_hex: &str,
+    plan: &Value,
+) -> Result<Value> {
+    let root = value_object(plan, "juror notification plan")?;
+    let schema = required_string_field(root, "schema", "juror notification plan")?;
+    if schema != "sorafs.moderation.quarantine.juror_plan.v1" {
+        return Err(eyre!(
+            "juror notification plan schema `{schema}` is not supported by notification delivery"
+        ));
+    }
+    let ballots = root
+        .get("ballots")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let mut notifications = Vec::new();
+    let mut planned_juror_count = 0_u64;
+    let mut skipped_complete_count = 0_u64;
+    let mut pending_commit_count = 0_u64;
+    let mut pending_reveal_count = 0_u64;
+    for ballot in ballots {
+        let ballot_obj = value_object(ballot, "juror notification ballot")?;
+        let case_id = required_string_field(ballot_obj, "case_id", "juror notification ballot")?;
+        let round_id = required_string_field(ballot_obj, "round_id", "juror notification ballot")?;
+        let jurors = ballot_obj
+            .get("jurors")
+            .and_then(Value::as_array)
+            .ok_or_else(|| eyre!("juror notification ballot is missing `jurors` array"))?;
+        for juror in jurors {
+            planned_juror_count = planned_juror_count.saturating_add(1);
+            let juror_obj = value_object(juror, "juror notification entry")?;
+            let needs_commit = juror_obj
+                .get("needs_commit")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let needs_reveal = juror_obj
+                .get("needs_reveal")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if !needs_commit && !needs_reveal {
+                skipped_complete_count = skipped_complete_count.saturating_add(1);
+                continue;
+            }
+            let notification = moderation_quarantine_juror_notification_delivery_json(
+                quarantine_id_hex,
+                case_id,
+                round_id,
+                ballot_obj,
+                juror_obj,
+                needs_commit,
+            )?;
+            if needs_commit {
+                pending_commit_count = pending_commit_count.saturating_add(1);
+            } else if needs_reveal {
+                pending_reveal_count = pending_reveal_count.saturating_add(1);
+            }
+            notifications.push(notification);
+        }
+    }
+
+    let mut delivery = Map::new();
+    delivery.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.quarantine.juror_notifications.v1"),
+    );
+    delivery.insert("source".into(), Value::from("juror-plan"));
+    delivery.insert("status".into(), Value::from("ready"));
+    delivery.insert(
+        "quarantine_id_hex".into(),
+        Value::from(quarantine_id_hex.to_string()),
+    );
+    delivery.insert(
+        "planned_juror_count".into(),
+        Value::from(planned_juror_count),
+    );
+    delivery.insert(
+        "notification_count".into(),
+        Value::from(notifications.len() as u64),
+    );
+    delivery.insert(
+        "skipped_complete_count".into(),
+        Value::from(skipped_complete_count),
+    );
+    delivery.insert(
+        "pending_commit_count".into(),
+        Value::from(pending_commit_count),
+    );
+    delivery.insert(
+        "pending_reveal_count".into(),
+        Value::from(pending_reveal_count),
+    );
+    delivery.insert("delivery_transport".into(), Value::from("operator-managed"));
+    delivery.insert(
+        "delivery_semantics".into(),
+        Value::from("at-least-once-with-dedup-key"),
+    );
+    delivery.insert("payload_bytes_included".into(), Value::Bool(false));
+    delivery.insert("private_payloads_included".into(), Value::Bool(false));
+    delivery.insert("notifications".into(), Value::Array(notifications));
+    Ok(Value::Object(delivery))
+}
+
+fn moderation_quarantine_commit_reveal_status_json(
+    quarantine_id_hex: &str,
+    panel: &Value,
+) -> Result<Value> {
+    let plan = moderation_quarantine_juror_plan_json(quarantine_id_hex, panel)?;
+    moderation_quarantine_commit_reveal_status_from_plan(quarantine_id_hex, &plan)
+}
+
+fn moderation_quarantine_commit_reveal_status_from_plan(
+    quarantine_id_hex: &str,
+    plan: &Value,
+) -> Result<Value> {
+    let root = value_object(plan, "commit/reveal coordination plan")?;
+    let schema = required_string_field(root, "schema", "commit/reveal coordination plan")?;
+    if schema != "sorafs.moderation.quarantine.juror_plan.v1" {
+        return Err(eyre!(
+            "juror notification plan schema `{schema}` is not supported by commit/reveal coordination"
+        ));
+    }
+    let ballots = root
+        .get("ballots")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let mut ballot_statuses = Vec::with_capacity(ballots.len());
+    let mut pending_commit_count = 0_u64;
+    let mut pending_reveal_count = 0_u64;
+    let mut commit_quorum_count = 0_u64;
+    let mut reveal_quorum_count = 0_u64;
+    let mut tally_ready_count = 0_u64;
+    let mut tallied_count = 0_u64;
+    for ballot in ballots {
+        let (status, counts) =
+            moderation_quarantine_commit_reveal_ballot_status_json(quarantine_id_hex, ballot)?;
+        pending_commit_count = pending_commit_count.saturating_add(counts.pending_commit_count);
+        pending_reveal_count = pending_reveal_count.saturating_add(counts.pending_reveal_count);
+        if counts.commit_quorum_met {
+            commit_quorum_count = commit_quorum_count.saturating_add(1);
+        }
+        if counts.reveal_quorum_met {
+            reveal_quorum_count = reveal_quorum_count.saturating_add(1);
+        }
+        if counts.ready_to_tally {
+            tally_ready_count = tally_ready_count.saturating_add(1);
+        }
+        if counts.tallied {
+            tallied_count = tallied_count.saturating_add(1);
+        }
+        ballot_statuses.push(status);
+    }
+    let mut status = Map::new();
+    status.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.quarantine.commit_reveal_status.v1"),
+    );
+    status.insert("source".into(), Value::from("juror-plan"));
+    status.insert("status".into(), Value::from("coordinated"));
+    status.insert(
+        "quarantine_id_hex".into(),
+        Value::from(quarantine_id_hex.to_string()),
+    );
+    status.insert(
+        "ballot_count".into(),
+        Value::from(ballot_statuses.len() as u64),
+    );
+    status.insert(
+        "pending_commit_count".into(),
+        Value::from(pending_commit_count),
+    );
+    status.insert(
+        "pending_reveal_count".into(),
+        Value::from(pending_reveal_count),
+    );
+    status.insert(
+        "commit_quorum_count".into(),
+        Value::from(commit_quorum_count),
+    );
+    status.insert(
+        "reveal_quorum_count".into(),
+        Value::from(reveal_quorum_count),
+    );
+    status.insert("tally_ready_count".into(), Value::from(tally_ready_count));
+    status.insert("tallied_count".into(), Value::from(tallied_count));
+    status.insert("payload_bytes_included".into(), Value::Bool(false));
+    status.insert("private_payloads_included".into(), Value::Bool(false));
+    status.insert("ballots".into(), Value::Array(ballot_statuses));
+    Ok(Value::Object(status))
+}
+
+#[derive(Default)]
+struct ModerationCommitRevealStatusCounts {
+    pending_commit_count: u64,
+    pending_reveal_count: u64,
+    commit_quorum_met: bool,
+    reveal_quorum_met: bool,
+    ready_to_tally: bool,
+    tallied: bool,
+}
+
+fn moderation_quarantine_commit_reveal_ballot_status_json(
+    quarantine_id_hex: &str,
+    ballot: &Value,
+) -> Result<(Value, ModerationCommitRevealStatusCounts)> {
+    let ballot_obj = value_object(ballot, "commit/reveal ballot status")?;
+    let case_id = required_string_field(ballot_obj, "case_id", "commit/reveal ballot status")?;
+    let round_id = required_string_field(ballot_obj, "round_id", "commit/reveal ballot status")?;
+    let quorum = ballot_obj.get("quorum").and_then(Value::as_u64);
+    let juror_count = ballot_obj
+        .get("juror_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let committed_count = ballot_obj
+        .get("committed_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let revealed_count = ballot_obj
+        .get("revealed_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let tally_status =
+        required_string_field(ballot_obj, "tally_status", "commit/reveal ballot status")?;
+    let jurors = ballot_obj
+        .get("jurors")
+        .and_then(Value::as_array)
+        .ok_or_else(|| eyre!("commit/reveal ballot status is missing `jurors` array"))?;
+    let mut missing_commit_jurors = Vec::new();
+    let mut missing_reveal_jurors = Vec::new();
+    for juror in jurors {
+        let juror_obj = value_object(juror, "commit/reveal juror status")?;
+        let juror_id = required_string_field(juror_obj, "juror_id", "commit/reveal juror status")?;
+        if juror_obj
+            .get("needs_commit")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            missing_commit_jurors.push(Value::from(juror_id.to_string()));
+        }
+        if juror_obj
+            .get("needs_reveal")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            missing_reveal_jurors.push(Value::from(juror_id.to_string()));
+        }
+    }
+    let quorum_known = quorum.is_some();
+    let commit_quorum_met = quorum.is_some_and(|value| committed_count >= value);
+    let reveal_quorum_met = quorum.is_some_and(|value| revealed_count >= value);
+    let pending_commit_count = missing_commit_jurors.len() as u64;
+    let pending_reveal_count = missing_reveal_jurors.len() as u64;
+    let tallied = tally_status == "tallied";
+    let (next_action, automation_status, ready_to_tally) = if tallied {
+        ("complete", "tallied", false)
+    } else if !commit_quorum_met {
+        ("collect_commits", "awaiting_commit_quorum", false)
+    } else if !reveal_quorum_met {
+        ("collect_reveals", "awaiting_reveal_quorum", false)
+    } else {
+        ("submit_tally", "ready_for_tally", true)
+    };
+    let mut status = Map::new();
+    status.insert("case_id".into(), Value::from(case_id.to_string()));
+    status.insert("round_id".into(), Value::from(round_id.to_string()));
+    status.insert(
+        "quarantine_id_hex".into(),
+        Value::from(quarantine_id_hex.to_string()),
+    );
+    status.insert(
+        "quorum".into(),
+        ballot_obj.get("quorum").cloned().unwrap_or(Value::Null),
+    );
+    status.insert("quorum_known".into(), Value::Bool(quorum_known));
+    status.insert("juror_count".into(), Value::from(juror_count));
+    status.insert("committed_count".into(), Value::from(committed_count));
+    status.insert("revealed_count".into(), Value::from(revealed_count));
+    status.insert("commit_quorum_met".into(), Value::Bool(commit_quorum_met));
+    status.insert("reveal_quorum_met".into(), Value::Bool(reveal_quorum_met));
+    status.insert(
+        "pending_commit_count".into(),
+        Value::from(pending_commit_count),
+    );
+    status.insert(
+        "pending_reveal_count".into(),
+        Value::from(pending_reveal_count),
+    );
+    status.insert(
+        "missing_commit_jurors".into(),
+        Value::Array(missing_commit_jurors),
+    );
+    status.insert(
+        "missing_reveal_jurors".into(),
+        Value::Array(missing_reveal_jurors),
+    );
+    status.insert("tally_status".into(), Value::from(tally_status.to_string()));
+    status.insert("next_action".into(), Value::from(next_action));
+    status.insert("automation_status".into(), Value::from(automation_status));
+    status.insert("ready_to_tally".into(), Value::Bool(ready_to_tally));
+    let tally_request = if ready_to_tally {
+        let mut body = Map::new();
+        body.insert("case_id".into(), Value::from(case_id.to_string()));
+        body.insert("round_id".into(), Value::from(round_id.to_string()));
+        let mut request = Map::new();
+        request.insert(
+            "route".into(),
+            Value::from(format!(
+                "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/ballot-tally"
+            )),
+        );
+        request.insert("body".into(), Value::Object(body));
+        request.insert(
+            "cli".into(),
+            Value::Array(
+                [
+                    "iroha",
+                    "sorafs",
+                    "moderation",
+                    "ballots",
+                    "tally",
+                    "--case-id",
+                    case_id,
+                    "--round-id",
+                    round_id,
+                ]
+                .into_iter()
+                .map(Value::from)
+                .collect(),
+            ),
+        );
+        Value::Object(request)
+    } else {
+        Value::Null
+    };
+    status.insert("tally_request".into(), tally_request);
+    status.insert("payload_bytes_included".into(), Value::Bool(false));
+    status.insert("private_payloads_included".into(), Value::Bool(false));
+    Ok((
+        Value::Object(status),
+        ModerationCommitRevealStatusCounts {
+            pending_commit_count,
+            pending_reveal_count,
+            commit_quorum_met,
+            reveal_quorum_met,
+            ready_to_tally,
+            tallied,
+        },
+    ))
+}
+
+fn moderation_quarantine_juror_notification_delivery_json(
+    quarantine_id_hex: &str,
+    case_id: &str,
+    round_id: &str,
+    ballot_obj: &Map,
+    juror_obj: &Map,
+    needs_commit: bool,
+) -> Result<Value> {
+    let juror_id = required_string_field(juror_obj, "juror_id", "juror notification entry")?;
+    let notification_status =
+        required_string_field(juror_obj, "notification_status", "juror notification entry")?;
+    let signed_by = required_string_field(juror_obj, "signed_by", "juror notification entry")?;
+    let (action, route_key, cli_key, deadline_field, title_action) = if needs_commit {
+        (
+            "submit_commit",
+            "commit",
+            "commit_cli",
+            "commit_deadline_unix_ms",
+            "commit",
+        )
+    } else {
+        (
+            "submit_reveal",
+            "reveal",
+            "reveal_cli",
+            "reveal_deadline_unix_ms",
+            "reveal",
+        )
+    };
+    let route = juror_obj
+        .get("routes")
+        .and_then(Value::as_object)
+        .and_then(|routes| routes.get(route_key))
+        .and_then(Value::as_str)
+        .ok_or_else(|| eyre!("juror notification entry is missing `{route_key}` route"))?;
+    let cli = juror_obj
+        .get(cli_key)
+        .cloned()
+        .ok_or_else(|| eyre!("juror notification entry is missing `{cli_key}`"))?;
+    let delivery_id = moderation_juror_notification_delivery_id(
+        quarantine_id_hex,
+        case_id,
+        round_id,
+        juror_id,
+        action,
+    );
+    let deadline = ballot_obj
+        .get(deadline_field)
+        .cloned()
+        .unwrap_or(Value::Null);
+    let evidence_uri = ballot_obj
+        .get("evidence_uri")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let subject = format!("SoraFS moderation {title_action} required for {case_id}/{round_id}");
+    let body = format!(
+        "Juror {juror_id} must {title_action} moderation ballot {case_id}/{round_id}. Sign as {signed_by} and submit to {route}. Build any private commit/reveal payload locally; this notification intentionally carries no payload bytes."
+    );
+
+    let mut notification = Map::new();
+    notification.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.juror_notification.v1"),
+    );
+    notification.insert("delivery_id".into(), Value::from(delivery_id.clone()));
+    notification.insert(
+        "dedup_key".into(),
+        Value::from(format!("sorafs-moderation-juror:{delivery_id}")),
+    );
+    notification.insert("delivery_status".into(), Value::from("ready_for_delivery"));
+    notification.insert("delivery_transport".into(), Value::from("operator-managed"));
+    notification.insert(
+        "quarantine_id_hex".into(),
+        Value::from(quarantine_id_hex.to_string()),
+    );
+    notification.insert("case_id".into(), Value::from(case_id.to_string()));
+    notification.insert("round_id".into(), Value::from(round_id.to_string()));
+    notification.insert("juror_id".into(), Value::from(juror_id.to_string()));
+    notification.insert("signed_by".into(), Value::from(signed_by.to_string()));
+    notification.insert("action".into(), Value::from(action));
+    notification.insert(
+        "notification_status".into(),
+        Value::from(notification_status.to_string()),
+    );
+    notification.insert("route".into(), Value::from(route.to_string()));
+    notification.insert("cli".into(), cli);
+    notification.insert("subject".into(), Value::from(subject));
+    notification.insert("body".into(), Value::from(body));
+    notification.insert("deadline_unix_ms".into(), deadline);
+    notification.insert("evidence_uri".into(), evidence_uri);
+    notification.insert("payload_bytes_included".into(), Value::Bool(false));
+    notification.insert("private_payload_included".into(), Value::Bool(false));
+    notification.insert("private_payload_source".into(), Value::from("juror-local"));
+    Ok(Value::Object(notification))
+}
+
+fn moderation_juror_notification_delivery_id(
+    quarantine_id_hex: &str,
+    case_id: &str,
+    round_id: &str,
+    juror_id: &str,
+    action: &str,
+) -> String {
+    let mut hasher = blake3::Hasher::new();
+    for part in [
+        "sorafs.moderation.juror_notification.v1",
+        quarantine_id_hex,
+        case_id,
+        round_id,
+        juror_id,
+        action,
+    ] {
+        hasher.update(part.as_bytes());
+        hasher.update(&[0]);
+    }
+    encode(hasher.finalize().as_bytes())
+}
+
+#[derive(Default)]
+struct ModerationJurorPlanCounts {
+    notification_count: u64,
+    pending_commit_count: u64,
+    pending_reveal_count: u64,
+}
+
+fn moderation_quarantine_juror_plan_ballot_json(
+    ballot: &Value,
+) -> Result<(Value, ModerationJurorPlanCounts)> {
+    let ballot_obj = value_object(ballot, "operator panel ballot")?;
+    let announcement = ballot_obj
+        .get("announcement")
+        .ok_or_else(|| eyre!("operator panel ballot is missing `announcement`"))?;
+    let announcement_obj = value_object(announcement, "operator panel ballot announcement")?;
+    let context = announcement_obj
+        .get("context")
+        .ok_or_else(|| eyre!("operator panel ballot announcement is missing `context`"))?;
+    let context_obj = value_object(context, "operator panel ballot context")?;
+    let case_id = required_string_field(context_obj, "case_id", "operator panel ballot context")?;
+    let round_id = required_string_field(
+        announcement_obj,
+        "round_id",
+        "operator panel ballot announcement",
+    )?;
+    let juror_values = announcement_obj
+        .get("juror_ids")
+        .and_then(Value::as_array)
+        .ok_or_else(|| eyre!("operator panel ballot announcement is missing `juror_ids` array"))?;
+    let commits = moderation_juror_ids_from_entries(ballot_obj, "commits")?;
+    let reveals = moderation_juror_ids_from_entries(ballot_obj, "reveals")?;
+    let mut jurors = Vec::with_capacity(juror_values.len());
+    let mut counts = ModerationJurorPlanCounts::default();
+    for juror in juror_values {
+        let juror_id = juror
+            .as_str()
+            .ok_or_else(|| eyre!("operator panel ballot juror id must be a string"))?;
+        let planned = moderation_quarantine_juror_plan_entry_json(
+            case_id, round_id, juror_id, &commits, &reveals,
+        )?;
+        let planned_obj = value_object(&planned, "juror notification plan entry")?;
+        if planned_obj
+            .get("needs_commit")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            counts.pending_commit_count = counts.pending_commit_count.saturating_add(1);
+        }
+        if planned_obj
+            .get("needs_reveal")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            counts.pending_reveal_count = counts.pending_reveal_count.saturating_add(1);
+        }
+        counts.notification_count = counts.notification_count.saturating_add(1);
+        jurors.push(planned);
+    }
+
+    let mut fields = Map::new();
+    fields.insert("case_id".into(), Value::from(case_id.to_string()));
+    fields.insert("round_id".into(), Value::from(round_id.to_string()));
+    fields.insert(
+        "evidence_uri".into(),
+        context_obj
+            .get("evidence_uri")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    fields.insert(
+        "quorum".into(),
+        announcement_obj
+            .get("quorum")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    for field in [
+        "announced_at_unix_ms",
+        "commit_deadline_unix_ms",
+        "challenge_deadline_unix_ms",
+        "reveal_deadline_unix_ms",
+    ] {
+        fields.insert(
+            field.into(),
+            announcement_obj.get(field).cloned().unwrap_or(Value::Null),
+        );
+    }
+    fields.insert("juror_count".into(), Value::from(juror_values.len() as u64));
+    fields.insert("committed_count".into(), Value::from(commits.len() as u64));
+    fields.insert("revealed_count".into(), Value::from(reveals.len() as u64));
+    fields.insert(
+        "tally_status".into(),
+        Value::from(
+            if ballot_obj
+                .get("tally")
+                .is_some_and(|tally| !tally.is_null())
+            {
+                "tallied"
+            } else {
+                "pending"
+            },
+        ),
+    );
+    fields.insert("jurors".into(), Value::Array(jurors));
+    Ok((Value::Object(fields), counts))
+}
+
+fn moderation_juror_ids_from_entries(ballot_obj: &Map, field: &str) -> Result<BTreeSet<String>> {
+    let mut jurors = BTreeSet::new();
+    let Some(entries) = ballot_obj.get(field).and_then(Value::as_array) else {
+        return Ok(jurors);
+    };
+    for entry in entries {
+        let entry_obj = value_object(entry, field)?;
+        let juror_id = required_string_field(entry_obj, "juror_id", field)?;
+        jurors.insert(juror_id.to_string());
+    }
+    Ok(jurors)
+}
+
+fn moderation_quarantine_juror_plan_entry_json(
+    case_id: &str,
+    round_id: &str,
+    juror_id: &str,
+    commits: &BTreeSet<String>,
+    reveals: &BTreeSet<String>,
+) -> Result<Value> {
+    let committed = commits.contains(juror_id);
+    let revealed = reveals.contains(juror_id);
+    let needs_commit = !committed;
+    let needs_reveal = committed && !revealed;
+    let mut entry = Map::new();
+    entry.insert("juror_id".into(), Value::from(juror_id.to_string()));
+    entry.insert("case_id".into(), Value::from(case_id.to_string()));
+    entry.insert("round_id".into(), Value::from(round_id.to_string()));
+    entry.insert(
+        "notification_status".into(),
+        Value::from(if revealed {
+            "complete"
+        } else if committed {
+            "reveal_required"
+        } else {
+            "commit_required"
+        }),
+    );
+    entry.insert(
+        "commit_status".into(),
+        Value::from(if committed { "accepted" } else { "pending" }),
+    );
+    entry.insert(
+        "reveal_status".into(),
+        Value::from(if revealed {
+            "accepted"
+        } else if committed {
+            "pending"
+        } else {
+            "waiting_for_commit"
+        }),
+    );
+    entry.insert("needs_commit".into(), Value::Bool(needs_commit));
+    entry.insert("needs_reveal".into(), Value::Bool(needs_reveal));
+    entry.insert("signed_by".into(), Value::from(juror_id.to_string()));
+    entry.insert(
+        "routes".into(),
+        norito::json!({
+            "commit": "/v1/sorafs/moderation/ballots/commits",
+            "reveal": "/v1/sorafs/moderation/ballots/reveals"
+        }),
+    );
+    entry.insert(
+        "commit_cli".into(),
+        Value::Array(
+            [
+                "iroha",
+                "sorafs",
+                "moderation",
+                "ballots",
+                "commit",
+                "--payload",
+                "<commit-payload.json>",
+            ]
+            .into_iter()
+            .map(Value::from)
+            .collect(),
+        ),
+    );
+    entry.insert(
+        "reveal_cli".into(),
+        Value::Array(
+            [
+                "iroha",
+                "sorafs",
+                "moderation",
+                "ballots",
+                "reveal",
+                "--payload",
+                "<reveal-payload.json>",
+            ]
+            .into_iter()
+            .map(Value::from)
+            .collect(),
+        ),
+    );
+    Ok(Value::Object(entry))
+}
+
+fn first_moderation_ballot_reference(ballots: &[Value]) -> Option<(&str, &str)> {
+    for ballot in ballots {
+        let ballot_obj = ballot.as_object()?;
+        let announcement = ballot_obj.get("announcement")?.as_object()?;
+        let round_id = announcement.get("round_id")?.as_str()?;
+        let context = announcement.get("context")?.as_object()?;
+        let case_id = context.get("case_id")?.as_str()?;
+        return Some((case_id, round_id));
+    }
+    None
+}
+
+fn ensure_moderation_bridge_plan_has_no_payload(value: &Value) -> Result<()> {
+    fn visit(path: &str, value: &Value) -> Result<()> {
+        match value {
+            Value::Object(fields) => {
+                for (key, child) in fields {
+                    let child_path = if path.is_empty() {
+                        key.to_string()
+                    } else {
+                        format!("{path}.{key}")
+                    };
+                    if key == "payload_b64" {
+                        return Err(eyre!(
+                            "operator panel response unexpectedly included payload bytes at `{child_path}`"
+                        ));
+                    }
+                    visit(&child_path, child)?;
+                }
+            }
+            Value::Array(values) => {
+                for (index, child) in values.iter().enumerate() {
+                    visit(&format!("{path}[{index}]"), child)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    visit("", value)
+}
+
+fn value_object<'a>(value: &'a Value, context: &str) -> Result<&'a Map> {
+    value
+        .as_object()
+        .ok_or_else(|| eyre!("{context} must be a JSON object"))
+}
+
+fn required_string_field<'a>(fields: &'a Map, field: &str, context: &str) -> Result<&'a str> {
+    fields
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| eyre!("{context} is missing string `{field}`"))
+}
+
 fn make_http_error(status: StatusCode, body: &[u8]) -> eyre::Report {
     let message = String::from_utf8_lossy(body);
     eyre!("request failed with status {status}: {message}")
+}
+
+trait ModerationOperatorWorkflowSource: Send + Sync {
+    fn get_operator_panel(
+        &self,
+        quarantine_id_hex: &str,
+        filter: &SorafsModerationQuarantineFilter,
+    ) -> Result<Response<Vec<u8>>>;
+
+    fn post_review(
+        &self,
+        _quarantine_id_hex: &str,
+        _request: &SorafsModerationQuarantineReviewRequest<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        Err(eyre!(
+            "SoraFS moderation operator service review forwarding is unavailable"
+        ))
+    }
+
+    fn post_release(
+        &self,
+        _quarantine_id_hex: &str,
+        _request: &SorafsModerationQuarantineReleaseRequest<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        Err(eyre!(
+            "SoraFS moderation operator service release forwarding is unavailable"
+        ))
+    }
+
+    fn post_appeal_handoff(
+        &self,
+        _quarantine_id_hex: &str,
+        _payload: &[u8],
+    ) -> Result<Response<Vec<u8>>> {
+        Err(eyre!(
+            "SoraFS moderation operator service appeal-handoff forwarding is unavailable"
+        ))
+    }
+
+    fn post_appeal_ballot(
+        &self,
+        _quarantine_id_hex: &str,
+        _payload: &[u8],
+    ) -> Result<Response<Vec<u8>>> {
+        Err(eyre!(
+            "SoraFS moderation operator service appeal-ballot forwarding is unavailable"
+        ))
+    }
+
+    fn post_ballot_tally(
+        &self,
+        _request: &SorafsModerationBallotTallyRequest<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        Err(eyre!(
+            "SoraFS moderation operator service ballot-tally forwarding is unavailable"
+        ))
+    }
+}
+
+impl ModerationOperatorWorkflowSource for Client {
+    fn get_operator_panel(
+        &self,
+        quarantine_id_hex: &str,
+        filter: &SorafsModerationQuarantineFilter,
+    ) -> Result<Response<Vec<u8>>> {
+        self.get_sorafs_moderation_quarantine_operator_panel(quarantine_id_hex, filter)
+    }
+
+    fn post_review(
+        &self,
+        quarantine_id_hex: &str,
+        request: &SorafsModerationQuarantineReviewRequest<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        self.post_sorafs_moderation_quarantine_review(quarantine_id_hex, request)
+    }
+
+    fn post_release(
+        &self,
+        quarantine_id_hex: &str,
+        request: &SorafsModerationQuarantineReleaseRequest<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        self.post_sorafs_moderation_quarantine_release(quarantine_id_hex, request)
+    }
+
+    fn post_appeal_handoff(
+        &self,
+        quarantine_id_hex: &str,
+        payload: &[u8],
+    ) -> Result<Response<Vec<u8>>> {
+        self.post_sorafs_moderation_quarantine_appeal_handoff_json(quarantine_id_hex, payload)
+    }
+
+    fn post_appeal_ballot(
+        &self,
+        quarantine_id_hex: &str,
+        payload: &[u8],
+    ) -> Result<Response<Vec<u8>>> {
+        self.post_sorafs_moderation_quarantine_appeal_ballot_json(quarantine_id_hex, payload)
+    }
+
+    fn post_ballot_tally(
+        &self,
+        request: &SorafsModerationBallotTallyRequest<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        self.post_sorafs_moderation_ballot_tally(request)
+    }
+}
+
+struct ModerationOperatorService {
+    listen: String,
+    default_limit: Option<u32>,
+    max_body_bytes: usize,
+    upstream: String,
+    default_actor: String,
+    workflow_source: Arc<dyn ModerationOperatorWorkflowSource>,
+}
+
+impl ModerationOperatorService {
+    const HTML_CONTENT_TYPE: &'static str = "text/html; charset=utf-8";
+    const JSON_CONTENT_TYPE: &'static str = "application/json";
+
+    fn status_json(&self) -> Value {
+        let mut fields = Map::new();
+        fields.insert(
+            "schema".into(),
+            Value::from("sorafs.moderation.quarantine.operator_service.status.v1"),
+        );
+        fields.insert("status".into(), Value::from("listening"));
+        fields.insert("source".into(), Value::from("iroha_cli"));
+        fields.insert("listen".into(), Value::from(self.listen.clone()));
+        fields.insert("upstream".into(), Value::from(self.upstream.clone()));
+        fields.insert(
+            "default_actor".into(),
+            Value::from(self.default_actor.clone()),
+        );
+        fields.insert(
+            "default_limit".into(),
+            self.default_limit.map_or(Value::Null, Value::from),
+        );
+        fields.insert(
+            "max_body_bytes".into(),
+            Value::from(u64::try_from(self.max_body_bytes).unwrap_or(u64::MAX)),
+        );
+        fields.insert("payload_bytes_included".into(), Value::Bool(false));
+        fields.insert(
+            "routes".into(),
+            Value::Array(vec![
+                Value::from("/"),
+                Value::from("/healthz"),
+                Value::from("/v1/sorafs/moderation/operator-panel/ui"),
+                Value::from("/v1/sorafs/moderation/operator-panel/status"),
+                Value::from("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel"),
+                Value::from("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/bridge-plan"),
+                Value::from("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-plan"),
+                Value::from(
+                    "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-notifications",
+                ),
+                Value::from(
+                    "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/commit-reveal-status",
+                ),
+                Value::from("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review"),
+                Value::from("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release"),
+                Value::from("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff"),
+                Value::from("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-ballot"),
+                Value::from("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/ballot-tally"),
+            ]),
+        );
+        Value::Object(fields)
+    }
+
+    fn handle_request(
+        &self,
+        request: &ModerationOperatorHttpRequest<'_>,
+    ) -> ModerationOperatorHttpResponse {
+        let route = match moderation_operator_route(request.path) {
+            Ok(route) => route,
+            Err(err) => return err.into_response(),
+        };
+        match route {
+            ModerationOperatorRoute::BrowserUi => {
+                if let Err(err) = moderation_operator_expect_method(request, "GET", false) {
+                    return err.into_response();
+                }
+                self.browser_ui_response()
+            }
+            ModerationOperatorRoute::Status => {
+                if let Err(err) = moderation_operator_expect_method(request, "GET", false) {
+                    return err.into_response();
+                }
+                moderation_operator_json_response(StatusCode::OK, &self.status_json())
+            }
+            ModerationOperatorRoute::OperatorPanel { quarantine_id_hex } => {
+                if let Err(err) = moderation_operator_expect_method(request, "GET", false) {
+                    return err.into_response();
+                }
+                let limit = match moderation_operator_query_limit(request.query, self.default_limit)
+                {
+                    Ok(limit) => limit,
+                    Err(err) => return err.into_response(),
+                };
+                self.operator_panel_response(&quarantine_id_hex, limit)
+            }
+            ModerationOperatorRoute::BridgePlan { quarantine_id_hex } => {
+                if let Err(err) = moderation_operator_expect_method(request, "GET", false) {
+                    return err.into_response();
+                }
+                let limit = match moderation_operator_query_limit(request.query, self.default_limit)
+                {
+                    Ok(limit) => limit,
+                    Err(err) => return err.into_response(),
+                };
+                self.bridge_plan_response(&quarantine_id_hex, limit)
+            }
+            ModerationOperatorRoute::JurorPlan { quarantine_id_hex } => {
+                if let Err(err) = moderation_operator_expect_method(request, "GET", false) {
+                    return err.into_response();
+                }
+                let limit = match moderation_operator_query_limit(request.query, self.default_limit)
+                {
+                    Ok(limit) => limit,
+                    Err(err) => return err.into_response(),
+                };
+                self.juror_plan_response(&quarantine_id_hex, limit)
+            }
+            ModerationOperatorRoute::JurorNotifications { quarantine_id_hex } => {
+                if let Err(err) = moderation_operator_expect_method(request, "GET", false) {
+                    return err.into_response();
+                }
+                let limit = match moderation_operator_query_limit(request.query, self.default_limit)
+                {
+                    Ok(limit) => limit,
+                    Err(err) => return err.into_response(),
+                };
+                self.juror_notifications_response(&quarantine_id_hex, limit)
+            }
+            ModerationOperatorRoute::CommitRevealStatus { quarantine_id_hex } => {
+                if let Err(err) = moderation_operator_expect_method(request, "GET", false) {
+                    return err.into_response();
+                }
+                let limit = match moderation_operator_query_limit(request.query, self.default_limit)
+                {
+                    Ok(limit) => limit,
+                    Err(err) => return err.into_response(),
+                };
+                self.commit_reveal_status_response(&quarantine_id_hex, limit)
+            }
+            ModerationOperatorRoute::Review { quarantine_id_hex } => {
+                if let Err(err) = moderation_operator_expect_method(request, "POST", true)
+                    .and_then(|_| moderation_operator_reject_query(request.query))
+                {
+                    return err.into_response();
+                }
+                self.review_response(&quarantine_id_hex, request.body)
+            }
+            ModerationOperatorRoute::Release { quarantine_id_hex } => {
+                if let Err(err) = moderation_operator_expect_method(request, "POST", true)
+                    .and_then(|_| moderation_operator_reject_query(request.query))
+                {
+                    return err.into_response();
+                }
+                self.release_response(&quarantine_id_hex, request.body)
+            }
+            ModerationOperatorRoute::AppealHandoff { quarantine_id_hex } => {
+                if let Err(err) = moderation_operator_expect_method(request, "POST", true)
+                    .and_then(|_| moderation_operator_reject_query(request.query))
+                {
+                    return err.into_response();
+                }
+                self.appeal_handoff_response(&quarantine_id_hex, request.body)
+            }
+            ModerationOperatorRoute::AppealBallot { quarantine_id_hex } => {
+                if let Err(err) = moderation_operator_expect_method(request, "POST", true)
+                    .and_then(|_| moderation_operator_reject_query(request.query))
+                {
+                    return err.into_response();
+                }
+                self.appeal_ballot_response(&quarantine_id_hex, request.body)
+            }
+            ModerationOperatorRoute::BallotTally { quarantine_id_hex } => {
+                if let Err(err) = moderation_operator_expect_method(request, "POST", true)
+                    .and_then(|_| moderation_operator_reject_query(request.query))
+                {
+                    return err.into_response();
+                }
+                self.ballot_tally_response(&quarantine_id_hex, request.body)
+            }
+        }
+    }
+
+    fn operator_panel_response(
+        &self,
+        quarantine_id_hex: &str,
+        limit: Option<u32>,
+    ) -> ModerationOperatorHttpResponse {
+        let response = match self.workflow_source.get_operator_panel(
+            quarantine_id_hex,
+            &SorafsModerationQuarantineFilter { limit },
+        ) {
+            Ok(response) => response,
+            Err(err) => {
+                return moderation_operator_json_error(
+                    StatusCode::BAD_GATEWAY,
+                    format!("failed to fetch operator-panel response from Torii: {err}"),
+                );
+            }
+        };
+        let status = response.status();
+        let body = response.into_body();
+        if status != StatusCode::OK {
+            return moderation_operator_upstream_response(status, body);
+        }
+        match moderation_operator_payload_free_panel_json(&body) {
+            Ok(panel) => moderation_operator_json_response(StatusCode::OK, &panel),
+            Err(err) => moderation_operator_json_error(
+                StatusCode::BAD_GATEWAY,
+                format!("unsafe or invalid operator-panel response from Torii: {err}"),
+            ),
+        }
+    }
+
+    fn bridge_plan_response(
+        &self,
+        quarantine_id_hex: &str,
+        limit: Option<u32>,
+    ) -> ModerationOperatorHttpResponse {
+        let response = match self.workflow_source.get_operator_panel(
+            quarantine_id_hex,
+            &SorafsModerationQuarantineFilter { limit },
+        ) {
+            Ok(response) => response,
+            Err(err) => {
+                return moderation_operator_json_error(
+                    StatusCode::BAD_GATEWAY,
+                    format!("failed to fetch operator-panel response from Torii: {err}"),
+                );
+            }
+        };
+        let status = response.status();
+        let body = response.into_body();
+        if status != StatusCode::OK {
+            return moderation_operator_upstream_response(status, body);
+        }
+        match moderation_operator_payload_free_panel_json(&body)
+            .and_then(|panel| moderation_quarantine_bridge_plan_json(quarantine_id_hex, &panel))
+        {
+            Ok(plan) => moderation_operator_json_response(StatusCode::OK, &plan),
+            Err(err) => moderation_operator_json_error(
+                StatusCode::BAD_GATEWAY,
+                format!("failed to build payload-free bridge plan: {err}"),
+            ),
+        }
+    }
+
+    fn juror_plan_response(
+        &self,
+        quarantine_id_hex: &str,
+        limit: Option<u32>,
+    ) -> ModerationOperatorHttpResponse {
+        let response = match self.workflow_source.get_operator_panel(
+            quarantine_id_hex,
+            &SorafsModerationQuarantineFilter { limit },
+        ) {
+            Ok(response) => response,
+            Err(err) => {
+                return moderation_operator_json_error(
+                    StatusCode::BAD_GATEWAY,
+                    format!("failed to fetch operator-panel response from Torii: {err}"),
+                );
+            }
+        };
+        let status = response.status();
+        let body = response.into_body();
+        if status != StatusCode::OK {
+            return moderation_operator_upstream_response(status, body);
+        }
+        match moderation_operator_payload_free_panel_json(&body)
+            .and_then(|panel| moderation_quarantine_juror_plan_json(quarantine_id_hex, &panel))
+        {
+            Ok(plan) => moderation_operator_json_response(StatusCode::OK, &plan),
+            Err(err) => moderation_operator_json_error(
+                StatusCode::BAD_GATEWAY,
+                format!("failed to build payload-free juror notification plan: {err}"),
+            ),
+        }
+    }
+
+    fn commit_reveal_status_response(
+        &self,
+        quarantine_id_hex: &str,
+        limit: Option<u32>,
+    ) -> ModerationOperatorHttpResponse {
+        let response = match self.workflow_source.get_operator_panel(
+            quarantine_id_hex,
+            &SorafsModerationQuarantineFilter { limit },
+        ) {
+            Ok(response) => response,
+            Err(err) => {
+                return moderation_operator_json_error(
+                    StatusCode::BAD_GATEWAY,
+                    format!("failed to fetch operator-panel response from Torii: {err}"),
+                );
+            }
+        };
+        let status = response.status();
+        let body = response.into_body();
+        if status != StatusCode::OK {
+            return moderation_operator_upstream_response(status, body);
+        }
+        match moderation_operator_payload_free_panel_json(&body).and_then(|panel| {
+            moderation_quarantine_commit_reveal_status_json(quarantine_id_hex, &panel)
+        }) {
+            Ok(status) => moderation_operator_json_response(StatusCode::OK, &status),
+            Err(err) => moderation_operator_json_error(
+                StatusCode::BAD_GATEWAY,
+                format!("failed to build payload-free commit/reveal coordination status: {err}"),
+            ),
+        }
+    }
+
+    fn juror_notifications_response(
+        &self,
+        quarantine_id_hex: &str,
+        limit: Option<u32>,
+    ) -> ModerationOperatorHttpResponse {
+        let response = match self.workflow_source.get_operator_panel(
+            quarantine_id_hex,
+            &SorafsModerationQuarantineFilter { limit },
+        ) {
+            Ok(response) => response,
+            Err(err) => {
+                return moderation_operator_json_error(
+                    StatusCode::BAD_GATEWAY,
+                    format!("failed to fetch operator-panel response from Torii: {err}"),
+                );
+            }
+        };
+        let status = response.status();
+        let body = response.into_body();
+        if status != StatusCode::OK {
+            return moderation_operator_upstream_response(status, body);
+        }
+        match moderation_operator_payload_free_panel_json(&body).and_then(|panel| {
+            moderation_quarantine_juror_notifications_json(quarantine_id_hex, &panel)
+        }) {
+            Ok(notifications) => moderation_operator_json_response(StatusCode::OK, &notifications),
+            Err(err) => moderation_operator_json_error(
+                StatusCode::BAD_GATEWAY,
+                format!("failed to build payload-free juror notification delivery manifest: {err}"),
+            ),
+        }
+    }
+
+    fn review_response(
+        &self,
+        quarantine_id_hex: &str,
+        body: &[u8],
+    ) -> ModerationOperatorHttpResponse {
+        let payload = match moderation_operator_review_payload_from_body(body, &self.default_actor)
+        {
+            Ok(payload) => payload,
+            Err(err) => return err.into_response(),
+        };
+        let request = payload.as_request();
+        let response = match self
+            .workflow_source
+            .post_review(quarantine_id_hex, &request)
+        {
+            Ok(response) => response,
+            Err(err) => {
+                return moderation_operator_json_error(
+                    StatusCode::BAD_GATEWAY,
+                    format!("failed to forward review request to Torii: {err}"),
+                );
+            }
+        };
+        moderation_operator_success_json_response(response, "review")
+    }
+
+    fn release_response(
+        &self,
+        quarantine_id_hex: &str,
+        body: &[u8],
+    ) -> ModerationOperatorHttpResponse {
+        let payload = match moderation_operator_release_payload_from_body(body, &self.default_actor)
+        {
+            Ok(payload) => payload,
+            Err(err) => return err.into_response(),
+        };
+        let request = payload.as_request();
+        let response = match self
+            .workflow_source
+            .post_release(quarantine_id_hex, &request)
+        {
+            Ok(response) => response,
+            Err(err) => {
+                return moderation_operator_json_error(
+                    StatusCode::BAD_GATEWAY,
+                    format!("failed to forward release request to Torii: {err}"),
+                );
+            }
+        };
+        moderation_operator_success_json_response(response, "release")
+    }
+
+    fn appeal_handoff_response(
+        &self,
+        quarantine_id_hex: &str,
+        body: &[u8],
+    ) -> ModerationOperatorHttpResponse {
+        let payload =
+            match moderation_operator_payload_free_json_body(body, "appeal-handoff request") {
+                Ok(payload) => payload,
+                Err(err) => return err.into_response(),
+            };
+        let response = match self
+            .workflow_source
+            .post_appeal_handoff(quarantine_id_hex, &payload)
+        {
+            Ok(response) => response,
+            Err(err) => {
+                return moderation_operator_json_error(
+                    StatusCode::BAD_GATEWAY,
+                    format!("failed to forward appeal-handoff request to Torii: {err}"),
+                );
+            }
+        };
+        moderation_operator_success_json_response(response, "appeal-handoff")
+    }
+
+    fn appeal_ballot_response(
+        &self,
+        quarantine_id_hex: &str,
+        body: &[u8],
+    ) -> ModerationOperatorHttpResponse {
+        let payload =
+            match moderation_operator_payload_free_json_body(body, "appeal-ballot request") {
+                Ok(payload) => payload,
+                Err(err) => return err.into_response(),
+            };
+        let response = match self
+            .workflow_source
+            .post_appeal_ballot(quarantine_id_hex, &payload)
+        {
+            Ok(response) => response,
+            Err(err) => {
+                return moderation_operator_json_error(
+                    StatusCode::BAD_GATEWAY,
+                    format!("failed to forward appeal-ballot request to Torii: {err}"),
+                );
+            }
+        };
+        moderation_operator_success_json_response(response, "appeal-ballot")
+    }
+
+    fn ballot_tally_response(
+        &self,
+        quarantine_id_hex: &str,
+        body: &[u8],
+    ) -> ModerationOperatorHttpResponse {
+        let reference = match moderation_operator_ballot_tally_payload_from_body(body) {
+            Ok(Some(reference)) => reference,
+            Ok(None) => match self.ballot_tally_reference_from_operator_panel(quarantine_id_hex) {
+                Ok(reference) => reference,
+                Err(err) => {
+                    return moderation_operator_json_error(
+                        StatusCode::BAD_GATEWAY,
+                        format!("failed to derive ballot tally reference from Torii: {err}"),
+                    );
+                }
+            },
+            Err(err) => return err.into_response(),
+        };
+        let request = reference.as_request();
+        let response = match self.workflow_source.post_ballot_tally(&request) {
+            Ok(response) => response,
+            Err(err) => {
+                return moderation_operator_json_error(
+                    StatusCode::BAD_GATEWAY,
+                    format!("failed to forward ballot-tally request to Torii: {err}"),
+                );
+            }
+        };
+        moderation_operator_success_json_response(response, "ballot-tally")
+    }
+
+    fn ballot_tally_reference_from_operator_panel(
+        &self,
+        quarantine_id_hex: &str,
+    ) -> Result<ModerationOperatorBallotTallyReference> {
+        let response = self.workflow_source.get_operator_panel(
+            quarantine_id_hex,
+            &SorafsModerationQuarantineFilter {
+                limit: self.default_limit,
+            },
+        )?;
+        let status = response.status();
+        let body = response.into_body();
+        if status != StatusCode::OK {
+            return Err(make_http_error(status, &body));
+        }
+        let panel = moderation_operator_payload_free_panel_json(&body)?;
+        moderation_operator_ballot_tally_reference_from_panel(&panel)
+    }
+
+    fn browser_ui_response(&self) -> ModerationOperatorHttpResponse {
+        ModerationOperatorHttpResponse {
+            status: StatusCode::OK,
+            content_type: Self::HTML_CONTENT_TYPE,
+            body: MODERATION_OPERATOR_BROWSER_UI_HTML.as_bytes().to_vec(),
+        }
+    }
+}
+
+const MODERATION_OPERATOR_BROWSER_UI_HTML: &str = r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SoraFS Moderation Operator</title>
+<style>
+:root {
+  color-scheme: light;
+  --ink: #17202a;
+  --muted: #5f6b7a;
+  --line: #d7dee8;
+  --panel: #f7f9fb;
+  --surface: #ffffff;
+  --accent: #0f766e;
+  --accent-strong: #115e59;
+  --warn: #9a3412;
+  --ok: #166534;
+  --err: #991b1b;
+  --focus: #2563eb;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: #eef3f7;
+}
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+}
+main {
+  display: grid;
+  grid-template-columns: minmax(300px, 420px) minmax(0, 1fr);
+  min-height: calc(100vh - 66px);
+}
+aside,
+section {
+  padding: 20px;
+}
+aside {
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+}
+section {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 16px;
+}
+.toolbar,
+.field-grid,
+.action-grid {
+  display: grid;
+  gap: 10px;
+}
+.toolbar {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.action-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+input,
+textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 11px;
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+}
+textarea {
+  min-height: 92px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+input:focus,
+textarea:focus,
+button:focus {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+button {
+  min-height: 38px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font: inherit;
+  font-weight: 700;
+  color: #ffffff;
+  background: var(--accent);
+  cursor: pointer;
+}
+button.secondary {
+  color: var(--accent-strong);
+  background: #eefaf8;
+}
+button.warn {
+  border-color: var(--warn);
+  background: var(--warn);
+}
+button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+.status {
+  min-width: 120px;
+  border-radius: 999px;
+  padding: 6px 10px;
+  color: var(--muted);
+  background: var(--panel);
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+.status.ok {
+  color: var(--ok);
+}
+.status.err {
+  color: var(--err);
+}
+.block {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+.block h2,
+.output h2 {
+  margin: 0;
+  font-size: 14px;
+}
+.output-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  min-height: 0;
+}
+.output {
+  display: grid;
+  grid-template-rows: auto minmax(220px, 1fr);
+  gap: 10px;
+  min-width: 0;
+}
+pre {
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px;
+  background: var(--surface);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+@media (max-width: 900px) {
+  main,
+  .output-grid {
+    grid-template-columns: 1fr;
+  }
+  aside {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  main {
+    min-height: auto;
+  }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>SoraFS Moderation Operator</h1>
+  <div class="status" id="status">Idle</div>
+</header>
+<main>
+  <aside>
+    <div class="field-grid">
+      <label>Quarantine ID
+        <input id="quarantineId" autocomplete="off" spellcheck="false" inputmode="text">
+      </label>
+      <label>Limit
+        <input id="limit" type="number" min="1" step="1">
+      </label>
+      <div class="toolbar">
+        <button type="button" id="loadPanel">Load</button>
+        <button type="button" id="loadPlan" class="secondary">Plan</button>
+      </div>
+      <div class="toolbar">
+        <button type="button" id="loadJurors" class="secondary">Jurors</button>
+        <button type="button" id="loadNotifications" class="secondary">Notify</button>
+      </div>
+      <button type="button" id="loadCommitReveal" class="secondary">Commit/Reveal</button>
+    </div>
+    <div class="block">
+      <h2>Review</h2>
+      <textarea id="reviewPayload">{"notes":null}</textarea>
+      <button type="button" id="sendReview">Review</button>
+    </div>
+    <div class="block">
+      <h2>Release</h2>
+      <textarea id="releasePayload">{"notes":null}</textarea>
+      <button type="button" id="sendRelease" class="warn">Release</button>
+    </div>
+    <div class="block">
+      <h2>Bridge</h2>
+      <textarea id="handoffPayload">{}</textarea>
+      <button type="button" id="sendHandoff">Handoff</button>
+      <textarea id="ballotPayload">{}</textarea>
+      <button type="button" id="sendBallot">Ballot</button>
+      <textarea id="tallyPayload">{}</textarea>
+      <button type="button" id="sendTally">Tally</button>
+    </div>
+  </aside>
+  <section>
+    <div class="toolbar">
+      <button type="button" id="refreshAll">Refresh</button>
+      <button type="button" id="clearOutput" class="secondary">Clear</button>
+    </div>
+    <div class="output-grid">
+      <div class="output">
+        <h2>Operator Panel</h2>
+        <pre id="panelOutput"></pre>
+      </div>
+      <div class="output">
+        <h2>Bridge Plan</h2>
+        <pre id="planOutput"></pre>
+      </div>
+      <div class="output">
+        <h2>Juror Plan</h2>
+        <pre id="jurorOutput"></pre>
+      </div>
+      <div class="output">
+        <h2>Notifications</h2>
+        <pre id="notificationOutput"></pre>
+      </div>
+      <div class="output">
+        <h2>Commit/Reveal</h2>
+        <pre id="commitRevealOutput"></pre>
+      </div>
+      <div class="output">
+        <h2>Mutation Result</h2>
+        <pre id="mutationOutput"></pre>
+      </div>
+      <div class="output">
+        <h2>Service Status</h2>
+        <pre id="serviceOutput"></pre>
+      </div>
+    </div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const buttons = Array.from(document.querySelectorAll("button"));
+
+function setStatus(text, kind) {
+  const el = $("status");
+  el.textContent = text;
+  el.className = kind ? `status ${kind}` : "status";
+}
+
+function setBusy(busy) {
+  buttons.forEach((button) => {
+    button.disabled = busy;
+  });
+}
+
+function quarantineId() {
+  const value = $("quarantineId").value.trim().replace(/^0x/i, "").toLowerCase();
+  if (!/^[0-9a-f]{32}$/.test(value)) {
+    throw new Error("quarantine id must be 16 bytes encoded as hex");
+  }
+  return value;
+}
+
+function limitQuery() {
+  const value = $("limit").value.trim();
+  return value ? `?limit=${encodeURIComponent(value)}` : "";
+}
+
+function parsePayload(id) {
+  const text = $(id).value.trim() || "{}";
+  if (text.includes("payload_b64")) {
+    throw new Error("payload_b64 is not accepted by the operator UI");
+  }
+  return JSON.parse(text);
+}
+
+async function requestJson(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: {
+      "Accept": "application/json",
+      ...(options.body ? {"Content-Type": "application/json"} : {})
+    },
+    cache: "no-store"
+  });
+  const text = await response.text();
+  let value = text;
+  try {
+    value = text ? JSON.parse(text) : null;
+  } catch (_err) {
+    value = text;
+  }
+  if (!response.ok) {
+    throw new Error(JSON.stringify(value, null, 2));
+  }
+  return value;
+}
+
+function render(id, value) {
+  $(id).textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+}
+
+async function run(target, work) {
+  setBusy(true);
+  setStatus("Working", "");
+  try {
+    const value = await work();
+    render(target, value);
+    setStatus("Ready", "ok");
+  } catch (err) {
+    render(target, err && err.message ? err.message : String(err));
+    setStatus("Error", "err");
+  } finally {
+    setBusy(false);
+  }
+}
+
+function workflowPath(suffix) {
+  return `/v1/sorafs/moderation/quarantine/${quarantineId()}/${suffix}`;
+}
+
+$("loadPanel").addEventListener("click", () => run("panelOutput", () =>
+  requestJson(`${workflowPath("operator-panel")}${limitQuery()}`)
+));
+$("loadPlan").addEventListener("click", () => run("planOutput", () =>
+  requestJson(`${workflowPath("bridge-plan")}${limitQuery()}`)
+));
+$("loadJurors").addEventListener("click", () => run("jurorOutput", () =>
+  requestJson(`${workflowPath("juror-plan")}${limitQuery()}`)
+));
+$("loadNotifications").addEventListener("click", () => run("notificationOutput", () =>
+  requestJson(`${workflowPath("juror-notifications")}${limitQuery()}`)
+));
+$("loadCommitReveal").addEventListener("click", () => run("commitRevealOutput", () =>
+  requestJson(`${workflowPath("commit-reveal-status")}${limitQuery()}`)
+));
+$("sendReview").addEventListener("click", () => run("mutationOutput", () =>
+  requestJson(workflowPath("review"), {method: "POST", body: JSON.stringify(parsePayload("reviewPayload"))})
+));
+$("sendRelease").addEventListener("click", () => run("mutationOutput", () =>
+  requestJson(workflowPath("release"), {method: "POST", body: JSON.stringify(parsePayload("releasePayload"))})
+));
+$("sendHandoff").addEventListener("click", () => run("mutationOutput", () =>
+  requestJson(workflowPath("appeal-handoff"), {method: "POST", body: JSON.stringify(parsePayload("handoffPayload"))})
+));
+$("sendBallot").addEventListener("click", () => run("mutationOutput", () =>
+  requestJson(workflowPath("appeal-ballot"), {method: "POST", body: JSON.stringify(parsePayload("ballotPayload"))})
+));
+$("sendTally").addEventListener("click", () => run("mutationOutput", () =>
+  requestJson(workflowPath("ballot-tally"), {method: "POST", body: JSON.stringify(parsePayload("tallyPayload"))})
+));
+$("refreshAll").addEventListener("click", async () => {
+  await run("serviceOutput", () => requestJson("/v1/sorafs/moderation/operator-panel/status"));
+  if ($("quarantineId").value.trim()) {
+    await run("panelOutput", () => requestJson(`${workflowPath("operator-panel")}${limitQuery()}`));
+    await run("planOutput", () => requestJson(`${workflowPath("bridge-plan")}${limitQuery()}`));
+    await run("jurorOutput", () => requestJson(`${workflowPath("juror-plan")}${limitQuery()}`));
+    await run("notificationOutput", () => requestJson(`${workflowPath("juror-notifications")}${limitQuery()}`));
+    await run("commitRevealOutput", () => requestJson(`${workflowPath("commit-reveal-status")}${limitQuery()}`));
+  }
+});
+$("clearOutput").addEventListener("click", () => {
+  ["panelOutput", "planOutput", "jurorOutput", "notificationOutput", "commitRevealOutput", "mutationOutput", "serviceOutput"].forEach((id) => render(id, ""));
+  setStatus("Idle", "");
+});
+
+run("serviceOutput", () => requestJson("/v1/sorafs/moderation/operator-panel/status"));
+</script>
+</body>
+</html>
+"#;
+
+#[derive(Debug)]
+struct ModerationOperatorHttpRequest<'a> {
+    method: &'a str,
+    path: &'a str,
+    query: Option<&'a str>,
+    body: &'a [u8],
+}
+
+#[derive(Debug)]
+struct ModerationOperatorHttpResponse {
+    status: StatusCode,
+    content_type: &'static str,
+    body: Vec<u8>,
+}
+
+impl ModerationOperatorHttpResponse {
+    fn to_http_bytes(&self) -> Vec<u8> {
+        let mut response = format!(
+            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            self.status.as_u16(),
+            moderation_operator_status_reason(self.status),
+            self.content_type,
+            self.body.len()
+        )
+        .into_bytes();
+        response.extend_from_slice(&self.body);
+        response
+    }
+}
+
+#[derive(Debug)]
+struct ModerationOperatorRequestError {
+    status: StatusCode,
+    message: String,
+}
+
+impl ModerationOperatorRequestError {
+    fn new(status: StatusCode, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+        }
+    }
+
+    fn into_response(self) -> ModerationOperatorHttpResponse {
+        moderation_operator_json_error(self.status, self.message)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ModerationOperatorRoute {
+    BrowserUi,
+    Status,
+    OperatorPanel { quarantine_id_hex: String },
+    BridgePlan { quarantine_id_hex: String },
+    JurorPlan { quarantine_id_hex: String },
+    JurorNotifications { quarantine_id_hex: String },
+    CommitRevealStatus { quarantine_id_hex: String },
+    Review { quarantine_id_hex: String },
+    Release { quarantine_id_hex: String },
+    AppealHandoff { quarantine_id_hex: String },
+    AppealBallot { quarantine_id_hex: String },
+    BallotTally { quarantine_id_hex: String },
+}
+
+fn moderation_operator_handle_stream(
+    mut stream: TcpStream,
+    service: &ModerationOperatorService,
+) -> Result<()> {
+    let response = match moderation_operator_read_http_request(&mut stream, service.max_body_bytes)
+    {
+        Ok(raw) => match moderation_operator_parse_http_request(&raw, service.max_body_bytes) {
+            Ok(request) => service.handle_request(&request),
+            Err(err) => err.into_response(),
+        },
+        Err(err) => err.into_response(),
+    };
+    stream
+        .write_all(&response.to_http_bytes())
+        .wrap_err("failed to write SoraFS moderation operator service response")?;
+    stream
+        .flush()
+        .wrap_err("failed to flush SoraFS moderation operator service response")
+}
+
+fn moderation_operator_read_http_request(
+    stream: &mut TcpStream,
+    max_body_bytes: usize,
+) -> Result<Vec<u8>, ModerationOperatorRequestError> {
+    const MAX_HEADER_BYTES: usize = 16 * 1024;
+    let mut buffer = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    let header_end = loop {
+        if let Some(header_end) = moderation_operator_find_header_end(&buffer) {
+            break header_end;
+        }
+        if buffer.len() > MAX_HEADER_BYTES {
+            return Err(ModerationOperatorRequestError::new(
+                StatusCode::BAD_REQUEST,
+                "SoraFS moderation operator service request headers are too large",
+            ));
+        }
+        let read = stream.read(&mut chunk).map_err(|err| {
+            ModerationOperatorRequestError::new(
+                StatusCode::BAD_REQUEST,
+                format!("failed to read SoraFS moderation operator service request: {err}"),
+            )
+        })?;
+        if read == 0 {
+            return Err(ModerationOperatorRequestError::new(
+                StatusCode::BAD_REQUEST,
+                "connection closed before HTTP request headers were complete",
+            ));
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+    };
+
+    let header_text = moderation_operator_header_text(&buffer, header_end)?;
+    let content_length = moderation_operator_content_length(header_text)?;
+    if content_length > max_body_bytes {
+        return Err(ModerationOperatorRequestError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!(
+                "SoraFS moderation operator service request body exceeds {max_body_bytes} bytes"
+            ),
+        ));
+    }
+    let request_len = header_end.checked_add(content_length).ok_or_else(|| {
+        ModerationOperatorRequestError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "SoraFS moderation operator service request length overflowed",
+        )
+    })?;
+    while buffer.len() < request_len {
+        let read = stream.read(&mut chunk).map_err(|err| {
+            ModerationOperatorRequestError::new(
+                StatusCode::BAD_REQUEST,
+                format!("failed to read SoraFS moderation operator service request body: {err}"),
+            )
+        })?;
+        if read == 0 {
+            return Err(ModerationOperatorRequestError::new(
+                StatusCode::BAD_REQUEST,
+                "connection closed before HTTP request body was complete",
+            ));
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+    }
+    buffer.truncate(request_len);
+    Ok(buffer)
+}
+
+fn moderation_operator_parse_http_request(
+    raw: &[u8],
+    max_body_bytes: usize,
+) -> Result<ModerationOperatorHttpRequest<'_>, ModerationOperatorRequestError> {
+    let header_end = moderation_operator_find_header_end(raw).ok_or_else(|| {
+        ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation operator service request is missing HTTP header terminator",
+        )
+    })?;
+    let header_text = moderation_operator_header_text(raw, header_end)?;
+    let mut lines = header_text.lines();
+    let request_line = lines.next().ok_or_else(|| {
+        ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation operator service request line is missing",
+        )
+    })?;
+    let mut request_parts = request_line.split_whitespace();
+    let method = request_parts.next().ok_or_else(|| {
+        ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation operator service request method is missing",
+        )
+    })?;
+    let target = request_parts.next().ok_or_else(|| {
+        ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation operator service request target is missing",
+        )
+    })?;
+    let version = request_parts.next().ok_or_else(|| {
+        ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation operator service HTTP version is missing",
+        )
+    })?;
+    if request_parts.next().is_some() || !version.starts_with("HTTP/") {
+        return Err(ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation operator service request line is malformed",
+        ));
+    }
+    let content_length = moderation_operator_content_length(header_text)?;
+    if content_length > max_body_bytes {
+        return Err(ModerationOperatorRequestError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!(
+                "SoraFS moderation operator service request body exceeds {max_body_bytes} bytes"
+            ),
+        ));
+    }
+    let body_end = header_end.checked_add(content_length).ok_or_else(|| {
+        ModerationOperatorRequestError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "SoraFS moderation operator service request length overflowed",
+        )
+    })?;
+    if raw.len() < body_end {
+        return Err(ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation operator service request body is incomplete",
+        ));
+    }
+    let (path, query) = moderation_operator_split_target(target)?;
+    Ok(ModerationOperatorHttpRequest {
+        method,
+        path,
+        query,
+        body: &raw[header_end..body_end],
+    })
+}
+
+fn moderation_operator_header_text(
+    raw: &[u8],
+    header_end: usize,
+) -> Result<&str, ModerationOperatorRequestError> {
+    let header_bytes = raw.get(..header_end.saturating_sub(4)).ok_or_else(|| {
+        ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation operator service request headers are malformed",
+        )
+    })?;
+    std::str::from_utf8(header_bytes).map_err(|err| {
+        ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            format!("SoraFS moderation operator service headers are not UTF-8: {err}"),
+        )
+    })
+}
+
+fn moderation_operator_content_length(
+    header_text: &str,
+) -> Result<usize, ModerationOperatorRequestError> {
+    let mut content_length = None;
+    for line in header_text.lines().skip(1) {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case("content-length") {
+            if content_length.is_some() {
+                return Err(ModerationOperatorRequestError::new(
+                    StatusCode::BAD_REQUEST,
+                    "SoraFS moderation operator service request has duplicate Content-Length",
+                ));
+            }
+            let parsed = value.trim().parse::<usize>().map_err(|err| {
+                ModerationOperatorRequestError::new(
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid SoraFS moderation operator service Content-Length: {err}"),
+                )
+            })?;
+            content_length = Some(parsed);
+        }
+    }
+    Ok(content_length.unwrap_or_default())
+}
+
+fn moderation_operator_split_target(
+    target: &str,
+) -> Result<(&str, Option<&str>), ModerationOperatorRequestError> {
+    let (path, query) = target
+        .split_once('?')
+        .map_or((target, None), |(path, query)| (path, Some(query)));
+    if !path.starts_with('/') {
+        return Err(ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation operator service request path must be absolute",
+        ));
+    }
+    Ok((path, query))
+}
+
+fn moderation_operator_find_header_end(raw: &[u8]) -> Option<usize> {
+    raw.windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|offset| offset + 4)
+}
+
+fn moderation_operator_route(
+    path: &str,
+) -> Result<ModerationOperatorRoute, ModerationOperatorRequestError> {
+    if path == "/" || path == "/v1/sorafs/moderation/operator-panel/ui" {
+        return Ok(ModerationOperatorRoute::BrowserUi);
+    }
+    if path == "/healthz" || path == "/v1/sorafs/moderation/operator-panel/status" {
+        return Ok(ModerationOperatorRoute::Status);
+    }
+    const PREFIX: &str = "/v1/sorafs/moderation/quarantine/";
+    let Some(remainder) = path.strip_prefix(PREFIX) else {
+        return Err(ModerationOperatorRequestError::new(
+            StatusCode::NOT_FOUND,
+            "unknown SoraFS moderation operator service route",
+        ));
+    };
+    let Some((quarantine_id, suffix)) = remainder.split_once('/') else {
+        return Err(ModerationOperatorRequestError::new(
+            StatusCode::NOT_FOUND,
+            "SoraFS moderation operator service route is missing a workflow endpoint",
+        ));
+    };
+    if suffix.contains('/') {
+        return Err(ModerationOperatorRequestError::new(
+            StatusCode::NOT_FOUND,
+            "unknown SoraFS moderation operator service workflow endpoint",
+        ));
+    }
+    let quarantine_id_hex =
+        normalize_hex_digest::<16>(quarantine_id, "quarantine id in request path").map_err(
+            |err| ModerationOperatorRequestError::new(StatusCode::BAD_REQUEST, err.to_string()),
+        )?;
+    match suffix {
+        "operator-panel" => Ok(ModerationOperatorRoute::OperatorPanel { quarantine_id_hex }),
+        "bridge-plan" => Ok(ModerationOperatorRoute::BridgePlan { quarantine_id_hex }),
+        "juror-plan" => Ok(ModerationOperatorRoute::JurorPlan { quarantine_id_hex }),
+        "juror-notifications" => {
+            Ok(ModerationOperatorRoute::JurorNotifications { quarantine_id_hex })
+        }
+        "commit-reveal-status" => {
+            Ok(ModerationOperatorRoute::CommitRevealStatus { quarantine_id_hex })
+        }
+        "review" => Ok(ModerationOperatorRoute::Review { quarantine_id_hex }),
+        "release" => Ok(ModerationOperatorRoute::Release { quarantine_id_hex }),
+        "appeal-handoff" => Ok(ModerationOperatorRoute::AppealHandoff { quarantine_id_hex }),
+        "appeal-ballot" => Ok(ModerationOperatorRoute::AppealBallot { quarantine_id_hex }),
+        "ballot-tally" => Ok(ModerationOperatorRoute::BallotTally { quarantine_id_hex }),
+        _ => Err(ModerationOperatorRequestError::new(
+            StatusCode::NOT_FOUND,
+            "unknown SoraFS moderation operator service workflow endpoint",
+        )),
+    }
+}
+
+fn moderation_operator_expect_method(
+    request: &ModerationOperatorHttpRequest<'_>,
+    expected_method: &str,
+    body_required: bool,
+) -> Result<(), ModerationOperatorRequestError> {
+    if request.method != expected_method {
+        return Err(ModerationOperatorRequestError::new(
+            StatusCode::METHOD_NOT_ALLOWED,
+            format!("SoraFS moderation operator service route requires {expected_method}"),
+        ));
+    }
+    if body_required {
+        if request.body.is_empty() {
+            return Err(ModerationOperatorRequestError::new(
+                StatusCode::BAD_REQUEST,
+                "SoraFS moderation operator service POST request body must not be empty",
+            ));
+        }
+    } else if !request.body.is_empty() {
+        return Err(ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation operator service GET requests must not include a body",
+        ));
+    }
+    Ok(())
+}
+
+fn moderation_operator_reject_query(
+    query: Option<&str>,
+) -> Result<(), ModerationOperatorRequestError> {
+    if query.is_some_and(|query| !query.is_empty()) {
+        return Err(ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation operator service mutation routes do not accept query parameters",
+        ));
+    }
+    Ok(())
+}
+
+fn moderation_operator_query_limit(
+    query: Option<&str>,
+    default_limit: Option<u32>,
+) -> Result<Option<u32>, ModerationOperatorRequestError> {
+    let Some(query) = query else {
+        return Ok(default_limit);
+    };
+    let mut limit = default_limit;
+    let mut saw_limit = false;
+    for pair in query.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if key != "limit" {
+            return Err(ModerationOperatorRequestError::new(
+                StatusCode::BAD_REQUEST,
+                format!("unsupported SoraFS moderation operator service query parameter `{key}`"),
+            ));
+        }
+        if saw_limit {
+            return Err(ModerationOperatorRequestError::new(
+                StatusCode::BAD_REQUEST,
+                "SoraFS moderation operator service query parameter `limit` was repeated",
+            ));
+        }
+        if value.is_empty() {
+            return Err(ModerationOperatorRequestError::new(
+                StatusCode::BAD_REQUEST,
+                "SoraFS moderation operator service query parameter `limit` must not be empty",
+            ));
+        }
+        let parsed = value.parse::<u32>().map_err(|err| {
+            ModerationOperatorRequestError::new(
+                StatusCode::BAD_REQUEST,
+                format!("invalid SoraFS moderation operator service `limit`: {err}"),
+            )
+        })?;
+        limit = Some(parsed);
+        saw_limit = true;
+    }
+    Ok(limit)
+}
+
+fn moderation_operator_payload_free_panel_json(body: &[u8]) -> Result<Value> {
+    let panel: Value =
+        norito::json::from_slice(body).wrap_err("failed to decode operator-panel JSON")?;
+    ensure_moderation_bridge_plan_has_no_payload(&panel)?;
+    Ok(panel)
+}
+
+struct ModerationOperatorReviewPayload {
+    reviewed_by: String,
+    reviewed_at_unix: Option<u64>,
+    notes: Option<String>,
+}
+
+impl ModerationOperatorReviewPayload {
+    fn as_request(&self) -> SorafsModerationQuarantineReviewRequest<'_> {
+        SorafsModerationQuarantineReviewRequest {
+            reviewed_by: self.reviewed_by.as_str(),
+            reviewed_at_unix: self.reviewed_at_unix,
+            notes: self.notes.as_deref(),
+        }
+    }
+}
+
+struct ModerationOperatorReleasePayload {
+    release_authority: String,
+    released_at_unix: Option<u64>,
+    notes: Option<String>,
+}
+
+impl ModerationOperatorReleasePayload {
+    fn as_request(&self) -> SorafsModerationQuarantineReleaseRequest<'_> {
+        SorafsModerationQuarantineReleaseRequest {
+            release_authority: self.release_authority.as_str(),
+            released_at_unix: self.released_at_unix,
+            notes: self.notes.as_deref(),
+        }
+    }
+}
+
+fn moderation_operator_review_payload_from_body(
+    body: &[u8],
+    default_actor: &str,
+) -> Result<ModerationOperatorReviewPayload, ModerationOperatorRequestError> {
+    let value = moderation_operator_payload_free_json_value(body, "review request")?;
+    let fields = value_object(&value, "review request").map_err(|err| {
+        ModerationOperatorRequestError::new(StatusCode::BAD_REQUEST, err.to_string())
+    })?;
+    let reviewed_by = optional_json_text(fields, "reviewed_by")
+        .map_err(|err| {
+            ModerationOperatorRequestError::new(StatusCode::BAD_REQUEST, err.to_string())
+        })?
+        .unwrap_or_else(|| default_actor.to_string());
+    let reviewed_at_unix = optional_json_u64(fields, "reviewed_at_unix").map_err(|err| {
+        ModerationOperatorRequestError::new(StatusCode::BAD_REQUEST, err.to_string())
+    })?;
+    if reviewed_at_unix == Some(0) {
+        return Err(ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            "reviewed_at_unix must be non-zero",
+        ));
+    }
+    let notes = optional_json_text(fields, "notes").map_err(|err| {
+        ModerationOperatorRequestError::new(StatusCode::BAD_REQUEST, err.to_string())
+    })?;
+    Ok(ModerationOperatorReviewPayload {
+        reviewed_by,
+        reviewed_at_unix,
+        notes,
+    })
+}
+
+fn moderation_operator_release_payload_from_body(
+    body: &[u8],
+    default_actor: &str,
+) -> Result<ModerationOperatorReleasePayload, ModerationOperatorRequestError> {
+    let value = moderation_operator_payload_free_json_value(body, "release request")?;
+    let fields = value_object(&value, "release request").map_err(|err| {
+        ModerationOperatorRequestError::new(StatusCode::BAD_REQUEST, err.to_string())
+    })?;
+    let release_authority = optional_json_text(fields, "release_authority")
+        .map_err(|err| {
+            ModerationOperatorRequestError::new(StatusCode::BAD_REQUEST, err.to_string())
+        })?
+        .unwrap_or_else(|| default_actor.to_string());
+    let released_at_unix = optional_json_u64(fields, "released_at_unix").map_err(|err| {
+        ModerationOperatorRequestError::new(StatusCode::BAD_REQUEST, err.to_string())
+    })?;
+    if released_at_unix == Some(0) {
+        return Err(ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            "released_at_unix must be non-zero",
+        ));
+    }
+    let notes = optional_json_text(fields, "notes").map_err(|err| {
+        ModerationOperatorRequestError::new(StatusCode::BAD_REQUEST, err.to_string())
+    })?;
+    Ok(ModerationOperatorReleasePayload {
+        release_authority,
+        released_at_unix,
+        notes,
+    })
+}
+
+struct ModerationOperatorBallotTallyReference {
+    case_id: String,
+    round_id: String,
+}
+
+impl ModerationOperatorBallotTallyReference {
+    fn as_request(&self) -> SorafsModerationBallotTallyRequest<'_> {
+        SorafsModerationBallotTallyRequest {
+            case_id: self.case_id.as_str(),
+            round_id: self.round_id.as_str(),
+        }
+    }
+}
+
+fn moderation_operator_ballot_tally_payload_from_body(
+    body: &[u8],
+) -> Result<Option<ModerationOperatorBallotTallyReference>, ModerationOperatorRequestError> {
+    let value = moderation_operator_payload_free_json_value(body, "ballot-tally request")?;
+    let fields = value_object(&value, "ballot-tally request").map_err(|err| {
+        ModerationOperatorRequestError::new(StatusCode::BAD_REQUEST, err.to_string())
+    })?;
+    let case_id = optional_json_text(fields, "case_id").map_err(|err| {
+        ModerationOperatorRequestError::new(StatusCode::BAD_REQUEST, err.to_string())
+    })?;
+    let round_id = optional_json_text(fields, "round_id").map_err(|err| {
+        ModerationOperatorRequestError::new(StatusCode::BAD_REQUEST, err.to_string())
+    })?;
+    match (case_id, round_id) {
+        (Some(case_id), Some(round_id)) => Ok(Some(ModerationOperatorBallotTallyReference {
+            case_id,
+            round_id,
+        })),
+        (None, None) => Ok(None),
+        _ => Err(ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            "ballot-tally request must provide both case_id and round_id, or neither",
+        )),
+    }
+}
+
+fn moderation_operator_ballot_tally_reference_from_panel(
+    panel: &Value,
+) -> Result<ModerationOperatorBallotTallyReference> {
+    let root = value_object(panel, "operator panel response")?;
+    let schema = required_string_field(root, "schema", "operator panel response")?;
+    if schema != "sorafs.moderation.quarantine.operator_panel.v1" {
+        return Err(eyre!(
+            "operator panel response schema `{schema}` is not supported by ballot-tally"
+        ));
+    }
+    let ballots = root
+        .get("ballots")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let Some((case_id, round_id)) = first_moderation_ballot_reference(ballots) else {
+        return Err(eyre!(
+            "operator panel response does not include a moderation ballot reference"
+        ));
+    };
+    Ok(ModerationOperatorBallotTallyReference {
+        case_id: required_trimmed_text(case_id, "case_id")?,
+        round_id: required_trimmed_text(round_id, "round_id")?,
+    })
+}
+
+fn moderation_operator_payload_free_json_body(
+    body: &[u8],
+    label: &str,
+) -> Result<Vec<u8>, ModerationOperatorRequestError> {
+    let value = moderation_operator_payload_free_json_value(body, label)?;
+    norito::json::to_vec(&value).map_err(|err| {
+        ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            format!("failed to canonicalize SoraFS moderation operator service {label}: {err}"),
+        )
+    })
+}
+
+fn moderation_operator_payload_free_json_value(
+    body: &[u8],
+    label: &str,
+) -> Result<Value, ModerationOperatorRequestError> {
+    let value: Value = norito::json::from_slice(body).map_err(|err| {
+        ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            format!("failed to parse SoraFS moderation operator service {label} JSON: {err}"),
+        )
+    })?;
+    ensure_moderation_bridge_plan_has_no_payload(&value).map_err(|err| {
+        ModerationOperatorRequestError::new(StatusCode::BAD_REQUEST, err.to_string())
+    })?;
+    Ok(value)
+}
+
+fn moderation_operator_success_json_response(
+    response: Response<Vec<u8>>,
+    operation: &str,
+) -> ModerationOperatorHttpResponse {
+    let status = response.status();
+    let body = response.into_body();
+    if !matches!(status, StatusCode::OK | StatusCode::ACCEPTED) {
+        return moderation_operator_upstream_response(status, body);
+    }
+    match moderation_operator_payload_free_json_value(&body, operation) {
+        Ok(value) => moderation_operator_json_response(status, &value),
+        Err(err) => moderation_operator_json_error(
+            StatusCode::BAD_GATEWAY,
+            format!(
+                "unsafe or invalid {operation} response from Torii: {}",
+                err.message
+            ),
+        ),
+    }
+}
+
+fn moderation_operator_upstream_response(
+    status: StatusCode,
+    body: Vec<u8>,
+) -> ModerationOperatorHttpResponse {
+    if body.is_empty() {
+        moderation_operator_json_error(status, format!("Torii returned status {status}"))
+    } else {
+        ModerationOperatorHttpResponse {
+            status,
+            content_type: ModerationOperatorService::JSON_CONTENT_TYPE,
+            body,
+        }
+    }
+}
+
+fn moderation_operator_json_response(
+    status: StatusCode,
+    value: &Value,
+) -> ModerationOperatorHttpResponse {
+    let body = norito::json::to_vec(value).unwrap_or_else(|_| {
+        br#"{"schema":"sorafs.moderation.quarantine.operator_service.error.v1","error":"failed to encode SoraFS moderation operator service JSON"}"#.to_vec()
+    });
+    ModerationOperatorHttpResponse {
+        status,
+        content_type: ModerationOperatorService::JSON_CONTENT_TYPE,
+        body,
+    }
+}
+
+fn moderation_operator_json_error(
+    status: StatusCode,
+    message: impl Into<String>,
+) -> ModerationOperatorHttpResponse {
+    let message = message.into();
+    moderation_operator_json_response(
+        status,
+        &norito::json!({
+            "schema": "sorafs.moderation.quarantine.operator_service.error.v1",
+            "error": (message)
+        }),
+    )
+}
+
+fn moderation_operator_status_reason(status: StatusCode) -> &'static str {
+    match status {
+        StatusCode::OK => "OK",
+        StatusCode::ACCEPTED => "Accepted",
+        StatusCode::BAD_REQUEST => "Bad Request",
+        StatusCode::UNAUTHORIZED => "Unauthorized",
+        StatusCode::FORBIDDEN => "Forbidden",
+        StatusCode::NOT_FOUND => "Not Found",
+        StatusCode::METHOD_NOT_ALLOWED => "Method Not Allowed",
+        StatusCode::PAYLOAD_TOO_LARGE => "Payload Too Large",
+        StatusCode::BAD_GATEWAY => "Bad Gateway",
+        StatusCode::INTERNAL_SERVER_ERROR => "Internal Server Error",
+        _ => "Status",
+    }
 }
 
 fn parse_xor_amount_decimal(input: &str) -> Result<XorAmount> {
@@ -13446,6 +21648,4537 @@ mod tests {
 
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"orders\""));
+    }
+
+    #[test]
+    fn transparency_cycles_list_prints_payload() {
+        let args = TransparencyCyclesListArgs { limit: Some(8) };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, filter| {
+            assert_eq!(filter.limit, Some(8));
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "cycles": [
+                        { "cycle_id_hex": "aa" }
+                    ]
+                }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"cycles\""));
+    }
+
+    #[test]
+    fn transparency_cycles_get_trims_cycle_id() {
+        let args = TransparencyCyclesGetArgs {
+            cycle_id: " 0xAAAA ".to_string(),
+            limit: Some(3),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, cycle_id, filter| {
+            assert_eq!(cycle_id, "0xAAAA");
+            assert_eq!(filter.limit, Some(3));
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "cycle_id_hex": "aa"
+                }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"cycle_id_hex\""));
+    }
+
+    #[test]
+    fn transparency_cycles_entry_trims_identifiers() {
+        let args = TransparencyCyclesEntryArgs {
+            cycle_id: " cycle-hex ".to_string(),
+            entry_id: " entry-hex ".to_string(),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, cycle_id, entry_id| {
+            assert_eq!(cycle_id, "cycle-hex");
+            assert_eq!(entry_id, "entry-hex");
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "entry_id_hex": "bb"
+                }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"entry_id_hex\""));
+    }
+
+    #[test]
+    fn transparency_explorer_prints_payload() {
+        let args = TransparencyExplorerArgs { limit: Some(5) };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, filter| {
+            assert_eq!(filter.limit, Some(5));
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "schema": "sorafs.transparency.explorer_snapshot.v1"
+                }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("explorer_snapshot"));
+    }
+
+    fn transparency_explorer_canary_fixture_json(
+        value: Value,
+    ) -> Result<TransparencyExplorerCanaryHttpResponse> {
+        Ok(TransparencyExplorerCanaryHttpResponse {
+            status: StatusCode::OK,
+            content_type: Some("application/json".to_string()),
+            body: norito::json::to_vec(&value)?,
+        })
+    }
+
+    fn transparency_explorer_canary_fixture_response(
+        url: &str,
+        include_private_key: bool,
+    ) -> Result<TransparencyExplorerCanaryHttpResponse> {
+        let parsed = Url::parse(url).expect("canary URL should parse");
+        let path = parsed.path();
+        if path.ends_with("/v1/sorafs/transparency/explorer") {
+            assert_eq!(
+                parsed
+                    .query_pairs()
+                    .find(|(key, _)| key == "limit")
+                    .map(|(_, value)| value.into_owned()),
+                Some("6".to_string())
+            );
+            let value = if include_private_key {
+                norito::json!({
+                    "schema": "sorafs.transparency.explorer_snapshot.v1",
+                    "payload_bytes_included": false,
+                    "private_digest_keys_included": false,
+                    "proof_token_issuances": [
+                        { "proof_token_digest_key": "must-not-ship" }
+                    ]
+                })
+            } else {
+                norito::json!({
+                    "schema": "sorafs.transparency.explorer_snapshot.v1",
+                    "payload_bytes_included": false,
+                    "private_digest_keys_included": false,
+                    "cycles": [],
+                    "proof_token_issuances": []
+                })
+            };
+            return transparency_explorer_canary_fixture_json(value);
+        }
+        if path.ends_with("/v1/sorafs/transparency/explorer/ui") {
+            return Ok(TransparencyExplorerCanaryHttpResponse {
+                status: StatusCode::OK,
+                content_type: Some("text/html; charset=utf-8".to_string()),
+                body: b"<main><h1>SoraFS Transparency Explorer</h1></main>".to_vec(),
+            });
+        }
+        if path.ends_with("/v1/sorafs/transparency/tokens") {
+            assert_eq!(
+                parsed
+                    .query_pairs()
+                    .find(|(key, _)| key == "limit")
+                    .map(|(_, value)| value.into_owned()),
+                Some("6".to_string())
+            );
+            return transparency_explorer_canary_fixture_json(norito::json!({
+                "schema": "sorafs.transparency.proof_token_issuances.v1",
+                "payload_bytes_included": false,
+                "private_digest_keys_included": false,
+                "entries": []
+            }));
+        }
+        panic!("unexpected transparency explorer canary route: {url}");
+    }
+
+    #[test]
+    fn transparency_explorer_canary_builds_payload_free_evidence() {
+        let out_dir = TempDir::new().expect("canary evidence dir");
+        let out = out_dir.path().join("nested/evidence.json");
+        let args = TransparencyExplorerCanaryArgs {
+            torii_url: Some(" https://torii.test/root ".to_string()),
+            limit: Some(6),
+            timeout_secs: 1,
+            out: Some(out.clone()),
+        };
+        let mut ctx = TestContext::new();
+        let mut requested = Vec::new();
+
+        args.run_with_fetch(&mut ctx, |url| {
+            requested.push(url.to_string());
+            transparency_explorer_canary_fixture_response(url, false)
+        })
+        .expect("transparency explorer canary should render evidence");
+
+        assert_eq!(requested.len(), 3);
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(!ctx.printed[0].contains("proof_token_digest_key"));
+        let value: Value = norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.transparency.explorer_canary.v1")
+        );
+        assert_eq!(value.get("status").and_then(Value::as_str), Some("passed"));
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(6));
+        assert_eq!(value.get("route_count").and_then(Value::as_u64), Some(3));
+        assert_eq!(
+            value.get("payload_bytes_included").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            value
+                .get("private_digest_keys_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let routes = value
+            .get("routes")
+            .and_then(Value::as_array)
+            .expect("canary routes");
+        assert!(
+            routes
+                .iter()
+                .any(|route| route.get("name").and_then(Value::as_str) == Some("browser_ui"))
+        );
+        assert!(
+            routes
+                .iter()
+                .any(|route| route.get("name").and_then(Value::as_str)
+                    == Some("proof_token_issuance_index"))
+        );
+        let explorer = routes
+            .iter()
+            .find(|route| route.get("name").and_then(Value::as_str) == Some("explorer_snapshot"))
+            .expect("explorer route evidence");
+        let explorer_url = explorer
+            .get("url")
+            .and_then(Value::as_str)
+            .expect("explorer URL");
+        assert!(explorer_url.contains("/root/v1/sorafs/transparency/explorer"));
+        assert!(explorer_url.contains("limit=6"));
+
+        let written: Value =
+            norito::json::from_slice(&fs::read(out).expect("written canary evidence"))
+                .expect("written evidence JSON");
+        assert_eq!(
+            written.get("schema").and_then(Value::as_str),
+            Some("sorafs.transparency.explorer_canary.v1")
+        );
+    }
+
+    #[test]
+    fn transparency_explorer_canary_rejects_private_digest_keys() {
+        let args = TransparencyExplorerCanaryArgs {
+            torii_url: Some("https://torii.test/root".to_string()),
+            limit: Some(6),
+            timeout_secs: 1,
+            out: None,
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args
+            .run_with_fetch(&mut ctx, |url| {
+                transparency_explorer_canary_fixture_response(url, true)
+            })
+            .expect_err("transparency explorer canary must reject private digest keys");
+
+        assert!(err.to_string().contains("digest-key"));
+        assert!(ctx.printed.is_empty());
+    }
+
+    fn transparency_publication_canary_fixture_response(
+        url: &str,
+        include_publisher_identity: bool,
+        status: StatusCode,
+    ) -> Result<TransparencyExplorerCanaryHttpResponse> {
+        if status != StatusCode::OK {
+            return Ok(TransparencyExplorerCanaryHttpResponse {
+                status,
+                content_type: Some("application/json".to_string()),
+                body: br#"{"error":"publication route unavailable must not leak"}"#.to_vec(),
+            });
+        }
+        let parsed = Url::parse(url).expect("publication canary URL should parse");
+        assert_eq!(
+            parsed
+                .query_pairs()
+                .find(|(key, _)| key == "limit")
+                .map(|(_, value)| value.into_owned()),
+            Some("3".to_string())
+        );
+        let path = parsed.path();
+        let cycle_id = "11".repeat(16);
+        let publisher_labels = if include_publisher_identity {
+            norito::json!({
+                "publisher_peer_id": "peer-a",
+                "publisher_public_key_hex": ("a1".repeat(32)),
+            })
+        } else {
+            norito::json!({})
+        };
+        if path.ends_with("/v1/sorafs/transparency/cycles") {
+            return transparency_explorer_canary_fixture_json(norito::json!({
+                "schema": "sorafs.transparency.cycles.v1",
+                "published_cycle_count": 1_u64,
+                "returned_cycle_count": 1_u64,
+                "limit": 3_u64,
+                "truncated": false,
+                "cycles": [
+                    {
+                        "cycle_id_hex": cycle_id,
+                        "block_hash_hex": ("b2".repeat(32)),
+                        "publication_hash_hex": ("c3".repeat(32)),
+                        "entry_root_hex": ("d4".repeat(32)),
+                        "encoded_blake3": ("e5".repeat(32)),
+                        "source_entry": {
+                            "labels": publisher_labels
+                        }
+                    }
+                ]
+            }));
+        }
+        if path.ends_with(&format!("/v1/sorafs/transparency/cycles/{cycle_id}")) {
+            return transparency_explorer_canary_fixture_json(norito::json!({
+                "schema": "sorafs.transparency.cycle_publication.v1",
+                "cycle_id_hex": cycle_id,
+                "encoded_blake3": ("e5".repeat(32)),
+                "proof_count": 2_u64,
+                "returned_proof_count": 1_u64,
+                "limit": 3_u64,
+                "truncated_proofs": true,
+                "entry": {
+                    "labels": publisher_labels
+                },
+                "verification": {
+                    "valid": true,
+                    "all_proofs_verified": true,
+                    "block_hash_hex": ("b2".repeat(32)),
+                    "publication_hash_hex": ("c3".repeat(32)),
+                    "entry_root_hex": ("d4".repeat(32)),
+                    "proof_count": 2_u64
+                },
+                "publication": {
+                    "proofs": [
+                        { "public_subject": "manifest-must-not-leak" }
+                    ]
+                }
+            }));
+        }
+        panic!("unexpected transparency publication canary route: {url}");
+    }
+
+    #[test]
+    fn transparency_publication_canary_builds_payload_free_evidence() {
+        let out_dir = TempDir::new().expect("publication canary evidence dir");
+        let out = out_dir.path().join("nested/evidence.json");
+        let cycle_id = "11".repeat(16);
+        let args = TransparencyPublicationCanaryArgs {
+            torii_url: Some(" https://torii.test/root ".to_string()),
+            cycle_ids: vec![cycle_id],
+            limit: Some(3),
+            timeout_secs: 1,
+            allow_missing_publisher_identity: false,
+            out: Some(out.clone()),
+        };
+        let mut ctx = TestContext::new();
+        let mut requested = Vec::new();
+
+        args.run_with_fetch(&mut ctx, |url| {
+            requested.push(url.to_string());
+            transparency_publication_canary_fixture_response(url, true, StatusCode::OK)
+        })
+        .expect("publication canary should render evidence");
+
+        assert_eq!(requested.len(), 2);
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(!ctx.printed[0].contains("manifest-must-not-leak"));
+        let value: Value =
+            norito::json::from_str(&ctx.printed[0]).expect("publication canary evidence JSON");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.transparency.publication_canary.v1")
+        );
+        assert_eq!(value.get("status").and_then(Value::as_str), Some("passed"));
+        assert_eq!(value.get("route_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            value.get("passed_route_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value
+                .get("cycle_detail_probe_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("publication_bodies_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let routes = value
+            .get("routes")
+            .and_then(Value::as_array)
+            .expect("publication canary routes");
+        assert!(routes.iter().all(|route| {
+            route
+                .get("anchor_metadata_present")
+                .and_then(Value::as_bool)
+                == Some(true)
+        }));
+        assert!(routes.iter().all(|route| {
+            route
+                .get("publisher_identity_present")
+                .and_then(Value::as_bool)
+                == Some(true)
+        }));
+
+        let written: Value =
+            norito::json::from_slice(&fs::read(out).expect("written publication canary evidence"))
+                .expect("written evidence JSON");
+        assert_eq!(
+            written.get("schema").and_then(Value::as_str),
+            Some("sorafs.transparency.publication_canary.v1")
+        );
+    }
+
+    #[test]
+    fn transparency_publication_canary_fails_missing_publisher_identity() {
+        let args = TransparencyPublicationCanaryArgs {
+            torii_url: Some("https://torii.test/root".to_string()),
+            cycle_ids: Vec::new(),
+            limit: Some(3),
+            timeout_secs: 1,
+            allow_missing_publisher_identity: false,
+            out: None,
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with_fetch(&mut ctx, |url| {
+            transparency_publication_canary_fixture_response(url, false, StatusCode::OK)
+        })
+        .expect("publication canary should emit failed evidence");
+
+        let value: Value =
+            norito::json::from_str(&ctx.printed[0]).expect("publication canary evidence JSON");
+        assert_eq!(value.get("status").and_then(Value::as_str), Some("failed"));
+        assert_eq!(
+            value.get("passed_route_count").and_then(Value::as_u64),
+            Some(0)
+        );
+        assert!(
+            value
+                .get("routes")
+                .and_then(Value::as_array)
+                .expect("routes")
+                .iter()
+                .all(|route| route
+                    .get("publisher_identity_present")
+                    .and_then(Value::as_bool)
+                    == Some(false))
+        );
+    }
+
+    #[test]
+    fn transparency_publication_canary_records_http_failure_without_body() {
+        let args = TransparencyPublicationCanaryArgs {
+            torii_url: Some("https://torii.test/root".to_string()),
+            cycle_ids: Vec::new(),
+            limit: Some(3),
+            timeout_secs: 1,
+            allow_missing_publisher_identity: false,
+            out: None,
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with_fetch(&mut ctx, |url| {
+            transparency_publication_canary_fixture_response(url, true, StatusCode::BAD_GATEWAY)
+        })
+        .expect("HTTP failure should still emit canary evidence");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(!ctx.printed[0].contains("publication route unavailable"));
+        let value: Value =
+            norito::json::from_str(&ctx.printed[0]).expect("publication canary evidence JSON");
+        assert_eq!(value.get("status").and_then(Value::as_str), Some("failed"));
+        assert_eq!(
+            value.get("passed_route_count").and_then(Value::as_u64),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn transparency_tokens_prints_payload() {
+        let args = TransparencyTokensArgs { limit: Some(7) };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, filter| {
+            assert_eq!(filter.limit, Some(7));
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "entries": [
+                        { "payload_kind": "proof_token_issuance" }
+                    ]
+                }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"proof_token_issuance\""));
+    }
+
+    #[test]
+    fn transparency_token_issuance_submit_reads_json_payload() {
+        let file = write_json_file(&norito::json!({
+            "token_b64": "proof-token-frame",
+            "signer_key_hex": ("a1".repeat(32)),
+            "evidence_digest_hex": ("b2".repeat(32)),
+            "policy_digest_hex": ("c3".repeat(32)),
+            "metadata": [
+                { "key": "producer", "value": "gateway-a" }
+            ]
+        }));
+        let args = TransparencyTokenIssuanceSubmitArgs {
+            payload: file.path().to_path_buf(),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, payload| {
+            let value: Value = norito::json::from_slice(payload).expect("payload is json");
+            assert_eq!(
+                value.get("token_b64").and_then(Value::as_str),
+                Some("proof-token-frame")
+            );
+            assert_eq!(
+                value.get("signer_key_hex").and_then(Value::as_str),
+                Some("a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1")
+            );
+            Ok(Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "schema": "sorafs.transparency.proof_token_issuance.ingest.v1"
+                }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("proof_token_issuance"));
+    }
+
+    #[test]
+    fn transparency_token_issuance_canary_writes_payload_free_evidence() {
+        let issuance_file = write_json_file(&norito::json!({
+            "token_b64": "proof-token-frame-must-not-leak",
+            "signer_key_hex": ("a1".repeat(32)),
+            "evidence_digest_hex": ("b2".repeat(32)),
+            "policy_digest_hex": ("c3".repeat(32)),
+            "metadata": [
+                { "key": "producer", "value": "gateway-a" }
+            ]
+        }));
+        let out_dir = TempDir::new().expect("proof-token issuance canary evidence dir");
+        let out = out_dir.path().join("nested/evidence.json");
+        let args = TransparencyTokenIssuanceCanaryArgs {
+            issuances: vec![issuance_file.path().to_path_buf()],
+            out: Some(out.clone()),
+        };
+        let mut ctx = TestContext::new();
+        let mut submitted = 0_usize;
+
+        args.run_with(&mut ctx, |_client, payload| {
+            submitted += 1;
+            let value: Value = norito::json::from_slice(payload).expect("issuance payload JSON");
+            assert_eq!(
+                value.get("token_b64").and_then(Value::as_str),
+                Some("proof-token-frame-must-not-leak")
+            );
+            Ok(Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "schema": "sorafs.transparency.proof_token_issuance.ingest.v1",
+                    "token_id_hex": "token-id-must-not-leak"
+                }))?)
+                .unwrap())
+        })
+        .expect("proof-token issuance canary should succeed");
+
+        assert_eq!(submitted, 1);
+        assert!(out.exists(), "canary evidence should be written");
+        assert_eq!(ctx.printed.len(), 1);
+        let evidence: Value =
+            norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
+        assert_eq!(
+            evidence.get("schema").and_then(Value::as_str),
+            Some("sorafs.transparency.proof_token_issuance.canary.v1")
+        );
+        assert_eq!(
+            evidence.get("status").and_then(Value::as_str),
+            Some("passed")
+        );
+        assert_eq!(evidence.get("probe_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            evidence.get("passed_probe_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            evidence.get("issuance_probe_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            evidence
+                .get("payload_bytes_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            evidence
+                .get("proof_token_frames_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            evidence
+                .get("response_bodies_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            !ctx.printed[0].contains("proof-token-frame-must-not-leak"),
+            "canary evidence must not include proof-token frames"
+        );
+        assert!(
+            !ctx.printed[0].contains("token-id-must-not-leak"),
+            "canary evidence must not archive response bodies"
+        );
+    }
+
+    #[test]
+    fn transparency_token_issuance_canary_records_failed_probe_without_body() {
+        let issuance_file = write_json_file(&norito::json!({
+            "token_b64": "proof-token-frame-must-not-leak",
+            "signer_key_hex": ("a1".repeat(32)),
+            "evidence_digest_hex": ("b2".repeat(32)),
+            "policy_digest_hex": ("c3".repeat(32)),
+        }));
+        let args = TransparencyTokenIssuanceCanaryArgs {
+            issuances: vec![issuance_file.path().to_path_buf()],
+            out: None,
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, _payload| {
+            Ok(Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "error": "proof-token producer unavailable"
+                }))?)
+                .unwrap())
+        })
+        .expect("failed probe should still emit canary evidence");
+
+        assert_eq!(ctx.printed.len(), 1);
+        let evidence: Value =
+            norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
+        assert_eq!(
+            evidence.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            evidence.get("passed_probe_count").and_then(Value::as_u64),
+            Some(0)
+        );
+        assert!(
+            !ctx.printed[0].contains("proof-token producer unavailable"),
+            "canary evidence must not archive response bodies"
+        );
+    }
+
+    #[test]
+    fn transparency_token_issuance_canary_rejects_empty_payload_list() {
+        let args = TransparencyTokenIssuanceCanaryArgs {
+            issuances: Vec::new(),
+            out: None,
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args
+            .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
+            .expect_err("missing issuance payloads must be rejected");
+        assert!(err.to_string().contains("at least one --issuance"));
+        assert!(ctx.printed.is_empty());
+    }
+
+    #[test]
+    fn transparency_privacy_aggregate_source_event_reads_json_payload() {
+        let mut file = NamedTempFile::new().expect("privacy aggregate source-event file");
+        file.write_all(
+            &norito::json::to_vec(&norito::json!({
+                "event_id": "privacy-event-1",
+                "occurred_at_unix": 1_800_000_500_u64,
+                "population_label": "moderation.global",
+                "metrics": [
+                    { "key": "quarantined", "value": 3_u64 }
+                ],
+                "policy_digest_hex": ("a1".repeat(32)),
+            }))
+            .expect("serialize privacy aggregate source-event JSON"),
+        )
+        .expect("write privacy aggregate source-event JSON");
+        let args = TransparencyPrivacyAggregateSourceEventArgs {
+            payload: file.path().to_path_buf(),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, payload| {
+            let value: Value = norito::json::from_slice(payload).expect("payload is json");
+            assert_eq!(
+                value.get("event_id").and_then(Value::as_str),
+                Some("privacy-event-1")
+            );
+            assert_eq!(
+                value.get("population_label").and_then(Value::as_str),
+                Some("moderation.global")
+            );
+            Ok(Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(
+                    &norito::json!({ "status": "accepted" }),
+                )?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"accepted\""));
+    }
+
+    #[test]
+    fn transparency_privacy_aggregate_publish_due_reads_json_payload() {
+        let mut file = NamedTempFile::new().expect("privacy aggregate publish-due file");
+        file.write_all(
+            &norito::json::to_vec(&norito::json!({
+                "now_unix": 1_800_000_800_u64,
+                "aggregate_id_prefix": "moderation",
+                "privacy_mode": "suppression",
+                "suppression_threshold": 4_u64,
+            }))
+            .expect("serialize privacy aggregate publish-due JSON"),
+        )
+        .expect("write privacy aggregate publish-due JSON");
+        let args = TransparencyPrivacyAggregatePublishDueArgs {
+            payload: file.path().to_path_buf(),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, payload| {
+            let value: Value = norito::json::from_slice(payload).expect("payload is json");
+            assert_eq!(
+                value.get("aggregate_id_prefix").and_then(Value::as_str),
+                Some("moderation")
+            );
+            assert_eq!(
+                value.get("privacy_mode").and_then(Value::as_str),
+                Some("suppression")
+            );
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(
+                    &norito::json!({ "status": "published" }),
+                )?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"published\""));
+    }
+
+    #[test]
+    fn transparency_privacy_aggregate_commands_reject_empty_payloads() {
+        let file = NamedTempFile::new().expect("empty privacy aggregate file");
+        let mut ctx = TestContext::new();
+
+        let source_args = TransparencyPrivacyAggregateSourceEventArgs {
+            payload: file.path().to_path_buf(),
+        };
+        let err = source_args
+            .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
+            .expect_err("empty source-event payload must be rejected");
+        assert!(err.to_string().contains("source-event payload"));
+
+        let publish_args = TransparencyPrivacyAggregatePublishDueArgs {
+            payload: file.path().to_path_buf(),
+        };
+        let err = publish_args
+            .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
+            .expect_err("empty publish-due payload must be rejected");
+        assert!(err.to_string().contains("publish-due payload"));
+        assert!(ctx.printed.is_empty());
+    }
+
+    #[test]
+    fn transparency_privacy_aggregate_canary_writes_payload_free_evidence() {
+        let source_file = write_json_file(&norito::json!({
+            "event_id": "privacy-event-1",
+            "occurred_at_unix": 1_800_000_500_u64,
+            "population_label": "moderation.global",
+            "metrics": [
+                { "key": "quarantined", "value": 3_u64 }
+            ],
+            "policy_digest_hex": ("a1".repeat(32)),
+        }));
+        let publish_file = write_json_file(&norito::json!({
+            "now_unix": 1_800_000_800_u64,
+            "aggregate_id_prefix": "moderation",
+            "privacy_mode": "suppression",
+            "suppression_threshold": 4_u64,
+        }));
+        let out_dir = TempDir::new().expect("privacy aggregate canary evidence dir");
+        let out = out_dir.path().join("nested/evidence.json");
+        let args = TransparencyPrivacyAggregateCanaryArgs {
+            source_events: vec![source_file.path().to_path_buf()],
+            publish_due: vec![publish_file.path().to_path_buf()],
+            out: Some(out.clone()),
+        };
+        let mut ctx = TestContext::new();
+        let mut submitted_source = 0_usize;
+        let mut submitted_publish = 0_usize;
+
+        args.run_with(
+            &mut ctx,
+            |_client, payload| {
+                submitted_source += 1;
+                let value: Value = norito::json::from_slice(payload).expect("source payload JSON");
+                assert_eq!(
+                    value.get("event_id").and_then(Value::as_str),
+                    Some("privacy-event-1")
+                );
+                Ok(Response::builder()
+                    .status(StatusCode::ACCEPTED)
+                    .header("Content-Type", "application/json")
+                    .body(norito::json::to_vec(&norito::json!({
+                        "status": "accepted",
+                        "event_id": "privacy-event-1"
+                    }))?)
+                    .unwrap())
+            },
+            |_client, payload| {
+                submitted_publish += 1;
+                let value: Value = norito::json::from_slice(payload).expect("publish payload JSON");
+                assert_eq!(
+                    value.get("aggregate_id_prefix").and_then(Value::as_str),
+                    Some("moderation")
+                );
+                Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(norito::json::to_vec(&norito::json!({
+                        "status": "published",
+                        "cycle_id_hex": "aa"
+                    }))?)
+                    .unwrap())
+            },
+        )
+        .expect("privacy aggregate canary should succeed");
+
+        assert_eq!(submitted_source, 1);
+        assert_eq!(submitted_publish, 1);
+        assert!(out.exists(), "canary evidence should be written");
+        assert_eq!(ctx.printed.len(), 1);
+        let evidence: Value =
+            norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
+        assert_eq!(
+            evidence.get("schema").and_then(Value::as_str),
+            Some("sorafs.transparency.privacy_aggregate.canary.v1")
+        );
+        assert_eq!(
+            evidence.get("status").and_then(Value::as_str),
+            Some("passed")
+        );
+        assert_eq!(evidence.get("probe_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            evidence.get("passed_probe_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            evidence
+                .get("payload_bytes_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            evidence
+                .get("raw_metric_values_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            !ctx.printed[0].contains("\"metrics\""),
+            "canary evidence must not include raw metric arrays"
+        );
+        assert!(
+            !ctx.printed[0].contains("\"quarantined\""),
+            "canary evidence must not include raw metric names"
+        );
+    }
+
+    #[test]
+    fn transparency_privacy_aggregate_canary_records_failed_probe_without_body() {
+        let publish_file = write_json_file(&norito::json!({
+            "now_unix": 1_800_000_800_u64,
+            "aggregate_id_prefix": "moderation",
+            "privacy_mode": "suppression",
+            "suppression_threshold": 4_u64,
+        }));
+        let args = TransparencyPrivacyAggregateCanaryArgs {
+            source_events: Vec::new(),
+            publish_due: vec![publish_file.path().to_path_buf()],
+            out: None,
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(
+            &mut ctx,
+            |_client, _payload| unreachable!("source-event submit must not run"),
+            |_client, _payload| {
+                Ok(Response::builder()
+                    .status(StatusCode::BAD_GATEWAY)
+                    .header("Content-Type", "application/json")
+                    .body(norito::json::to_vec(&norito::json!({
+                        "error": "scheduler unavailable"
+                    }))?)
+                    .unwrap())
+            },
+        )
+        .expect("failed probe should still emit canary evidence");
+
+        assert_eq!(ctx.printed.len(), 1);
+        let evidence: Value =
+            norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
+        assert_eq!(
+            evidence.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            evidence.get("passed_probe_count").and_then(Value::as_u64),
+            Some(0)
+        );
+        assert!(
+            !ctx.printed[0].contains("scheduler unavailable"),
+            "canary evidence must not archive response bodies"
+        );
+    }
+
+    #[test]
+    fn transparency_source_entry_submit_reads_json_payload() {
+        let mut file = NamedTempFile::new().expect("source entry file");
+        file.write_all(
+            &norito::json::to_vec(&norito::json!({
+                "event_id": "legal-hold-1",
+                "occurred_at_unix": 1_800_000_500_u64,
+                "subject": "case-401",
+                "payload_digest_hex": ("a1".repeat(32)),
+            }))
+            .expect("serialize source entry JSON"),
+        )
+        .expect("write source entry JSON");
+        let args = TransparencySourceEntrySubmitArgs {
+            source_kind: " legal-hold-notice ".to_string(),
+            payload: file.path().to_path_buf(),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, source_kind, payload| {
+            assert_eq!(source_kind, "legal-hold-notice");
+            let value: Value = norito::json::from_slice(payload).expect("payload is json");
+            assert_eq!(
+                value.get("event_id").and_then(Value::as_str),
+                Some("legal-hold-1")
+            );
+            Ok(Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(
+                    &norito::json!({ "status": "accepted" }),
+                )?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"accepted\""));
+    }
+
+    #[test]
+    fn transparency_source_entry_submit_rejects_empty_payload() {
+        let file = NamedTempFile::new().expect("source entry file");
+        let args = TransparencySourceEntrySubmitArgs {
+            source_kind: "legal-hold-notice".to_string(),
+            payload: file.path().to_path_buf(),
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args
+            .run_with(&mut ctx, |_client, _, _| {
+                unreachable!("submit must not run")
+            })
+            .expect_err("empty payload must be rejected");
+        assert!(err.to_string().contains("source-entry payload"));
+        assert!(ctx.printed.is_empty());
+    }
+
+    #[test]
+    fn transparency_source_entry_canary_writes_payload_free_evidence() {
+        let legal_hold_file = write_json_file(&norito::json!({
+            "event_id": "legal-hold-1",
+            "occurred_at_unix": 1_800_000_500_u64,
+            "subject": "case-401",
+            "payload_digest_hex": ("a1".repeat(32)),
+        }));
+        let redaction_file = write_json_file(&norito::json!({
+            "event_id": "redaction-1",
+            "occurred_at_unix": 1_800_000_600_u64,
+            "target": "manifest:alpha",
+            "payload_digest_hex": ("b2".repeat(32)),
+        }));
+        let out_dir = TempDir::new().expect("source-entry canary evidence dir");
+        let out = out_dir.path().join("nested/evidence.json");
+        let args = TransparencySourceEntryCanaryArgs {
+            source_entries: vec![
+                format!(" legal-hold-notice = {} ", legal_hold_file.path().display()),
+                format!("redaction-notice={}", redaction_file.path().display()),
+            ],
+            out: Some(out.clone()),
+        };
+        let mut ctx = TestContext::new();
+        let mut submitted = Vec::new();
+
+        args.run_with(&mut ctx, |_client, source_kind, payload| {
+            submitted.push(source_kind.to_string());
+            let value: Value = norito::json::from_slice(payload).expect("source payload JSON");
+            assert!(value.get("event_id").is_some());
+            Ok(Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "status": "accepted",
+                    "entry_id_hex": "must-not-leak"
+                }))?)
+                .unwrap())
+        })
+        .expect("source-entry canary should succeed");
+
+        assert_eq!(
+            submitted,
+            vec![
+                "legal-hold-notice".to_string(),
+                "redaction-notice".to_string()
+            ]
+        );
+        assert!(out.exists(), "canary evidence should be written");
+        assert_eq!(ctx.printed.len(), 1);
+        let evidence: Value =
+            norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
+        assert_eq!(
+            evidence.get("schema").and_then(Value::as_str),
+            Some("sorafs.transparency.source_entry.canary.v1")
+        );
+        assert_eq!(
+            evidence.get("status").and_then(Value::as_str),
+            Some("passed")
+        );
+        assert_eq!(evidence.get("probe_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            evidence.get("passed_probe_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            evidence
+                .get("source_entry_probe_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            evidence
+                .get("payload_bytes_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            evidence
+                .get("response_bodies_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            !ctx.printed[0].contains("case-401"),
+            "canary evidence must not include source payload fields"
+        );
+        assert!(
+            !ctx.printed[0].contains("must-not-leak"),
+            "canary evidence must not archive response bodies"
+        );
+    }
+
+    #[test]
+    fn transparency_source_entry_canary_records_failed_probe_without_body() {
+        let source_file = write_json_file(&norito::json!({
+            "event_id": "evidence-access-1",
+            "occurred_at_unix": 1_800_000_500_u64,
+            "subject": "case-401",
+            "payload_digest_hex": ("a1".repeat(32)),
+        }));
+        let args = TransparencySourceEntryCanaryArgs {
+            source_entries: vec![format!(
+                "evidence-access-summary={}",
+                source_file.path().display()
+            )],
+            out: None,
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, source_kind, _payload| {
+            assert_eq!(source_kind, "evidence-access-summary");
+            Ok(Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "error": "producer unavailable"
+                }))?)
+                .unwrap())
+        })
+        .expect("failed probe should still emit canary evidence");
+
+        assert_eq!(ctx.printed.len(), 1);
+        let evidence: Value =
+            norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
+        assert_eq!(
+            evidence.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            evidence.get("passed_probe_count").and_then(Value::as_u64),
+            Some(0)
+        );
+        assert!(
+            !ctx.printed[0].contains("producer unavailable"),
+            "canary evidence must not archive response bodies"
+        );
+    }
+
+    #[test]
+    fn transparency_source_entry_canary_rejects_malformed_specs() {
+        let mut ctx = TestContext::new();
+        let empty_args = TransparencySourceEntryCanaryArgs {
+            source_entries: Vec::new(),
+            out: None,
+        };
+        let err = empty_args
+            .run_with(&mut ctx, |_client, _, _| {
+                unreachable!("submit must not run")
+            })
+            .expect_err("missing probes must be rejected");
+        assert!(err.to_string().contains("at least one --source-entry"));
+
+        let malformed_args = TransparencySourceEntryCanaryArgs {
+            source_entries: vec!["legal-hold-notice".to_string()],
+            out: None,
+        };
+        let err = malformed_args
+            .run_with(&mut ctx, |_client, _, _| {
+                unreachable!("submit must not run")
+            })
+            .expect_err("malformed probe must be rejected");
+        assert!(err.to_string().contains("KIND=PATH"));
+        assert!(ctx.printed.is_empty());
+    }
+
+    fn write_json_file(value: &Value) -> NamedTempFile {
+        let mut file = NamedTempFile::new().expect("json file");
+        file.write_all(&norito::json::to_vec(value).expect("serialize json"))
+            .expect("write json file");
+        file
+    }
+
+    #[test]
+    fn appeals_pricing_quote_reads_json_payload() {
+        let file = write_json_file(&norito::json!({
+            "class": "content",
+            "backlog": 4_u64,
+            "evidence_size_mb": 12_u64,
+            "urgency": "normal"
+        }));
+        let args = AppealsPricingQuoteArgs {
+            input: file.path().to_path_buf(),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, payload| {
+            let value: Value = norito::json::from_slice(payload).expect("payload is json");
+            assert_eq!(value.get("class").and_then(Value::as_str), Some("content"));
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(
+                    &norito::json!({ "deposit_xor": "123" }),
+                )?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"123\""));
+    }
+
+    #[test]
+    fn appeals_finance_deposit_create_reads_json_payload() {
+        let file = write_json_file(&norito::json!({
+            "case_id": "case-401",
+            "payer_account": "payer",
+            "destination_account": "treasury",
+            "asset_definition_id": "xor#wonderland",
+            "deposit_xor": "100",
+            "idempotency_key": "case-401-round-7"
+        }));
+        let args = AppealsFinanceDepositCreateArgs {
+            input: file.path().to_path_buf(),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, payload| {
+            let value: Value = norito::json::from_slice(payload).expect("payload is json");
+            assert_eq!(
+                value.get("case_id").and_then(Value::as_str),
+                Some("case-401")
+            );
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(
+                    &norito::json!({ "status": "deposit_instruction" }),
+                )?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("deposit_instruction"));
+    }
+
+    #[test]
+    fn appeals_finance_deposit_get_trims_escrow_id() {
+        let args = AppealsFinanceDepositGetArgs {
+            escrow_id: " 0xAAAA ".to_string(),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, escrow_id| {
+            assert_eq!(escrow_id, "0xAAAA");
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(
+                    &norito::json!({ "escrow_id_hex": "aa" }),
+                )?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("escrow_id_hex"));
+    }
+
+    #[test]
+    fn appeals_finance_deposit_submit_settlement_accepts_accepted_status() {
+        let file = write_json_file(&norito::json!({
+            "deposit_confirmation": {
+                "escrow_id_hex": ("11".repeat(32)),
+                "case_id": "case-401",
+                "payer_account": "payer",
+                "destination_account": "treasury",
+                "asset_definition_id": "xor#wonderland",
+                "deposit_xor": "100",
+                "idempotency_key": "case-401-round-7"
+            },
+            "outcome": "uphold"
+        }));
+        let args = AppealsFinanceDepositSubmitSettlementArgs {
+            input: file.path().to_path_buf(),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, payload| {
+            let value: Value = norito::json::from_slice(payload).expect("payload is json");
+            assert_eq!(value.get("outcome").and_then(Value::as_str), Some("uphold"));
+            Ok(Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(
+                    &norito::json!({ "status": "queued" }),
+                )?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("queued"));
+    }
+
+    #[test]
+    fn appeals_finance_reports_list_prints_payload() {
+        let args = AppealsFinanceReportsArgs { limit: Some(5) };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, filter| {
+            assert_eq!(filter.limit, Some(5));
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "entries": [
+                        { "payload_kind": "appeal_finance_report" }
+                    ]
+                }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("appeal_finance_report"));
+    }
+
+    #[test]
+    fn appeals_finance_deposit_create_rejects_empty_payload() {
+        let file = NamedTempFile::new().expect("empty payload");
+        let args = AppealsFinanceDepositCreateArgs {
+            input: file.path().to_path_buf(),
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args
+            .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
+            .expect_err("empty payload must be rejected");
+        assert!(err.to_string().contains("appeal finance deposit payload"));
+        assert!(ctx.printed.is_empty());
+    }
+
+    fn signed_moderation_repro_manifest_fixture() -> ModerationReproManifestV1 {
+        use iroha_data_model::sorafs::moderation::{
+            MODERATION_REPRO_MANIFEST_VERSION_V1, ModerationModelFingerprintV1,
+            ModerationReproBodyV1, ModerationReproSignatureV1, ModerationSeedMaterialV1,
+            ModerationThresholdsV1,
+        };
+
+        let body = ModerationReproBodyV1 {
+            schema_version: MODERATION_REPRO_MANIFEST_VERSION_V1,
+            manifest_id: [0xA1; 16],
+            manifest_digest: [0xB2; 32],
+            runner_hash: [0xC3; 32],
+            runtime_version: "sorafs-ai-runner cli-test".to_string(),
+            issued_at_unix: 1_800_000_000,
+            seed_material: ModerationSeedMaterialV1 {
+                domain_tag: "sfm4a:cli-test".to_string(),
+                seed_version: 1,
+                run_nonce: [0xD4; 32],
+            },
+            thresholds: ModerationThresholdsV1 {
+                quarantine: 6_000,
+                escalate: 8_500,
+            },
+            models: vec![ModerationModelFingerprintV1 {
+                model_id: [0x11; 16],
+                artifact_digest: [0x22; 32],
+                weights_digest: [0x33; 32],
+                opset: 17,
+                weight: Some(10_000),
+            }],
+            notes: Some("cli registry fixture".to_string()),
+        };
+        let keypair = KeyPair::try_from_seed(vec![0xE5; 32], Algorithm::Ed25519)
+            .expect("derive moderation fixture keypair");
+        let signature = iroha_crypto::SignatureOf::try_new(keypair.private_key(), &body)
+            .expect("sign moderation fixture body");
+        ModerationReproManifestV1 {
+            body,
+            signatures: vec![ModerationReproSignatureV1 {
+                role: "council".to_string(),
+                public_key: keypair.public_key().clone(),
+                signature,
+            }],
+        }
+    }
+
+    fn adversarial_corpus_manifest_fixture() -> AdversarialCorpusManifestV1 {
+        use iroha_data_model::sorafs::moderation::{
+            ADVERSARIAL_CORPUS_VERSION_V1, AdversarialPerceptualFamilyV1,
+            AdversarialPerceptualVariantV1,
+        };
+
+        AdversarialCorpusManifestV1 {
+            schema_version: ADVERSARIAL_CORPUS_VERSION_V1,
+            issued_at_unix: 1_800_000_100,
+            cohort_label: Some("cli-registry-fixture".to_string()),
+            families: vec![AdversarialPerceptualFamilyV1 {
+                family_id: [0x44; 16],
+                description: "jpeg jitter corpus".to_string(),
+                variants: vec![AdversarialPerceptualVariantV1 {
+                    variant_id: [0x55; 16],
+                    attack_vector: "jpeg_jitter".to_string(),
+                    reference_cid_b64: None,
+                    perceptual_hash: Some([0x66; 32]),
+                    hamming_radius: 8,
+                    embedding_digest: None,
+                    notes: Some("cli registry variant".to_string()),
+                }],
+            }],
+        }
+    }
+
+    fn moderation_ballot_reveal_fixture() -> SoraFsModerationBallotRevealV1 {
+        use iroha_data_model::sorafs::moderation::{
+            SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
+            SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1, SoraFsModerationBallotContextV1,
+            SoraFsModerationVoteChoice,
+        };
+
+        SoraFsModerationBallotRevealV1 {
+            version: SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1,
+            context: SoraFsModerationBallotContextV1 {
+                version: SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
+                case_id: "case-401".to_string(),
+                evidence_bundle_digest: [0xA1; 32],
+                appeal_finance_config_version: "appeal-fee-v1".to_string(),
+                panel_roster_hash: [0xB2; 32],
+                policy_reference: "moderation-policy-v1".to_string(),
+                evidence_uri: Some("dag://evidence/case-401".to_string()),
+            },
+            round_id: "round-7".to_string(),
+            juror_id: "juror-1@moderation".to_string(),
+            choice: SoraFsModerationVoteChoice::Overturn,
+            nonce: vec![0xC3; 32],
+            revealed_at_unix_ms: 1_800_000_400_000,
+        }
+    }
+
+    fn moderation_ballot_commit_fixture() -> SoraFsModerationBallotCommitV1 {
+        use iroha_data_model::sorafs::moderation::SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1;
+
+        let reveal = moderation_ballot_reveal_fixture();
+        SoraFsModerationBallotCommitV1 {
+            version: SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
+            context: reveal.context.clone(),
+            round_id: reveal.round_id.clone(),
+            juror_id: reveal.juror_id.clone(),
+            commitment_blake2b_256: reveal.compute_commitment(),
+            committed_at_unix_ms: 1_800_000_300_000,
+        }
+    }
+
+    fn moderation_ballot_reveal_fixture_for_juror(
+        juror_id: &str,
+    ) -> SoraFsModerationBallotRevealV1 {
+        let mut reveal = moderation_ballot_reveal_fixture();
+        reveal.juror_id = juror_id.to_string();
+        reveal
+    }
+
+    fn moderation_ballot_commit_fixture_for_juror(
+        juror_id: &str,
+    ) -> SoraFsModerationBallotCommitV1 {
+        use iroha_data_model::sorafs::moderation::SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1;
+
+        let reveal = moderation_ballot_reveal_fixture_for_juror(juror_id);
+        SoraFsModerationBallotCommitV1 {
+            version: SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
+            context: reveal.context.clone(),
+            round_id: reveal.round_id.clone(),
+            juror_id: reveal.juror_id.clone(),
+            commitment_blake2b_256: reveal.compute_commitment(),
+            committed_at_unix_ms: 1_800_000_300_000,
+        }
+    }
+
+    fn write_commit_reveal_status_file(
+        missing_commit_jurors: &[&str],
+        missing_reveal_jurors: &[&str],
+        ready_to_tally: bool,
+    ) -> NamedTempFile {
+        let status = norito::json!({
+            "schema": "sorafs.moderation.quarantine.commit_reveal_status.v1",
+            "status": "coordinated",
+            "payload_bytes_included": false,
+            "private_payloads_included": false,
+            "ballots": [{
+                "case_id": "case-401",
+                "round_id": "round-7",
+                "missing_commit_jurors": (
+                    missing_commit_jurors
+                        .iter()
+                        .copied()
+                        .map(Value::from)
+                        .collect::<Vec<_>>()
+                ),
+                "missing_reveal_jurors": (
+                    missing_reveal_jurors
+                        .iter()
+                        .copied()
+                        .map(Value::from)
+                        .collect::<Vec<_>>()
+                ),
+                "ready_to_tally": (ready_to_tally)
+            }]
+        });
+        write_json_file(&status)
+    }
+
+    fn juror_notifications_manifest_fixture(private_payload_included: bool) -> Value {
+        norito::json!({
+            "schema": "sorafs.moderation.quarantine.juror_notifications.v1",
+            "source": "juror-plan",
+            "status": "ready",
+            "quarantine_id_hex": "abababababababababababababababab",
+            "planned_juror_count": 1_u64,
+            "notification_count": 1_u64,
+            "skipped_complete_count": 0_u64,
+            "pending_commit_count": 1_u64,
+            "pending_reveal_count": 0_u64,
+            "delivery_transport": "operator-managed",
+            "delivery_semantics": "at-least-once-with-dedup-key",
+            "payload_bytes_included": false,
+            "private_payloads_included": false,
+            "notifications": [{
+                "schema": "sorafs.moderation.juror_notification.v1",
+                "delivery_id": "notify-1",
+                "dedup_key": "sorafs-moderation-juror:notify-1",
+                "delivery_status": "ready_for_delivery",
+                "delivery_transport": "operator-managed",
+                "quarantine_id_hex": "abababababababababababababababab",
+                "case_id": "case-401",
+                "round_id": "round-7",
+                "juror_id": "juror-1@moderation",
+                "signed_by": "juror-1@moderation",
+                "action": "submit_commit",
+                "notification_status": "commit_required",
+                "route": "/v1/sorafs/moderation/ballots/commits",
+                "cli": ["iroha", "sorafs", "moderation", "ballots", "commit"],
+                "subject": "SoraFS moderation commit required",
+                "body": "Build the private commit payload locally.",
+                "deadline_unix_ms": 1_800_000_200_000_u64,
+                "evidence_uri": "dag://evidence/case-401",
+                "payload_bytes_included": false,
+                "private_payload_included": (private_payload_included),
+                "private_payload_source": "juror-local"
+            }]
+        })
+    }
+
+    #[test]
+    fn moderation_ballots_list_prints_payload() {
+        let args = ModerationBallotsListArgs { limit: Some(8) };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, filter| {
+            assert_eq!(filter.limit, Some(8));
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "ballots": [
+                        { "case_id": "case-401", "round_id": "round-7" }
+                    ]
+                }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"ballots\""));
+    }
+
+    #[test]
+    fn moderation_ballots_get_trims_identifiers() {
+        let args = ModerationBallotsGetArgs {
+            case_id: " case-401 ".to_string(),
+            round_id: " round-7 ".to_string(),
+            limit: Some(3),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, case_id, round_id, filter| {
+            assert_eq!(case_id, "case-401");
+            assert_eq!(round_id, "round-7");
+            assert_eq!(filter.limit, Some(3));
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "case_id": "case-401",
+                    "round_id": "round-7"
+                }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"case-401\""));
+    }
+
+    #[test]
+    fn moderation_ballots_events_prints_payload() {
+        let args = ModerationBallotsEventsArgs {
+            since: Some(12),
+            limit: Some(4),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, filter| {
+            assert_eq!(filter.since, Some(12));
+            assert_eq!(filter.limit, Some(4));
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "events": [
+                        { "sequence": 13, "kind": "commit_accepted" }
+                    ]
+                }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"events\""));
+    }
+
+    #[test]
+    fn moderation_ballots_commit_reads_json_payload() {
+        let commit = moderation_ballot_commit_fixture();
+        let mut file = NamedTempFile::new().expect("commit file");
+        file.write_all(
+            norito::json::to_json_pretty(&commit)
+                .expect("render commit json")
+                .as_bytes(),
+        )
+        .expect("write commit json");
+        let args = ModerationBallotsCommitArgs {
+            payload: file.path().to_path_buf(),
+            format: "json".to_string(),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, request| {
+            assert_eq!(request, &commit);
+            Ok(Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(
+                    &norito::json!({ "status": "commit_accepted" }),
+                )?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"commit_accepted\""));
+    }
+
+    #[test]
+    fn moderation_ballots_reveal_reads_norito_payload() {
+        let reveal = moderation_ballot_reveal_fixture();
+        let encoded = to_bytes(&reveal).expect("encode reveal");
+        let mut file = NamedTempFile::new().expect("reveal file");
+        file.write_all(&encoded).expect("write reveal norito");
+        let args = ModerationBallotsRevealArgs {
+            payload: file.path().to_path_buf(),
+            format: "norito".to_string(),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, request| {
+            assert_eq!(request, &reveal);
+            Ok(Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(
+                    &norito::json!({ "status": "reveal_accepted" }),
+                )?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"reveal_accepted\""));
+    }
+
+    #[test]
+    fn moderation_ballots_tally_builds_request() {
+        let args = ModerationBallotsTallyArgs {
+            case_id: " case-401 ".to_string(),
+            round_id: " round-7 ".to_string(),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, request| {
+            assert_eq!(request.case_id, "case-401");
+            assert_eq!(request.round_id, "round-7");
+            Ok(Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(
+                    &norito::json!({ "winning_choice": "uphold" }),
+                )?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"uphold\""));
+    }
+
+    #[test]
+    fn moderation_ballots_commit_rejects_invalid_format() {
+        let file = NamedTempFile::new().expect("commit file");
+        let args = ModerationBallotsCommitArgs {
+            payload: file.path().to_path_buf(),
+            format: "yaml".to_string(),
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args
+            .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
+            .expect_err("invalid format must be rejected");
+        assert!(err.to_string().contains("--format"));
+        assert!(ctx.printed.is_empty());
+    }
+
+    #[test]
+    fn moderation_ballots_execute_submits_pending_actions_payload_free() {
+        let commit = moderation_ballot_commit_fixture_for_juror("juror-1@moderation");
+        let reveal = moderation_ballot_reveal_fixture_for_juror("juror-2@moderation");
+        let mut commit_file = NamedTempFile::new().expect("commit file");
+        commit_file
+            .write_all(
+                norito::json::to_json_pretty(&commit)
+                    .expect("render commit json")
+                    .as_bytes(),
+            )
+            .expect("write commit json");
+        let mut reveal_file = NamedTempFile::new().expect("reveal file");
+        reveal_file
+            .write_all(&to_bytes(&reveal).expect("encode reveal"))
+            .expect("write reveal norito");
+        let status_file =
+            write_commit_reveal_status_file(&["juror-1@moderation"], &["juror-2@moderation"], true);
+        let args = ModerationBallotsExecuteArgs {
+            status: status_file.path().to_path_buf(),
+            commit_payloads: vec![commit_file.path().to_path_buf()],
+            reveal_payloads: vec![reveal_file.path().to_path_buf()],
+            commit_format: "json".to_string(),
+            reveal_format: "norito".to_string(),
+            submit_tally: true,
+        };
+        let mut ctx = TestContext::new();
+        let mut committed = Vec::new();
+        let mut revealed = Vec::new();
+        let mut tallied = Vec::new();
+
+        args.run_with(
+            &mut ctx,
+            |_client, request| {
+                committed.push(request.juror_id.clone());
+                Ok(Response::builder()
+                    .status(StatusCode::ACCEPTED)
+                    .header("Content-Type", "application/json")
+                    .body(norito::json::to_vec(
+                        &norito::json!({ "status": "commit_accepted" }),
+                    )?)
+                    .unwrap())
+            },
+            |_client, request| {
+                revealed.push(request.juror_id.clone());
+                Ok(Response::builder()
+                    .status(StatusCode::ACCEPTED)
+                    .header("Content-Type", "application/json")
+                    .body(norito::json::to_vec(
+                        &norito::json!({ "status": "reveal_accepted" }),
+                    )?)
+                    .unwrap())
+            },
+            |_client, request| {
+                tallied.push((request.case_id.to_string(), request.round_id.to_string()));
+                Ok(Response::builder()
+                    .status(StatusCode::ACCEPTED)
+                    .header("Content-Type", "application/json")
+                    .body(norito::json::to_vec(
+                        &norito::json!({ "status": "tallied" }),
+                    )?)
+                    .unwrap())
+            },
+        )
+        .expect("execution should succeed");
+
+        assert_eq!(committed, vec!["juror-1@moderation"]);
+        assert_eq!(revealed, vec!["juror-2@moderation"]);
+        assert_eq!(
+            tallied,
+            vec![("case-401".to_string(), "round-7".to_string())]
+        );
+        assert_eq!(ctx.printed.len(), 1);
+        let summary: Value =
+            norito::json::from_str(&ctx.printed[0]).expect("execution summary JSON");
+        assert_eq!(
+            summary.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.ballots.execution.v1")
+        );
+        assert_eq!(summary.get("action_count").and_then(Value::as_u64), Some(3));
+        assert_eq!(
+            summary
+                .get("payload_bytes_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            summary
+                .get("private_payloads_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            !ctx.printed[0].contains("nonce"),
+            "execution summary must not print reveal payload internals"
+        );
+    }
+
+    #[test]
+    fn moderation_ballots_execute_rejects_non_pending_commit() {
+        let commit = moderation_ballot_commit_fixture_for_juror("juror-1@moderation");
+        let mut commit_file = NamedTempFile::new().expect("commit file");
+        commit_file
+            .write_all(
+                norito::json::to_json_pretty(&commit)
+                    .expect("render commit json")
+                    .as_bytes(),
+            )
+            .expect("write commit json");
+        let status_file = write_commit_reveal_status_file(&["juror-other@moderation"], &[], false);
+        let args = ModerationBallotsExecuteArgs {
+            status: status_file.path().to_path_buf(),
+            commit_payloads: vec![commit_file.path().to_path_buf()],
+            reveal_payloads: Vec::new(),
+            commit_format: "json".to_string(),
+            reveal_format: "json".to_string(),
+            submit_tally: false,
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args
+            .run_with(
+                &mut ctx,
+                |_client, _| unreachable!("commit submit must not run"),
+                |_client, _| unreachable!("reveal submit must not run"),
+                |_client, _| unreachable!("tally submit must not run"),
+            )
+            .expect_err("non-pending commit must be rejected");
+
+        assert!(err.to_string().contains("not pending in --status"));
+        assert!(ctx.printed.is_empty());
+    }
+
+    #[test]
+    fn moderation_ballots_executor_bundle_writes_supervised_job_payload_free() {
+        let temp = TempDir::new().expect("executor bundle temp dir");
+        let bundle_dir = temp.path().join("executor-bundle");
+        let status_path = temp.path().join("runtime/commit-reveal-status.json");
+        let commit_path = temp.path().join("private/commit.json");
+        let reveal_path = temp.path().join("private/reveal.to");
+        let args = ModerationBallotsExecutorBundleArgs {
+            status: status_path.clone(),
+            bundle_out: bundle_dir.clone(),
+            commit_payloads: vec![commit_path.clone()],
+            reveal_payloads: vec![reveal_path.clone()],
+            commit_format: "json".to_string(),
+            reveal_format: "norito".to_string(),
+            submit_tally: true,
+            iroha_bin: "/usr/local/bin/iroha".to_string(),
+            service_name: "org.sora.sorafs.ballots-executor-test".to_string(),
+            service_user: "sorafs-exec".to_string(),
+            service_group: "sorafs-exec".to_string(),
+            interval_secs: 30,
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx)
+            .expect("executor bundle should be written");
+
+        assert_eq!(ctx.printed.len(), 1);
+        let summary: Value =
+            norito::json::from_str(&ctx.printed[0]).expect("executor bundle summary JSON");
+        assert_eq!(
+            summary.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.ballots.executor_bundle.v1")
+        );
+        assert_eq!(
+            summary.get("commit_payload_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            summary.get("reveal_payload_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            summary.get("submit_tally").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("payload_bytes_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            summary
+                .get("private_payloads_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            summary
+                .get("private_payload_files_copied")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+
+        let run_script = fs::read_to_string(bundle_dir.join("run.sh")).expect("read run script");
+        assert!(run_script.contains("sorafs moderation ballots execute"));
+        assert!(run_script.contains("--submit-tally"));
+        assert!(run_script.contains(&format!("--commit-payload='{}'", commit_path.display())));
+        assert!(run_script.contains(&format!("--reveal-payload='{}'", reveal_path.display())));
+        assert!(!run_script.contains("nonce"));
+
+        let env = fs::read_to_string(bundle_dir.join("executor.env")).expect("read env");
+        assert!(env.contains("IROHA_BIN='/usr/local/bin/iroha'"));
+        assert!(env.contains(&format!(
+            "SORAFS_BALLOTS_EXECUTOR_STATUS_PATH='{}'",
+            status_path.display()
+        )));
+        assert!(!env.contains("commitment_blake2b_256"));
+
+        let systemd =
+            fs::read_to_string(bundle_dir.join("org.sora.sorafs.ballots-executor-test.service"))
+                .expect("read systemd unit");
+        assert!(systemd.contains("Type=oneshot"));
+        assert!(systemd.contains("NoNewPrivileges=true"));
+        let timer =
+            fs::read_to_string(bundle_dir.join("org.sora.sorafs.ballots-executor-test.timer"))
+                .expect("read systemd timer");
+        assert!(timer.contains("OnUnitActiveSec=30s"));
+        let launchd =
+            fs::read_to_string(bundle_dir.join("org.sora.sorafs.ballots-executor-test.plist"))
+                .expect("read launchd plist");
+        assert!(launchd.contains("<key>StartInterval</key>"));
+        assert!(launchd.contains("<integer>30</integer>"));
+        let metadata: Value =
+            norito::json::from_slice(&fs::read(bundle_dir.join("bundle.json")).expect("metadata"))
+                .expect("metadata JSON");
+        assert_eq!(
+            metadata.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.ballots.executor_bundle.v1")
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let mode = fs::metadata(bundle_dir.join("run.sh"))
+                .expect("run script metadata")
+                .permissions()
+                .mode();
+            assert_ne!(mode & 0o111, 0, "run.sh should be executable");
+        }
+    }
+
+    #[test]
+    fn moderation_ballots_executor_bundle_rejects_empty_action_set() {
+        let temp = TempDir::new().expect("executor bundle temp dir");
+        let args = ModerationBallotsExecutorBundleArgs {
+            status: temp.path().join("status.json"),
+            bundle_out: temp.path().join("executor-bundle"),
+            commit_payloads: Vec::new(),
+            reveal_payloads: Vec::new(),
+            commit_format: "json".to_string(),
+            reveal_format: "json".to_string(),
+            submit_tally: false,
+            iroha_bin: "iroha".to_string(),
+            service_name: "org.sora.sorafs.ballots-executor-test".to_string(),
+            service_user: "sorafs-exec".to_string(),
+            service_group: "sorafs-exec".to_string(),
+            interval_secs: 60,
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args
+            .run_with(&mut ctx)
+            .expect_err("empty executor bundle action set must be rejected");
+
+        assert!(err.to_string().contains("at least one --commit-payload"));
+        assert!(ctx.printed.is_empty());
+        assert!(
+            !temp.path().join("executor-bundle").exists(),
+            "bundle directory must not be created on validation failure"
+        );
+    }
+
+    #[test]
+    fn moderation_ballots_executor_canary_writes_payload_free_evidence() {
+        let temp = TempDir::new().expect("executor canary temp dir");
+        let bundle_dir = temp.path().join("executor-bundle");
+        let bundle_args = ModerationBallotsExecutorBundleArgs {
+            status: temp.path().join("runtime/commit-reveal-status.json"),
+            bundle_out: bundle_dir.clone(),
+            commit_payloads: vec![temp.path().join("private/commit.json")],
+            reveal_payloads: vec![temp.path().join("private/reveal.to")],
+            commit_format: "json".to_string(),
+            reveal_format: "norito".to_string(),
+            submit_tally: true,
+            iroha_bin: "/usr/local/bin/iroha".to_string(),
+            service_name: "org.sora.sorafs.ballots-executor-test".to_string(),
+            service_user: "sorafs-exec".to_string(),
+            service_group: "sorafs-exec".to_string(),
+            interval_secs: 30,
+        };
+        let mut setup_ctx = TestContext::new();
+        bundle_args
+            .run_with(&mut setup_ctx)
+            .expect("executor bundle should be written");
+        let execution_summary = write_json_file(&norito::json!({
+            "schema": "sorafs.moderation.ballots.execution.v1",
+            "source": "commit-reveal-status",
+            "status": "executed",
+            "action_count": 2_u64,
+            "commit_action_count": 1_u64,
+            "reveal_action_count": 0_u64,
+            "tally_action_count": 1_u64,
+            "payload_bytes_included": false,
+            "private_payloads_included": false,
+            "actions": [{
+                "action": "commit",
+                "case_id": "case-401",
+                "round_id": "round-7",
+                "juror_id": "juror-1@moderation",
+                "response_status": 202_u64,
+                "response_bytes": 21_u64,
+                "response_body_blake3": ("ab".repeat(32)),
+                "payload_bytes_included": false,
+                "private_payloads_included": false
+            }, {
+                "action": "tally",
+                "case_id": "case-401",
+                "round_id": "round-7",
+                "juror_id": null,
+                "response_status": 200_u64,
+                "response_bytes": 18_u64,
+                "response_body_blake3": ("cd".repeat(32)),
+                "payload_bytes_included": false,
+                "private_payloads_included": false
+            }]
+        }));
+        let out = temp.path().join("nested/executor-canary.json");
+        let args = ModerationBallotsExecutorCanaryArgs {
+            bundle: bundle_dir.clone(),
+            execution_summary: Some(execution_summary.path().to_path_buf()),
+            out: Some(out.clone()),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx)
+            .expect("executor canary should emit evidence");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(out.exists(), "executor canary evidence should be written");
+        let evidence: Value =
+            norito::json::from_str(&ctx.printed[0]).expect("executor canary evidence JSON");
+        assert_eq!(
+            evidence.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.ballots.executor_canary.v1")
+        );
+        assert_eq!(
+            evidence.get("status").and_then(Value::as_str),
+            Some("passed")
+        );
+        assert_eq!(
+            evidence.get("artifact_count").and_then(Value::as_u64),
+            Some(7)
+        );
+        assert_eq!(
+            evidence
+                .get("passed_artifact_count")
+                .and_then(Value::as_u64),
+            Some(7)
+        );
+        assert_eq!(
+            evidence
+                .get("execution_summary_present")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            evidence
+                .get("payload_bytes_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            evidence
+                .get("private_payloads_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            !ctx.printed[0].contains("payload_b64"),
+            "canary evidence must not include payload bytes"
+        );
+        assert!(
+            !ctx.printed[0].contains("nonce"),
+            "canary evidence must not include reveal internals"
+        );
+        let artifacts = evidence
+            .get("artifacts")
+            .and_then(Value::as_array)
+            .expect("artifact probes");
+        assert!(
+            artifacts
+                .iter()
+                .any(|artifact| artifact.get("kind").and_then(Value::as_str) == Some("run_script"))
+        );
+    }
+
+    #[test]
+    fn moderation_ballots_executor_canary_rejects_payload_bearing_summary() {
+        let temp = TempDir::new().expect("executor canary temp dir");
+        let bundle_dir = temp.path().join("executor-bundle");
+        let bundle_args = ModerationBallotsExecutorBundleArgs {
+            status: temp.path().join("runtime/commit-reveal-status.json"),
+            bundle_out: bundle_dir.clone(),
+            commit_payloads: vec![temp.path().join("private/commit.json")],
+            reveal_payloads: Vec::new(),
+            commit_format: "json".to_string(),
+            reveal_format: "json".to_string(),
+            submit_tally: false,
+            iroha_bin: "iroha".to_string(),
+            service_name: "org.sora.sorafs.ballots-executor-test".to_string(),
+            service_user: "sorafs-exec".to_string(),
+            service_group: "sorafs-exec".to_string(),
+            interval_secs: 60,
+        };
+        let mut setup_ctx = TestContext::new();
+        bundle_args
+            .run_with(&mut setup_ctx)
+            .expect("executor bundle should be written");
+        let execution_summary = write_json_file(&norito::json!({
+            "schema": "sorafs.moderation.ballots.execution.v1",
+            "payload_bytes_included": false,
+            "private_payloads_included": false,
+            "payload_b64": "AAAA",
+            "actions": []
+        }));
+        let args = ModerationBallotsExecutorCanaryArgs {
+            bundle: bundle_dir,
+            execution_summary: Some(execution_summary.path().to_path_buf()),
+            out: None,
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args
+            .run_with(&mut ctx)
+            .expect_err("payload-bearing execution summary must be rejected");
+
+        assert!(err.to_string().contains("payload bytes"));
+        assert!(ctx.printed.is_empty());
+    }
+
+    #[test]
+    fn moderation_quarantine_notifications_deliver_writes_outbox_and_webhook_summary() {
+        let manifest = juror_notifications_manifest_fixture(false);
+        let manifest_file = write_json_file(&manifest);
+        let out_dir = TempDir::new().expect("notification outbox");
+        let args = ModerationQuarantineNotificationsDeliverArgs {
+            manifest: manifest_file.path().to_path_buf(),
+            out_dir: Some(out_dir.path().to_path_buf()),
+            webhook_url: Some("https://moderation.example.test/webhook".to_string()),
+            timeout_secs: 5,
+        };
+        let mut ctx = TestContext::new();
+        let mut posts = Vec::new();
+
+        args.run_with(&mut ctx, |url, body| {
+            assert_eq!(url, "https://moderation.example.test/webhook");
+            posts.push(body.to_vec());
+            Ok(Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "status": "accepted"
+                }))?)
+                .unwrap())
+        })
+        .expect("notification delivery should succeed");
+
+        assert_eq!(posts.len(), 1);
+        let posted: Value = norito::json::from_slice(&posts[0]).expect("posted notification JSON");
+        assert_eq!(
+            posted.get("delivery_id").and_then(Value::as_str),
+            Some("notify-1")
+        );
+        let outbox_file = out_dir.path().join("notify-1.json");
+        assert!(outbox_file.exists(), "outbox file should be written");
+        let outbox_body = fs::read_to_string(outbox_file).expect("read outbox file");
+        assert!(!outbox_body.contains("payload_b64"));
+
+        assert_eq!(ctx.printed.len(), 1);
+        let summary: Value =
+            norito::json::from_str(&ctx.printed[0]).expect("delivery summary JSON");
+        assert_eq!(
+            summary.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.juror_notifications.delivery.v1")
+        );
+        assert_eq!(
+            summary.get("delivery_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            summary
+                .get("payload_bytes_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            summary
+                .get("private_payloads_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            !ctx.printed[0].contains("Build the private commit payload locally."),
+            "delivery summary must not repeat notification body text"
+        );
+    }
+
+    #[test]
+    fn moderation_quarantine_notifications_deliver_rejects_private_payload_flags() {
+        let manifest = juror_notifications_manifest_fixture(true);
+        let manifest_file = write_json_file(&manifest);
+        let out_dir = TempDir::new().expect("notification outbox");
+        let args = ModerationQuarantineNotificationsDeliverArgs {
+            manifest: manifest_file.path().to_path_buf(),
+            out_dir: Some(out_dir.path().to_path_buf()),
+            webhook_url: None,
+            timeout_secs: 5,
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args
+            .run_with(&mut ctx, |_url, _body| {
+                unreachable!("webhook delivery must not run")
+            })
+            .expect_err("private payload flag must be rejected");
+
+        assert!(err.to_string().contains("private_payload_included"));
+        assert!(ctx.printed.is_empty());
+        assert!(
+            fs::read_dir(out_dir.path())
+                .expect("read outbox dir")
+                .next()
+                .is_none(),
+            "outbox must stay empty on validation failure"
+        );
+    }
+
+    #[test]
+    fn moderation_quarantine_notifications_canary_writes_payload_free_evidence() {
+        let manifest = juror_notifications_manifest_fixture(false);
+        let manifest_file = write_json_file(&manifest);
+        let out_dir = TempDir::new().expect("canary evidence dir");
+        let out = out_dir.path().join("nested/evidence.json");
+        let args = ModerationQuarantineNotificationsCanaryArgs {
+            manifest: manifest_file.path().to_path_buf(),
+            webhook_url: "https://moderation.example.test/webhook".to_string(),
+            out: Some(out.clone()),
+            timeout_secs: 5,
+        };
+        let mut ctx = TestContext::new();
+        let mut posts = Vec::new();
+
+        args.run_with(&mut ctx, |url, body| {
+            assert_eq!(url, "https://moderation.example.test/webhook");
+            posts.push(body.to_vec());
+            Ok(Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "status": "accepted"
+                }))?)
+                .unwrap())
+        })
+        .expect("canary should succeed");
+
+        assert_eq!(posts.len(), 1);
+        assert!(out.exists(), "canary evidence file should be written");
+        assert_eq!(ctx.printed.len(), 1);
+        let evidence: Value =
+            norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
+        assert_eq!(
+            evidence.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.juror_notifications.transport_canary.v1")
+        );
+        assert_eq!(
+            evidence.get("status").and_then(Value::as_str),
+            Some("passed")
+        );
+        assert_eq!(evidence.get("probe_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            evidence.get("accepted_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            evidence
+                .get("payload_bytes_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            evidence
+                .get("private_payloads_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            !ctx.printed[0].contains("Build the private commit payload locally."),
+            "canary evidence must not repeat notification body text"
+        );
+    }
+
+    #[test]
+    fn moderation_quarantine_notifications_canary_records_failed_probe_without_body() {
+        let manifest = juror_notifications_manifest_fixture(false);
+        let manifest_file = write_json_file(&manifest);
+        let args = ModerationQuarantineNotificationsCanaryArgs {
+            manifest: manifest_file.path().to_path_buf(),
+            webhook_url: "https://moderation.example.test/webhook".to_string(),
+            out: None,
+            timeout_secs: 5,
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_url, _body| {
+            Ok(Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "error": "transport unavailable"
+                }))?)
+                .unwrap())
+        })
+        .expect("canary should emit failed evidence instead of hiding probe failure");
+
+        let evidence: Value =
+            norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
+        assert_eq!(
+            evidence.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            evidence.get("accepted_count").and_then(Value::as_u64),
+            Some(0)
+        );
+        assert!(
+            !ctx.printed[0].contains("transport unavailable"),
+            "canary evidence must hash response bodies instead of archiving them"
+        );
+    }
+
+    #[test]
+    fn moderation_registry_list_with_prints_payload() {
+        let args = ModerationRegistryListArgs { limit: Some(5) };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, filter| {
+            assert_eq!(filter.limit, Some(5));
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "repro_manifests": [
+                        { "manifest_id_hex": "aa", "model_count": 1 }
+                    ],
+                    "adversarial_corpora": []
+                }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"repro_manifests\""));
+    }
+
+    #[test]
+    fn moderation_registry_submit_repro_reads_json_manifest() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let expected_bytes = to_bytes(&manifest).expect("encode canonical repro manifest");
+        let mut file = NamedTempFile::new().expect("repro manifest file");
+        file.write_all(
+            norito::json::to_json_pretty(&manifest)
+                .expect("render repro json")
+                .as_bytes(),
+        )
+        .expect("write repro json");
+        let args = ModerationRegistrySubmitReproArgs {
+            manifest: file.path().to_path_buf(),
+            format: "json".to_string(),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, manifest_bytes| {
+            assert_eq!(manifest_bytes, expected_bytes.as_slice());
+            Ok(Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(
+                    &norito::json!({ "status": "admitted" }),
+                )?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"admitted\""));
+    }
+
+    #[test]
+    fn moderation_registry_submit_corpus_reads_norito_manifest() {
+        let manifest = adversarial_corpus_manifest_fixture();
+        let expected_bytes = to_bytes(&manifest).expect("encode canonical corpus manifest");
+        let mut file = NamedTempFile::new().expect("corpus manifest file");
+        file.write_all(&expected_bytes)
+            .expect("write corpus norito");
+        let args = ModerationRegistrySubmitCorpusArgs {
+            manifest: file.path().to_path_buf(),
+            format: "norito".to_string(),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, manifest_bytes| {
+            assert_eq!(manifest_bytes, expected_bytes.as_slice());
+            Ok(Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(
+                    &norito::json!({ "status": "admitted" }),
+                )?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"admitted\""));
+    }
+
+    #[test]
+    fn moderation_registry_submit_repro_rejects_invalid_format() {
+        let file = NamedTempFile::new().expect("manifest file");
+        let args = ModerationRegistrySubmitReproArgs {
+            manifest: file.path().to_path_buf(),
+            format: "yaml".to_string(),
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args
+            .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
+            .expect_err("invalid format must be rejected");
+        assert!(err.to_string().contains("--format"));
+        assert!(ctx.printed.is_empty());
+    }
+
+    #[test]
+    fn moderation_screening_list_with_prints_payload() {
+        let args = ModerationScreeningListArgs { limit: Some(6) };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, filter| {
+            assert_eq!(filter.limit, Some(6));
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "screening_records": [
+                        { "record_id_hex": "aa", "verdict": "quarantine" }
+                    ]
+                }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"screening_records\""));
+    }
+
+    #[test]
+    fn moderation_screening_submit_reads_runner_json() {
+        let subject_digest = [0xA1_u8; 32];
+        let manifest_id = [0xB2_u8; 16];
+        let runner_hash = [0xC3_u8; 32];
+        let evidence_digest = [0xD4_u8; 32];
+        let policy_digest = [0xE5_u8; 32];
+        let expected_subject_digest = encode(subject_digest);
+        let expected_manifest_id = encode(manifest_id);
+        let expected_runner_hash = encode(runner_hash);
+        let expected_evidence_digest = encode(evidence_digest);
+        let expected_policy_digest = encode(policy_digest);
+        let mut file = NamedTempFile::new().expect("screening result file");
+        file.write_all(
+            &norito::json::to_vec(&norito::json!({
+                "subject": " cid:bafyfixture ",
+                "subject_digest_hex": (encode(subject_digest).to_ascii_uppercase()),
+                "manifest_id_hex": (format!("0x{}", encode(manifest_id).to_ascii_uppercase())),
+                "runner_hash_hex": (encode(runner_hash).to_ascii_uppercase()),
+                "combined_score_bps": 6500_u64,
+                "verdict": " Quarantine ",
+                "screened_at_unix": 1_800_000_110_u64,
+                "evidence_digest_hex": (encode(evidence_digest).to_ascii_uppercase()),
+                "policy_digest_hex": (encode(policy_digest).to_ascii_uppercase()),
+                "notes": " local runner fixture ",
+            }))
+            .expect("serialize screening JSON"),
+        )
+        .expect("write screening JSON");
+        let args = ModerationScreeningSubmitArgs {
+            input: file.path().to_path_buf(),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, request| {
+            assert_eq!(request.subject, "cid:bafyfixture");
+            assert_eq!(request.subject_digest_hex, expected_subject_digest);
+            assert_eq!(request.manifest_id_hex, expected_manifest_id);
+            assert_eq!(request.runner_hash_hex, expected_runner_hash);
+            assert_eq!(request.combined_score_bps, 6_500);
+            assert_eq!(request.verdict, "quarantine");
+            assert_eq!(request.screened_at_unix, Some(1_800_000_110));
+            assert_eq!(
+                request.evidence_digest_hex,
+                Some(expected_evidence_digest.as_str())
+            );
+            assert_eq!(
+                request.policy_digest_hex,
+                Some(expected_policy_digest.as_str())
+            );
+            assert_eq!(request.notes, Some("local runner fixture"));
+            Ok(Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(
+                    &norito::json!({ "status": "accepted" }),
+                )?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"accepted\""));
+    }
+
+    #[test]
+    fn moderation_screening_submit_rejects_missing_field() {
+        let mut file = NamedTempFile::new().expect("screening result file");
+        file.write_all(
+            &norito::json::to_vec(&norito::json!({
+                "subject": "cid:bafyfixture",
+                "subject_digest_hex": (encode([0x11_u8; 32])),
+                "manifest_id_hex": (encode([0x22_u8; 16])),
+                "combined_score_bps": 1000_u64,
+                "verdict": "pass",
+            }))
+            .expect("serialize screening JSON"),
+        )
+        .expect("write screening JSON");
+        let args = ModerationScreeningSubmitArgs {
+            input: file.path().to_path_buf(),
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args
+            .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
+            .expect_err("missing runner hash must be rejected");
+        assert!(err.to_string().contains("runner_hash_hex"));
+        assert!(ctx.printed.is_empty());
+    }
+
+    #[test]
+    fn moderation_quarantine_list_with_prints_payload() {
+        let args = ModerationQuarantineListArgs { limit: Some(4) };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, filter| {
+            assert_eq!(filter.limit, Some(4));
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "quarantine_records": [
+                        { "quarantine_id_hex": "aa", "state": "pending_review" }
+                    ]
+                }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"quarantine_records\""));
+    }
+
+    #[test]
+    fn moderation_quarantine_object_store_reads_payload_file() {
+        let quarantine_id = [0xA7_u8; 16];
+        let mut file = NamedTempFile::new().expect("temp payload");
+        file.write_all(b"quarantine payload bytes")
+            .expect("write payload");
+        let args = ModerationQuarantineObjectStoreArgs {
+            quarantine_id: format!("0x{}", encode(quarantine_id).to_ascii_uppercase()),
+            payload_file: file.path().to_path_buf(),
+            captured_at: Some("@1800000310".to_string()),
+            content_type: Some(" application/octet-stream ".to_string()),
+            notes: Some(" sealed via cli ".to_string()),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, id, request| {
+            assert_eq!(id, encode(quarantine_id));
+            assert_eq!(request.payload, b"quarantine payload bytes");
+            assert_eq!(request.captured_at_unix, Some(1_800_000_310));
+            assert_eq!(request.content_type, Some("application/octet-stream"));
+            assert_eq!(request.notes, Some("sealed via cli"));
+            Ok(Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(
+                    &norito::json!({ "status": "stored" }),
+                )?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"stored\""));
+    }
+
+    #[test]
+    fn moderation_quarantine_object_read_prints_payload_json() {
+        let quarantine_id = [0xB8_u8; 16];
+        let args = ModerationQuarantineObjectReadArgs {
+            quarantine_id: encode(quarantine_id),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, id| {
+            assert_eq!(id, encode(quarantine_id));
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "status": "read",
+                    "payload_b64": "cGF5bG9hZA=="
+                }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"payload_b64\""));
+    }
+
+    #[test]
+    fn moderation_quarantine_object_store_rejects_empty_payload_file() {
+        let file = NamedTempFile::new().expect("empty payload");
+        let args = ModerationQuarantineObjectStoreArgs {
+            quarantine_id: encode([0xC9_u8; 16]),
+            payload_file: file.path().to_path_buf(),
+            captured_at: Some("@1800000310".to_string()),
+            content_type: None,
+            notes: None,
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args
+            .run_with(&mut ctx, |_client, _, _| {
+                unreachable!("submit must not run")
+            })
+            .expect_err("empty payload must be rejected");
+        assert!(err.to_string().contains("--payload-file"));
+        assert!(ctx.printed.is_empty());
+    }
+
+    #[test]
+    fn moderation_quarantine_review_builds_request() {
+        let quarantine_id = [0xAB_u8; 16];
+        let args = ModerationQuarantineReviewArgs {
+            quarantine_id: format!("0x{}", encode(quarantine_id).to_ascii_uppercase()),
+            reviewed_by: Some(" operator@moderation ".to_string()),
+            reviewed_at: Some("@1800000210".to_string()),
+            notes: Some(" reviewed locally ".to_string()),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, id, request| {
+            assert_eq!(id, encode(quarantine_id));
+            assert_eq!(request.reviewed_by, "operator@moderation");
+            assert_eq!(request.reviewed_at_unix, Some(1_800_000_210));
+            assert_eq!(request.notes, Some("reviewed locally"));
+            Ok(Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(
+                    &norito::json!({ "state": "reviewed" }),
+                )?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"reviewed\""));
+    }
+
+    #[test]
+    fn moderation_quarantine_release_defaults_authority_to_cli_account() {
+        let quarantine_id = [0xCD_u8; 16];
+        let args = ModerationQuarantineReleaseArgs {
+            quarantine_id: encode(quarantine_id),
+            release_authority: None,
+            released_at: Some("@1800000220".to_string()),
+            notes: None,
+        };
+        let mut ctx = TestContext::new();
+        let expected_authority = ctx.config().account.to_string();
+
+        args.run_with(&mut ctx, |_client, id, request| {
+            assert_eq!(id, encode(quarantine_id));
+            assert_eq!(request.release_authority, expected_authority);
+            assert_eq!(request.released_at_unix, Some(1_800_000_220));
+            assert_eq!(request.notes, None);
+            Ok(Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(
+                    &norito::json!({ "state": "released" }),
+                )?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"released\""));
+    }
+
+    #[test]
+    fn moderation_quarantine_appeal_handoff_reads_json_payload() {
+        let quarantine_id = [0xA4_u8; 16];
+        let input = write_json_file(&norito::json!({
+            "class": "content",
+            "backlog": 2_u64,
+            "evidence_size_mb": 8_u64,
+            "payer_account": "payer",
+            "destination_account": "treasury",
+            "asset_definition_id": "xor#wonderland"
+        }));
+        let args = ModerationQuarantineAppealHandoffArgs {
+            quarantine_id: format!("0x{}", encode(quarantine_id).to_ascii_uppercase()),
+            input: input.path().to_path_buf(),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, id, payload| {
+            assert_eq!(id, encode(quarantine_id));
+            let value: Value = norito::json::from_slice(payload)?;
+            assert_eq!(value.get("class").and_then(Value::as_str), Some("content"));
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "schema": "sorafs.moderation.quarantine.appeal_handoff.v1",
+                    "status": "ready_for_deposit"
+                }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("ready_for_deposit"));
+    }
+
+    #[test]
+    fn moderation_quarantine_appeal_handoff_rejects_empty_payload() {
+        let input = NamedTempFile::new().expect("empty appeal handoff payload");
+        let args = ModerationQuarantineAppealHandoffArgs {
+            quarantine_id: encode([0xA5_u8; 16]),
+            input: input.path().to_path_buf(),
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args
+            .run_with(&mut ctx, |_client, _, _| {
+                unreachable!("submit must not run")
+            })
+            .expect_err("empty appeal handoff payload must be rejected");
+        assert!(
+            err.to_string()
+                .contains("moderation quarantine appeal handoff payload")
+        );
+        assert!(ctx.printed.is_empty());
+    }
+
+    #[test]
+    fn moderation_quarantine_appeal_ballot_reads_json_payload() {
+        let quarantine_id = [0xA6_u8; 16];
+        let input = write_json_file(&norito::json!({
+            "deposit_confirmation": {
+                "escrow_id_hex": ("11".repeat(32)),
+                "case_id": "case-401",
+                "round_id": "round-7",
+                "payer_account": "payer",
+                "destination_account": "treasury",
+                "asset_definition_id": "xor#wonderland",
+                "deposit_xor": "100",
+                "idempotency_key": "case-401-round-7",
+                "evidence_hashes_hex": [("22".repeat(32))]
+            },
+            "juror_ids": ["juror-1", "juror-2"],
+            "quorum": 2_u64,
+            "commit_deadline_unix_ms": 1_800_000_500_000_u64,
+            "challenge_deadline_unix_ms": 1_800_000_600_000_u64,
+            "reveal_deadline_unix_ms": 1_800_000_700_000_u64
+        }));
+        let args = ModerationQuarantineAppealBallotArgs {
+            quarantine_id: format!("0x{}", encode(quarantine_id).to_ascii_uppercase()),
+            input: input.path().to_path_buf(),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, id, payload| {
+            assert_eq!(id, encode(quarantine_id));
+            let value: Value = norito::json::from_slice(payload)?;
+            assert_eq!(value.get("quorum").and_then(Value::as_u64), Some(2));
+            Ok(Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "schema": "sorafs.moderation.quarantine.appeal_ballot.v1",
+                    "status": "announced"
+                }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("announced"));
+    }
+
+    #[test]
+    fn moderation_quarantine_appeal_ballot_rejects_empty_payload() {
+        let input = NamedTempFile::new().expect("empty appeal ballot payload");
+        let args = ModerationQuarantineAppealBallotArgs {
+            quarantine_id: encode([0xA7_u8; 16]),
+            input: input.path().to_path_buf(),
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args
+            .run_with(&mut ctx, |_client, _, _| {
+                unreachable!("submit must not run")
+            })
+            .expect_err("empty appeal ballot payload must be rejected");
+        assert!(
+            err.to_string()
+                .contains("moderation quarantine appeal ballot payload")
+        );
+        assert!(ctx.printed.is_empty());
+    }
+
+    #[test]
+    fn moderation_quarantine_operator_panel_reads_workflow_view() {
+        let quarantine_id = [0xA8_u8; 16];
+        let args = ModerationQuarantineOperatorPanelArgs {
+            quarantine_id: format!("0x{}", encode(quarantine_id).to_ascii_uppercase()),
+            limit: Some(4),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, id, filter| {
+            assert_eq!(id, encode(quarantine_id));
+            assert_eq!(filter.limit, Some(4));
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "schema": "sorafs.moderation.quarantine.operator_panel.v1",
+                    "status": "ready"
+                }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("operator_panel"));
+    }
+
+    #[test]
+    fn moderation_quarantine_operator_panel_rejects_bad_quarantine_id() {
+        let args = ModerationQuarantineOperatorPanelArgs {
+            quarantine_id: "abcd".to_owned(),
+            limit: None,
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args
+            .run_with(&mut ctx, |_client, _, _| unreachable!("get must not run"))
+            .expect_err("bad quarantine id must be rejected");
+        assert!(err.to_string().contains("--quarantine-id"));
+        assert!(ctx.printed.is_empty());
+    }
+
+    #[test]
+    fn moderation_quarantine_bridge_plan_derives_workflow_actions() {
+        let quarantine_id = [0xA9_u8; 16];
+        let args = ModerationQuarantineBridgePlanArgs {
+            quarantine_id: format!("0x{}", encode(quarantine_id).to_ascii_uppercase()),
+            limit: Some(5),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, id, filter| {
+            assert_eq!(id, encode(quarantine_id));
+            assert_eq!(filter.limit, Some(5));
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "schema": "sorafs.moderation.quarantine.operator_panel.v1",
+                    "status": "ready",
+                    "record": {
+                        "quarantine_id_hex": (encode(quarantine_id)),
+                        "state": "reviewed"
+                    },
+                    "object_status": "stored",
+                    "ballot_count": 1_u64,
+                    "returned_ballot_count": 1_u64,
+                    "ballots": [{
+                        "announcement": {
+                            "context": {
+                                "case_id": "quarantine-case",
+                                "evidence_uri": "sorafs://moderation/quarantine"
+                            },
+                            "round_id": "round-7"
+                        },
+                        "tally": null
+                    }],
+                    "operator_routes": {
+                        "object": "/v1/sorafs/moderation/quarantine/object"
+                    },
+                    "next_actions": [
+                        {
+                            "action": "read_object",
+                            "route": "/v1/sorafs/moderation/quarantine/object",
+                            "required": false
+                        },
+                        {
+                            "action": "collect_commits_reveals_tally",
+                            "route": "/v1/sorafs/moderation/ballots",
+                            "required": true
+                        }
+                    ]
+                }))?)
+                .unwrap())
+        })
+        .expect("bridge plan should render");
+
+        assert_eq!(ctx.printed.len(), 1);
+        let value: Value = norito::json::from_str(&ctx.printed[0]).expect("bridge plan json");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.quarantine.bridge_plan.v1")
+        );
+        assert_eq!(
+            value.get("payload_bytes_included").and_then(Value::as_bool),
+            Some(false)
+        );
+        let actions = value
+            .get("actions")
+            .and_then(Value::as_array)
+            .expect("actions");
+        assert_eq!(actions.len(), 2);
+        assert_eq!(
+            actions[1].get("automation_status").and_then(Value::as_str),
+            Some("waiting_for_commit_reveal_tally")
+        );
+        let cli = actions[1]
+            .get("cli")
+            .and_then(Value::as_array)
+            .expect("cli");
+        assert!(
+            cli.iter()
+                .any(|part| part.as_str() == Some("quarantine-case"))
+        );
+        assert!(!ctx.printed[0].contains("payload_b64"));
+    }
+
+    #[test]
+    fn moderation_quarantine_bridge_plan_rejects_payload_bytes() {
+        let quarantine_id = [0xAA_u8; 16];
+        let args = ModerationQuarantineBridgePlanArgs {
+            quarantine_id: encode(quarantine_id),
+            limit: None,
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args
+            .run_with(&mut ctx, |_client, _id, _filter| {
+                Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(norito::json::to_vec(&norito::json!({
+                        "schema": "sorafs.moderation.quarantine.operator_panel.v1",
+                        "record": {
+                            "state": "reviewed"
+                        },
+                        "object_status": "stored",
+                        "payload_b64": "c2hvdWxkLW5vdC1iZS1oZXJl",
+                        "next_actions": []
+                    }))?)
+                    .unwrap())
+            })
+            .expect_err("payload bytes must be rejected");
+        assert!(err.to_string().contains("payload bytes"));
+        assert!(ctx.printed.is_empty());
+    }
+
+    #[test]
+    fn moderation_quarantine_bridge_plan_rejects_bad_quarantine_id() {
+        let args = ModerationQuarantineBridgePlanArgs {
+            quarantine_id: "abcd".to_owned(),
+            limit: None,
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args
+            .run_with(&mut ctx, |_client, _, _| unreachable!("get must not run"))
+            .expect_err("bad quarantine id must be rejected");
+        assert!(err.to_string().contains("--quarantine-id"));
+        assert!(ctx.printed.is_empty());
+    }
+
+    fn moderation_operator_canary_fixture_json(
+        value: Value,
+    ) -> Result<ModerationOperatorCanaryHttpResponse> {
+        Ok(ModerationOperatorCanaryHttpResponse {
+            status: StatusCode::OK,
+            content_type: Some("application/json".to_string()),
+            body: norito::json::to_vec(&value)?,
+        })
+    }
+
+    fn moderation_operator_canary_fixture_response(
+        url: &str,
+        quarantine_id_hex: &str,
+        include_payload_b64: bool,
+        bridge_schema: &str,
+    ) -> Result<ModerationOperatorCanaryHttpResponse> {
+        let parsed = Url::parse(url).expect("canary URL should parse");
+        let path = parsed.path();
+        if path.contains("/quarantine/") {
+            assert!(
+                path.contains(&format!("/quarantine/{quarantine_id_hex}/")),
+                "unexpected canary quarantine route: {path}"
+            );
+        }
+        if path.ends_with("/healthz")
+            || path.ends_with("/v1/sorafs/moderation/operator-panel/status")
+        {
+            return moderation_operator_canary_fixture_json(norito::json!({
+                "schema": "sorafs.moderation.quarantine.operator_service.status.v1",
+                "status": "ready"
+            }));
+        }
+        if path.ends_with("/v1/sorafs/moderation/operator-panel/ui") {
+            return Ok(ModerationOperatorCanaryHttpResponse {
+                status: StatusCode::OK,
+                content_type: Some("text/html; charset=utf-8".to_string()),
+                body: b"<main><h1>SoraFS Moderation Operator</h1></main>".to_vec(),
+            });
+        }
+        if path.ends_with("/operator-panel") {
+            let value = if include_payload_b64 {
+                norito::json!({
+                    "schema": "sorafs.moderation.quarantine.operator_panel.v1",
+                    "status": "ready",
+                    "payload_b64": "c2hvdWxkLW5vdC1iZS1oZXJl",
+                    "payload_bytes_included": false,
+                    "record": {
+                        "quarantine_id_hex": (quarantine_id_hex),
+                        "state": "reviewed"
+                    },
+                    "object_status": "stored",
+                    "next_actions": []
+                })
+            } else {
+                norito::json!({
+                    "schema": "sorafs.moderation.quarantine.operator_panel.v1",
+                    "status": "ready",
+                    "payload_bytes_included": false,
+                    "record": {
+                        "quarantine_id_hex": (quarantine_id_hex),
+                        "state": "reviewed"
+                    },
+                    "object_status": "stored",
+                    "next_actions": []
+                })
+            };
+            return moderation_operator_canary_fixture_json(value);
+        }
+        if path.ends_with("/bridge-plan") {
+            return moderation_operator_canary_fixture_json(norito::json!({
+                "schema": (bridge_schema),
+                "payload_bytes_included": false,
+                "private_payloads_included": false,
+                "actions": []
+            }));
+        }
+        if path.ends_with("/juror-plan") {
+            return moderation_operator_canary_fixture_json(norito::json!({
+                "schema": "sorafs.moderation.quarantine.juror_plan.v1",
+                "payload_bytes_included": false,
+                "private_payloads_included": false,
+                "ballots": []
+            }));
+        }
+        if path.ends_with("/juror-notifications") {
+            return moderation_operator_canary_fixture_json(norito::json!({
+                "schema": "sorafs.moderation.quarantine.juror_notifications.v1",
+                "payload_bytes_included": false,
+                "private_payloads_included": false,
+                "notifications": []
+            }));
+        }
+        if path.ends_with("/commit-reveal-status") {
+            return moderation_operator_canary_fixture_json(norito::json!({
+                "schema": "sorafs.moderation.quarantine.commit_reveal_status.v1",
+                "payload_bytes_included": false,
+                "private_payloads_included": false,
+                "ballots": []
+            }));
+        }
+        panic!("unexpected canary route: {url}");
+    }
+
+    #[test]
+    fn moderation_quarantine_operator_canary_builds_payload_free_evidence() {
+        let quarantine_id = [0xBA_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let out_dir = TempDir::new().expect("canary evidence dir");
+        let out = out_dir.path().join("nested/evidence.json");
+        let args = ModerationQuarantineOperatorCanaryArgs {
+            operator_url: " https://operator.test/root ".to_string(),
+            quarantine_id: format!("0x{}", quarantine_id_hex.to_ascii_uppercase()),
+            limit: Some(4),
+            timeout_secs: 1,
+            out: Some(out.clone()),
+        };
+        let mut ctx = TestContext::new();
+        let mut requested = Vec::new();
+
+        args.run_with_fetch(&mut ctx, |url| {
+            requested.push(url.to_string());
+            moderation_operator_canary_fixture_response(
+                url,
+                &quarantine_id_hex,
+                false,
+                "sorafs.moderation.quarantine.bridge_plan.v1",
+            )
+        })
+        .expect("operator canary should render evidence");
+
+        assert_eq!(requested.len(), 8);
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(!ctx.printed[0].contains("payload_b64"));
+        let value: Value = norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.quarantine.operator_canary.v1")
+        );
+        assert_eq!(value.get("status").and_then(Value::as_str), Some("passed"));
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(4));
+        assert_eq!(value.get("route_count").and_then(Value::as_u64), Some(8));
+        assert_eq!(
+            value.get("payload_bytes_included").and_then(Value::as_bool),
+            Some(false)
+        );
+        let routes = value
+            .get("routes")
+            .and_then(Value::as_array)
+            .expect("canary routes");
+        assert_eq!(routes.len(), 8);
+        assert!(
+            routes
+                .iter()
+                .any(|route| route.get("name").and_then(Value::as_str)
+                    == Some("commit_reveal_status"))
+        );
+        let operator_panel = routes
+            .iter()
+            .find(|route| route.get("name").and_then(Value::as_str) == Some("operator_panel"))
+            .expect("operator-panel route evidence");
+        let operator_panel_url = operator_panel
+            .get("url")
+            .and_then(Value::as_str)
+            .expect("operator-panel URL");
+        assert!(operator_panel_url.contains("/root/v1/sorafs/moderation/quarantine/"));
+        assert!(operator_panel_url.contains("limit=4"));
+        assert!(routes.iter().all(|route| {
+            route.get("payload_bytes_included").and_then(Value::as_bool) == Some(false)
+        }));
+
+        let written: Value =
+            norito::json::from_slice(&fs::read(out).expect("written canary evidence"))
+                .expect("written evidence JSON");
+        assert_eq!(
+            written.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.quarantine.operator_canary.v1")
+        );
+    }
+
+    #[test]
+    fn moderation_quarantine_operator_canary_rejects_payload_bytes() {
+        let quarantine_id = [0xBB_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let args = ModerationQuarantineOperatorCanaryArgs {
+            operator_url: "https://operator.test/root".to_string(),
+            quarantine_id: quarantine_id_hex.clone(),
+            limit: Some(4),
+            timeout_secs: 1,
+            out: None,
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args
+            .run_with_fetch(&mut ctx, |url| {
+                moderation_operator_canary_fixture_response(
+                    url,
+                    &quarantine_id_hex,
+                    true,
+                    "sorafs.moderation.quarantine.bridge_plan.v1",
+                )
+            })
+            .expect_err("operator canary must reject payload bytes");
+
+        assert!(err.to_string().contains("payload bytes"));
+        assert!(ctx.printed.is_empty());
+    }
+
+    #[test]
+    fn moderation_quarantine_operator_canary_rejects_schema_drift() {
+        let quarantine_id = [0xBC_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let args = ModerationQuarantineOperatorCanaryArgs {
+            operator_url: "https://operator.test/root".to_string(),
+            quarantine_id: quarantine_id_hex.clone(),
+            limit: None,
+            timeout_secs: 1,
+            out: None,
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args
+            .run_with_fetch(&mut ctx, |url| {
+                moderation_operator_canary_fixture_response(
+                    url,
+                    &quarantine_id_hex,
+                    false,
+                    "sorafs.moderation.quarantine.unexpected_bridge_plan.v1",
+                )
+            })
+            .expect_err("operator canary must reject schema drift");
+
+        assert!(err.to_string().contains("schema"));
+        assert!(ctx.printed.is_empty());
+    }
+
+    struct FixtureModerationOperatorPanelSource {
+        expected_quarantine_id_hex: String,
+        expected_limit: Option<u32>,
+        status: StatusCode,
+        body: Vec<u8>,
+    }
+
+    impl ModerationOperatorWorkflowSource for FixtureModerationOperatorPanelSource {
+        fn get_operator_panel(
+            &self,
+            quarantine_id_hex: &str,
+            filter: &SorafsModerationQuarantineFilter,
+        ) -> Result<Response<Vec<u8>>> {
+            assert_eq!(quarantine_id_hex, self.expected_quarantine_id_hex);
+            assert_eq!(filter.limit, self.expected_limit);
+            Ok(Response::builder()
+                .status(self.status)
+                .header("Content-Type", "application/json")
+                .body(self.body.clone())
+                .unwrap())
+        }
+    }
+
+    fn fixture_moderation_operator_service(
+        quarantine_id: [u8; 16],
+        expected_limit: Option<u32>,
+        body: Value,
+    ) -> ModerationOperatorService {
+        let args = ModerationQuarantineOperatorServeArgs {
+            listen: "127.0.0.1:0".to_string(),
+            limit: expected_limit,
+            max_body_bytes: 1024,
+        };
+        args.service(
+            Arc::new(FixtureModerationOperatorPanelSource {
+                expected_quarantine_id_hex: encode(quarantine_id),
+                expected_limit,
+                status: StatusCode::OK,
+                body: norito::json::to_vec(&body).expect("fixture operator-panel JSON"),
+            }),
+            "http://torii.test/".to_string(),
+            "operator@moderation".to_string(),
+        )
+        .expect("operator service")
+    }
+
+    struct FixtureModerationOperatorMutationSource {
+        expected_quarantine_id_hex: String,
+        expected_kind: &'static str,
+        status: StatusCode,
+        body: Vec<u8>,
+    }
+
+    impl FixtureModerationOperatorMutationSource {
+        fn response(&self) -> Result<Response<Vec<u8>>> {
+            Ok(Response::builder()
+                .status(self.status)
+                .header("Content-Type", "application/json")
+                .body(self.body.clone())
+                .unwrap())
+        }
+    }
+
+    impl ModerationOperatorWorkflowSource for FixtureModerationOperatorMutationSource {
+        fn get_operator_panel(
+            &self,
+            _quarantine_id_hex: &str,
+            _filter: &SorafsModerationQuarantineFilter,
+        ) -> Result<Response<Vec<u8>>> {
+            unreachable!("mutation fixture does not serve operator-panel reads")
+        }
+
+        fn post_review(
+            &self,
+            quarantine_id_hex: &str,
+            request: &SorafsModerationQuarantineReviewRequest<'_>,
+        ) -> Result<Response<Vec<u8>>> {
+            assert_eq!(self.expected_kind, "review");
+            assert_eq!(quarantine_id_hex, self.expected_quarantine_id_hex);
+            assert_eq!(request.reviewed_by, "operator@moderation");
+            assert_eq!(request.reviewed_at_unix, Some(1_800_000_310));
+            assert_eq!(request.notes, Some("reviewed through service"));
+            self.response()
+        }
+
+        fn post_release(
+            &self,
+            quarantine_id_hex: &str,
+            request: &SorafsModerationQuarantineReleaseRequest<'_>,
+        ) -> Result<Response<Vec<u8>>> {
+            assert_eq!(self.expected_kind, "release");
+            assert_eq!(quarantine_id_hex, self.expected_quarantine_id_hex);
+            assert_eq!(request.release_authority, "release@moderation");
+            assert_eq!(request.released_at_unix, Some(1_800_000_320));
+            assert_eq!(request.notes, Some("released through service"));
+            self.response()
+        }
+
+        fn post_appeal_handoff(
+            &self,
+            quarantine_id_hex: &str,
+            payload: &[u8],
+        ) -> Result<Response<Vec<u8>>> {
+            assert_eq!(self.expected_kind, "appeal-handoff");
+            assert_eq!(quarantine_id_hex, self.expected_quarantine_id_hex);
+            let value: Value = norito::json::from_slice(payload).expect("handoff payload JSON");
+            assert_eq!(value.get("class").and_then(Value::as_str), Some("content"));
+            assert!(!String::from_utf8_lossy(payload).contains("payload_b64"));
+            self.response()
+        }
+
+        fn post_appeal_ballot(
+            &self,
+            quarantine_id_hex: &str,
+            payload: &[u8],
+        ) -> Result<Response<Vec<u8>>> {
+            assert_eq!(self.expected_kind, "appeal-ballot");
+            assert_eq!(quarantine_id_hex, self.expected_quarantine_id_hex);
+            let value: Value = norito::json::from_slice(payload).expect("ballot payload JSON");
+            assert_eq!(value.get("quorum").and_then(Value::as_u64), Some(2));
+            assert!(!String::from_utf8_lossy(payload).contains("payload_b64"));
+            self.response()
+        }
+    }
+
+    fn fixture_moderation_operator_mutation_service(
+        quarantine_id: [u8; 16],
+        expected_kind: &'static str,
+        status: StatusCode,
+        body: Value,
+    ) -> ModerationOperatorService {
+        let args = ModerationQuarantineOperatorServeArgs {
+            listen: "127.0.0.1:0".to_string(),
+            limit: None,
+            max_body_bytes: 2048,
+        };
+        args.service(
+            Arc::new(FixtureModerationOperatorMutationSource {
+                expected_quarantine_id_hex: encode(quarantine_id),
+                expected_kind,
+                status,
+                body: norito::json::to_vec(&body).expect("fixture mutation response JSON"),
+            }),
+            "http://torii.test/".to_string(),
+            "operator@moderation".to_string(),
+        )
+        .expect("operator mutation service")
+    }
+
+    struct FixtureModerationOperatorBallotTallySource {
+        expected_quarantine_id_hex: String,
+        expected_limit: Option<u32>,
+        panel_body: Option<Vec<u8>>,
+        expected_case_id: String,
+        expected_round_id: String,
+        status: StatusCode,
+        body: Vec<u8>,
+    }
+
+    impl ModerationOperatorWorkflowSource for FixtureModerationOperatorBallotTallySource {
+        fn get_operator_panel(
+            &self,
+            quarantine_id_hex: &str,
+            filter: &SorafsModerationQuarantineFilter,
+        ) -> Result<Response<Vec<u8>>> {
+            assert_eq!(quarantine_id_hex, self.expected_quarantine_id_hex);
+            assert_eq!(filter.limit, self.expected_limit);
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(
+                    self.panel_body
+                        .as_ref()
+                        .expect("fixture does not serve operator-panel reads")
+                        .clone(),
+                )
+                .unwrap())
+        }
+
+        fn post_ballot_tally(
+            &self,
+            request: &SorafsModerationBallotTallyRequest<'_>,
+        ) -> Result<Response<Vec<u8>>> {
+            assert_eq!(request.case_id, self.expected_case_id);
+            assert_eq!(request.round_id, self.expected_round_id);
+            Ok(Response::builder()
+                .status(self.status)
+                .header("Content-Type", "application/json")
+                .body(self.body.clone())
+                .unwrap())
+        }
+    }
+
+    fn fixture_moderation_operator_ballot_tally_service(
+        quarantine_id: [u8; 16],
+        default_limit: Option<u32>,
+        panel: Option<Value>,
+        expected_case_id: &str,
+        expected_round_id: &str,
+        status: StatusCode,
+        body: Value,
+    ) -> ModerationOperatorService {
+        let args = ModerationQuarantineOperatorServeArgs {
+            listen: "127.0.0.1:0".to_string(),
+            limit: default_limit,
+            max_body_bytes: 2048,
+        };
+        args.service(
+            Arc::new(FixtureModerationOperatorBallotTallySource {
+                expected_quarantine_id_hex: encode(quarantine_id),
+                expected_limit: default_limit,
+                panel_body: panel.map(|value| {
+                    norito::json::to_vec(&value).expect("fixture operator-panel JSON")
+                }),
+                expected_case_id: expected_case_id.to_string(),
+                expected_round_id: expected_round_id.to_string(),
+                status,
+                body: norito::json::to_vec(&body).expect("fixture tally response JSON"),
+            }),
+            "http://torii.test/".to_string(),
+            "operator@moderation".to_string(),
+        )
+        .expect("operator ballot tally service")
+    }
+
+    fn handle_moderation_operator_raw_request(
+        service: &ModerationOperatorService,
+        raw: String,
+    ) -> ModerationOperatorHttpResponse {
+        let raw = raw.into_bytes();
+        let request = moderation_operator_parse_http_request(&raw, 1024).expect("HTTP request");
+        service.handle_request(&request)
+    }
+
+    #[test]
+    fn moderation_operator_service_routes_operator_panel_with_query_limit() {
+        let quarantine_id = [0xAB_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_service(
+            quarantine_id,
+            Some(7),
+            norito::json!({
+                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
+                "status": "ready",
+                "record": {
+                    "quarantine_id_hex": (quarantine_id_hex.clone()),
+                    "state": "reviewed"
+                },
+                "object_status": "stored",
+                "next_actions": []
+            }),
+        );
+        let response = handle_moderation_operator_raw_request(
+            &service,
+            format!(
+                "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel?limit=7 HTTP/1.1\r\nHost: local\r\n\r\n"
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::OK);
+        let value: Value = norito::json::from_slice(&response.body).expect("operator panel JSON");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.quarantine.operator_panel.v1")
+        );
+        assert!(!String::from_utf8_lossy(&response.body).contains("payload_b64"));
+    }
+
+    #[test]
+    fn moderation_operator_service_builds_bridge_plan_without_payload() {
+        let quarantine_id = [0xAC_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_service(
+            quarantine_id,
+            Some(5),
+            norito::json!({
+                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
+                "status": "ready",
+                "record": {
+                    "quarantine_id_hex": (quarantine_id_hex.clone()),
+                    "state": "reviewed"
+                },
+                "object_status": "stored",
+                "ballot_count": 0_u64,
+                "returned_ballot_count": 0_u64,
+                "ballots": [],
+                "next_actions": [{
+                    "action": "review",
+                    "route": "/v1/sorafs/moderation/quarantine/review",
+                    "required": true
+                }]
+            }),
+        );
+        let response = handle_moderation_operator_raw_request(
+            &service,
+            format!(
+                "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/bridge-plan HTTP/1.1\r\nHost: local\r\n\r\n"
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::OK);
+        let value: Value = norito::json::from_slice(&response.body).expect("bridge plan JSON");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.quarantine.bridge_plan.v1")
+        );
+        assert_eq!(
+            value.get("payload_bytes_included").and_then(Value::as_bool),
+            Some(false)
+        );
+        let actions = value
+            .get("actions")
+            .and_then(Value::as_array)
+            .expect("planned actions");
+        assert_eq!(
+            actions[0].get("automation_status").and_then(Value::as_str),
+            Some("operator_review_required")
+        );
+    }
+
+    #[test]
+    fn moderation_operator_service_builds_juror_plan_without_payload() {
+        let quarantine_id = [0xA4_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_service(
+            quarantine_id,
+            Some(2),
+            norito::json!({
+                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
+                "status": "ready",
+                "record": {
+                    "quarantine_id_hex": (quarantine_id_hex.clone()),
+                    "state": "reviewed"
+                },
+                "object_status": "stored",
+                "ballot_count": 1_u64,
+                "returned_ballot_count": 1_u64,
+                "truncated_ballots": false,
+                "ballots": [{
+                    "announcement": {
+                        "context": {
+                            "case_id": "quarantine-case",
+                            "evidence_uri": "sorafs://moderation/quarantine"
+                        },
+                        "round_id": "round-7",
+                        "juror_ids": ["juror-a@moderation", "juror-b@moderation"],
+                        "quorum": 2_u64,
+                        "announced_at_unix_ms": 1_800_000_100_000_u64,
+                        "commit_deadline_unix_ms": 1_800_000_200_000_u64,
+                        "challenge_deadline_unix_ms": 1_800_000_300_000_u64,
+                        "reveal_deadline_unix_ms": 1_800_000_400_000_u64
+                    },
+                    "commits": [{
+                        "juror_id": "juror-a@moderation"
+                    }],
+                    "reveals": [],
+                    "tally": null
+                }],
+                "next_actions": []
+            }),
+        );
+        let response = handle_moderation_operator_raw_request(
+            &service,
+            format!(
+                "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-plan HTTP/1.1\r\nHost: local\r\n\r\n"
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::OK);
+        let body = String::from_utf8(response.body.clone()).expect("juror plan body UTF-8");
+        assert!(!body.contains("payload_b64"));
+        let value: Value = norito::json::from_slice(&response.body).expect("juror plan JSON");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.quarantine.juror_plan.v1")
+        );
+        assert_eq!(
+            value.get("payload_bytes_included").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            value.get("notification_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value.get("pending_commit_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("pending_reveal_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        let ballots = value
+            .get("ballots")
+            .and_then(Value::as_array)
+            .expect("planned ballots");
+        let jurors = ballots[0]
+            .get("jurors")
+            .and_then(Value::as_array)
+            .expect("planned jurors");
+        assert_eq!(
+            jurors[0].get("notification_status").and_then(Value::as_str),
+            Some("reveal_required")
+        );
+        assert_eq!(
+            jurors[0].get("signed_by").and_then(Value::as_str),
+            Some("juror-a@moderation")
+        );
+        assert_eq!(
+            jurors[1].get("notification_status").and_then(Value::as_str),
+            Some("commit_required")
+        );
+        assert_eq!(
+            jurors[1]
+                .get("routes")
+                .and_then(Value::as_object)
+                .and_then(|routes| routes.get("commit"))
+                .and_then(Value::as_str),
+            Some("/v1/sorafs/moderation/ballots/commits")
+        );
+    }
+
+    #[test]
+    fn moderation_operator_service_builds_juror_notifications_without_payload() {
+        let quarantine_id = [0xA6_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_service(
+            quarantine_id,
+            Some(3),
+            norito::json!({
+                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
+                "status": "ready",
+                "record": {
+                    "quarantine_id_hex": (quarantine_id_hex.clone()),
+                    "state": "reviewed"
+                },
+                "object_status": "stored",
+                "ballot_count": 1_u64,
+                "returned_ballot_count": 1_u64,
+                "truncated_ballots": false,
+                "ballots": [{
+                    "announcement": {
+                        "context": {
+                            "case_id": "quarantine-case",
+                            "evidence_uri": "sorafs://moderation/quarantine"
+                        },
+                        "round_id": "round-7",
+                        "juror_ids": [
+                            "juror-a@moderation",
+                            "juror-b@moderation",
+                            "juror-c@moderation"
+                        ],
+                        "quorum": 2_u64,
+                        "announced_at_unix_ms": 1_800_000_100_000_u64,
+                        "commit_deadline_unix_ms": 1_800_000_200_000_u64,
+                        "challenge_deadline_unix_ms": 1_800_000_300_000_u64,
+                        "reveal_deadline_unix_ms": 1_800_000_400_000_u64
+                    },
+                    "commits": [{
+                        "juror_id": "juror-a@moderation"
+                    }, {
+                        "juror_id": "juror-c@moderation"
+                    }],
+                    "reveals": [{
+                        "juror_id": "juror-c@moderation"
+                    }],
+                    "tally": null
+                }],
+                "next_actions": []
+            }),
+        );
+        let response = handle_moderation_operator_raw_request(
+            &service,
+            format!(
+                "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-notifications HTTP/1.1\r\nHost: local\r\n\r\n"
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::OK);
+        let body = String::from_utf8(response.body.clone()).expect("notification body UTF-8");
+        assert!(!body.contains("payload_b64"));
+        let value: Value =
+            norito::json::from_slice(&response.body).expect("juror notifications JSON");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.quarantine.juror_notifications.v1")
+        );
+        assert_eq!(
+            value.get("payload_bytes_included").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            value
+                .get("private_payloads_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            value.get("planned_juror_count").and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            value.get("notification_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value.get("skipped_complete_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        let notifications = value
+            .get("notifications")
+            .and_then(Value::as_array)
+            .expect("notifications");
+        assert_eq!(notifications.len(), 2);
+        assert_eq!(
+            notifications[0].get("action").and_then(Value::as_str),
+            Some("submit_reveal")
+        );
+        assert_eq!(
+            notifications[0].get("route").and_then(Value::as_str),
+            Some("/v1/sorafs/moderation/ballots/reveals")
+        );
+        assert_eq!(
+            notifications[1].get("action").and_then(Value::as_str),
+            Some("submit_commit")
+        );
+        assert_eq!(
+            notifications[1].get("route").and_then(Value::as_str),
+            Some("/v1/sorafs/moderation/ballots/commits")
+        );
+        assert_eq!(
+            notifications[1]
+                .get("private_payload_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            notifications[1]
+                .get("delivery_id")
+                .and_then(Value::as_str)
+                .map(str::len),
+            Some(64)
+        );
+        assert!(
+            notifications[1]
+                .get("body")
+                .and_then(Value::as_str)
+                .expect("notification body")
+                .contains("carries no payload bytes")
+        );
+    }
+
+    #[test]
+    fn moderation_operator_service_builds_commit_reveal_status_without_payload() {
+        let quarantine_id = [0xA8_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_service(
+            quarantine_id,
+            Some(3),
+            norito::json!({
+                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
+                "status": "ready",
+                "record": {
+                    "quarantine_id_hex": (quarantine_id_hex.clone()),
+                    "state": "reviewed"
+                },
+                "object_status": "stored",
+                "ballot_count": 1_u64,
+                "returned_ballot_count": 1_u64,
+                "truncated_ballots": false,
+                "ballots": [{
+                    "announcement": {
+                        "context": {
+                            "case_id": "quarantine-case",
+                            "evidence_uri": "sorafs://moderation/quarantine"
+                        },
+                        "round_id": "round-7",
+                        "juror_ids": [
+                            "juror-a@moderation",
+                            "juror-b@moderation",
+                            "juror-c@moderation"
+                        ],
+                        "quorum": 2_u64,
+                        "announced_at_unix_ms": 1_800_000_100_000_u64,
+                        "commit_deadline_unix_ms": 1_800_000_200_000_u64,
+                        "challenge_deadline_unix_ms": 1_800_000_300_000_u64,
+                        "reveal_deadline_unix_ms": 1_800_000_400_000_u64
+                    },
+                    "commits": [{
+                        "juror_id": "juror-a@moderation"
+                    }, {
+                        "juror_id": "juror-c@moderation"
+                    }],
+                    "reveals": [{
+                        "juror_id": "juror-a@moderation"
+                    }, {
+                        "juror_id": "juror-c@moderation"
+                    }],
+                    "tally": null
+                }],
+                "next_actions": []
+            }),
+        );
+        let response = handle_moderation_operator_raw_request(
+            &service,
+            format!(
+                "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/commit-reveal-status HTTP/1.1\r\nHost: local\r\n\r\n"
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::OK);
+        let body = String::from_utf8(response.body.clone()).expect("status body UTF-8");
+        assert!(!body.contains("payload_b64"));
+        let value: Value =
+            norito::json::from_slice(&response.body).expect("commit/reveal status JSON");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.quarantine.commit_reveal_status.v1")
+        );
+        assert_eq!(
+            value.get("payload_bytes_included").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            value
+                .get("private_payloads_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            value.get("tally_ready_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("pending_commit_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("pending_reveal_count").and_then(Value::as_u64),
+            Some(0)
+        );
+        let ballots = value
+            .get("ballots")
+            .and_then(Value::as_array)
+            .expect("ballot statuses");
+        assert_eq!(
+            ballots[0].get("next_action").and_then(Value::as_str),
+            Some("submit_tally")
+        );
+        assert_eq!(
+            ballots[0].get("ready_to_tally").and_then(Value::as_bool),
+            Some(true)
+        );
+        let missing_commit = ballots[0]
+            .get("missing_commit_jurors")
+            .and_then(Value::as_array)
+            .expect("missing commit jurors");
+        assert_eq!(missing_commit[0].as_str(), Some("juror-b@moderation"));
+        assert_eq!(
+            ballots[0]
+                .get("tally_request")
+                .and_then(Value::as_object)
+                .and_then(|request| request.get("route"))
+                .and_then(Value::as_str),
+            Some("/v1/sorafs/moderation/quarantine/a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8/ballot-tally")
+        );
+    }
+
+    #[test]
+    fn moderation_operator_service_rejects_juror_plan_payload_bytes() {
+        let quarantine_id = [0xA5_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_service(
+            quarantine_id,
+            None,
+            norito::json!({
+                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
+                "status": "ready",
+                "record": {
+                    "quarantine_id_hex": (quarantine_id_hex.clone()),
+                    "state": "reviewed"
+                },
+                "object_status": "stored",
+                "ballot_count": 1_u64,
+                "returned_ballot_count": 1_u64,
+                "ballots": [{
+                    "announcement": {
+                        "context": {
+                            "case_id": "quarantine-case"
+                        },
+                        "round_id": "round-7",
+                        "juror_ids": ["juror-a@moderation"]
+                    },
+                    "payload_b64": "c2hvdWxkLW5vdC1sZWFr"
+                }],
+                "next_actions": []
+            }),
+        );
+        let response = handle_moderation_operator_raw_request(
+            &service,
+            format!(
+                "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-plan HTTP/1.1\r\nHost: local\r\n\r\n"
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::BAD_GATEWAY);
+        let body = String::from_utf8(response.body).expect("error JSON is UTF-8");
+        assert!(body.contains("payload bytes"));
+    }
+
+    #[test]
+    fn moderation_operator_service_rejects_juror_notifications_payload_bytes() {
+        let quarantine_id = [0xA7_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_service(
+            quarantine_id,
+            None,
+            norito::json!({
+                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
+                "status": "ready",
+                "record": {
+                    "quarantine_id_hex": (quarantine_id_hex.clone()),
+                    "state": "reviewed"
+                },
+                "object_status": "stored",
+                "ballot_count": 1_u64,
+                "returned_ballot_count": 1_u64,
+                "ballots": [{
+                    "announcement": {
+                        "context": {
+                            "case_id": "quarantine-case"
+                        },
+                        "round_id": "round-7",
+                        "juror_ids": ["juror-a@moderation"]
+                    },
+                    "payload_b64": "c2hvdWxkLW5vdC1sZWFr"
+                }],
+                "next_actions": []
+            }),
+        );
+        let response = handle_moderation_operator_raw_request(
+            &service,
+            format!(
+                "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-notifications HTTP/1.1\r\nHost: local\r\n\r\n"
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::BAD_GATEWAY);
+        let body = String::from_utf8(response.body).expect("error JSON is UTF-8");
+        assert!(body.contains("payload bytes"));
+    }
+
+    #[test]
+    fn moderation_operator_service_rejects_commit_reveal_status_payload_bytes() {
+        let quarantine_id = [0xA9_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_service(
+            quarantine_id,
+            None,
+            norito::json!({
+                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
+                "status": "ready",
+                "record": {
+                    "quarantine_id_hex": (quarantine_id_hex.clone()),
+                    "state": "reviewed"
+                },
+                "object_status": "stored",
+                "ballot_count": 1_u64,
+                "returned_ballot_count": 1_u64,
+                "ballots": [{
+                    "announcement": {
+                        "context": {
+                            "case_id": "quarantine-case"
+                        },
+                        "round_id": "round-7",
+                        "juror_ids": ["juror-a@moderation"]
+                    },
+                    "payload_b64": "c2hvdWxkLW5vdC1sZWFr"
+                }],
+                "next_actions": []
+            }),
+        );
+        let response = handle_moderation_operator_raw_request(
+            &service,
+            format!(
+                "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/commit-reveal-status HTTP/1.1\r\nHost: local\r\n\r\n"
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::BAD_GATEWAY);
+        let body = String::from_utf8(response.body).expect("error JSON is UTF-8");
+        assert!(body.contains("payload bytes"));
+    }
+
+    #[test]
+    fn moderation_operator_service_rejects_payload_b64_from_upstream() {
+        let quarantine_id = [0xAD_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_service(
+            quarantine_id,
+            None,
+            norito::json!({
+                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
+                "status": "ready",
+                "record": {
+                    "quarantine_id_hex": (quarantine_id_hex.clone()),
+                    "state": "reviewed"
+                },
+                "object_status": "stored",
+                "payload_b64": "c2hvdWxkLW5vdC1sZWFr",
+                "next_actions": []
+            }),
+        );
+        let response = handle_moderation_operator_raw_request(
+            &service,
+            format!(
+                "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel HTTP/1.1\r\nHost: local\r\n\r\n"
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::BAD_GATEWAY);
+        let body = String::from_utf8(response.body).expect("error JSON is UTF-8");
+        assert!(body.contains("payload bytes"));
+    }
+
+    #[test]
+    fn moderation_operator_service_rejects_request_body() {
+        let request = b"GET /healthz HTTP/1.1\r\nHost: local\r\nContent-Length: 2\r\n\r\n{}";
+        let parsed =
+            moderation_operator_parse_http_request(request, 1024).expect("parse request body");
+        let args = ModerationQuarantineOperatorServeArgs {
+            listen: "127.0.0.1:0".to_string(),
+            limit: None,
+            max_body_bytes: 1024,
+        };
+        let service = args
+            .service(
+                Arc::new(FixtureModerationOperatorPanelSource {
+                    expected_quarantine_id_hex: encode([0_u8; 16]),
+                    expected_limit: None,
+                    status: StatusCode::OK,
+                    body: Vec::new(),
+                }),
+                "http://torii.test/".to_string(),
+                "operator@moderation".to_string(),
+            )
+            .expect("operator service");
+
+        let response = service.handle_request(&parsed);
+
+        assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn moderation_operator_service_serves_browser_ui() {
+        let quarantine_id = [0xA1_u8; 16];
+        let service = fixture_moderation_operator_service(quarantine_id, None, norito::json!({}));
+
+        let response = handle_moderation_operator_raw_request(
+            &service,
+            "GET / HTTP/1.1\r\nHost: local\r\n\r\n".to_string(),
+        );
+
+        assert_eq!(response.status, StatusCode::OK);
+        assert_eq!(
+            response.content_type,
+            ModerationOperatorService::HTML_CONTENT_TYPE
+        );
+        let body = String::from_utf8(response.body.clone()).expect("UI body UTF-8");
+        assert!(body.contains("SoraFS Moderation Operator"));
+        assert!(body.contains("juror-plan"));
+        assert!(body.contains("juror-notifications"));
+        assert!(body.contains("commit-reveal-status"));
+        assert!(body.contains("ballot-tally"));
+        let http = String::from_utf8(response.to_http_bytes()).expect("HTTP response UTF-8");
+        assert!(http.contains("Content-Type: text/html; charset=utf-8"));
+        assert!(http.contains("X-Content-Type-Options: nosniff"));
+    }
+
+    #[test]
+    fn moderation_operator_service_status_lists_browser_ui_route() {
+        let quarantine_id = [0xA2_u8; 16];
+        let service = fixture_moderation_operator_service(quarantine_id, None, norito::json!({}));
+
+        let response = handle_moderation_operator_raw_request(
+            &service,
+            "GET /v1/sorafs/moderation/operator-panel/status HTTP/1.1\r\nHost: local\r\n\r\n"
+                .to_string(),
+        );
+
+        assert_eq!(response.status, StatusCode::OK);
+        let value: Value = norito::json::from_slice(&response.body).expect("status JSON");
+        let routes = value
+            .get("routes")
+            .and_then(Value::as_array)
+            .expect("status routes");
+        assert!(
+            routes
+                .iter()
+                .any(|route| { route.as_str() == Some("/v1/sorafs/moderation/operator-panel/ui") })
+        );
+        assert!(routes.iter().any(|route| {
+            route.as_str()
+                == Some("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-plan")
+        }));
+        assert!(routes.iter().any(|route| {
+            route.as_str()
+                == Some("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-notifications")
+        }));
+        assert!(routes.iter().any(|route| {
+            route.as_str()
+                == Some("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/commit-reveal-status")
+        }));
+    }
+
+    #[test]
+    fn moderation_operator_service_rejects_browser_ui_request_body() {
+        let quarantine_id = [0xA3_u8; 16];
+        let service = fixture_moderation_operator_service(quarantine_id, None, norito::json!({}));
+
+        let response = handle_moderation_operator_raw_request(
+            &service,
+            "GET /v1/sorafs/moderation/operator-panel/ui HTTP/1.1\r\nHost: local\r\nContent-Length: 2\r\n\r\n{}"
+                .to_string(),
+        );
+
+        assert_eq!(response.status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response.content_type,
+            ModerationOperatorService::JSON_CONTENT_TYPE
+        );
+    }
+
+    #[test]
+    fn moderation_operator_service_forwards_review_with_default_actor() {
+        let quarantine_id = [0xAE_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_mutation_service(
+            quarantine_id,
+            "review",
+            StatusCode::ACCEPTED,
+            norito::json!({
+                "schema": "sorafs.moderation.quarantine.review.v1",
+                "status": "reviewed"
+            }),
+        );
+        let body = r#"{"reviewed_at_unix":1800000310,"notes":"reviewed through service"}"#;
+        let response = handle_moderation_operator_raw_request(
+            &service,
+            format!(
+                "POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review HTTP/1.1\r\nHost: local\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::ACCEPTED);
+        let value: Value = norito::json::from_slice(&response.body).expect("review response JSON");
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("reviewed")
+        );
+    }
+
+    #[test]
+    fn moderation_operator_service_forwards_release_with_explicit_authority() {
+        let quarantine_id = [0xAF_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_mutation_service(
+            quarantine_id,
+            "release",
+            StatusCode::ACCEPTED,
+            norito::json!({
+                "schema": "sorafs.moderation.quarantine.release.v1",
+                "status": "released"
+            }),
+        );
+        let body = r#"{"release_authority":"release@moderation","released_at_unix":1800000320,"notes":"released through service"}"#;
+        let response = handle_moderation_operator_raw_request(
+            &service,
+            format!(
+                "POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release HTTP/1.1\r\nHost: local\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::ACCEPTED);
+        let value: Value = norito::json::from_slice(&response.body).expect("release response JSON");
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("released")
+        );
+    }
+
+    #[test]
+    fn moderation_operator_service_forwards_appeal_handoff_payload() {
+        let quarantine_id = [0xB0_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_mutation_service(
+            quarantine_id,
+            "appeal-handoff",
+            StatusCode::OK,
+            norito::json!({
+                "schema": "sorafs.moderation.quarantine.appeal_handoff.v1",
+                "status": "handoff_ready"
+            }),
+        );
+        let body = r#"{"class":"content","backlog":3,"evidence_size_mb":8}"#;
+        let response = handle_moderation_operator_raw_request(
+            &service,
+            format!(
+                "POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff HTTP/1.1\r\nHost: local\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::OK);
+        let value: Value = norito::json::from_slice(&response.body).expect("handoff response JSON");
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("handoff_ready")
+        );
+    }
+
+    #[test]
+    fn moderation_operator_service_forwards_appeal_ballot_payload() {
+        let quarantine_id = [0xB1_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_mutation_service(
+            quarantine_id,
+            "appeal-ballot",
+            StatusCode::ACCEPTED,
+            norito::json!({
+                "schema": "sorafs.moderation.quarantine.appeal_ballot.v1",
+                "status": "announced"
+            }),
+        );
+        let body = r#"{"quorum":2,"juror_ids":["juror-a","juror-b"]}"#;
+        let response = handle_moderation_operator_raw_request(
+            &service,
+            format!(
+                "POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-ballot HTTP/1.1\r\nHost: local\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::ACCEPTED);
+        let value: Value = norito::json::from_slice(&response.body).expect("ballot response JSON");
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("announced")
+        );
+    }
+
+    #[test]
+    fn moderation_operator_service_rejects_mutation_payload_bytes() {
+        let quarantine_id = [0xB2_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_mutation_service(
+            quarantine_id,
+            "appeal-handoff",
+            StatusCode::OK,
+            norito::json!({ "status": "must_not_be_called" }),
+        );
+        let body = r#"{"class":"content","payload_b64":"c2hvdWxkLW5vdC1sZWFr"}"#;
+        let response = handle_moderation_operator_raw_request(
+            &service,
+            format!(
+                "POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff HTTP/1.1\r\nHost: local\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::BAD_REQUEST);
+        let body = String::from_utf8(response.body).expect("error body UTF-8");
+        assert!(body.contains("payload bytes"));
+    }
+
+    #[test]
+    fn moderation_operator_service_tallies_ballot_from_operator_panel_reference() {
+        let quarantine_id = [0xB3_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_ballot_tally_service(
+            quarantine_id,
+            Some(4),
+            Some(norito::json!({
+                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
+                "status": "ready",
+                "record": {
+                    "quarantine_id_hex": (quarantine_id_hex.clone()),
+                    "state": "appeal_ballot_announced"
+                },
+                "object_status": "stored",
+                "ballots": [{
+                    "announcement": {
+                        "round_id": "round-derived",
+                        "context": {
+                            "case_id": "case-derived"
+                        }
+                    }
+                }],
+                "next_actions": []
+            })),
+            "case-derived",
+            "round-derived",
+            StatusCode::ACCEPTED,
+            norito::json!({
+                "schema": "sorafs.moderation.ballot.tally.v1",
+                "status": "tallied",
+                "winning_choice": "uphold"
+            }),
+        );
+        let body = "{}";
+        let response = handle_moderation_operator_raw_request(
+            &service,
+            format!(
+                "POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/ballot-tally HTTP/1.1\r\nHost: local\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::ACCEPTED);
+        let value: Value = norito::json::from_slice(&response.body).expect("tally response JSON");
+        assert_eq!(
+            value.get("winning_choice").and_then(Value::as_str),
+            Some("uphold")
+        );
+    }
+
+    #[test]
+    fn moderation_operator_service_tallies_explicit_ballot_reference() {
+        let quarantine_id = [0xB4_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_ballot_tally_service(
+            quarantine_id,
+            Some(4),
+            None,
+            "case-explicit",
+            "round-explicit",
+            StatusCode::OK,
+            norito::json!({
+                "schema": "sorafs.moderation.ballot.tally.v1",
+                "status": "tallied"
+            }),
+        );
+        let body = r#"{"case_id":" case-explicit ","round_id":" round-explicit "}"#;
+        let response = handle_moderation_operator_raw_request(
+            &service,
+            format!(
+                "POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/ballot-tally HTTP/1.1\r\nHost: local\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::OK);
+        let value: Value = norito::json::from_slice(&response.body).expect("tally response JSON");
+        assert_eq!(value.get("status").and_then(Value::as_str), Some("tallied"));
+    }
+
+    #[test]
+    fn moderation_operator_service_rejects_tally_without_ballot_reference() {
+        let quarantine_id = [0xB5_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_ballot_tally_service(
+            quarantine_id,
+            None,
+            Some(norito::json!({
+                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
+                "status": "ready",
+                "record": {
+                    "quarantine_id_hex": (quarantine_id_hex.clone()),
+                    "state": "reviewed"
+                },
+                "object_status": "stored",
+                "ballots": [],
+                "next_actions": []
+            })),
+            "unused-case",
+            "unused-round",
+            StatusCode::ACCEPTED,
+            norito::json!({ "status": "must_not_be_called" }),
+        );
+        let body = "{}";
+        let response = handle_moderation_operator_raw_request(
+            &service,
+            format!(
+                "POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/ballot-tally HTTP/1.1\r\nHost: local\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::BAD_GATEWAY);
+        let body = String::from_utf8(response.body).expect("error body UTF-8");
+        assert!(body.contains("does not include a moderation ballot reference"));
+    }
+
+    #[test]
+    fn moderation_operator_service_rejects_tally_payload_bytes() {
+        let quarantine_id = [0xB6_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_ballot_tally_service(
+            quarantine_id,
+            None,
+            None,
+            "unused-case",
+            "unused-round",
+            StatusCode::ACCEPTED,
+            norito::json!({ "status": "must_not_be_called" }),
+        );
+        let body =
+            r#"{"case_id":"case-a","round_id":"round-a","payload_b64":"c2hvdWxkLW5vdC1sZWFr"}"#;
+        let response = handle_moderation_operator_raw_request(
+            &service,
+            format!(
+                "POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/ballot-tally HTTP/1.1\r\nHost: local\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::BAD_REQUEST);
+        let body = String::from_utf8(response.body).expect("error body UTF-8");
+        assert!(body.contains("payload bytes"));
+    }
+
+    #[test]
+    fn moderation_quarantine_review_rejects_blank_notes() {
+        let args = ModerationQuarantineReviewArgs {
+            quarantine_id: encode([0xEF_u8; 16]),
+            reviewed_by: Some("operator@moderation".to_string()),
+            reviewed_at: Some("@1800000210".to_string()),
+            notes: Some("   ".to_string()),
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args
+            .run_with(&mut ctx, |_client, _, _| {
+                unreachable!("submit must not run")
+            })
+            .expect_err("blank notes must be rejected");
+        assert!(err.to_string().contains("--notes"));
+        assert!(ctx.printed.is_empty());
     }
 
     #[test]

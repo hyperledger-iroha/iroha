@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-24
+Last updated: 2026-06-25
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -2816,8 +2816,46 @@ and completed history lives in [`status.md`](./status.md).
   snapshot, rejects conflicting manifest ids, keys corpus entries by canonical
   Norito BLAKE3 digest, persists the snapshot as a Norito checkpoint when
   storage is enabled, reloads it on node startup, and exposes canonical-
-  authenticated Torii admission plus bounded readback endpoints under
-  `/v1/sorafs/moderation/model-registry`. `sorafs_node` also persists
+	  authenticated Torii admission plus bounded readback endpoints under
+	  `/v1/sorafs/moderation/model-registry`. `iroha sorafs moderation registry
+	  submit-repro|submit-corpus|list` now wraps local model-registry
+	  admission/readback, validates JSON or Norito manifest inputs, and sends
+	  canonical Norito manifest bytes through signed Torii requests.
+	  `sorafs_cli moderation registry-serve` now exposes a standalone persistent
+	  HTTP model-registry service backed by an atomic Norito checkpoint, with
+	  status, bounded snapshot readback, and base64 canonical Norito
+	  repro/corpus admission endpoints that reuse the data-model validators and
+	  reject conflicting manifest ids.
+  `iroha::client` and `iroha sorafs moderation ballots
+  list|get|events|commit|reveal|tally` now wrap the local moderation ballot
+  readback and signed committee lifecycle endpoints, validating JSON or Norito
+  commit/reveal payloads and submitting canonical Norito bytes to Torii.
+  `iroha::client` and `iroha sorafs transparency
+  cycles|explorer|tokens|source-entry` now wrap the local transparency
+  readback and signed source-entry ingest surface so operators can inspect
+  published cycles, entry proofs, explorer snapshots, proof-token issuance
+  indexes, and submit typed source-entry JSON for later publication.
+  `iroha::client` and `iroha sorafs appeals pricing
+  config|status|quote` plus `iroha sorafs appeals finance` now wrap the local
+  appeal pricing, asset-lock deposit, settlement, reconciliation, and finance
+  report readback endpoints. Pricing quote submission validates and
+  canonicalizes JSON; finance mutation and deposit readback calls use canonical
+  Iroha request signing; deposit get normalizes 32-byte escrow ids; finance
+  report, weekly-rollup, and settlement-receipt readbacks support bounded
+  `limit` queries. Torii, `iroha::client`, and `iroha sorafs moderation
+  quarantine appeal-handoff` now also expose local reviewed-quarantine appeal
+  handoff: pending/released records fail closed, reviewed records produce a
+  baseline pricing quote, quote-bound deposit request, and native
+  `OpenAssetLock` instruction for payer signing. Torii, `iroha::client`, and
+  `iroha sorafs moderation quarantine appeal-ballot` now also verify confirmed
+  handoff-bound appeal deposits and announce the existing local moderation
+  ballot, failing closed when the quarantine record is not reviewed or the
+  deposit evidence omits the deterministic quarantine handoff hash.
+  `sorafs_cli moderation run-local`
+  now validates governance-signed reproducibility manifests, reads payload
+  bytes, derives deterministic local model scores from the manifest
+  seed/material and payload digest, and emits Torii-compatible
+  screening-result JSON for local admission fixtures. `sorafs_node` also persists
   deterministic local screening-result records and pending local quarantine
   records under `moderation-screening/screening-snapshot.to`; `quarantine` and
   `escalate` verdicts enqueue pending review records, and Torii exposes
@@ -2825,15 +2863,155 @@ and completed history lives in [`status.md`](./status.md).
   bounded readback through `GET /v1/sorafs/moderation/screening-results` and
   `GET /v1/sorafs/moderation/quarantine`. The local quarantine queue now also
   advances records through reviewed and released states with checkpointed
-  operator metadata via canonical-authenticated
+  operator metadata via canonical-authenticated accounts assigned the
+  `sorafs_moderation_operator` role at
   `POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review` and
   `POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release`.
-  Remaining rollout work stays focused on the persistent production model
-  registry service, deterministic runner, committee service, encrypted
-  quarantine object store, CLI review/release commands, operator panel, and
-  live ingest/quarantine/appeal/transparency evidence rather than local
-  catalog, metadata readback, registry-admission/checkpoint/API hardening, or
-  local screening/quarantine evidence persistence and API state transitions.
+  `iroha sorafs moderation screening submit|list` now bridges deterministic
+  local runner output into the signed screening-result admission endpoint and
+  bounded readback endpoint, validating the runner JSON before submission.
+  `iroha sorafs moderation quarantine list|review|release` now wraps those
+  local queue endpoints, validates 16-byte quarantine ids, applies canonical
+  signing for review/release, and defaults operator identities to the CLI
+  account when omitted. `sorafs_node` now also seals quarantined payload bytes
+  into encrypted local Norito object envelopes under the storage data
+  directory, persists a separate object-index checkpoint, reloads it on
+  restart, and verifies plaintext digests plus envelope authentication before
+  returning payload bytes. Torii now exposes canonical-authenticated and
+  `sorafs_moderation_operator` role-gated local object store/readback at
+  `POST`/`GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object`,
+  accepting base64 payload bytes on store and returning `payload_b64` on
+  verified reads. `iroha sorafs moderation quarantine object store|read` now
+  wraps that local object API for operators, reading store payload bytes from
+  `--payload-file`, rejecting empty payload files, signing store/read requests,
+  and printing object metadata or payload readback JSON. Torii,
+  `iroha::client`, and
+  `iroha sorafs moderation quarantine operator-panel` now also expose a
+  `sorafs_moderation_operator` role-gated local workflow read model for one
+  quarantine record, bundling encrypted-object metadata status, matching local
+  appeal ballots, operator routes, and next-action hints without returning
+  payload bytes. `iroha sorafs moderation quarantine bridge-plan` now derives a
+  payload-free local automation plan from that read model, emitting ordered
+  handoff, ballot, tally, and transparency CLI actions while failing closed if
+  the panel response unexpectedly contains payload bytes.
+  `sorafs_cli moderation runner-serve` now promotes the deterministic local
+  runner into a locked-manifest HTTP service mode: status endpoints report the
+  active governance manifest and disabled outbound-network posture, while
+  `POST /v1/sorafs/moderation/runner/screen` returns the same
+  Torii-compatible screening-result JSON as `run-local` from explicit
+  request input. `sorafs_cli moderation runner-grpc-serve` now exposes the
+  production unary gRPC runner surface
+  (`sorafs.moderation.runner.v1.Runner/Status` and `/Screen`) over a
+  locked governance manifest, accepting payload bytes directly and returning
+  deterministic screening-result DTOs with outbound network disabled.
+  `iroha sorafs moderation quarantine operator-serve` now exposes a local
+  payload-free HTTP operator workflow service with a browser UI at `/` and
+  `/v1/sorafs/moderation/operator-panel/ui`, health/status, operator-panel, and
+  bridge-plan and juror-plan GET routes backed by the signed Torii
+  operator-panel read model; it rejects request bodies, validates 16-byte
+  quarantine ids, supports bounded ballot limits, and fails closed if the
+  upstream panel unexpectedly includes payload bytes. The juror-plan view
+  reports per-juror commit/reveal readiness, signing accounts, signed Torii
+  routes, and CLI command templates without embedding private commit or reveal
+  payload bytes. The companion juror-notifications view emits deterministic
+  operator-managed delivery records with dedup keys, subjects, message bodies,
+  signed Torii routes, and CLI command templates for external
+  mail/webhook/scheduler transport.
+  `iroha sorafs moderation quarantine notifications deliver --manifest PATH
+  [--out-dir DIR] [--webhook-url URL]` now validates those payload-free
+  notification manifests, writes canonical outbox JSON and/or POSTs each
+  notification to a webhook, rejects private-payload flags, and emits
+  payload-free delivery evidence with notification and response body hashes.
+  `iroha sorafs moderation quarantine notifications canary --manifest PATH
+  --webhook-url URL [--out PATH]` now probes deployed notification transport
+  webhooks with the same payload-free manifest, records passed/failed probe
+  status, notification body hashes, and response body hashes, and can write
+  `sorafs.moderation.juror_notifications.transport_canary.v1` evidence without
+  archiving message or response bodies.
+  The companion commit-reveal-status view
+  emits payload-free quorum readiness, missing-juror lists, next actions, and
+  tally-ready request templates. The same service now forwards signed review,
+  release,
+  appeal-handoff, appeal-ballot, and ballot-tally POST requests to Torii after
+  rejecting `payload_b64`, rejecting mutation query parameters, defaulting
+  review/release actors to the configured CLI account when omitted,
+  canonicalizing appeal JSON bodies before forwarding, and deriving tally
+  `case_id`/`round_id` values from the payload-free operator-panel ballot view
+  when they are not supplied explicitly.
+  `iroha sorafs moderation quarantine operator-canary` now captures
+  payload-free rollout evidence from a deployed operator workflow service by
+  probing health/status, browser UI, operator-panel, bridge-plan, juror-plan,
+  juror-notifications, and commit-reveal-status routes, verifying expected
+  schemas and UI markers, rejecting payload bytes, and archiving response
+  hashes instead of response bodies.
+  `iroha sorafs moderation ballots execute --status PATH
+  [--commit-payload PATH...] [--reveal-payload PATH...] [--submit-tally]` now
+  consumes the payload-free commit/reveal coordination status, validates local
+  commit/reveal payload files against pending juror lists, submits only pending
+  signed commit/reveal/tally requests through Torii, and emits response
+  status/body hashes without replaying private reveal payload internals.
+  `iroha sorafs moderation ballots executor-bundle --status PATH
+  --bundle-out DIR [--commit-payload PATH...] [--reveal-payload PATH...]
+  [--submit-tally]` now generates a payload-free scheduled executor job bundle
+  with `executor.env`, executable `run.sh`, systemd service/timer files,
+  launchd plist, README, and
+  `sorafs.moderation.ballots.executor_bundle.v1` metadata without copying
+  private commit/reveal payload files.
+  `iroha sorafs moderation ballots executor-canary --bundle DIR
+  [--execution-summary PATH] [--out PATH]` now verifies generated executor
+  bundles and optional payload-free `ballots execute` summaries, records
+  artifact hashes, scheduler checks, summary hashes, and pass/fail status, and
+  emits `sorafs.moderation.ballots.executor_canary.v1` evidence without
+  archiving private payload files or response bodies.
+  `sorafs_cli moderation runner-bundle` now generates the
+  supervised HTTP runner deployment bundle for a validated locked manifest,
+  including the manifest copy, `runner.env`, executable `run.sh`, systemd
+  unit, launchd plist, README, and
+  `sorafs.moderation.runner.bundle.v1` metadata JSON. `sorafs_cli moderation
+  runner-canary` now probes deployed locked-manifest HTTP runners, verifies
+  status and screening responses against the manifest id, runner hash, payload
+  digest, score range, and threshold-derived verdict, and emits payload-free
+  `sorafs.moderation.runner.rollout_evidence.v1` JSON for rollout archives.
+  `sorafs_cli moderation committee-run` now validates the same locked
+  reproducibility manifest, rejects payload-bearing runner outputs, verifies
+  manifest/runner/subject consistency and threshold-derived verdicts, and
+  emits payload-free `sorafs.moderation.committee.aggregate.v1` JSON using a
+  deterministic median score under the requested quorum. `sorafs_cli moderation
+  committee-serve` now locks that manifest and quorum into a bounded local HTTP
+  service with status and payload-free aggregation endpoints. `sorafs_cli
+  moderation committee-bundle` now generates supervised HTTP committee
+  deployment artifacts, and `sorafs_cli moderation committee-canary` verifies
+  deployed committee status plus payload-free aggregate responses against the
+  locked manifest and deterministic local aggregation.
+  Remaining rollout work stays focused on captured deployed juror notification
+  transport service rollout evidence, captured deployed commit/reveal executor
+  job rollout evidence, and live
+  ingest/quarantine/appeal/transparency evidence rather than local
+  catalog, metadata readback, registry-admission/checkpoint/API/CLI hardening,
+  standalone persistent model-registry service, local screening/quarantine
+  evidence persistence and API state transitions, deterministic local runner CLI
+  output, locked-manifest local HTTP runner service mode, supervised HTTP runner
+  bundle generation, production unary gRPC runner service, local committee
+  aggregation CLI, local committee aggregation HTTP service, HTTP runner canary
+  rollout evidence tooling, supervised committee bundle generation, HTTP
+  committee canary rollout evidence tooling, local moderation ballot
+  readback/commit/reveal/tally client and CLI
+  bridge, local transparency readback/source-entry client and CLI bridge, local
+  appeal pricing/deposit/readback client and CLI bridge, local
+  reviewed-quarantine appeal handoff and appeal-ballot API/CLI, local
+  screening-result submit/list CLI, local encrypted quarantine object
+  envelopes/API/CLI, local quarantine CLI queue/review/release commands, the
+  local operator-panel read model, local bridge-plan CLI, local payload-free
+  operator workflow service, local signed operator workflow mutation
+  forwarding, local payload-free juror notification planning, local
+  payload-free juror notification delivery manifests, local payload-free
+  juror notification outbox/webhook delivery CLI automation, local
+  payload-free juror notification transport canary evidence tooling, local
+  payload-free commit/reveal coordination status, local commit/reveal executor
+  CLI automation, local supervised commit/reveal executor job bundle
+  generation, local commit/reveal executor canary evidence tooling, local
+  operator workflow canary evidence tooling, the local quarantine operator role
+  gate, or the documented production role-provisioning runbook.
 - SFM-4c transparency ledger V1 data-model payloads are now shipped:
   `iroha_data_model::sorafs::transparency` defines
   `ModerationLedgerEntryV1`, `ModerationLedgerBlockV1`, and
@@ -2886,25 +3064,50 @@ and completed history lives in [`status.md`](./status.md).
   canonical-authenticated local feed boundary for those concrete source
   payloads plus public legal-hold/redaction/evidence-access summaries,
   returning only the derived public source-entry summary while routing accepted
-  entries into the duplicate-checked local worker. The remaining SFM-4c
-  production work is deployed producers for GAR, moderation, appeal,
-  legal-hold, redaction, and evidence-viewer events plus rollout evidence
-  around that feed boundary, deployed anchoring/publisher identities, deployed
-  proof API hardening beyond the local verifier throttle and bounded readback
-  arrays, deployed proof-token issuance producers/explorer linking, public
-  receipt explorer UI, and live privacy-safe moderation aggregate publisher.
+  entries into the duplicate-checked local worker. `iroha::client` and
+  `iroha sorafs transparency cycles|explorer|tokens|source-entry` now wrap the
+  local cycle/entry/explorer/token readback and signed source-entry ingest
+  surface for operator automation. `iroha sorafs transparency source-entry
+  canary --source-entry KIND=PATH [--source-entry KIND=PATH...] [--out PATH]`
+  now submits canary source-entry producer payloads through that signed feed,
+  records request/response sizes, status, and BLAKE3 hashes, and emits
+  `sorafs.transparency.source_entry.canary.v1` evidence without archiving source
+  payload fields or response bodies. The remaining SFM-4c production work is
+  deployed producers for GAR, moderation, appeal, legal-hold, redaction, and
+  evidence-viewer events plus captured rollout evidence using that canary,
+  deployed anchoring/publisher identities, deployed proof API hardening beyond
+  the local verifier throttle and bounded readback arrays, deployed proof-token
+  issuance producers/explorer-linking rollout evidence, deployed public receipt
+  explorer rollout evidence capture, and live privacy-safe moderation aggregate
+  publisher.
   Torii now also exposes
   `/v1/sorafs/transparency/tokens/issuances` as a canonical-authenticated local
   proof-token issuance feed; it accepts one URL-safe base64 `SFGT` frame, the
   Ed25519 signer public key, optional evidence/policy digests, and sorted public
   metadata, then verifies and publishes the derived `ProofTokenIssuanceV1`
   through the local Governance DAG publisher when configured, without accepting
-  blinded-digest keys. Torii now also exposes
+  blinded-digest keys. `iroha::Client` and `iroha sorafs transparency
+  token-issuance submit --payload PATH` now wrap that signed feed for deployed
+  producer automation, and `iroha sorafs transparency token-issuance canary
+  --issuance PATH [--issuance PATH...] [--out PATH]` emits payload-free
+  `sorafs.transparency.proof_token_issuance.canary.v1` rollout evidence with
+  request/response sizes, status, and BLAKE3 hashes, without archiving
+  proof-token frames, private digest-key material, or response bodies. Torii now
+  also exposes
   `/v1/sorafs/transparency/explorer` as a local read-only explorer snapshot over
   the Governance DAG publish-index, returning cycle summaries, proof-token
   issuance summaries, payload-kind counts, source paths, index digests, cache
-  validators, total/returned counts, and `limit`-bounded arrays for public UI
-  integration without exposing private proof-token digest keys. The
+  validators, total/returned counts, and `limit`-bounded arrays for local UI
+  integration without exposing private proof-token digest keys. Torii now also
+  exposes `/v1/sorafs/transparency/explorer/ui` as a static local browser
+  explorer that fetches that payload-free snapshot, renders cycle and
+  proof-token issuance summaries, ships `no-store`/`nosniff`/CSP headers, and
+  does not embed ledger payload bodies or private proof-token digest keys.
+  `iroha sorafs transparency explorer-canary` now probes deployed/public
+  explorer snapshot, browser UI, and proof-token issuance index routes, verifies
+  expected schemas/HTML markers, rejects ledger payload bodies and private
+  proof-token digest-key material, and emits payload-free rollout evidence with
+  response body hashes. The
   data-model foundation for that publisher is now shipped as
   `ModerationPrivacyAggregateV1` plus explicit
   `ModerationPrivacyParametersV1` epsilon/delta/suppression metadata,
@@ -2941,9 +3144,18 @@ and completed history lives in [`status.md`](./status.md).
   canonical-authenticated local trigger for configured due aggregate
   publication, with stale due event-backed window catch-up, runtime-only
   privacy policy/noise seed inputs, and structured
-  published/skipped/already-published outcomes. The remaining
-  aggregate work is deployed source-event producers, deployed scheduler jobs,
-  and rollout evidence around this worker.
+  published/skipped/already-published outcomes. `iroha::Client` and
+  `iroha sorafs transparency privacy-aggregate source-event|publish-due
+  --payload PATH` now wrap those signed routes for producer and scheduler
+  automation. `iroha sorafs transparency privacy-aggregate canary
+  --source-event PATH [--source-event PATH...] [--publish-due PATH...]
+  [--out PATH]` now submits canary source-event and publish-due payloads
+  through the signed routes, records request/response sizes, status, and BLAKE3
+  hashes, and emits `sorafs.transparency.privacy_aggregate.canary.v1`
+  evidence without archiving raw metric arrays, metric names, or response
+  bodies. The remaining aggregate work is deployed source-event producers,
+  deployed scheduler jobs, and captured rollout evidence using those wrappers
+  and the canary.
 - SoraFS economics/governance plan status is current for the remaining local
   production gaps: SFM-2 now has initial orderbook/streaming-settlement Norito
   payloads and validators in `sorafs_manifest::orderbook` plus Rust reference
@@ -3060,7 +3272,7 @@ and completed history lives in [`status.md`](./status.md).
   ballot lifecycle events now publish into the SoraFS Governance DAG filesystem publisher,
   `publish-index.json`, CAR queue, and optional signed runtime DAG, but still
   need durable or contract-backed orchestration, on-chain or ledger recording,
-  juror CLI/portal flows, public decision/challenge DAG rollout, and
+  production juror portal flows, public decision/challenge DAG rollout, and
   end-to-end panel simulations;
   SFM-5 hedging/billing is still a target
   architecture; SFM-6 currently ships the reserve policy, quote/ledger, matrix,

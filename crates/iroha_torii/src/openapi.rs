@@ -491,6 +491,19 @@ fn plain_text_response(description: &str, example: Option<&str>) -> Value {
     Value::Object(body)
 }
 
+fn html_response(description: &str) -> Value {
+    let mut schema = Map::new();
+    schema.insert("type".into(), Value::String("string".to_owned()));
+    let mut media = Map::new();
+    media.insert("schema".into(), Value::Object(schema));
+    let mut content = Map::new();
+    content.insert("text/html".into(), Value::Object(media));
+    let mut body = Map::new();
+    body.insert("description".into(), Value::String(description.to_owned()));
+    body.insert("content".into(), Value::Object(content));
+    Value::Object(body)
+}
+
 fn event_stream_response(description: &str) -> Value {
     let mut schema = Map::new();
     schema.insert("type".into(), Value::String("string".to_owned()));
@@ -4590,6 +4603,14 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/sorafs/transparency/explorer/ui".to_owned(),
+        Value::Object(html_get_operation(
+            "SoraFS",
+            "Open the transparency explorer UI.",
+            "Return a static browser UI for the local SoraFS transparency explorer. The page fetches the payload-free `/v1/sorafs/transparency/explorer` JSON snapshot, renders published cycle and proof-token issuance summaries, and does not embed private proof-token digest keys or ledger payload bodies.",
+        )),
+    );
+    paths.insert(
         "/v1/sorafs/transparency/source-entries/{source_kind}".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
@@ -4834,7 +4855,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Mark a local moderation quarantine record reviewed.",
-            "Advance one pending local SFM-4a moderation quarantine record to reviewed state with deterministic operator metadata. The endpoint persists the local screening checkpoint when storage is enabled and requires X-Iroha canonical app authentication.",
+            "Advance one pending local SFM-4a moderation quarantine record to reviewed state with deterministic operator metadata. The endpoint persists the local screening checkpoint when storage is enabled and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             vec![string_path_param(
@@ -4848,7 +4869,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Release a reviewed local moderation quarantine record.",
-            "Advance one reviewed local SFM-4a moderation quarantine record to released state with deterministic release-authority metadata. The endpoint persists the local screening checkpoint when storage is enabled and requires X-Iroha canonical app authentication.",
+            "Advance one reviewed local SFM-4a moderation quarantine record to released state with deterministic release-authority metadata. The endpoint persists the local screening checkpoint when storage is enabled and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             vec![string_path_param(
@@ -4856,6 +4877,83 @@ fn sorafs_paths() -> Map {
                 "16-byte local quarantine id encoded as hexadecimal.",
             )],
         )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Build a reviewed-quarantine appeal finance handoff.",
+            "For a reviewed local SFM-4a quarantine record, compute a baseline appeal pricing quote, derive a quote-bound appeal finance deposit request, bind it to deterministic quarantine evidence, and return the native OpenAssetLock instruction ready for payer signing. The request requires X-Iroha canonical app authentication from the payer_account.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            vec![string_path_param(
+                "quarantine_id_hex",
+                "16-byte local quarantine id encoded as hexadecimal.",
+            )],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-ballot".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Announce a reviewed-quarantine appeal ballot.",
+            "For a reviewed local SFM-4a quarantine record, verify a confirmed appeal-finance asset-lock deposit, require that its evidence hashes include the deterministic quarantine handoff hash, and announce the local moderation ballot. The request requires X-Iroha canonical app authentication from an account that can see the confirmed deposit.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            vec![string_path_param(
+                "quarantine_id_hex",
+                "16-byte local quarantine id encoded as hexadecimal.",
+            )],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "Read a local moderation quarantine operator-panel workflow view.",
+            "Return one role-gated local SFM-4a quarantine operator-panel read model with the quarantine record, encrypted object metadata status, matching local appeal ballots, operator routes, and bounded next-action hints. The endpoint does not return quarantined payload bytes and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
+            "#/components/schemas/JsonValue",
+            vec![
+                string_path_param(
+                    "quarantine_id_hex",
+                    "16-byte local quarantine id encoded as hexadecimal.",
+                ),
+                integer_query_param(
+                    "limit",
+                    "Maximum number of matching ballots to return.",
+                    Some("uint64"),
+                ),
+            ],
+        )),
+    );
+    let mut quarantine_object = json_get_operation(
+        "SoraFS",
+        "Read a local encrypted quarantine payload object.",
+        "Read and decrypt one local SFM-4a quarantine payload object from the node-local encrypted object store. The endpoint verifies the object envelope, returns the payload as standard base64 for authorized operators, and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
+        "#/components/schemas/JsonValue",
+        vec![string_path_param(
+            "quarantine_id_hex",
+            "16-byte local quarantine id encoded as hexadecimal.",
+        )],
+    );
+    if let Some(Value::Object(post_operation)) = json_post_operation(
+        "SoraFS",
+        "Store a local encrypted quarantine payload object.",
+        "Seal one base64 quarantined payload into the node-local encrypted SFM-4a quarantine object store. The plaintext BLAKE3 digest must match the quarantine record subject digest, the object index is persisted when storage is enabled, and the endpoint requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
+        "#/components/schemas/JsonValue",
+        "#/components/schemas/JsonValue",
+        vec![string_path_param(
+            "quarantine_id_hex",
+            "16-byte local quarantine id encoded as hexadecimal.",
+        )],
+    )
+    .remove("post")
+    {
+        quarantine_object.insert("post".to_owned(), Value::Object(post_operation));
+    }
+    paths.insert(
+        "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object".to_owned(),
+        Value::Object(quarantine_object),
     );
     paths.insert(
         "/v1/sorafs/providers".to_owned(),
@@ -6922,6 +7020,22 @@ fn text_get_operation(tag: &str, summary: &str, description: &str, example: Opti
         "200".to_owned(),
         plain_text_response("Successful response.", example),
     );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn html_get_operation(tag: &str, summary: &str, description: &str) -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String(tag.to_owned())]),
+    );
+    operation.insert("summary".into(), Value::String(summary.to_owned()));
+    operation.insert("description".into(), Value::String(description.to_owned()));
+    let mut responses = Map::new();
+    responses.insert("200".to_owned(), html_response("Successful HTML response."));
     operation.insert("responses".into(), Value::Object(responses));
     let mut methods = Map::new();
     methods.insert("get".to_owned(), Value::Object(operation));
@@ -13048,6 +13162,7 @@ mod tests {
             )
         );
         assert!(paths.contains_key("/v1/sorafs/transparency/explorer"));
+        assert!(paths.contains_key("/v1/sorafs/transparency/explorer/ui"));
         assert!(paths.contains_key("/v1/sorafs/transparency/source-entries/{source_kind}"));
         assert!(paths.contains_key("/v1/sorafs/transparency/privacy-aggregates/source-events"));
         assert!(paths.contains_key("/v1/sorafs/transparency/privacy-aggregates/publish-due"));
@@ -13067,6 +13182,21 @@ mod tests {
         assert!(paths.contains_key("/v1/sorafs/moderation/quarantine"));
         assert!(paths.contains_key("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review"));
         assert!(paths.contains_key("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release"));
+        assert!(
+            paths.contains_key(
+                "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff"
+            )
+        );
+        assert!(
+            paths
+                .contains_key("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-ballot")
+        );
+        assert!(
+            paths.contains_key(
+                "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel"
+            )
+        );
+        assert!(paths.contains_key("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object"));
         assert!(paths.contains_key("/v1/soradns/directory/latest"));
         assert!(paths.contains_key("/v1/content/{bundle}/{path}"));
         assert!(paths.contains_key("/v1/sns/names"));
