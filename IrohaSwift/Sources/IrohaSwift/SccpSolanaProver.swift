@@ -5975,11 +5975,8 @@ private func normalizeHexBytes(_ value: String, field: String, byteCount: Int) t
 
 private func solanaHash32Bytes(_ value: String, field: String) throws -> Data {
     let text = try normalizeNonEmpty(value, field: field)
-    var hex = text
-    if hex.lowercased().hasPrefix("0x") {
-        hex.removeFirst(2)
-    }
-    if hex.count == 64, hex.allSatisfy({ $0.isHexDigit }) {
+    let hex = text.hasPrefix("0x") ? String(text.dropFirst(2)) : text
+    if hex.count == 64, solanaIsLowercaseHexBody(hex) {
         let bytes = try bytesFromHex32(text, field: field)
         guard bytes.contains(where: { $0 != 0 }) else {
             throw SolanaSccpProverError.invalidHex32(field)
@@ -6572,19 +6569,24 @@ private func bytesFromHex32(_ value: String, field: String) throws -> Data {
     try bytesFromHex(value, field: field, byteCount: 32)
 }
 
+private func solanaIsLowercaseHexBody(_ value: String) -> Bool {
+    value.utf8.allSatisfy { byte in
+        (byte >= 0x30 && byte <= 0x39) || (byte >= 0x61 && byte <= 0x66)
+    }
+}
+
 private func bytesFromHex(_ value: String, field: String, byteCount: Int) throws -> Data {
     guard value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
         throw SolanaSccpProverError.invalidHex32(field)
     }
-    var hex = value
-    if hex.lowercased().hasPrefix("0x") {
-        hex.removeFirst(2)
-    }
+    let hex = value.hasPrefix("0x") ? String(value.dropFirst(2)) : value
     guard hex.unicodeScalars.allSatisfy({ !CharacterSet.whitespacesAndNewlines.contains($0) }) else {
         throw SolanaSccpProverError.invalidHex32(field)
     }
-    hex = hex.lowercased()
-    guard hex.count == byteCount * 2, let bytes = Data(hexString: hex), bytes.count == byteCount else {
+    guard hex.count == byteCount * 2,
+          solanaIsLowercaseHexBody(hex),
+          let bytes = Data(hexString: hex),
+          bytes.count == byteCount else {
         throw SolanaSccpProverError.invalidHex32(field)
     }
     return bytes

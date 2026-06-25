@@ -2163,8 +2163,13 @@ fn make_sccp_sol_to_sora_message_bridge_proof_with_material_and_deployment(
                     )
                 }),
             );
-        } else {
+        } else if iroha_sccp::sccp_source_verifier_material_is_production_ready(material) {
             assert!(material_bound_bundle_is_structural);
+        } else {
+            assert!(
+                !material_bound_bundle_is_structural,
+                "generic source verifier material must not verify structurally as lane-bound material",
+            );
         }
         assert_eq!(source_proof.source_domain, source_domain);
         assert_eq!(source_proof.target_domain, target_domain);
@@ -2209,12 +2214,19 @@ fn make_sccp_sol_to_sora_message_bridge_proof_with_material_and_deployment(
                 Some(deployment.adapter_verifier_vk_hash),
             );
         } else {
-            assert!(
+            let material_bound_source_envelope_is_structural =
                 iroha_sccp::verify_sccp_source_chain_proof_envelope_structure_with_material(
                     &source_proof,
                     material,
-                )
-            );
+                );
+            if iroha_sccp::sccp_source_verifier_material_is_production_ready(material) {
+                assert!(material_bound_source_envelope_is_structural);
+            } else {
+                assert!(
+                    !material_bound_source_envelope_is_structural,
+                    "generic source verifier material must not verify a source envelope structurally as lane-bound material",
+                );
+            }
             let source_adapter_ready =
                 iroha_sccp::sccp_source_adapter_ready_with_material_for_domain(
                     source_domain,
@@ -4579,8 +4591,7 @@ fn submit_sccp_inbound_message_waits_for_sol_lane_launch_before_route_allowlist_
     let destination_rollout = configured_sol_destination_rollout();
     let mut route_allowlist =
         configured_sol_route_allowlist(&material, &audited_deployment, &destination_rollout);
-    route_allowlist.route_allowlist_hash = Some(hex_0x([0xde; 32]));
-    route_allowlist.route_canary_route_allowlist_hash = Some(hex_0x([0xde; 32]));
+    route_allowlist.route_canary_evidence_hash = Some(hex_0x([0xde; 32]));
     state
         .zk
         .sccp_source_verifier_materials
@@ -4637,8 +4648,7 @@ fn submit_sccp_inbound_message_waits_for_tron_lane_launch_before_route_allowlist
     let destination_rollout = configured_tron_destination_rollout(&material);
     let mut route_allowlist =
         configured_tron_route_allowlist(&material, &deployment, &destination_rollout);
-    route_allowlist.route_allowlist_hash = Some(hex_0x([0xde; 32]));
-    route_allowlist.route_canary_route_allowlist_hash = Some(hex_0x([0xde; 32]));
+    route_allowlist.route_canary_evidence_hash = Some(hex_0x([0xde; 32]));
     state
         .zk
         .sccp_source_verifier_materials
@@ -5015,7 +5025,7 @@ fn submit_sccp_inbound_message_rejects_configured_source_verifier_material_until
     let mut block = state.block(header);
     let mut stx = block.transaction();
 
-    let proof = make_sccp_sol_to_sora_message_bridge_proof_with_material(100, Some(&material));
+    let proof = make_sccp_sol_to_sora_message_bridge_proof(100);
     let proof_id = bridge_proof_id(&proof);
     let submit: InstructionBox =
         iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof.clone()).into();

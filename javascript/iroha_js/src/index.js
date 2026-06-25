@@ -916,6 +916,7 @@ export {
   normalizeSccpSourceAdapterDeploymentBinding,
   canonicalSccpSourceAdapterDeploymentBindingBytes,
   sccpSourceAdapterDeploymentBindingHash,
+  sccpSourceAdapterDeploymentBindingFromDeployment,
   sccpDestinationBindingKey,
   sccpDestinationBindingHash,
   canonicalSolanaSccpRouteCanaryEvidenceBytes,

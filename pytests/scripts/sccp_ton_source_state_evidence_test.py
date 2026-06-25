@@ -137,6 +137,25 @@ def test_ton_hex_parser_rejects_zero_and_wrong_width():
     else:
         raise AssertionError("short TON source-state verifier hash was accepted")
 
+    for value, expected in (
+        ("11" * 32, "canonical lowercase 0x hex"),
+        ("0X" + "11" * 32, "lowercase 0x prefix"),
+        ("0x" + "AA" * 32, "lowercase hex"),
+    ):
+        try:
+            module.parse_hex_bytes(
+                value,
+                label="source state verifier hash",
+                byte_length=32,
+            )
+        except module.argparse.ArgumentTypeError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError(
+                f"noncanonical TON source-state verifier hash {value!r} "
+                "was accepted"
+            )
+
 
 def test_ton_source_hex_parser_redacts_parser_causes():
     """Invalid TON source-state hex inputs must not chain parser payloads."""
@@ -160,31 +179,42 @@ def test_ton_source_hex_parser_redacts_parser_causes():
         raise AssertionError("invalid TON source-state hex was accepted")
 
 
-def test_ton_source_hex_parser_redacts_typeerror_parser_causes(monkeypatch):
+def test_ton_source_hex_parser_redacts_helper_exit_parser_causes(monkeypatch):
     module = load_evidence_module()
 
-    class SecretBytes:
-        @staticmethod
-        def fromhex(_text):
-            raise TypeError("secret-token TON source hex TypeError detail")
-
-    monkeypatch.setattr(module, "bytes", SecretBytes, raising=False)
-
-    try:
-        module.parse_hex_bytes(
-            "0x" + "11" * 32,
-            label="source state verifier hash",
-            byte_length=32,
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+        detail = (
+            "secret-token TON source hex TypeError detail"
+            if exception_type is TypeError
+            else f"secret-token TON source hex {exception_type.__name__} detail"
         )
-    except module.argparse.ArgumentTypeError as exc:
-        rendered = str(exc)
-        assert rendered == "source state verifier hash must be hex"
-        assert "secret-token" not in rendered
-        assert "TypeError" not in rendered
-        assert exc.__cause__ is None
-        assert exc.__suppress_context__ is True
-    else:
-        raise AssertionError("TON source-state parser TypeError was accepted")
+
+        class SecretBytes:
+            @staticmethod
+            def fromhex(_text, detail=detail, exception_type=exception_type):
+                raise exception_type(detail)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "bytes", SecretBytes, raising=False)
+
+            try:
+                module.parse_hex_bytes(
+                    "0x" + "11" * 32,
+                    label="source state verifier hash",
+                    byte_length=32,
+                )
+            except module.argparse.ArgumentTypeError as exc:
+                rendered = str(exc)
+                assert rendered == "source state verifier hash must be hex"
+                assert "secret-token" not in rendered
+                assert exception_type.__name__ not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    "TON source-state parser "
+                    f"{exception_type.__name__} was accepted"
+                )
 
 
 def test_ton_source_domain_parser_requires_canonical_ascii_decimal():

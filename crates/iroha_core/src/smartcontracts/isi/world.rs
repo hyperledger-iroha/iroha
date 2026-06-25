@@ -7645,19 +7645,35 @@ pub mod isi {
         validate_sccp_finality_against_state(&finality, state_transaction)
     }
 
-    fn parse_sccp_source_material_h256(raw: &str, field: &str) -> Result<[u8; 32], Error> {
-        let bytes = hex::decode(raw.trim_start_matches("0x")).map_err(|_| {
-            invalid_bridge_proof(format!(
-                "SCCP source verifier material `{field}` must be 32-byte hex"
-            ))
-        })?;
-        if bytes.len() != 32 {
+    fn canonical_sccp_hex_body<'a>(
+        raw: &'a str,
+        expected_hex_len: usize,
+        context: &str,
+        field: &str,
+    ) -> Result<&'a str, Error> {
+        let body = raw.strip_prefix("0x").unwrap_or(raw);
+        if body.len() != expected_hex_len
+            || !body
+                .as_bytes()
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || matches!(*byte, b'a'..=b'f'))
+        {
             return Err(invalid_bridge_proof(format!(
-                "SCCP source verifier material `{field}` must be 32-byte hex"
+                "{context} `{field}` must be canonical lowercase {}-byte hex",
+                expected_hex_len / 2
             )));
         }
+        Ok(body)
+    }
+
+    fn parse_sccp_source_material_h256(raw: &str, field: &str) -> Result<[u8; 32], Error> {
+        let body = canonical_sccp_hex_body(raw, 64, "SCCP source verifier material", field)?;
         let mut out = [0u8; 32];
-        out.copy_from_slice(&bytes);
+        hex::decode_to_slice(body, &mut out).map_err(|_| {
+            invalid_bridge_proof(format!(
+                "SCCP source verifier material `{field}` must be canonical lowercase 32-byte hex"
+            ))
+        })?;
         Ok(out)
     }
 
@@ -7676,15 +7692,17 @@ pub mod isi {
         if raw.is_empty() {
             return Ok(Vec::new());
         }
-        let bytes = hex::decode(raw.trim_start_matches("0x")).map_err(|_| {
-            invalid_bridge_proof(format!("{context} `{field}` must be 20-byte hex"))
-        })?;
-        if bytes.len() != iroha_sccp::SCCP_EVM_SOURCE_BRIDGE_EMITTER_ADDRESS_BYTES {
-            return Err(invalid_bridge_proof(format!(
-                "{context} `{field}` must be 20-byte hex"
-            )));
-        }
-        Ok(bytes)
+        let body = canonical_sccp_hex_body(
+            raw,
+            iroha_sccp::SCCP_EVM_SOURCE_BRIDGE_EMITTER_ADDRESS_BYTES * 2,
+            context,
+            field,
+        )?;
+        hex::decode(body).map_err(|_| {
+            invalid_bridge_proof(format!(
+                "{context} `{field}` must be canonical lowercase 20-byte hex"
+            ))
+        })
     }
 
     fn configured_sccp_source_verifier_material_for_domain(
@@ -7789,18 +7807,14 @@ pub mod isi {
         raw: &str,
         field: &str,
     ) -> Result<[u8; 32], Error> {
-        let bytes = hex::decode(raw.trim_start_matches("0x")).map_err(|_| {
+        let body =
+            canonical_sccp_hex_body(raw, 64, "SCCP source adapter engine deployment", field)?;
+        let mut out = [0u8; 32];
+        hex::decode_to_slice(body, &mut out).map_err(|_| {
             invalid_bridge_proof(format!(
-                "SCCP source adapter engine deployment `{field}` must be 32-byte hex"
+                "SCCP source adapter engine deployment `{field}` must be canonical lowercase 32-byte hex"
             ))
         })?;
-        if bytes.len() != 32 {
-            return Err(invalid_bridge_proof(format!(
-                "SCCP source adapter engine deployment `{field}` must be 32-byte hex"
-            )));
-        }
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&bytes);
         Ok(out)
     }
 
@@ -8548,6 +8562,36 @@ pub mod isi {
         Ok(())
     }
 
+    fn configured_sccp_single_lane_launch_policy_v1() -> Option<(u32, &'static str, &'static str)> {
+        match iroha_sccp::sccp_production_policy_v1().launch_mode {
+            iroha_sccp::SccpLaunchModeV1::AllLanesAtOnce => None,
+            iroha_sccp::SccpLaunchModeV1::EthereumMainnetLane => Some((
+                iroha_sccp::SCCP_DOMAIN_ETH,
+                "SCCP Ethereum mainnet lane launch policy",
+                "Ethereum mainnet",
+            )),
+            iroha_sccp::SccpLaunchModeV1::BscMainnetLane => Some((
+                iroha_sccp::SCCP_DOMAIN_BSC,
+                "SCCP BSC mainnet lane launch policy",
+                "BSC mainnet",
+            )),
+        }
+    }
+
+    fn validate_configured_sccp_single_lane_launch_scope(domain: u32) -> Result<(), Error> {
+        let Some((launch_domain, launch_policy_label, launch_source_label)) =
+            configured_sccp_single_lane_launch_policy_v1()
+        else {
+            return Ok(());
+        };
+        if domain != launch_domain {
+            return Err(invalid_bridge_proof(format!(
+                "{launch_policy_label} only admits {launch_source_label} source proofs before domain {domain} is enabled"
+            )));
+        }
+        Ok(())
+    }
+
     fn validate_configured_sccp_lane_launch_ready(
         zk_config: &iroha_config::parameters::actual::Zk,
         domain: u32,
@@ -8556,27 +8600,11 @@ pub mod isi {
         destination_rollout: &iroha_sccp::SccpDestinationRolloutV1,
         route_allowlist: &iroha_sccp::SccpRouteAllowlistReadinessV1,
     ) -> Result<(), Error> {
-        let (launch_domain, launch_policy_label, launch_source_label) =
-            match iroha_sccp::sccp_production_policy_v1().launch_mode {
-                iroha_sccp::SccpLaunchModeV1::AllLanesAtOnce => {
-                    return validate_configured_sccp_all_lanes_launch_ready(zk_config);
-                }
-                iroha_sccp::SccpLaunchModeV1::EthereumMainnetLane => (
-                    iroha_sccp::SCCP_DOMAIN_ETH,
-                    "SCCP Ethereum mainnet lane launch policy",
-                    "Ethereum mainnet",
-                ),
-                iroha_sccp::SccpLaunchModeV1::BscMainnetLane => (
-                    iroha_sccp::SCCP_DOMAIN_BSC,
-                    "SCCP BSC mainnet lane launch policy",
-                    "BSC mainnet",
-                ),
-            };
-        if domain != launch_domain {
-            return Err(invalid_bridge_proof(format!(
-                "{launch_policy_label} only admits {launch_source_label} source proofs before domain {domain} is enabled"
-            )));
-        }
+        let Some((_, launch_policy_label, _)) = configured_sccp_single_lane_launch_policy_v1()
+        else {
+            return validate_configured_sccp_all_lanes_launch_ready(zk_config);
+        };
+        validate_configured_sccp_single_lane_launch_scope(domain)?;
 
         let readiness =
             iroha_sccp::sccp_lane_production_readiness_with_deployment_materials_for_domain(
@@ -8676,6 +8704,7 @@ pub mod isi {
             configured_source_material.as_ref(),
             configured_source_deployment.as_ref(),
         ) {
+            validate_configured_sccp_single_lane_launch_scope(source_domain)?;
             let destination_rollout = configured_sccp_destination_rollout_for_domain(
                 &state_transaction.zk,
                 source_domain,
@@ -16834,6 +16863,95 @@ pub mod isi {
             }
 
             zk
+        }
+
+        #[test]
+        fn configured_sccp_source_verifier_material_rejects_noncanonical_hex() {
+            let domain = iroha_sccp::SCCP_DOMAIN_SOL;
+            let material = test_sccp_source_verifier_material_for_domain(domain, 0xa0);
+            let canonical_hash = hex::encode(material.source_trust_anchor_hash);
+            let forged_hashes = [
+                ("uppercase", canonical_hash.to_ascii_uppercase()),
+                (
+                    "prefixed uppercase",
+                    format!("0x{}", canonical_hash.to_ascii_uppercase()),
+                ),
+                ("repeated prefix", format!("0x0x{canonical_hash}")),
+            ];
+
+            for (label, forged_hash) in forged_hashes {
+                let mut zk = crate::state::default_zk_config();
+                zk.sccp_source_verifier_materials.clear();
+                let mut actual = test_actual_sccp_source_verifier_material(&material);
+                actual.source_trust_anchor_hash = forged_hash;
+                zk.sccp_source_verifier_materials.push(actual);
+
+                let err = super::configured_sccp_source_verifier_material_for_domain(&zk, domain)
+                    .expect_err("noncanonical source verifier material hex must fail");
+                let err = format!("{err:?}");
+                assert!(
+                    err.contains("source_trust_anchor_hash")
+                        && err.contains("canonical lowercase 32-byte hex"),
+                    "unexpected error for {label}: {err}",
+                );
+            }
+        }
+
+        #[test]
+        fn configured_sccp_source_adapter_deployment_rejects_noncanonical_hex() {
+            let domain = iroha_sccp::SCCP_DOMAIN_ETH;
+            let material = test_sccp_source_verifier_material_for_domain(domain, 0xa0);
+            let deployment =
+                test_sccp_source_adapter_deployment_for_domain(domain, &material, 0xa0);
+            let canonical_vk_hash = hex::encode(deployment.adapter_verifier_vk_hash);
+            let canonical_emitter = hex::encode(&deployment.source_bridge_emitter_address);
+            let cases = [
+                (
+                    "uppercase verifier hash",
+                    "adapter_verifier_vk_hash",
+                    canonical_vk_hash.to_ascii_uppercase(),
+                ),
+                (
+                    "repeated verifier hash prefix",
+                    "adapter_verifier_vk_hash",
+                    format!("0x0x{canonical_vk_hash}"),
+                ),
+                (
+                    "uppercase emitter address",
+                    "source_bridge_emitter_address",
+                    format!("0x{}", canonical_emitter.to_ascii_uppercase()),
+                ),
+            ];
+
+            for (label, field, forged_value) in cases {
+                let mut zk = crate::state::default_zk_config();
+                zk.sccp_source_verifier_materials.clear();
+                zk.sccp_source_adapter_engine_deployments.clear();
+                zk.sccp_source_verifier_materials
+                    .push(test_actual_sccp_source_verifier_material(&material));
+                let mut actual_deployment =
+                    test_actual_sccp_source_adapter_deployment(&material, &deployment);
+                match field {
+                    "adapter_verifier_vk_hash" => {
+                        actual_deployment.adapter_verifier_vk_hash = forged_value;
+                    }
+                    "source_bridge_emitter_address" => {
+                        actual_deployment.source_bridge_emitter_address = forged_value;
+                    }
+                    _ => unreachable!("unknown SCCP deployment test field"),
+                }
+                zk.sccp_source_adapter_engine_deployments
+                    .push(actual_deployment);
+
+                let err =
+                    super::configured_sccp_source_adapter_engine_deployment_for_domain(&zk, domain)
+                        .expect_err("noncanonical source adapter deployment hex must fail");
+                let err = format!("{err:?}");
+                assert!(
+                    err.contains(field) && err.contains("canonical lowercase"),
+                    "unexpected error for {label}: {err}",
+                );
+            }
         }
 
         #[test]

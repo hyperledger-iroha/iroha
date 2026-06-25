@@ -124,6 +124,17 @@ def load_report_module():
     return module
 
 
+def assert_phase_output_matches_required_fragments(report, phase: str, output: str) -> None:
+    """Assert that a dry-run phase would satisfy release transcript matching."""
+
+    commands = report._phase_command_lines(output)
+    for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]:
+        assert any(
+            report._phase_command_matches_required_fragment(phase, command, fragment)
+            for command in commands
+        ), f"{phase} dry-run missing required release fragment: {fragment}"
+
+
 def test_sccp_production_corridor_script_is_listable() -> None:
     """The runner must stay syntactically valid and expose every release phase."""
 
@@ -480,8 +491,7 @@ def test_sccp_production_corridor_override_dry_run_matches_release_fragments() -
         else:
             end = len(output)
         phase_output = output[start:end]
-        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]:
-            assert fragment in phase_output
+        assert_phase_output_matches_required_fragments(report, phase, phase_output)
 
 
 def test_sccp_production_corridor_dry_run_matches_release_phase_fragments() -> None:
@@ -517,8 +527,7 @@ def test_sccp_production_corridor_dry_run_matches_release_phase_fragments() -> N
         else:
             end = len(output)
         phase_output = output[start:end]
-        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]:
-            assert fragment in phase_output
+        assert_phase_output_matches_required_fragments(report, phase, phase_output)
 
 
 def test_sccp_production_corridor_evidence_phase_has_no_untracked_pytests() -> None:
@@ -715,6 +724,8 @@ def test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades() -> No
     assert "DOTNET_CLI_UI_LANGUAGE=en" in completed.stdout
     assert "dotnet --version" in completed.stdout
     assert "dotnet --info" in completed.stdout
+    assert "CARGO_TARGET_DIR=" in completed.stdout
+    assert "cargo build -p connect_norito_bridge" in completed.stdout
     assert "dotnet restore Hyperledger.Iroha.Sdk.sln" in completed.stdout
     assert (
         "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/"
@@ -726,14 +737,93 @@ def test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades() -> No
     assert "SCCP production corridor dry run completed." in completed.stdout
 
     script = SCRIPT.read_text(encoding="utf-8")
-    assert "canonical .NET 8 SDK version" in script
+    assert "stable canonical .NET 8.0.x SDK version" in script
+    assert "non-zero patch" in script
+    assert r"^8\.0\.[1-9][0-9]*$" in script
+    assert r"^8\.[0-9]+\.[0-9]+(-[A-Za-z0-9][A-Za-z0-9_.-]*)?$" not in script
     assert "OS Architecture:" in script
     assert "canonical Windows RID" in script
     assert "SCCP .NET SDK Architecture:" in script
     assert "canonical architecture" in script
     assert "^(x64|x86|arm64|arm)$" in script
+    assert "requires the Windows RID architecture to match" in script
+    assert "connect_norito_bridge.dll" in script
+    assert "connect_norito_bridge native bridge:" in script
+    assert "connect_norito_bridge native bridge sha256:" in script
+    assert "non-canonical native bridge SHA-256" in script
     assert "requires exactly one .NET TRX result" in script
+    assert '[[ ! -s "$dotnet_trx_path" ]]' in script
+    assert "empty TRX result" in script
     assert "SCCP .NET SDK TRX:" in script
+    assert "SCCP .NET SDK TRX bytes:" in script
+    assert r"^[1-9][0-9]*$" in script
+    assert (
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/*/TestResults/"
+        "sccp-dotnet-sdk.trx"
+    ) in script
+    assert "*sccp-dotnet-sdk.trx" not in script
+
+
+def test_sccp_production_corridor_dotnet_phase_rejects_rid_architecture_mismatch(
+    tmp_path: Path,
+) -> None:
+    """Windows .NET evidence must fail before build when RID and arch diverge."""
+
+    dotnet_root = tmp_path / "dotnet-root"
+    dotnet_root.mkdir()
+    fake_dotnet = dotnet_root / "dotnet"
+    fake_dotnet.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  --version)
+    printf '8.0.101\\n'
+    ;;
+  --info)
+    cat <<'EOF'
+.NET SDK:
+ Version:           8.0.101
+
+Host:
+  Version:      8.0.1
+  Architecture: arm64
+
+Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  OS Architecture: arm64
+  RID:         win-x64
+EOF
+    ;;
+  *)
+    printf 'unexpected fake dotnet invocation: %s\\n' "$*" >&2
+    exit 99
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_dotnet.chmod(0o755)
+    env = os.environ.copy()
+    env["DOTNET_ROOT"] = str(dotnet_root)
+
+    completed = subprocess.run(
+        ["bash", str(SCRIPT), "--phase", "dotnet-sdk"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+
+    assert completed.returncode == 1
+    assert "SCCP .NET SDK validation requires the Windows RID architecture to match" in (
+        completed.stderr
+    )
+    assert "RID: win-x64" in completed.stderr
+    assert "architecture: arm64" in completed.stderr
+    assert "cargo build -p connect_norito_bridge" not in completed.stdout
+    assert "dotnet restore Hyperledger.Iroha.Sdk.sln" not in completed.stdout
+    assert "dotnet test tests/Hyperledger.Iroha.Sdk.Tests" not in completed.stdout
 
 
 def test_sccp_production_corridor_java_home_resolver_handles_homebrew_jdk() -> None:

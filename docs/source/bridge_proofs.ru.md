@@ -16,8 +16,11 @@ translation_last_reviewed: 2026-06-21
 ## Область запуска SCCP
 
 Текущая поверхность SCCP ограничена Ethereum, BSC, Solana, TON и TRON.
+Retired runtime-network families outside that launch scope are not supported for now.
 SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.
 Это предложение фиксирует границу поддержки текущего релиза, а не отложенную задачу запуска SCCP.
+That exclusion is intentional current-launch scope, not a hidden compatibility lane.
+Do not track that family as remaining SCCP launch work in this cycle.
 Для этого семейства сетей в текущий запуск SCCP не входят relayer adapter, route manifest, proof fixture или public discovery route.
 
 ## Правила принятия

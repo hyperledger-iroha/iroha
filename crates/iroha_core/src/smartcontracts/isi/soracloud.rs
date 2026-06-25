@@ -16,6 +16,7 @@ use iroha_crypto::fhe_bfv::{
 use iroha_crypto::fhe_bfv::{
     BfvFullBootstrapExecutionProverInputMaterialV1, BfvFullBootstrapMaterialProofInputMaterialV1,
     bfv_full_bootstrap_arithmetic_air_evaluation_material_v1,
+    bfv_full_bootstrap_arithmetic_trace_material_digest_v1,
     bfv_full_bootstrap_arithmetic_trace_material_v1,
     bfv_full_bootstrap_execution_proof_input_material_v1,
     bfv_full_bootstrap_execution_prover_input_material_digest_for_artifacts_v1,
@@ -49,7 +50,7 @@ use iroha_crypto::{
         bfv_multiply_bounded_noise_output_bound, bfv_multiply_output_residual_multiple_bound,
         bfv_packed_rotate_left_bounded_noise_output_bound,
         bfv_packed_rotate_left_output_residual_multiple_bound,
-        bfv_rotate_slots_left_bounded_noise_output_bounds,
+        bfv_rotate_slots_left_bounded_noise_registered_rns_basis_extension_output_bounds,
         bfv_rotate_slots_left_output_residual_multiple_bounds,
         bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_rounds,
         bootstrap_ciphertext_registered_rns_exact_rounds,
@@ -64,7 +65,7 @@ use iroha_crypto::{
         multiply_ciphertexts_registered_rns_exact, multiply_plain_scalar,
         ram_lfe_bfv_parameters_v1, registered_bfv_key_switch_decomposition_chain_digest,
         registered_bfv_parameter_digest, registered_bfv_rns_modulus_chain_digest,
-        rotate_ciphertext_slots_left_bounded_noise_registered_rns_exact,
+        rotate_ciphertext_slots_left_bounded_noise_registered_rns_basis_extension_exact,
         rotate_ciphertext_slots_left_registered_rns_exact,
         rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_registered_rns_basis_extension_exact,
         rotate_packed_ciphertext_slots_left_with_galois_keys_registered_rns_exact,
@@ -1105,14 +1106,6 @@ fn validate_soracloud_fhe_stark_native_envelope_bytes(
 }
 
 fn soracloud_fhe_stark_native_envelope_bytes_are_placeholder_text(envelope_bytes: &[u8]) -> bool {
-    if !envelope_bytes
-        .iter()
-        .all(|byte| byte.is_ascii_graphic() || byte.is_ascii_whitespace())
-    {
-        return false;
-    }
-    let mut lower = Vec::with_capacity(envelope_bytes.len());
-    lower.extend(envelope_bytes.iter().map(u8::to_ascii_lowercase));
     const PLACEHOLDER_MARKERS: &[&[u8]] = &[
         b"placeholder",
         b"not production ready",
@@ -1159,7 +1152,39 @@ fn soracloud_fhe_stark_native_envelope_bytes_are_placeholder_text(envelope_bytes
         b"template",
         b"example",
     ];
-    soracloud_ascii_text_contains_placeholder_marker(&lower, PLACEHOLDER_MARKERS)
+    let is_text_byte = |byte: &u8| byte.is_ascii_graphic() || byte.is_ascii_whitespace();
+    if envelope_bytes.iter().all(is_text_byte) {
+        return soracloud_fhe_stark_native_envelope_text_span_is_placeholder(
+            envelope_bytes,
+            PLACEHOLDER_MARKERS,
+        );
+    }
+    let Some(start) = envelope_bytes.iter().position(is_text_byte) else {
+        return false;
+    };
+    let Some(end) = envelope_bytes
+        .iter()
+        .rposition(is_text_byte)
+        .map(|index| index + 1)
+    else {
+        return false;
+    };
+    let decorated_text = &envelope_bytes[start..end];
+    decorated_text.iter().all(is_text_byte)
+        && !decorated_text.iter().all(u8::is_ascii_whitespace)
+        && soracloud_fhe_stark_native_envelope_text_span_is_placeholder(
+            decorated_text,
+            PLACEHOLDER_MARKERS,
+        )
+}
+
+fn soracloud_fhe_stark_native_envelope_text_span_is_placeholder(
+    text: &[u8],
+    markers: &[&[u8]],
+) -> bool {
+    let mut lower = Vec::with_capacity(text.len());
+    lower.extend(text.iter().map(u8::to_ascii_lowercase));
+    soracloud_ascii_text_contains_placeholder_marker(&lower, markers)
 }
 
 const SORACLOUD_COLLAPSED_PLACEHOLDER_MARKER_MIN_BYTES: usize = 5;
@@ -1730,6 +1755,10 @@ struct BfvFullBootstrapNativeAirPublicPaddingContext {
     #[cfg(feature = "zk-stark")]
     bound_mode: BfvFullBootstrapExecutionProofBoundModeV1,
     #[cfg(feature = "zk-stark")]
+    trace_material_digest: Hash,
+    #[cfg(feature = "zk-stark")]
+    expected_trace_material_digest: Option<Hash>,
+    #[cfg(feature = "zk-stark")]
     expected_trace_rows: Option<Vec<Vec<u64>>>,
     #[cfg(feature = "zk-stark")]
     expected_composition_values: Option<Vec<u64>>,
@@ -2091,11 +2120,29 @@ fn soracloud_fhe_full_bootstrap_native_air_domain_tag_matches_v1(
 }
 
 #[cfg(feature = "zk-stark")]
+#[cfg(test)]
 fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
     label: &str,
     statement_hash: Hash,
     native: &crate::zk_stark::StarkVerifyEnvelopeV1,
     public_padding_context: Option<BfvFullBootstrapNativeAirPublicPaddingContext>,
+) -> Result<(), InstructionExecutionError> {
+    validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary_with_limits(
+        label,
+        statement_hash,
+        native,
+        public_padding_context,
+        &crate::zk_stark::StarkVerifierLimits::default(),
+    )
+}
+
+#[cfg(feature = "zk-stark")]
+fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary_with_limits(
+    label: &str,
+    statement_hash: Hash,
+    native: &crate::zk_stark::StarkVerifyEnvelopeV1,
+    public_padding_context: Option<BfvFullBootstrapNativeAirPublicPaddingContext>,
+    limits: &crate::zk_stark::StarkVerifierLimits,
 ) -> Result<(), InstructionExecutionError> {
     if statement_hash == Hash::prehashed([0_u8; Hash::LENGTH]) {
         return Err(invalid_parameter(format!(
@@ -2240,6 +2287,15 @@ fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
             "{label} native BFV AIR public padding context is required"
         ))
     })?;
+    if let Some(expected_trace_material_digest) = public_padding_context
+        .expected_trace_material_digest
+        .as_ref()
+        && &public_padding_context.trace_material_digest != expected_trace_material_digest
+    {
+        return Err(invalid_parameter(format!(
+            "{label} native BFV AIR trace material digest mismatch"
+        )));
+    }
     let expected_trace_rows = public_padding_context
         .expected_trace_rows
         .as_ref()
@@ -2297,27 +2353,55 @@ fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
         .iter()
         .map(|opening| opening.index)
         .collect::<Vec<_>>();
-    iroha_crypto::fhe_bfv::validate_bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_v1(
+    let opened_rows = air
+        .openings
+        .iter()
+        .map(|opening| opening.row.clone())
+        .collect::<Vec<_>>();
+    let opened_next_rows = air
+        .openings
+        .iter()
+        .map(|opening| opening.next_row.clone())
+        .collect::<Vec<_>>();
+    iroha_crypto::fhe_bfv::validate_bfv_full_bootstrap_arithmetic_trace_transcript_public_padding_openings_v1(
         &opening_indices,
+        &opened_rows,
+        &opened_next_rows,
+        statement_hash,
+        public_padding_context.trace_material_digest,
+        public_padding_context.slot_index,
+        public_padding_context.bound_mode,
     )
     .map_err(|err| {
         invalid_parameter(format!(
-            "{label} native BFV AIR privacy boundary failed validation: {err}"
+            "{label} native BFV AIR transcript public-padding openings failed validation: {err}"
         ))
     })?;
-    let extra_query_roots = [air.trace_root, air.composition_root, air.public_digest];
-    let sampled_query_indices = crate::zk_stark::validate_stark_fri_query_shape_and_indices_v1(
-        &native.params,
-        &native.transcript_label,
-        &native.proof.commits.roots,
-        &extra_query_roots,
-        &native.proof.queries,
-    )
-    .map_err(|err| {
-        invalid_parameter(format!(
-            "{label} native BFV AIR FRI query shape failed validation: {err}"
-        ))
-    })?;
+    let expected_query_indices = opening_indices
+        .iter()
+        .copied()
+        .map(|index| {
+            usize::try_from(index).map_err(|_| {
+                invalid_parameter(format!(
+                    "{label} native BFV AIR opening index exceeds platform usize"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let sampled_query_indices =
+        crate::zk_stark::validate_stark_fri_query_shape_for_base_indices_with_limits_v1(
+            &native.params,
+            &native.transcript_label,
+            &native.proof.commits.roots,
+            &native.proof.queries,
+            &expected_query_indices,
+            limits,
+        )
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "{label} native BFV AIR FRI query shape failed validation: {err}"
+            ))
+        })?;
     let sampled_query_indices_u32 = sampled_query_indices
         .iter()
         .copied()
@@ -2435,10 +2519,11 @@ fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
                 "{opening_label} public padding composition value must be zero"
             )));
         }
-        crate::zk_stark::validate_stark_air_opening_commitment_roots_v1(
+        crate::zk_stark::validate_stark_air_opening_commitment_roots_with_limits_v1(
             &native.params,
             air,
             opening,
+            limits,
         )
         .map_err(|err| {
             invalid_parameter(format!(
@@ -2588,23 +2673,25 @@ fn verify_soracloud_fhe_full_bootstrap_arithmetic_stark_air(
             "{label} proof requires a dedicated BFV full-bootstrap arithmetic STARK/AIR proof; {FHE_FULL_BOOTSTRAP_GENERIC_BINDING_AIR_REJECTED}"
         )));
     }
-    validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+    let mut limits = crate::zk_stark::StarkVerifierLimits::default();
+    limits.max_envelope_bytes = guardrails.stark_max_proof_bytes;
+    validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary_with_limits(
         label,
         statement_hash,
         &native,
         public_padding_context.clone(),
+        &limits,
     )?;
     let public_padding_context = public_padding_context.as_ref().ok_or_else(|| {
         invalid_parameter(format!(
             "{label} native BFV AIR governed trace context is required"
         ))
     })?;
-    let mut public_padding_limits = crate::zk_stark::StarkVerifierLimits::default();
-    public_padding_limits.max_envelope_bytes = guardrails.stark_max_proof_bytes;
     if !crate::zk_stark::verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
         &open.envelope_bytes,
-        &public_padding_limits,
+        &limits,
         statement_hash,
+        public_padding_context.trace_material_digest,
         public_padding_context.slot_index,
         public_padding_context.bound_mode,
     ) {
@@ -2629,15 +2716,33 @@ fn verify_soracloud_fhe_full_bootstrap_arithmetic_stark_air(
             ))
         })?;
     let expected_public_digest = <[u8; Hash::LENGTH]>::from(statement_hash);
-    let mut limits = crate::zk_stark::StarkVerifierLimits::default();
-    limits.max_envelope_bytes = guardrails.stark_max_proof_bytes;
-    if !crate::zk_stark::verify_stark_fri_air_envelope_from_rows_and_composition_values_with_limits(
+    let expected_base_indices =
+        iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transcript_v1(
+            statement_hash,
+            public_padding_context.trace_material_digest,
+        )
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "{label} native BFV AIR opening schedule derivation failed: {err}"
+            ))
+        })?
+        .into_iter()
+        .map(|index| {
+            usize::try_from(index).map_err(|_| {
+                invalid_parameter(format!(
+                    "{label} native BFV AIR opening index exceeds platform usize"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if !crate::zk_stark::verify_stark_fri_air_envelope_from_rows_and_composition_values_with_base_indices_with_limits(
         &open.envelope_bytes,
         &limits,
         iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
         &expected_public_digest,
         expected_trace_rows,
         expected_composition_values,
+        &expected_base_indices,
     ) {
         return Err(invalid_parameter(format!(
             "{label} native BFV AIR explicit STARK verifier rejected governed trace material"
@@ -2730,6 +2835,8 @@ fn validate_soracloud_fhe_full_bootstrap_material_native_air_envelope_bytes_for_
             "{label} native material AIR envelope exceeds configured STARK proof byte cap"
         )));
     }
+    let mut limits = crate::zk_stark::StarkVerifierLimits::default();
+    limits.max_envelope_bytes = max_envelope_bytes;
     let native: crate::zk_stark::StarkVerifyEnvelopeV1 = norito::decode_from_bytes(envelope_bytes)
         .map_err(|err| {
             invalid_parameter(format!(
@@ -2859,18 +2966,20 @@ fn validate_soracloud_fhe_full_bootstrap_material_native_air_envelope_bytes_for_
     let goldilocks_modulus =
         iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1;
     let extra_query_roots = [air.trace_root, air.composition_root, air.public_digest];
-    let sampled_query_indices = crate::zk_stark::validate_stark_fri_query_shape_and_indices_v1(
-        &native.params,
-        &native.transcript_label,
-        &native.proof.commits.roots,
-        &extra_query_roots,
-        &native.proof.queries,
-    )
-    .map_err(|err| {
-        invalid_parameter(format!(
-            "{label} native material AIR FRI query shape failed validation: {err}"
-        ))
-    })?;
+    let sampled_query_indices =
+        crate::zk_stark::validate_stark_fri_query_shape_and_indices_with_limits_v1(
+            &native.params,
+            &native.transcript_label,
+            &native.proof.commits.roots,
+            &extra_query_roots,
+            &native.proof.queries,
+            &limits,
+        )
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "{label} native material AIR FRI query shape failed validation: {err}"
+            ))
+        })?;
     let sampled_query_indices_u32 = sampled_query_indices
         .iter()
         .copied()
@@ -2980,10 +3089,11 @@ fn validate_soracloud_fhe_full_bootstrap_material_native_air_envelope_bytes_for_
             expected_merkle_depth,
             opening_index,
         )?;
-        crate::zk_stark::validate_stark_air_opening_commitment_roots_v1(
+        crate::zk_stark::validate_stark_air_opening_commitment_roots_with_limits_v1(
             &native.params,
             air,
             opening,
+            &limits,
         )
         .map_err(|err| {
             invalid_parameter(format!(
@@ -3016,8 +3126,6 @@ fn validate_soracloud_fhe_full_bootstrap_material_native_air_envelope_bytes_for_
         })?;
     }
     let expected_public_digest = <[u8; Hash::LENGTH]>::from(statement_hash);
-    let mut limits = crate::zk_stark::StarkVerifierLimits::default();
-    limits.max_envelope_bytes = max_envelope_bytes;
     if !crate::zk_stark::verify_stark_fri_air_envelope_from_rows_and_composition_values_with_limits(
         envelope_bytes,
         &limits,
@@ -4711,7 +4819,7 @@ fn verify_soracloud_fhe_full_bootstrap_execution_proofs(
                 ))
             })?;
         #[cfg(feature = "zk-stark")]
-        let (expected_trace_rows, expected_composition_values) = {
+        let (trace_material_digest, expected_trace_rows, expected_composition_values) = {
             let witness_material = bfv_full_bootstrap_execution_witness_digest_material_v1(
                 params,
                 bootstrap_key,
@@ -4750,7 +4858,15 @@ fn verify_soracloud_fhe_full_bootstrap_execution_proofs(
                         "failed to derive FHE full-bootstrap execution verifier AIR evaluation for slot {slot_index}: {err}"
                     ))
                 })?;
+            let trace_material_digest =
+                bfv_full_bootstrap_arithmetic_trace_material_digest_v1(&arithmetic_trace_material)
+                    .map_err(|err| {
+                        invalid_parameter(format!(
+                            "failed to derive FHE full-bootstrap execution verifier arithmetic trace digest for slot {slot_index}: {err}"
+                        ))
+                    })?;
             (
+                trace_material_digest,
                 Some(arithmetic_trace_material.rows),
                 Some(arithmetic_air_evaluation_material.composition_values),
             )
@@ -4779,6 +4895,10 @@ fn verify_soracloud_fhe_full_bootstrap_execution_proofs(
                 slot_index: slot_index_u32,
                 #[cfg(feature = "zk-stark")]
                 bound_mode: proof_bound_mode,
+                #[cfg(feature = "zk-stark")]
+                trace_material_digest,
+                #[cfg(feature = "zk-stark")]
+                expected_trace_material_digest: Some(trace_material_digest),
                 #[cfg(feature = "zk-stark")]
                 expected_trace_rows,
                 #[cfg(feature = "zk-stark")]
@@ -9795,14 +9915,15 @@ fn soracloud_fhe_job_output_bounded_noise_bound(
                     ))
                 })?;
             let slot_bounds = vec![input_bound; slots.len()];
-            let output_bounds = bfv_rotate_slots_left_bounded_noise_output_bounds(
-                params,
-                rotation_key,
-                &slot_bounds,
-            )
-            .map_err(|err| {
-                invalid_parameter(format!("FHE rotate bounded-noise bound exceeded: {err}"))
-            })?;
+            let output_bounds =
+                bfv_rotate_slots_left_bounded_noise_registered_rns_basis_extension_output_bounds(
+                    params,
+                    rotation_key,
+                    &slot_bounds,
+                )
+                .map_err(|err| {
+                    invalid_parameter(format!("FHE rotate bounded-noise bound exceeded: {err}"))
+                })?;
             Ok(output_bounds.into_iter().max())
         }
         FheJobOperationV1::Bootstrap => {
@@ -10220,12 +10341,15 @@ fn execute_soracloud_fhe_job_bounded_noise_with_full_bootstrap_artifacts(
                         job.rotation_steps
                     ))
                 })?;
-            let slots = rotate_ciphertext_slots_left_bounded_noise_registered_rns_exact(
-                params,
-                rotation_key,
-                slots,
-            )
-            .map_err(|err| invalid_parameter(format!("FHE bounded-noise rotate failed: {err}")))?;
+            let slots =
+                rotate_ciphertext_slots_left_bounded_noise_registered_rns_basis_extension_exact(
+                    params,
+                    rotation_key,
+                    slots,
+                )
+                .map_err(|err| {
+                    invalid_parameter(format!("FHE bounded-noise rotate failed: {err}"))
+                })?;
             Ok(BfvIdentifierCiphertext { slots })
         }
         FheJobOperationV1::Bootstrap => {
@@ -16696,65 +16820,57 @@ fn build_soracloud_fhe_full_bootstrap_execution_native_air_envelope_bytes_from_t
         statement_hash,
     )?;
     let stark_params = soracloud_fhe_full_bootstrap_native_air_stark_params_v1(statement_hash);
-    for query_nonce in 0..FHE_FULL_BOOTSTRAP_NATIVE_AIR_QUERY_NONCE_LIMIT {
-        let transcript_label =
-            soracloud_fhe_full_bootstrap_native_air_transcript_label_v1(query_nonce);
-        let envelope_result =
-            crate::zk_stark::prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes(
-                stark_params.clone(),
-                transcript_label,
-                iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
-                <[u8; Hash::LENGTH]>::from(statement_hash),
-                arithmetic_trace_material.rows.clone(),
-                arithmetic_air_evaluation_material
-                    .composition_values
-                    .clone(),
-            );
-        let envelope_bytes = match envelope_result {
-            Ok(envelope_bytes) => envelope_bytes,
-            Err(err) if err.contains(crate::zk_stark::STARK_FRI_QUERY_INDEX_REPEATED_ERROR) => {
-                continue;
-            }
-            Err(err) => {
-                return Err(invalid_parameter(format!(
-                    "FHE full-bootstrap execution native AIR envelope generation failed: {err}"
-                )));
-            }
-        };
-        let native_envelope: crate::zk_stark::StarkVerifyEnvelopeV1 =
-            norito::decode_from_bytes(&envelope_bytes).map_err(|err| {
-                invalid_parameter(format!(
-                    "FHE full-bootstrap execution native AIR envelope decode failed: {err}"
-                ))
-            })?;
-        let Some(air) = native_envelope.proof.air.as_ref() else {
-            return Err(invalid_parameter(
-                "FHE full-bootstrap execution native AIR envelope is missing AIR section",
-            ));
-        };
-        let opening_indices = air
-            .openings
-            .iter()
-            .map(|opening| opening.index)
-            .collect::<Vec<_>>();
-        if iroha_crypto::fhe_bfv::validate_bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_v1(
-            &opening_indices,
-        )
-        .is_err()
-        {
-            continue;
-        }
-        validate_soracloud_fhe_full_bootstrap_execution_native_air_envelope_bytes_for_trace_material_v1(
-            &envelope_bytes,
+    let trace_material_digest =
+        iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_trace_material_digest_v1(
             arithmetic_trace_material,
-            arithmetic_air_evaluation_material,
-        )?;
-        return Ok(envelope_bytes);
-    }
-    Err(invalid_parameter(format!(
-        "FHE full-bootstrap execution native AIR envelope generation failed to derive public-row query nonce within {} attempts",
-        FHE_FULL_BOOTSTRAP_NATIVE_AIR_QUERY_NONCE_LIMIT
-    )))
+        )
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "FHE full-bootstrap execution arithmetic trace material digest failed validation: {err}"
+            ))
+        })?;
+    let expected_base_indices =
+        iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transcript_v1(
+            statement_hash,
+            trace_material_digest,
+        )
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "FHE full-bootstrap execution native AIR opening schedule derivation failed: {err}"
+            ))
+        })?
+        .into_iter()
+        .map(|index| {
+            usize::try_from(index).map_err(|_| {
+                invalid_parameter(
+                    "FHE full-bootstrap execution native AIR opening index exceeds platform usize",
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let envelope_bytes =
+        crate::zk_stark::prove_stark_fri_air_envelope_from_rows_and_composition_values_with_base_indices_bytes(
+            stark_params,
+            soracloud_fhe_full_bootstrap_native_air_transcript_label_v1(0),
+            iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
+            <[u8; Hash::LENGTH]>::from(statement_hash),
+            arithmetic_trace_material.rows.clone(),
+            arithmetic_air_evaluation_material
+                .composition_values
+                .clone(),
+            &expected_base_indices,
+        )
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "FHE full-bootstrap execution native AIR envelope generation failed: {err}"
+            ))
+        })?;
+    validate_soracloud_fhe_full_bootstrap_execution_native_air_envelope_bytes_for_trace_material_v1(
+        &envelope_bytes,
+        arithmetic_trace_material,
+        arithmetic_air_evaluation_material,
+    )?;
+    Ok(envelope_bytes)
 }
 
 #[cfg(all(test, feature = "zk-stark"))]
@@ -16797,9 +16913,20 @@ fn validate_soracloud_fhe_full_bootstrap_execution_native_air_envelope_bytes_for
         .proof_input_material
         .witness_material
         .bound_mode;
+    let trace_material_digest =
+        iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_trace_material_digest_v1(
+            arithmetic_trace_material,
+        )
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "FHE full-bootstrap execution arithmetic trace material digest failed validation: {err}"
+            ))
+        })?;
     let public_padding_context = BfvFullBootstrapNativeAirPublicPaddingContext {
         slot_index,
         bound_mode,
+        trace_material_digest,
+        expected_trace_material_digest: Some(trace_material_digest),
         expected_trace_rows: Some(arithmetic_trace_material.rows.clone()),
         expected_composition_values: Some(
             arithmetic_air_evaluation_material
@@ -16807,19 +16934,21 @@ fn validate_soracloud_fhe_full_bootstrap_execution_native_air_envelope_bytes_for
                 .clone(),
         ),
     };
-    validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
-        "FHE full-bootstrap execution proof",
-        statement_hash,
-        &native_envelope,
-        Some(public_padding_context),
-    )?;
     let mut limits = crate::zk_stark::StarkVerifierLimits::default();
     limits.max_envelope_bytes =
         SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_NATIVE_ENVELOPE_BYTES;
+    validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary_with_limits(
+        "FHE full-bootstrap execution proof",
+        statement_hash,
+        &native_envelope,
+        Some(public_padding_context.clone()),
+        &limits,
+    )?;
     if !crate::zk_stark::verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
         envelope_bytes,
         &limits,
         statement_hash,
+        public_padding_context.trace_material_digest,
         slot_index,
         bound_mode,
     ) {
@@ -16827,13 +16956,33 @@ fn validate_soracloud_fhe_full_bootstrap_execution_native_air_envelope_bytes_for
             "FHE full-bootstrap execution native AIR envelope shared public-padding verifier rejected release-prover public openings",
         ));
     }
-    if !crate::zk_stark::verify_stark_fri_air_envelope_from_rows_and_composition_values_with_limits(
+    let expected_base_indices =
+        iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transcript_v1(
+            statement_hash,
+            trace_material_digest,
+        )
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "FHE full-bootstrap execution native AIR opening schedule derivation failed: {err}"
+            ))
+        })?
+        .into_iter()
+        .map(|index| {
+            usize::try_from(index).map_err(|_| {
+                invalid_parameter(
+                    "FHE full-bootstrap execution native AIR opening index exceeds platform usize",
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if !crate::zk_stark::verify_stark_fri_air_envelope_from_rows_and_composition_values_with_base_indices_with_limits(
         envelope_bytes,
         &limits,
         iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
         &<[u8; Hash::LENGTH]>::from(statement_hash),
         &arithmetic_trace_material.rows,
         &arithmetic_air_evaluation_material.composition_values,
+        &expected_base_indices,
     ) {
         return Err(invalid_parameter(
             "FHE full-bootstrap execution native AIR envelope replay rejected release-prover trace material",
@@ -17590,6 +17739,7 @@ mod tests {
             keygen_bounded_noise_with_relinearization_from_seed, keygen_from_seed,
             packed_galois_slot_permutation, packed_left_rotation_galois_automorphism_power,
             packed_left_rotation_galois_automorphism_powers,
+            registered_bfv_centered_scale_round_source_chain_digest,
             registered_bfv_key_switch_decomposition_chain,
             registered_bfv_key_switch_decomposition_chain_digest, registered_bfv_parameter_digest,
             registered_bfv_rns_modulus_chain, registered_bfv_rns_modulus_chain_digest,
@@ -18682,6 +18832,9 @@ mod tests {
             key_switch_decomposition_chain_digest:
                 registered_bfv_key_switch_decomposition_chain_digest(params)
                     .expect("registered decomposition digest"),
+            centered_scale_round_source_chain_digest:
+                registered_bfv_centered_scale_round_source_chain_digest(params)
+                    .expect("registered centered scale-round source digest"),
             coefficient_to_slot_key_digest: Hash::new(&artifacts.coefficient_to_slot_key),
             slot_to_coefficient_key_digest: Hash::new(&artifacts.slot_to_coefficient_key),
             blind_rotation_key_digest: Hash::new(&artifacts.blind_rotation_key),
@@ -20048,23 +20201,75 @@ mod tests {
         .expect("derive sample full-bootstrap execution prover input material")
     }
 
-    const SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY: &[u8] =
-        b"soracloud-core-full-bootstrap-audit-report:approved-with-generated-circuit-findings-v1";
-    const SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BODY: &[u8] =
-        b"soracloud-core-full-bootstrap-audit-archive:evidence-bundle-for-generated-circuit-v1";
-
-    fn sample_full_bootstrap_release_audit_report_bytes() -> Vec<u8> {
-        iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_report_bytes_v1(
-            SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY,
-        )
-        .expect("sample release audit report bytes are canonical")
+    fn sample_full_bootstrap_release_audit_report_bytes_for_artifacts(
+        params: &BfvParameters,
+        material: &iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitMaterialV1,
+        artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    ) -> Vec<u8> {
+        let (report_bytes, _) =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_report_and_archive_bytes_for_artifacts_v1(
+                params,
+                material,
+                artifacts,
+            )
+            .expect("sample release audit report bytes bind governed artifacts");
+        report_bytes
     }
 
-    fn sample_full_bootstrap_release_audit_archive_bytes() -> Vec<u8> {
-        iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_archive_bytes_v1(
-            SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BODY,
-        )
-        .expect("sample release audit archive bytes are canonical")
+    fn sample_full_bootstrap_release_audit_archive_bytes_for_artifacts(
+        params: &BfvParameters,
+        material: &iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitMaterialV1,
+        artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    ) -> Vec<u8> {
+        let (_, archive_bytes) =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_report_and_archive_bytes_for_artifacts_v1(
+                params,
+                material,
+                artifacts,
+            )
+            .expect("sample release audit archive bytes bind governed artifacts");
+        archive_bytes
+    }
+
+    fn copied_full_bootstrap_release_audit_body_from_valid_artifacts(
+        report_bytes: &[u8],
+        archive_bytes: &[u8],
+    ) -> Vec<u8> {
+        let report_body = report_bytes
+            .strip_prefix(iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1)
+            .expect("sample release audit report bytes carry the v1 header");
+        let archive_body = archive_bytes
+            .strip_prefix(iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1)
+            .expect("sample release audit archive bytes carry the v1 header");
+        let mut seen_labels = std::collections::BTreeSet::new();
+        let mut copied_body =
+            b"copied-full-bootstrap-release-audit-report-and-archive-body-shared-evidence".to_vec();
+        for field in report_body
+            .split(|byte| *byte == b';')
+            .chain(archive_body.split(|byte| *byte == b';'))
+        {
+            let start = field
+                .iter()
+                .position(|byte| !byte.is_ascii_whitespace())
+                .unwrap_or(field.len());
+            let end = field
+                .iter()
+                .rposition(|byte| !byte.is_ascii_whitespace())
+                .map_or(start, |index| index + 1);
+            let trimmed = &field[start..end];
+            let Some(label_end) = trimmed.iter().position(|byte| *byte == b'=') else {
+                continue;
+            };
+            let label_key = trimmed[..label_end]
+                .iter()
+                .map(u8::to_ascii_lowercase)
+                .collect::<Vec<_>>();
+            if !label_key.is_empty() && seen_labels.insert(label_key) {
+                copied_body.extend_from_slice(b"; ");
+                copied_body.extend_from_slice(trimmed);
+            }
+        }
+        copied_body
     }
 
     fn sample_full_bootstrap_release_audit_package(
@@ -20073,6 +20278,24 @@ mod tests {
         artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
         reviewer_key_pair: &KeyPair,
     ) -> iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditPackageV1 {
+        sample_full_bootstrap_release_audit_package_and_digest(
+            params,
+            evaluation_keys,
+            artifacts,
+            reviewer_key_pair,
+        )
+        .0
+    }
+
+    fn sample_full_bootstrap_release_audit_package_and_digest(
+        params: &BfvParameters,
+        evaluation_keys: &BfvEvaluationKeyBundle,
+        artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+        reviewer_key_pair: &KeyPair,
+    ) -> (
+        iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditPackageV1,
+        Hash,
+    ) {
         let material = evaluation_keys
             .bootstrap_key
             .as_ref()
@@ -20080,16 +20303,55 @@ mod tests {
             .full_bootstrap_material
             .as_ref()
             .expect("sample full-bootstrap key carries governed material");
-        iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_package_v1(
+        let (generated_report_bytes, generated_archive_bytes) =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_report_and_archive_bytes_for_artifacts_v1(
+                params,
+                material,
+                artifacts,
+            )
+            .expect("sample full-bootstrap release audit generated report/archive bytes");
+        let generated_report_body = generated_report_bytes
+            .strip_prefix(iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1)
+            .expect("generated report bytes carry canonical header");
+        let generated_archive_body = generated_archive_bytes
+            .strip_prefix(iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1)
+            .expect("generated archive bytes carry canonical header");
+        let report_suffix = generated_report_body
+            .strip_prefix(b"machine-generated BFV full-bootstrap release audit report inventory v1")
+            .expect("generated report body carries deterministic inventory prefix");
+        let archive_suffix = generated_archive_body
+            .strip_prefix(
+                b"machine-generated BFV full-bootstrap release evidence archive inventory v1",
+            )
+            .expect("generated archive body carries deterministic inventory prefix");
+        let report_body = [
+            b"external-review-approved: reviewer-id=sora-zk-audit-wg-2026 independent BFV full-bootstrap release audit report v1"
+                .as_slice(),
+            report_suffix,
+        ]
+        .concat();
+        let archive_body = [
+            b"external-review-evidence-archive: reviewer-id=sora-zk-audit-wg-2026 independent BFV full-bootstrap prover verifier evidence v1"
+                .as_slice(),
+            archive_suffix,
+        ]
+        .concat();
+        let report_bytes =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_report_bytes_v1(&report_body)
+                .expect("sample external-review report bytes");
+        let archive_bytes =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_archive_bytes_v1(&archive_body)
+                .expect("sample external-review archive bytes");
+        iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_external_review_package_and_digest_v1(
             params,
             material,
             artifacts,
-            &sample_full_bootstrap_release_audit_report_bytes(),
-            &sample_full_bootstrap_release_audit_archive_bytes(),
+            &report_bytes,
+            &archive_bytes,
             "sora-zk-audit-wg-2026",
             reviewer_key_pair.private_key(),
         )
-        .expect("sample full-bootstrap release audit package validates")
+        .expect("sample external-review full-bootstrap release audit package and digest")
     }
 
     #[cfg(feature = "zk-stark")]
@@ -20181,13 +20443,6 @@ mod tests {
         )
     }
 
-    fn sample_full_bootstrap_release_audit_package_digest(
-        package: &iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditPackageV1,
-    ) -> Hash {
-        iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_package_digest_v1(package)
-            .expect("sample full-bootstrap release audit package digest validates")
-    }
-
     fn sample_full_bootstrap_execution_output_and_bounds(
         params: &BfvParameters,
         evaluation_keys: &BfvEvaluationKeyBundle,
@@ -20201,14 +20456,13 @@ mod tests {
         let input_bound =
             bfv_encrypted_zero_refresh_residual_multiple_bound(params).expect("input bound");
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            params,
-            evaluation_keys,
-            artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                params,
+                evaluation_keys,
+                artifacts,
+                &reviewer_key_pair,
+            );
         let slots = input
             .slots
             .iter()
@@ -20944,11 +21198,18 @@ mod tests {
     }
 
     #[cfg(feature = "zk-stark")]
+    fn sample_full_bootstrap_bfv_native_air_trace_material_digest() -> Hash {
+        Hash::new(b"sample Soracloud BFV full-bootstrap native AIR trace material")
+    }
+
+    #[cfg(feature = "zk-stark")]
     fn sample_full_bootstrap_bfv_native_air_public_padding_context()
     -> BfvFullBootstrapNativeAirPublicPaddingContext {
         BfvFullBootstrapNativeAirPublicPaddingContext {
             slot_index: 0,
             bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
+            trace_material_digest: sample_full_bootstrap_bfv_native_air_trace_material_digest(),
+            expected_trace_material_digest: None,
             expected_trace_rows: None,
             expected_composition_values: None,
         }
@@ -21002,6 +21263,8 @@ mod tests {
         BfvFullBootstrapNativeAirPublicPaddingContext {
             slot_index: 0,
             bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
+            trace_material_digest: sample_full_bootstrap_bfv_native_air_trace_material_digest(),
+            expected_trace_material_digest: None,
             expected_trace_rows: Some(expected_trace_rows),
             expected_composition_values: Some(expected_composition_values),
         }
@@ -21016,14 +21279,25 @@ mod tests {
             sample_full_bootstrap_bfv_native_air_material(statement_hash, params.n_log2);
         let transcript_label = soracloud_fhe_full_bootstrap_native_air_transcript_label_v1(0);
         let public_digest = <[u8; Hash::LENGTH]>::from(statement_hash);
+        let expected_base_indices =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transcript_v1(
+                statement_hash,
+                sample_full_bootstrap_bfv_native_air_trace_material_digest(),
+            )
+            .ok()?
+            .into_iter()
+            .map(usize::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
         let envelope_bytes =
-            crate::zk_stark::prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes(
+            crate::zk_stark::prove_stark_fri_air_envelope_from_rows_and_composition_values_with_base_indices_bytes(
                 params,
                 transcript_label,
                 iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
                 public_digest,
                 trace_rows,
                 composition_values,
+                &expected_base_indices,
             )
             .ok()?;
         norito::decode_from_bytes(&envelope_bytes).ok()
@@ -21089,20 +21363,17 @@ mod tests {
     fn sample_private_full_bootstrap_bfv_native_air_envelope(
         seed: &[u8],
     ) -> (Hash, crate::zk_stark::StarkVerifyEnvelopeV1) {
-        for nonce in 0_u64..10_000 {
-            let mut material = Vec::with_capacity(seed.len() + std::mem::size_of::<u64>());
-            material.extend_from_slice(seed);
-            material.extend_from_slice(&nonce.to_le_bytes());
-            let statement_hash = Hash::new(&material);
-            if let Some(native) = try_sample_full_bootstrap_bfv_native_air_envelope(statement_hash)
-            {
-                let opening_indices = bfv_native_air_opening_indices(&native);
-                if !bfv_native_air_opening_indices_are_public_only(&opening_indices) {
-                    return (statement_hash, native);
-                }
-            }
-        }
-        panic!("failed to find sample BFV AIR statement hash with private query openings");
+        let (statement_hash, mut native) = sample_safe_full_bootstrap_bfv_native_air_envelope(seed);
+        let opening = native
+            .proof
+            .air
+            .as_mut()
+            .expect("sample carries BFV AIR")
+            .openings
+            .first_mut()
+            .expect("sample carries BFV AIR openings");
+        retarget_full_bootstrap_bfv_native_air_opening(opening, 0);
+        (statement_hash, native)
     }
 
     #[cfg(feature = "zk-stark")]
@@ -21698,6 +21969,18 @@ mod tests {
             };
             assert_invalid_parameter_contains(err, "STARK native envelope bytes");
         }
+        let mut binary_decorated_placeholder = Vec::from([0xff]);
+        binary_decorated_placeholder
+            .extend_from_slice(b"TODO pending native STARK envelope placeholder");
+        binary_decorated_placeholder.push(0xfe);
+        let Err(err) = validate_soracloud_fhe_stark_native_envelope_bytes(
+            "FHE full-bootstrap execution",
+            &binary_decorated_placeholder,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
+        ) else {
+            panic!("binary-decorated placeholder native STARK envelope bytes must fail");
+        };
+        assert_invalid_parameter_contains(err, "placeholder");
     }
 
     #[test]
@@ -22468,6 +22751,10 @@ mod tests {
                 .proof_input_material
                 .witness_material
                 .bound_mode,
+            trace_material_digest: prover_input_material.arithmetic_trace_material_digest,
+            expected_trace_material_digest: Some(
+                prover_input_material.arithmetic_trace_material_digest,
+            ),
             expected_trace_rows: Some(prover_input_material.arithmetic_trace_material.rows.clone()),
             expected_composition_values: Some(
                 prover_input_material
@@ -22476,10 +22763,40 @@ mod tests {
                     .clone(),
             ),
         });
-        iroha_crypto::fhe_bfv::validate_bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_v1(
+        let opened_rows = native
+            .proof
+            .air
+            .as_ref()
+            .expect("BFV AIR section")
+            .openings
+            .iter()
+            .map(|opening| opening.row.clone())
+            .collect::<Vec<_>>();
+        let opened_next_rows = native
+            .proof
+            .air
+            .as_ref()
+            .expect("BFV AIR section")
+            .openings
+            .iter()
+            .map(|opening| opening.next_row.clone())
+            .collect::<Vec<_>>();
+        iroha_crypto::fhe_bfv::validate_bfv_full_bootstrap_arithmetic_trace_transcript_public_padding_openings_v1(
             &opening_indices,
+            &opened_rows,
+            &opened_next_rows,
+            statement_hash,
+            prover_input_material.arithmetic_trace_material_digest,
+            prover_input_material
+                .proof_input_material
+                .witness_material
+                .slot_index,
+            prover_input_material
+                .proof_input_material
+                .witness_material
+                .bound_mode,
         )
-        .expect("BFV-native AIR builder must return canonical public-row openings");
+        .expect("BFV-native AIR builder must return transcript-derived public-row openings");
         validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
             label,
             statement_hash,
@@ -22627,7 +22944,7 @@ mod tests {
             &prover_input_material.arithmetic_air_evaluation_material,
         )
         .expect_err("BFV AIR builder replay must reject opening row drift");
-        assert_invalid_parameter_contains(err, "row does not match governed arithmetic trace");
+        assert_invalid_parameter_contains(err, "public padding row does not match canonical row");
 
         let mut stale_row_path_native = native.clone();
         stale_row_path_native
@@ -22721,6 +23038,95 @@ mod tests {
         .expect_err("BFV AIR boundary must reject zero statement hashes before digest binding");
         assert_invalid_parameter_contains(err, "statement hash must not be zero");
 
+        let mut zero_trace_digest_context = public_padding_context
+            .clone()
+            .expect("sample carries public-padding context");
+        zero_trace_digest_context.trace_material_digest = Hash::prehashed([0_u8; Hash::LENGTH]);
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &native,
+            Some(zero_trace_digest_context),
+        )
+        .expect_err("BFV AIR boundary must reject zero public trace digests");
+        assert_invalid_parameter_contains(err, "transcript public-padding openings");
+
+        let mut placeholder_trace_digest_context = public_padding_context
+            .clone()
+            .expect("sample carries public-padding context");
+        placeholder_trace_digest_context.trace_material_digest =
+            Hash::new(b"pending BFV full-bootstrap execution witness digest");
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &native,
+            Some(placeholder_trace_digest_context),
+        )
+        .expect_err("BFV AIR boundary must reject placeholder public trace digests");
+        assert_invalid_parameter_contains(err, "transcript public-padding openings");
+
+        let delayed_placeholder_trace_digest_preimage = [
+            b" \n\t".as_slice(),
+            b"full-bootstrap material before placeholder: ".as_slice(),
+            b"pending BFV full-bootstrap execution witness digest".as_slice(),
+        ]
+        .concat();
+        let mut delayed_placeholder_trace_digest_context = public_padding_context
+            .clone()
+            .expect("sample carries public-padding context");
+        delayed_placeholder_trace_digest_context.trace_material_digest =
+            Hash::new(&delayed_placeholder_trace_digest_preimage);
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &native,
+            Some(delayed_placeholder_trace_digest_context),
+        )
+        .expect_err("BFV AIR boundary must reject delayed-placeholder public trace digests");
+        assert_invalid_parameter_contains(err, "transcript public-padding openings");
+
+        for separator_spelled_preimage in [
+            b"p-e-n-d-i-n-g BFV full-bootstrap execution witness digest".as_slice(),
+            b"p.e.n.d.i.n.g BFV full-bootstrap execution witness digest".as_slice(),
+            b"p_e_n_d_i_n_g BFV full-bootstrap execution witness digest".as_slice(),
+        ] {
+            let mut separator_spelled_trace_digest_context = public_padding_context
+                .clone()
+                .expect("sample carries public-padding context");
+            separator_spelled_trace_digest_context.trace_material_digest =
+                Hash::new(separator_spelled_preimage);
+            let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+                label,
+                statement_hash,
+                &native,
+                Some(separator_spelled_trace_digest_context),
+            )
+            .expect_err("BFV AIR boundary must reject separator-spelled public trace digests");
+            assert_invalid_parameter_contains(err, "placeholder");
+
+            let delayed_separator_spelled_trace_digest_preimage = [
+                b" \n\t".as_slice(),
+                b"full-bootstrap material before placeholder: ".as_slice(),
+                separator_spelled_preimage,
+            ]
+            .concat();
+            let mut delayed_separator_spelled_trace_digest_context = public_padding_context
+                .clone()
+                .expect("sample carries public-padding context");
+            delayed_separator_spelled_trace_digest_context.trace_material_digest =
+                Hash::new(&delayed_separator_spelled_trace_digest_preimage);
+            let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+                label,
+                statement_hash,
+                &native,
+                Some(delayed_separator_spelled_trace_digest_context),
+            )
+            .expect_err(
+                "BFV AIR boundary must reject delayed separator-spelled public trace digests",
+            );
+            assert_invalid_parameter_contains(err, "placeholder");
+        }
+
         let mut missing_bfv_air = native.clone();
         missing_bfv_air.proof.air = None;
         let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
@@ -22768,7 +23174,7 @@ mod tests {
             private_public_padding_context,
         )
         .expect_err("BFV AIR boundary must reject transcript-sampled private-row openings");
-        assert_invalid_parameter_contains(err, "unmasked private row");
+        assert_invalid_parameter_contains(err, "transcript public-padding openings");
 
         let mut duplicate_public_opening = native.clone();
         {
@@ -22832,7 +23238,7 @@ mod tests {
             public_padding_context.clone(),
         )
         .expect_err("BFV AIR boundary must reject retargeted private-row openings");
-        assert_invalid_parameter_contains(err, "unmasked private row");
+        assert_invalid_parameter_contains(err, "transcript public-padding openings");
 
         let mut wrapped_private_next = native.clone();
         let opening = wrapped_private_next
@@ -22856,7 +23262,7 @@ mod tests {
             public_padding_context.clone(),
         )
         .expect_err("BFV AIR boundary must reject wraparound private next-row openings");
-        assert_invalid_parameter_contains(err, "unmasked private row");
+        assert_invalid_parameter_contains(err, "transcript public-padding openings");
 
         let mut public_index_replay = native.clone();
         let sampled_first_index = public_index_replay
@@ -22890,7 +23296,7 @@ mod tests {
             public_padding_context.clone(),
         )
         .expect_err("BFV AIR boundary must reject public-row opening index replay");
-        assert_invalid_parameter_contains(err, "FRI query/opening index mismatch");
+        assert_invalid_parameter_contains(err, "transcript public-padding openings");
 
         let mut stale_params = native.clone();
         stale_params.params.queries = stale_params.params.queries.saturating_sub(1);
@@ -23058,7 +23464,7 @@ mod tests {
             public_padding_context.clone(),
         )
         .expect_err("BFV AIR boundary must reject stale governed trace rows");
-        assert_invalid_parameter_contains(err, "row does not match governed arithmetic trace");
+        assert_invalid_parameter_contains(err, "transcript public-padding openings");
 
         let mut stale_composition = native;
         stale_composition
@@ -23095,6 +23501,8 @@ mod tests {
         let public_padding_context = Some(BfvFullBootstrapNativeAirPublicPaddingContext {
             slot_index: 0,
             bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
+            trace_material_digest: sample_full_bootstrap_bfv_native_air_trace_material_digest(),
+            expected_trace_material_digest: None,
             expected_trace_rows: Some(expected_trace_rows),
             expected_composition_values: Some(expected_composition_values),
         });
@@ -23132,7 +23540,7 @@ mod tests {
             public_padding_context.clone(),
         )
         .expect_err("BFV AIR boundary must reject short opened rows");
-        assert_invalid_parameter_contains(err, "row width mismatch");
+        assert_invalid_parameter_contains(err, "transcript public-padding openings");
 
         let mut wide_next_row = native.clone();
         mutate_first_opening(&mut wide_next_row, |opening| {
@@ -23145,7 +23553,7 @@ mod tests {
             public_padding_context.clone(),
         )
         .expect_err("BFV AIR boundary must reject wide next rows");
-        assert_invalid_parameter_contains(err, "next row width mismatch");
+        assert_invalid_parameter_contains(err, "transcript public-padding openings");
 
         let mut non_field_row = native.clone();
         mutate_first_opening(&mut non_field_row, |opening| {
@@ -23159,7 +23567,7 @@ mod tests {
             public_padding_context.clone(),
         )
         .expect_err("BFV AIR boundary must reject non-field row elements");
-        assert_invalid_parameter_contains(err, "row field element");
+        assert_invalid_parameter_contains(err, "transcript public-padding openings");
 
         let mut non_field_composition = native.clone();
         mutate_first_opening(&mut non_field_composition, |opening| {
@@ -23368,7 +23776,7 @@ mod tests {
             public_padding_context.clone(),
         )
         .expect_err("BFV AIR boundary must reject stale public row slot headers");
-        assert_invalid_parameter_contains(err, "row does not match governed arithmetic trace");
+        assert_invalid_parameter_contains(err, "transcript public-padding openings");
 
         let mut stale_next_row_statement = native.clone();
         mutate_first_opening(&mut stale_next_row_statement, |opening| {
@@ -23381,7 +23789,7 @@ mod tests {
             public_padding_context.clone(),
         )
         .expect_err("BFV AIR boundary must reject stale public next-row statement limbs");
-        assert_invalid_parameter_contains(err, "next row does not match governed arithmetic trace");
+        assert_invalid_parameter_contains(err, "transcript public-padding openings");
 
         let mut short_row_path = native.clone();
         mutate_first_opening(&mut short_row_path, |opening| {
@@ -23636,6 +24044,24 @@ mod tests {
         .expect("safe BFV AIR must pass the full-bootstrap arithmetic verifier boundary");
         assert!(bfv_native_verified);
 
+        let mut stale_trace_digest_context = public_padding_context
+            .clone()
+            .expect("sample carries public-padding context");
+        stale_trace_digest_context.expected_trace_material_digest = Some(Hash::new(
+            b"stale governed BFV native AIR trace material digest",
+        ));
+        let err = verify_soracloud_fhe_full_bootstrap_arithmetic_stark_air(
+            label,
+            FHE_INPUT_ADMISSION_BACKEND,
+            &safe_envelope,
+            statement_hash,
+            Some(stale_trace_digest_context),
+            test_guardrails,
+            proof_bytes_len(&safe_envelope),
+        )
+        .expect_err("stale governed trace-material digest must fail before verifier fallback");
+        assert_invalid_parameter_contains(err, "trace material digest mismatch");
+
         let mut private_native = safe_native;
         let opening = private_native
             .proof
@@ -23657,7 +24083,7 @@ mod tests {
             proof_bytes_len(&private_envelope),
         )
         .expect_err("private-row BFV AIR must fail before dedicated-verifier fallback");
-        assert_invalid_parameter_contains(err, "privacy boundary failed validation");
+        assert_invalid_parameter_contains(err, "transcript public-padding openings");
     }
 
     #[test]
@@ -26919,14 +27345,13 @@ mod tests {
         );
         let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
 
         let proof =
             prove_soracloud_fhe_full_bootstrap_material_proof_for_evaluation_keys_with_release_audit_v1(
@@ -26970,14 +27395,13 @@ mod tests {
         );
         let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
         let mut downgraded_package = release_audit_package.clone();
         downgraded_package
             .record
@@ -27017,14 +27441,13 @@ mod tests {
         );
         let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
 
         let mut role_spliced_artifacts = artifacts.clone();
         role_spliced_artifacts.sample_extraction_key =
@@ -27078,14 +27501,13 @@ mod tests {
         );
         let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
         let full_bootstrap_material = evaluation_keys
             .bootstrap_key
             .as_ref()
@@ -27179,14 +27601,30 @@ mod tests {
         );
         let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
+        let release_audit_material = evaluation_keys
+            .bootstrap_key
+            .as_ref()
+            .and_then(|bootstrap_key| bootstrap_key.full_bootstrap_material.as_ref())
+            .expect("sample carries full-bootstrap material");
+        let valid_audit_report_bytes =
+            sample_full_bootstrap_release_audit_report_bytes_for_artifacts(
+                &params,
+                release_audit_material,
+                &artifacts,
+            );
+        let valid_audit_archive_bytes =
+            sample_full_bootstrap_release_audit_archive_bytes_for_artifacts(
+                &params,
+                release_audit_material,
+                &artifacts,
+            );
 
         let err =
             prove_soracloud_fhe_full_bootstrap_material_proof_for_evaluation_keys_with_release_audit_v1(
@@ -27359,7 +27797,7 @@ mod tests {
             &evaluation_keys,
             &artifacts,
             vec![0_u8; 32],
-            sample_full_bootstrap_release_audit_archive_bytes(),
+            valid_audit_archive_bytes.clone(),
             &reviewer_key_pair,
         );
         let err =
@@ -27382,7 +27820,7 @@ mod tests {
             &params,
             &evaluation_keys,
             &artifacts,
-            sample_full_bootstrap_release_audit_report_bytes(),
+            valid_audit_report_bytes.clone(),
             vec![0_u8; 32],
             &reviewer_key_pair,
         );
@@ -27412,7 +27850,7 @@ mod tests {
             &evaluation_keys,
             &artifacts,
             short_report_bytes,
-            sample_full_bootstrap_release_audit_archive_bytes(),
+            valid_audit_archive_bytes.clone(),
             &reviewer_key_pair,
         );
         let err =
@@ -27444,7 +27882,7 @@ mod tests {
                 &evaluation_keys,
                 &artifacts,
                 whitespace_nested_report_bytes,
-                sample_full_bootstrap_release_audit_archive_bytes(),
+                valid_audit_archive_bytes.clone(),
                 &reviewer_key_pair,
             );
         let err =
@@ -27480,7 +27918,7 @@ mod tests {
                 &evaluation_keys,
                 &artifacts,
                 delayed_nested_report_bytes,
-                sample_full_bootstrap_release_audit_archive_bytes(),
+                valid_audit_archive_bytes.clone(),
                 &reviewer_key_pair,
             );
         let err =
@@ -27513,7 +27951,7 @@ mod tests {
                 &evaluation_keys,
                 &artifacts,
                 delayed_placeholder_report_bytes,
-                sample_full_bootstrap_release_audit_archive_bytes(),
+                valid_audit_archive_bytes.clone(),
                 &reviewer_key_pair,
             );
         let err = iroha_crypto::fhe_bfv::validate_bfv_full_bootstrap_release_audit_package_v1(
@@ -27562,7 +28000,7 @@ mod tests {
                     &evaluation_keys,
                     &artifacts,
                     delayed_sentinel_report_bytes,
-                    sample_full_bootstrap_release_audit_archive_bytes(),
+                    valid_audit_archive_bytes.clone(),
                     &reviewer_key_pair,
                 );
             let err =
@@ -27591,7 +28029,7 @@ mod tests {
                 &evaluation_keys,
                 &artifacts,
                 b"soracloud-core-full-bootstrap-audit-report-without-header".to_vec(),
-                sample_full_bootstrap_release_audit_archive_bytes(),
+                valid_audit_archive_bytes.clone(),
                 &reviewer_key_pair,
             );
         let err =
@@ -27615,22 +28053,24 @@ mod tests {
             &evaluation_keys,
             &artifacts,
             iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1.to_vec(),
-            sample_full_bootstrap_release_audit_archive_bytes(),
+            valid_audit_archive_bytes.clone(),
             &reviewer_key_pair,
         )
         .expect_err("header-only audit report must fail before package construction");
         assert_bfv_error_contains(&err, "header-only");
 
-        let copied_audit_body =
-            b"soracloud-core-full-bootstrap-copied-material-audit-report-archive-body";
+        let copied_audit_body = copied_full_bootstrap_release_audit_body_from_valid_artifacts(
+            &valid_audit_report_bytes,
+            &valid_audit_archive_bytes,
+        );
         let copied_body_report_bytes =
             iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_report_bytes_v1(
-                copied_audit_body,
+                &copied_audit_body,
             )
             .expect("copied-body audit report bytes are canonical");
         let copied_body_archive_bytes =
             iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_archive_bytes_v1(
-                copied_audit_body,
+                &copied_audit_body,
             )
             .expect("copied-body audit archive bytes are canonical");
         let copied_body_package = signed_full_bootstrap_release_audit_package_with_artifact_bytes(
@@ -27712,14 +28152,13 @@ mod tests {
         );
         let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
 
         let mut missing_bootstrap_keys = evaluation_keys.clone();
         missing_bootstrap_keys.bootstrap_key = None;
@@ -27841,6 +28280,32 @@ mod tests {
         assert_invalid_parameter_contains(err.clone(), "refresh transcript");
         assert_invalid_parameter_contains(err, "rotation_transcripts.seed");
 
+        let mut stale_package_with_all_zero_transcript = release_audit_package.clone();
+        stale_package_with_all_zero_transcript.record_digest =
+            Hash::new(b"stale-material-package-digest-behind-transcript-inventory-error");
+        let err =
+            prove_soracloud_fhe_full_bootstrap_material_proof_for_evaluation_keys_with_release_audit_v1(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &all_zero_seed_transcript,
+                &vk_box,
+                &stale_package_with_all_zero_transcript,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            )
+            .expect_err(
+                "malformed transcript inventory must fail before stale material release package validation",
+            );
+        let debug = format!("{err:?}");
+        assert_invalid_parameter_contains(err.clone(), "refresh transcript");
+        assert_invalid_parameter_contains(err, "rotation_transcripts.seed");
+        assert!(
+            !debug.contains("release audit package failed validation"),
+            "transcript inventory diagnostics must not be masked by stale package validation: {debug}"
+        );
+
         let mut stale_transcript_body = transcript.clone();
         stale_transcript_body.rotation_transcripts[0]
             .seed
@@ -27876,14 +28341,13 @@ mod tests {
         );
         let wrong_vk_box = sample_fhe_full_bootstrap_execution_vk_box();
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
 
         let err =
             prove_soracloud_fhe_full_bootstrap_material_proof_for_evaluation_keys_with_release_audit_v1(
@@ -30346,6 +30810,8 @@ mod tests {
                     iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_PROOF_SYSTEM_V1
                         .to_owned(),
                 field: iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FIELD_V1.to_owned(),
+                centered_scale_round_source_chain_digest: canonical_native_payload
+                    .centered_scale_round_source_chain_digest,
                 arithmetic_trace_profile_digest:
                     iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_trace_profile_digest_v1()
                         .expect("canonical full-bootstrap trace profile digest"),
@@ -30643,6 +31109,9 @@ mod tests {
                 key_switch_decomposition_chain_digest:
                     registered_bfv_key_switch_decomposition_chain_digest(&params)
                         .expect("registered decomposition digest"),
+                centered_scale_round_source_chain_digest:
+                    registered_bfv_centered_scale_round_source_chain_digest(&params)
+                        .expect("registered centered scale-round source digest"),
                 max_bootstrap_depth: 1,
                 public_input_schema_digest: schema_digest,
                 evaluator_artifact_set_digest,
@@ -30667,6 +31136,18 @@ mod tests {
                     BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_BYTES_V1,
                 supports_exact_residual_multiple: true,
                 supports_bounded_noise: true,
+                derives_opening_schedule_from_statement_hash: true,
+                derives_opening_schedule_from_trace_material_digest: true,
+                bounds_opening_schedule_rejection_sampling: true,
+                validates_transcript_public_padding_openings: true,
+                validates_merkle_path_shape: true,
+                validates_merkle_path_roots: true,
+                validates_fri_query_chain: true,
+                binds_first_fri_values_to_opened_air_values: true,
+                binds_fri_queries_to_air_commitment_roots: true,
+                validates_artifact_bound_prover_input: true,
+                rejects_stale_galois_key_set_replay: true,
+                rejects_stale_proof_key_artifacts: true,
                 key_material_commitment: Hash::new(
                     b"soracloud-invalid-inert-verifier-key-commitment",
                 ),
@@ -31694,14 +32175,13 @@ mod tests {
             output_bound,
         ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
 
         let proofs =
             prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
@@ -31746,14 +32226,13 @@ mod tests {
             output_bound,
         ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
         let mut downgraded_package = release_audit_package.clone();
         downgraded_package
             .record
@@ -31799,14 +32278,13 @@ mod tests {
             output_bound,
         ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
 
         let mut drifted_output = output.clone();
         drifted_output.slots[0].c0[0] =
@@ -31873,14 +32351,13 @@ mod tests {
             output_bound,
         ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
 
         let mut role_spliced_artifacts = artifacts.clone();
         role_spliced_artifacts.sample_extraction_key =
@@ -31940,14 +32417,13 @@ mod tests {
             output_bound,
         ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
         let full_bootstrap_material = evaluation_keys
             .bootstrap_key
             .as_ref()
@@ -32051,14 +32527,30 @@ mod tests {
             output_bound,
         ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
+        let release_audit_material = evaluation_keys
+            .bootstrap_key
+            .as_ref()
+            .and_then(|bootstrap_key| bootstrap_key.full_bootstrap_material.as_ref())
+            .expect("sample carries full-bootstrap material");
+        let valid_audit_report_bytes =
+            sample_full_bootstrap_release_audit_report_bytes_for_artifacts(
+                &params,
+                release_audit_material,
+                &artifacts,
+            );
+        let valid_audit_archive_bytes =
+            sample_full_bootstrap_release_audit_archive_bytes_for_artifacts(
+                &params,
+                release_audit_material,
+                &artifacts,
+            );
 
         let err =
             prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
@@ -32285,7 +32777,7 @@ mod tests {
             &evaluation_keys,
             &artifacts,
             vec![0_u8; 32],
-            sample_full_bootstrap_release_audit_archive_bytes(),
+            valid_audit_archive_bytes.clone(),
             &reviewer_key_pair,
         );
         let err =
@@ -32313,7 +32805,7 @@ mod tests {
             &params,
             &evaluation_keys,
             &artifacts,
-            sample_full_bootstrap_release_audit_report_bytes(),
+            valid_audit_report_bytes.clone(),
             vec![0_u8; 32],
             &reviewer_key_pair,
         );
@@ -32343,7 +32835,7 @@ mod tests {
                 &params,
                 &evaluation_keys,
                 &artifacts,
-                sample_full_bootstrap_release_audit_report_bytes(),
+                valid_audit_report_bytes.clone(),
                 b"soracloud-core-full-bootstrap-audit-archive-without-header".to_vec(),
                 &reviewer_key_pair,
             );
@@ -32376,7 +32868,7 @@ mod tests {
                 &params,
                 &evaluation_keys,
                 &artifacts,
-                sample_full_bootstrap_release_audit_report_bytes(),
+                valid_audit_report_bytes.clone(),
                 zero_body_archive_bytes,
                 &reviewer_key_pair,
             );
@@ -32413,7 +32905,7 @@ mod tests {
                 &params,
                 &evaluation_keys,
                 &artifacts,
-                sample_full_bootstrap_release_audit_report_bytes(),
+                valid_audit_report_bytes.clone(),
                 blank_body_archive_bytes,
                 &reviewer_key_pair,
             );
@@ -32451,7 +32943,7 @@ mod tests {
                 &params,
                 &evaluation_keys,
                 &artifacts,
-                sample_full_bootstrap_release_audit_report_bytes(),
+                valid_audit_report_bytes.clone(),
                 delayed_placeholder_archive_bytes,
                 &reviewer_key_pair,
             );
@@ -32505,7 +32997,7 @@ mod tests {
                     &params,
                     &evaluation_keys,
                     &artifacts,
-                    sample_full_bootstrap_release_audit_report_bytes(),
+                    valid_audit_report_bytes.clone(),
                     delayed_sentinel_archive_bytes,
                     &reviewer_key_pair,
                 );
@@ -32550,7 +33042,7 @@ mod tests {
                 &params,
                 &evaluation_keys,
                 &artifacts,
-                sample_full_bootstrap_release_audit_report_bytes(),
+                valid_audit_report_bytes.clone(),
                 delayed_nested_archive_bytes,
                 &reviewer_key_pair,
             );
@@ -32577,16 +33069,18 @@ mod tests {
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
         assert_invalid_parameter_contains(err, "audit artifact header");
 
-        let copied_audit_body =
-            b"soracloud-core-full-bootstrap-copied-execution-audit-report-archive-body";
+        let copied_audit_body = copied_full_bootstrap_release_audit_body_from_valid_artifacts(
+            &valid_audit_report_bytes,
+            &valid_audit_archive_bytes,
+        );
         let copied_body_report_bytes =
             iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_report_bytes_v1(
-                copied_audit_body,
+                &copied_audit_body,
             )
             .expect("copied-body audit report bytes are canonical");
         let copied_body_archive_bytes =
             iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_archive_bytes_v1(
-                copied_audit_body,
+                &copied_audit_body,
             )
             .expect("copied-body audit archive bytes are canonical");
         let copied_body_package = signed_full_bootstrap_release_audit_package_with_artifact_bytes(
@@ -32679,14 +33173,13 @@ mod tests {
             output_bound,
         ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
 
         let mut missing_bootstrap_keys = evaluation_keys.clone();
         missing_bootstrap_keys.bootstrap_key = None;
@@ -32823,9 +33316,7 @@ mod tests {
             .bootstrap_key
             .as_mut()
             .expect("sample carries bootstrap key")
-            .zero_refresh
-            .c0
-            .push(1);
+            .max_refresh_rounds = 1;
         let err =
             prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
                 &params,
@@ -32845,6 +33336,36 @@ mod tests {
             )
             .expect_err(
                 "malformed governed bootstrap-key entries must fail before execution proof generation",
+            );
+        assert_invalid_parameter_contains(err, "max_refresh_rounds");
+
+        let mut malformed_zero_refresh_entries = evaluation_keys.clone();
+        malformed_zero_refresh_entries
+            .bootstrap_key
+            .as_mut()
+            .expect("sample carries bootstrap key")
+            .zero_refresh
+            .c0
+            .push(1);
+        let err =
+            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
+                &params,
+                &malformed_zero_refresh_entries,
+                &transcript,
+                &artifacts,
+                &input,
+                &output,
+                BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                input_bound,
+                output_bound,
+                &vk_box,
+                &release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            )
+            .expect_err(
+                "malformed governed bootstrap-key zero-refresh entries must fail before execution proof generation",
             );
         assert_invalid_parameter_contains(
             err,
@@ -32877,6 +33398,40 @@ mod tests {
             "refresh transcript failed exact-lift validation",
         );
         assert_invalid_parameter_contains(err, "rotation_transcripts.seed");
+
+        let mut stale_package_with_all_zero_transcript = release_audit_package.clone();
+        stale_package_with_all_zero_transcript.record_digest =
+            Hash::new(b"stale-execution-package-digest-behind-transcript-inventory-error");
+        let err =
+            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
+                &params,
+                &evaluation_keys,
+                &all_zero_seed_transcript,
+                &artifacts,
+                &input,
+                &output,
+                BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                input_bound,
+                output_bound,
+                &vk_box,
+                &stale_package_with_all_zero_transcript,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            )
+            .expect_err(
+                "malformed transcript inventory must fail before stale execution release package validation",
+            );
+        let debug = format!("{err:?}");
+        assert_invalid_parameter_contains(
+            err.clone(),
+            "refresh transcript failed exact-lift validation",
+        );
+        assert_invalid_parameter_contains(err, "rotation_transcripts.seed");
+        assert!(
+            !debug.contains("release audit package failed validation"),
+            "transcript inventory diagnostics must not be masked by stale package validation: {debug}"
+        );
 
         let mut stale_transcript_body = transcript.clone();
         stale_transcript_body.rotation_transcripts[0]
@@ -32945,14 +33500,13 @@ mod tests {
         ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
         let wrong_vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
 
         let err =
             prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
@@ -33244,6 +33798,71 @@ mod tests {
             &vk_box,
         )
         .expect_err("stale Galois key set must fail before proof generation");
+        assert_invalid_parameter_contains(err, "Galois key set digest mismatch");
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn soracloud_fhe_full_bootstrap_execution_prover_rejects_stale_galois_key_set_digest() {
+        let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
+        let (
+            params,
+            evaluation_keys,
+            transcript,
+            artifacts,
+            _job,
+            input,
+            output,
+            input_bound,
+            output_bound,
+        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
+        let prover_input_material = sample_full_bootstrap_execution_prover_input_material(
+            &params,
+            &evaluation_keys,
+            &transcript,
+            &artifacts,
+            &input,
+            &output,
+            input_bound,
+            output_bound,
+        );
+
+        let mut stale_witness = prover_input_material
+            .proof_input_material
+            .witness_material
+            .clone();
+        stale_witness.galois_key_set_digest =
+            Hash::new(b"stale Core full-bootstrap prover-input Galois key-set digest");
+        assert_ne!(
+            stale_witness.galois_key_set_digest,
+            prover_input_material
+                .proof_input_material
+                .witness_material
+                .galois_key_set_digest,
+            "fixture must retarget the embedded Galois key-set digest"
+        );
+        let stale_proof_input = bfv_full_bootstrap_execution_proof_input_material_v1(
+            &transcript.public_key,
+            &stale_witness,
+        )
+        .expect("derive internally consistent stale-Galois-digest proof input");
+        let stale_prover_input = bfv_full_bootstrap_execution_prover_input_material_v1(
+            &stale_proof_input,
+            &prover_input_material.prover_key,
+            &prover_input_material.verifier_key,
+        )
+        .expect("derive internally consistent stale-Galois-digest prover input");
+        validate_bfv_full_bootstrap_execution_prover_input_material_v1(&stale_prover_input)
+            .expect("generic prover input validation accepts self-consistent stale Galois digest");
+
+        let err = prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material_v1(
+            &params,
+            &evaluation_keys,
+            &artifacts,
+            &stale_prover_input,
+            &vk_box,
+        )
+        .expect_err("stale Galois key-set digest must fail before proof generation");
         assert_invalid_parameter_contains(err, "Galois key set digest mismatch");
     }
 
@@ -34502,6 +35121,8 @@ mod tests {
         let missing_rows_context = Some(BfvFullBootstrapNativeAirPublicPaddingContext {
             slot_index: 0,
             bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
+            trace_material_digest: sample_full_bootstrap_bfv_native_air_trace_material_digest(),
+            expected_trace_material_digest: None,
             expected_trace_rows: None,
             expected_composition_values: Some(expected_composition_values.clone()),
         });
@@ -34520,6 +35141,8 @@ mod tests {
         let missing_composition_context = Some(BfvFullBootstrapNativeAirPublicPaddingContext {
             slot_index: 0,
             bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
+            trace_material_digest: sample_full_bootstrap_bfv_native_air_trace_material_digest(),
+            expected_trace_material_digest: None,
             expected_trace_rows: Some(expected_trace_rows),
             expected_composition_values: None,
         });
@@ -34574,6 +35197,8 @@ mod tests {
             BfvFullBootstrapNativeAirPublicPaddingContext {
                 slot_index: 0,
                 bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
+                trace_material_digest: sample_full_bootstrap_bfv_native_air_trace_material_digest(),
+                expected_trace_material_digest: None,
                 expected_trace_rows: None,
                 expected_composition_values: Some(expected_composition_values),
             },
@@ -36448,6 +37073,81 @@ mod tests {
     }
 
     #[test]
+    fn soracloud_bounded_noise_outer_rotate_uses_target_limb_refresh_bridge() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (secret_key, public_key, mut evaluation_keys, _transcript, _digest) =
+            sample_registered_bounded_noise_bfv_material();
+        let rotation_key = rotation_key_bounded_noise_from_seed(
+            &params,
+            &public_key,
+            1,
+            b"soracloud-bounded-target-limb-outer-rotation",
+        )
+        .expect("bounded-noise outer rotation key");
+        evaluation_keys.rotation_keys = vec![rotation_key];
+        let input = BfvIdentifierCiphertext {
+            slots: vec![
+                encrypt_bounded_noise_from_seed(
+                    &params,
+                    &public_key,
+                    &[11],
+                    b"soracloud-bounded-target-limb-rotate-slot-0",
+                )
+                .expect("encrypt rotate slot 0"),
+                encrypt_bounded_noise_from_seed(
+                    &params,
+                    &public_key,
+                    &[13],
+                    b"soracloud-bounded-target-limb-rotate-slot-1",
+                )
+                .expect("encrypt rotate slot 1"),
+                encrypt_bounded_noise_from_seed(
+                    &params,
+                    &public_key,
+                    &[17],
+                    b"soracloud-bounded-target-limb-rotate-slot-2",
+                )
+                .expect("encrypt rotate slot 2"),
+            ],
+        };
+        let mut job = sample_fhe_job(Vec::new());
+        job.operation = FheJobOperationV1::RotateLeft;
+        job.rotation_steps = 1;
+        let input_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh noise bound");
+        let rotate_slot_bounds = vec![input_bound; input.slots.len()];
+        let expected_output_bound =
+            bfv_rotate_slots_left_bounded_noise_registered_rns_basis_extension_output_bounds(
+                &params,
+                &evaluation_keys.rotation_keys[0],
+                &rotate_slot_bounds,
+            )
+            .expect("outer rotate output noise bounds")
+            .into_iter()
+            .max();
+
+        let (output, output_bound) = execute_soracloud_fhe_job_with_bounded_noise_bounds(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+        )
+        .expect("execute bounded-noise outer rotate through target-limb bridge");
+        let plaintext_slots = output
+            .slots
+            .iter()
+            .map(|slot| {
+                decrypt_bounded_noise(&params, &secret_key, slot)
+                    .expect("decrypt bounded outer rotate output")[0]
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(plaintext_slots, vec![13, 17, 11]);
+        assert_eq!(output_bound, expected_output_bound);
+    }
+
+    #[test]
     fn soracloud_bounded_noise_packed_rotate_uses_target_limb_key_switch_bridge() {
         let params = ram_lfe_bfv_parameters_v1();
         let (secret_key, public_key, relinearization_key) =
@@ -37544,14 +38244,13 @@ mod tests {
         }
 
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
         let release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
             package: &release_audit_package,
             expected_package_digest: release_audit_package_digest,
@@ -37632,6 +38331,34 @@ mod tests {
             b"soracloud-full-bootstrap-runtime-material-proof-statement",
         ));
 
+        let mut missing_material_evaluation_keys = evaluation_keys.clone();
+        missing_material_evaluation_keys
+            .bootstrap_key
+            .as_mut()
+            .expect("sample bundle carries a full-bootstrap key")
+            .full_bootstrap_material = None;
+        let err = soracloud_fhe_full_bootstrap_release_audit_runtime_context(
+            &params,
+            &missing_material_evaluation_keys,
+            &job,
+            Some(&artifacts),
+            &policy,
+        )
+        .expect_err(
+            "full-bootstrap runtime must reject missing governed material before policy matching",
+        );
+        assert_invalid_parameter_contains(err, "requires governed material");
+
+        let err = soracloud_fhe_full_bootstrap_release_audit_runtime_context(
+            &params,
+            &evaluation_keys,
+            &job,
+            None,
+            &policy,
+        )
+        .expect_err("full-bootstrap runtime must reject missing artifacts before policy matching");
+        assert_invalid_parameter_contains(err, "requires circuit artifacts");
+
         let err = soracloud_fhe_full_bootstrap_release_audit_runtime_context(
             &params,
             &evaluation_keys,
@@ -37643,14 +38370,13 @@ mod tests {
         assert_invalid_parameter_contains(err, "requires release audit package");
 
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
         policy.full_bootstrap_release_audit_package = Some(release_audit_package.clone());
         policy.full_bootstrap_release_audit_package_digest = Some(release_audit_package_digest);
         policy.full_bootstrap_release_audit_trusted_reviewer_id =
@@ -37987,14 +38713,13 @@ mod tests {
         }
 
         let reviewer_key_pair = checked_keypair();
-        let release_audit_package = sample_full_bootstrap_release_audit_package(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
-        let release_audit_package_digest =
-            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+        let (release_audit_package, release_audit_package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &reviewer_key_pair,
+            );
         let release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
             package: &release_audit_package,
             expected_package_digest: release_audit_package_digest,

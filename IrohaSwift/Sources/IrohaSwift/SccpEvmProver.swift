@@ -7939,18 +7939,23 @@ private func evmBytesFromHex32(_ value: String, field: String) throws -> Data {
     guard value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
         throw EvmSccpProverError.invalidHex32(field)
     }
-    var hex = value
-    if hex.lowercased().hasPrefix("0x") {
-        hex.removeFirst(2)
-    }
+    let hex = value.hasPrefix("0x") ? String(value.dropFirst(2)) : value
     guard hex.unicodeScalars.allSatisfy({ !CharacterSet.whitespacesAndNewlines.contains($0) }) else {
         throw EvmSccpProverError.invalidHex32(field)
     }
-    hex = hex.lowercased()
-    guard hex.count == 64, let bytes = Data(hexString: hex), bytes.count == 32 else {
+    guard hex.count == 64,
+          evmIsLowercaseHexBody(hex),
+          let bytes = Data(hexString: hex),
+          bytes.count == 32 else {
         throw EvmSccpProverError.invalidHex32(field)
     }
     return bytes
+}
+
+private func evmIsLowercaseHexBody(_ value: String) -> Bool {
+    value.utf8.allSatisfy { byte in
+        (byte >= 0x30 && byte <= 0x39) || (byte >= 0x61 && byte <= 0x66)
+    }
 }
 
 private func evmNormalizeHex32(_ value: String, field: String) throws -> String {

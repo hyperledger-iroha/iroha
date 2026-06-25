@@ -649,42 +649,142 @@ def test_evm_source_live_numeric_parsers_require_canonical_decimal():
     assert module._source_bridge_deployment_receipt_is_verified(source_bridge) is False
 
 
-def test_evm_source_live_hex_parsers_redact_typeerror_parser_causes(monkeypatch):
+def test_evm_source_live_receipt_ready_predicate_redacts_imported_address_parser_failures(
+    monkeypatch,
+):
+    module = load_live_module()
+    fake = fake_opener_for(module)
+    source_bridge = module.collect_source_bridge_evidence(
+        "https://ethereum.example",
+        domain=module.SCCP_DOMAIN_ETH,
+        bridge_address=fake.bridge,
+        block_tag="finalized",
+        deployment_transaction_hash=bytes.fromhex("de" * 32),
+        opener=fake.opener,
+        timeout=1.0,
+    )
+    source_module = module._load_evidence_module(module.SCCP_DOMAIN_ETH)
+    original_parse_evm_address = source_module.parse_evm_address
+
+    for target_label in (
+        "source bridge address",
+        "deployment receipt contract address",
+    ):
+        for exception_type in (
+            module.argparse.ArgumentTypeError,
+            SystemExit,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ):
+            with monkeypatch.context() as patch:
+
+                def fail_target_address(
+                    value,
+                    *,
+                    label,
+                    target_label=target_label,
+                    exception_type=exception_type,
+                ):
+                    if label == target_label:
+                        raise exception_type(
+                            f"secret-token {target_label} imported "
+                            f"{exception_type.__name__} detail"
+                        )
+                    return original_parse_evm_address(value, label=label)
+
+                patch.setattr(
+                    source_module,
+                    "parse_evm_address",
+                    fail_target_address,
+                )
+                assert (
+                    module._source_bridge_deployment_receipt_is_verified(source_bridge)
+                    is False
+                )
+
+
+def test_evm_source_live_receipt_ready_predicate_uses_guarded_receipt_hash_parse(
+    monkeypatch,
+):
+    module = load_live_module()
+    fake = fake_opener_for(module)
+    source_bridge = module.collect_source_bridge_evidence(
+        "https://ethereum.example",
+        domain=module.SCCP_DOMAIN_ETH,
+        bridge_address=fake.bridge,
+        block_tag="finalized",
+        deployment_transaction_hash=bytes.fromhex("de" * 32),
+        opener=fake.opener,
+        timeout=1.0,
+    )
+    original_parse_hex32 = module._parse_hex32
+    receipt_hash_parse_count = 0
+
+    def fail_second_receipt_hash_parse(value, *, label):
+        nonlocal receipt_hash_parse_count
+        if label == "deployment receipt block hash":
+            receipt_hash_parse_count += 1
+            if receipt_hash_parse_count > 1:
+                raise SystemExit("secret-token unguarded receipt hash parse detail")
+        return original_parse_hex32(value, label=label)
+
+    monkeypatch.setattr(module, "_parse_hex32", fail_second_receipt_hash_parse)
+
+    assert module._source_bridge_deployment_receipt_is_verified(source_bridge) is True
+    assert receipt_hash_parse_count == 1
+
+
+def test_evm_source_live_hex_parsers_redact_helper_exit_parser_causes(monkeypatch):
     module = load_live_module()
 
-    class SecretBytes:
-        @staticmethod
-        def fromhex(_text):
-            raise TypeError("secret-token EVM source live hex TypeError detail")
-
-    monkeypatch.setattr(module, "bytes", SecretBytes, raising=False)
-
-    try:
-        module._parse_hex32("0x" + "11" * 32, label="component hash")
-    except module.argparse.ArgumentTypeError as exc:
-        rendered = str(exc)
-        assert rendered == "component hash must be hex"
-        assert "secret-token" not in rendered
-        assert "TypeError" not in rendered
-        assert exc.__cause__ is None
-        assert exc.__suppress_context__ is True
-    else:
-        raise AssertionError("EVM source live component parser TypeError was accepted")
-
-    try:
-        module._rpc_hex_data("0x6000", method="eth_getCode source bridge")
-    except RuntimeError as exc:
-        rendered = str(exc)
-        assert (
-            rendered
-            == "eth_getCode source bridge returned non-canonical lowercase 0x hex data"
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+        detail = (
+            "secret-token EVM source live hex TypeError detail"
+            if exception_type is TypeError
+            else f"secret-token EVM source live hex {exception_type.__name__} detail"
         )
-        assert "secret-token" not in rendered
-        assert "TypeError" not in rendered
-        assert exc.__cause__ is None
-        assert exc.__suppress_context__ is True
-    else:
-        raise AssertionError("EVM source live RPC hex parser TypeError was accepted")
+
+        class SecretBytes:
+            @staticmethod
+            def fromhex(_text, detail=detail, exception_type=exception_type):
+                raise exception_type(detail)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "bytes", SecretBytes, raising=False)
+
+            try:
+                module._parse_hex32("0x" + "11" * 32, label="component hash")
+            except module.argparse.ArgumentTypeError as exc:
+                rendered = str(exc)
+                assert rendered == "component hash must be hex"
+                assert "secret-token" not in rendered
+                assert exception_type.__name__ not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    "EVM source live component parser "
+                    f"{exception_type.__name__} was accepted"
+                )
+
+            try:
+                module._rpc_hex_data("0x6000", method="eth_getCode source bridge")
+            except RuntimeError as exc:
+                rendered = str(exc)
+                assert (
+                    rendered
+                    == "eth_getCode source bridge returned non-canonical lowercase 0x hex data"
+                )
+                assert "secret-token" not in rendered
+                assert exception_type.__name__ not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    "EVM source live RPC hex parser "
+                    f"{exception_type.__name__} was accepted"
+                )
 
 
 def test_evm_source_live_block_tag_parser_rejects_unstable_or_noncanonical_tags():
@@ -813,7 +913,7 @@ def test_evm_source_live_evidence_collects_source_records_and_toml():
     assert source["deployment_transaction_block_hash"] == "0x" + "99" * 32
     assert source["deployment_transaction_block_number"] == 0x1234
     assert source["deployment_transaction_contract_creation"] is True
-    assert source["deployment_transaction_input_sha256"] == hashlib.sha256(
+    assert source["deployment_transaction_input_sha256"] == "0x" + hashlib.sha256(
         fake.bridge_runtime
     ).hexdigest()
     assert source["deployment_transaction_block_matches"] is True
@@ -859,7 +959,12 @@ def test_evm_source_live_evidence_collects_source_records_and_toml():
         in rendered
     )
     assert '# sccp_evm_source_deployment_transaction_block_number = "4660"' in rendered
-    assert "# sccp_evm_source_deployment_transaction_input_sha256" in rendered
+    assert (
+        '# sccp_evm_source_deployment_transaction_input_sha256 = "0x'
+        + hashlib.sha256(fake.bridge_runtime).hexdigest()
+        + '"'
+        in rendered
+    )
     assert '# sccp_evm_source_deployment_block_number = "4660"' in rendered
     assert (
         '# sccp_evm_source_deployment_block_receipts_root = "0x'
@@ -1062,55 +1167,129 @@ def test_evm_source_live_toml_revalidates_imported_summary_metadata(monkeypatch)
         raise AssertionError("invalid EVM source live runtime metadata rendered TOML")
 
     source_module = module._load_evidence_module(module.SCCP_DOMAIN_ETH)
+    runtime_failure_cases = (
+        (
+            module.argparse.ArgumentTypeError,
+            "secret-token {label} imported argument detail",
+            "imported argument detail",
+        ),
+        (
+            SystemExit,
+            "secret-token {label} imported SystemExit detail",
+            "imported SystemExit detail",
+        ),
+        (
+            RuntimeError,
+            "secret-token {label} imported RuntimeError detail",
+            "imported RuntimeError detail",
+        ),
+        (
+            TypeError,
+            "secret-token {label} imported parser detail",
+            "imported parser detail",
+        ),
+        (
+            ValueError,
+            "secret-token {label} imported ValueError detail",
+            "imported ValueError detail",
+        ),
+    )
     original_parse_runtime_bytecode_hex = source_module.parse_runtime_bytecode_hex
-    with monkeypatch.context() as patch:
-        def fail_source_runtime_parse(value, *, label):
-            if label == "source bridge runtime bytecode":
-                raise TypeError(f"secret-token {label} imported parser detail")
-            return original_parse_runtime_bytecode_hex(value, label=label)
 
-        patch.setattr(
-            source_module,
-            "parse_runtime_bytecode_hex",
-            fail_source_runtime_parse,
-        )
-        try:
-            module.render_offline_toml(summary)
-        except ValueError as exc:
-            rendered = str(exc)
-            assert rendered == "EVM source bridge runtime bytecode metadata is invalid"
-            assert "secret-token" not in rendered
-            assert "imported parser detail" not in rendered
-            assert exc.__cause__ is None
-            assert exc.__suppress_context__ is True
-        else:
-            raise AssertionError(
-                "EVM source live TOML accepted imported runtime parser TypeError"
+    for exception_type, secret_template, forbidden_detail in runtime_failure_cases:
+        with monkeypatch.context() as patch:
+
+            def fail_source_runtime_parse(
+                value,
+                *,
+                label,
+                exception_type=exception_type,
+                secret_template=secret_template,
+            ):
+                if label == "source bridge runtime bytecode":
+                    raise exception_type(secret_template.format(label=label))
+                return original_parse_runtime_bytecode_hex(value, label=label)
+
+            patch.setattr(
+                source_module,
+                "parse_runtime_bytecode_hex",
+                fail_source_runtime_parse,
             )
+            try:
+                module.render_offline_toml(summary)
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == "EVM source bridge runtime bytecode metadata is invalid"
+                assert "secret-token" not in rendered
+                assert forbidden_detail not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    "EVM source live TOML accepted imported runtime "
+                    f"{exception_type.__name__}"
+                )
 
     original_parse_hex_bytes = module._parse_hex_bytes
-    with monkeypatch.context() as patch:
-        def fail_bridge_address_parse(value, *, label, byte_length):
-            if label == "source bridge address":
-                raise module.argparse.ArgumentTypeError(
-                    "secret-token source bridge address parser detail"
-                )
-            return original_parse_hex_bytes(value, label=label, byte_length=byte_length)
+    for exception_type, secret_template, forbidden_detail in (
+        (
+            module.argparse.ArgumentTypeError,
+            "secret-token source bridge address parser detail",
+            "parser detail",
+        ),
+        (
+            SystemExit,
+            "secret-token source bridge address SystemExit detail",
+            "SystemExit detail",
+        ),
+        (
+            RuntimeError,
+            "secret-token source bridge address RuntimeError detail",
+            "RuntimeError detail",
+        ),
+        (
+            TypeError,
+            "secret-token source bridge address TypeError detail",
+            "TypeError detail",
+        ),
+        (
+            ValueError,
+            "secret-token source bridge address ValueError detail",
+            "ValueError detail",
+        ),
+    ):
+        with monkeypatch.context() as patch:
 
-        patch.setattr(module, "_parse_hex_bytes", fail_bridge_address_parse)
-        try:
-            module.render_offline_toml(summary)
-        except ValueError as exc:
-            rendered = str(exc)
-            assert rendered == "source bridge address metadata is invalid"
-            assert "secret-token" not in rendered
-            assert "parser detail" not in rendered
-            assert exc.__cause__ is None
-            assert exc.__suppress_context__ is True
-        else:
-            raise AssertionError(
-                "EVM source live TOML leaked parser detail for bridge address"
-            )
+            def fail_bridge_address_parse(
+                value,
+                *,
+                label,
+                byte_length,
+                exception_type=exception_type,
+                secret_template=secret_template,
+            ):
+                if label == "source bridge address":
+                    raise exception_type(secret_template)
+                return original_parse_hex_bytes(
+                    value,
+                    label=label,
+                    byte_length=byte_length,
+                )
+
+            patch.setattr(module, "_parse_hex_bytes", fail_bridge_address_parse)
+            try:
+                module.render_offline_toml(summary)
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == "source bridge address metadata is invalid"
+                assert "secret-token" not in rendered
+                assert forbidden_detail not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    "EVM source live TOML leaked parser detail for bridge address"
+                )
 
 
 def test_bsc_source_live_evidence_uses_canonical_bsc_profile():
@@ -1346,7 +1525,7 @@ def test_evm_source_live_redacts_receipt_field_parser_exception_causes(monkeypat
     )
 
     for target_method, expected_message in cases:
-        for exception_type in (TypeError, RuntimeError, ValueError):
+        for exception_type in (SystemExit, TypeError, RuntimeError, ValueError):
             fake = fake_opener_for(module)
 
             def fail_target_receipt_field(
@@ -1391,6 +1570,125 @@ def test_evm_source_live_redacts_receipt_field_parser_exception_causes(monkeypat
                     assert exc.__suppress_context__ is True
                 else:
                     raise AssertionError(f"{target_method} parser detail was accepted")
+
+
+def test_evm_source_live_redacts_receipt_readback_parser_exception_causes(monkeypatch):
+    module = load_live_module()
+    original_rpc_fixed_hex_data = module._rpc_fixed_hex_data
+    cases = (
+        (
+            "eth_getTransactionByHash hash",
+            "deployment transaction hash must be a non-zero bytes32",
+        ),
+        (
+            "eth_getTransactionByHash blockHash",
+            "deployment transaction blockHash must be a non-zero bytes32",
+        ),
+        (
+            "eth_getBlockByNumber hash",
+            "deployment receipt block hash must be a non-zero bytes32",
+        ),
+        (
+            "eth_getBlockByNumber receiptsRoot",
+            "deployment receipt block receiptsRoot must be a non-zero bytes32",
+        ),
+        (
+            "deployment receipt finalized block hash",
+            "deployment receipt finalized block hash must be a non-zero bytes32",
+        ),
+    )
+
+    for target_method, expected_message in cases:
+        for exception_type in (SystemExit, TypeError, RuntimeError, ValueError):
+            fake = fake_opener_for(module)
+
+            def fail_target_receipt_readback(
+                result,
+                *,
+                method,
+                byte_length,
+                nonzero=True,
+                exception_type=exception_type,
+                target_method=target_method,
+            ):
+                if method == target_method:
+                    raise exception_type(
+                        f"secret-token {target_method} readback parser detail"
+                    )
+                return original_rpc_fixed_hex_data(
+                    result,
+                    method=method,
+                    byte_length=byte_length,
+                    nonzero=nonzero,
+                )
+
+            with monkeypatch.context() as patch:
+                patch.setattr(module, "_rpc_fixed_hex_data", fail_target_receipt_readback)
+                try:
+                    module.collect_source_bridge_evidence(
+                        "https://ethereum.example",
+                        domain=module.SCCP_DOMAIN_ETH,
+                        bridge_address=fake.bridge,
+                        block_tag="finalized",
+                        deployment_transaction_hash=bytes.fromhex("de" * 32),
+                        opener=fake.opener,
+                        timeout=1.0,
+                    )
+                except RuntimeError as exc:
+                    rendered = str(exc)
+                    assert rendered == expected_message
+                    assert "secret-token" not in rendered
+                    assert "parser detail" not in rendered
+                    assert "readback" not in rendered
+                    assert exception_type.__name__ not in rendered
+                    assert exc.__cause__ is None
+                    assert exc.__suppress_context__ is True
+                else:
+                    raise AssertionError(
+                        f"{target_method} readback parser detail was accepted"
+                    )
+
+
+def test_evm_source_live_redacts_receipt_block_hash_metadata_reparse_failures(
+    monkeypatch,
+):
+    module = load_live_module()
+    original_parse_hex32 = module._parse_hex32
+
+    for exception_type in (SystemExit, TypeError, RuntimeError, ValueError):
+        fake = fake_opener_for(module)
+
+        def fail_receipt_block_hash(value, *, label, exception_type=exception_type):
+            if label == "deployment receipt block hash":
+                raise exception_type(
+                    "secret-token deployment receipt block hash metadata parser detail"
+                )
+            return original_parse_hex32(value, label=label)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "_parse_hex32", fail_receipt_block_hash)
+            try:
+                module.collect_source_bridge_evidence(
+                    "https://ethereum.example",
+                    domain=module.SCCP_DOMAIN_ETH,
+                    bridge_address=fake.bridge,
+                    block_tag="latest",
+                    deployment_transaction_hash=bytes.fromhex("de" * 32),
+                    opener=fake.opener,
+                    timeout=1.0,
+                )
+            except RuntimeError as exc:
+                rendered = str(exc)
+                assert rendered == "deployment receipt block hash metadata is invalid"
+                assert "secret-token" not in rendered
+                assert "parser detail" not in rendered
+                assert exception_type.__name__ not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    "deployment receipt block hash metadata parser detail was accepted"
+                )
 
 
 def test_evm_source_live_rejects_deployment_transaction_readback_drift():

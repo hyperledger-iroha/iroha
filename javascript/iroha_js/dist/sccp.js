@@ -632,7 +632,7 @@ const normalizeHexInput = (value, label, byteLength = null) => {
   if (value.trim() !== value) {
     throw new TypeError(`${label} must be canonical hex`);
   }
-  const trimmed = value.replace(/^0x/i, "").toLowerCase();
+  const trimmed = value.startsWith("0x") ? value.slice(2) : value;
   if (!trimmed || /[^0-9a-f]/.test(trimmed) || trimmed.length % 2 !== 0) {
     throw new TypeError(`${label} must be canonical hex`);
   }
@@ -8164,6 +8164,32 @@ export const buildTonSccpProofRequest = (input) => {
       "sourceStateVerifierHash must not be the TON template verifier hash",
     );
   }
+  const sourceAdapterDeploymentInput = optionalInputField(
+    "sourceAdapterDeployment",
+    "sourceAdapterDeployment",
+    "source_adapter_deployment",
+  );
+  let descriptorDerivedDeploymentBinding;
+  if (sourceAdapterDeploymentInput !== SCCP_OPTIONAL_FIELD_MISSING) {
+    const sourceAdapterDeployment = normalizeSccpSourceAdapterEngineDeployment(
+      sourceAdapterDeploymentInput,
+    );
+    if (sourceAdapterDeployment.sourceDomain !== SCCP_DOMAIN_TON) {
+      throw new TypeError("sourceAdapterDeployment.sourceDomain must be TON");
+    }
+    if (sourceAdapterDeployment.targetDomain !== SCCP_DOMAIN_SORA) {
+      throw new TypeError("sourceAdapterDeployment.targetDomain must be SORA");
+    }
+    if (
+      sourceStateVerifierHash !== sourceAdapterDeployment.sourceStateVerifierHash
+    ) {
+      throw new TypeError(
+        "sourceStateVerifierHash must match sourceAdapterDeployment",
+      );
+    }
+    descriptorDerivedDeploymentBinding =
+      sccpSourceAdapterDeploymentBindingFromDeployment(sourceAdapterDeployment);
+  }
   const proofContextInput = optionalInputField(
     "proofContext",
     "proofContext",
@@ -8224,7 +8250,7 @@ export const buildTonSccpProofRequest = (input) => {
       "TON SCCP proof request source adapter deployment binding targetDomain must be SORA",
     );
   }
-  const selectDeploymentHash = (label, snakeLabel) => {
+  const selectDeploymentHash = (label, snakeLabel, defaultValue) => {
     const topLevelValue = optionalInputField(label, label, snakeLabel);
     const nestedValue = strictOptionalResultField(
       deploymentInput,
@@ -8253,16 +8279,21 @@ export const buildTonSccpProofRequest = (input) => {
       );
     }
     return (
-      normalizedTopLevelValue ?? normalizedNestedValue ?? SCCP_ZERO_HASH_V1
+      normalizedTopLevelValue ??
+      normalizedNestedValue ??
+      defaultValue ??
+      SCCP_ZERO_HASH_V1
     );
   };
   const sourceAdapterDeploymentHash = selectDeploymentHash(
     "sourceAdapterDeploymentHash",
     "source_adapter_deployment_hash",
+    descriptorDerivedDeploymentBinding?.sourceAdapterDeploymentHash,
   );
   const sourceAdapterDeploymentReceiptHash = selectDeploymentHash(
     "sourceAdapterDeploymentReceiptHash",
     "source_adapter_deployment_receipt_hash",
+    descriptorDerivedDeploymentBinding?.sourceAdapterDeploymentReceiptHash,
   );
   const sourceAdapterDeploymentBinding =
     normalizeSccpSourceAdapterDeploymentBinding({
@@ -8271,6 +8302,15 @@ export const buildTonSccpProofRequest = (input) => {
       sourceAdapterDeploymentHash,
       sourceAdapterDeploymentReceiptHash,
     });
+  if (
+    descriptorDerivedDeploymentBinding !== undefined &&
+    JSON.stringify(sourceAdapterDeploymentBinding) !==
+      JSON.stringify(descriptorDerivedDeploymentBinding)
+  ) {
+    throw new TypeError(
+      "sourceAdapterDeploymentBinding must match sourceAdapterDeployment",
+    );
+  }
   if (
     sourceAdapterDeploymentBinding.sourceAdapterDeploymentHash ===
     SCCP_ZERO_HASH_V1
@@ -42804,6 +42844,21 @@ const rejectMismatchedTronSourceBridgeConfigHash = (material) => {
     "sourceBridgeConfigHash",
     32,
   );
+  const emitterAddress = hexToBytes(
+    material.sourceBridgeEmitterAddress,
+    "sourceBridgeEmitterAddress",
+    20,
+  );
+  const ownerAddress = hexToBytes(
+    material.sourceBridgeOwnerAddress,
+    "sourceBridgeOwnerAddress",
+    20,
+  );
+  if (bytesEqual(ownerAddress, emitterAddress)) {
+    throw new TypeError(
+      "sourceBridgeOwnerAddress must not match sourceBridgeEmitterAddress",
+    );
+  }
   const expected = tronSourceBridgeConfigHash(material);
   if (!bytesEqual(supplied, expected)) {
     throw new TypeError(
@@ -43724,6 +43779,18 @@ export function sccpSourceAdapterDeploymentBindingHash(input) {
       canonicalSccpSourceAdapterDeploymentBindingBytes(input),
     ),
   );
+}
+
+export function sccpSourceAdapterDeploymentBindingFromDeployment(input) {
+  const deployment = normalizeSccpSourceAdapterEngineDeployment(input);
+  return normalizeSccpSourceAdapterDeploymentBinding({
+    sourceDomain: deployment.sourceDomain,
+    targetDomain: deployment.targetDomain,
+    sourceAdapterDeploymentHash: sccpSourceAdapterEngineDeploymentHash(
+      deployment,
+    ),
+    sourceAdapterDeploymentReceiptHash: deployment.deploymentReceiptHash,
+  });
 }
 
 export function buildSolanaSccpProofRequest(input) {

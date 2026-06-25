@@ -726,6 +726,43 @@ def test_live_ton_evidence_rejects_noncanonical_remote_hash_base64():
             raise AssertionError(f"noncanonical live TON {label} was accepted")
 
 
+def test_live_ton_evidence_rejects_noncanonical_remote_hash_hex():
+    module = load_live_module()
+
+    for label, kwargs, expected in (
+        (
+            "code_hash",
+            {"code_hash_text": "0X" + TON_CODE_BOC_ROOT_HASH},
+            "lowercase 0x prefix",
+        ),
+        (
+            "account_state_hash",
+            {"account_state_hash_text": "0x" + "AA" * 32},
+            "lowercase hex",
+        ),
+        (
+            "last_transaction_hash",
+            {"last_transaction_hash_text": "AA" * 32},
+            "lowercase hex",
+        ),
+    ):
+        fake = fake_ton_opener(module, **kwargs)
+        try:
+            module.collect_live_evidence(
+                "https://toncenter.example",
+                verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
+                opener=fake.opener,
+                timeout=3.0,
+            )
+        except RuntimeError as exc:
+            assert label in str(exc)
+            assert expected in str(exc)
+        else:
+            raise AssertionError(
+                f"noncanonical live TON {label} hex was accepted"
+            )
+
+
 def test_live_ton_evidence_rejects_padded_code_boc_text():
     module = load_live_module()
     valid_code_boc = base64.b64encode(bytes.fromhex(TON_CODE_BOC_HEX)).decode("ascii")
@@ -779,51 +816,85 @@ def test_live_ton_evidence_redacts_code_boc_parser_failures(monkeypatch):
         account_state_hash=bytes.fromhex("55" * 32),
     )
 
-    for exception_type in (TypeError, ValueError):
+    failure_cases = (
+        (
+            module.argparse.ArgumentTypeError,
+            "secret-token {label} argument detail",
+            "argument detail",
+        ),
+        (
+            SystemExit,
+            "secret-token {label} SystemExit detail",
+            "SystemExit detail",
+        ),
+        (
+            RuntimeError,
+            "secret-token {label} RuntimeError detail",
+            "RuntimeError detail",
+        ),
+        (
+            TypeError,
+            "secret-token {label} parser detail",
+            "parser detail",
+        ),
+        (
+            ValueError,
+            "secret-token {label} ValueError detail",
+            "ValueError detail",
+        ),
+    )
+    for exception_type, secret_template, forbidden_detail in failure_cases:
+        with monkeypatch.context() as patch:
 
-        def fail_code_boc(_value, *, label, exception_type=exception_type):
-            raise exception_type(f"secret-token {label} parser detail")
+            def fail_code_boc(
+                _value,
+                *,
+                label,
+                exception_type=exception_type,
+                secret_template=secret_template,
+            ):
+                raise exception_type(secret_template.format(label=label))
 
-        monkeypatch.setattr(module.evidence, "parse_code_boc_base64", fail_code_boc)
+            patch.setattr(module.evidence, "parse_code_boc_base64", fail_code_boc)
 
-        try:
-            module.collect_live_evidence(
-                "https://toncenter.example",
-                verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
-                opener=fake_ton_opener(module).opener,
-                timeout=3.0,
-            )
-        except RuntimeError as exc:
-            live_exc = exc
-            live_error = str(exc)
-        else:
-            raise AssertionError("TON live collection accepted parser failure")
+            try:
+                module.collect_live_evidence(
+                    "https://toncenter.example",
+                    verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
+                    opener=fake_ton_opener(module).opener,
+                    timeout=3.0,
+                )
+            except RuntimeError as exc:
+                live_exc = exc
+                live_error = str(exc)
+            else:
+                raise AssertionError("TON live collection accepted parser failure")
 
-        try:
-            module._summary(args, live)
-        except ValueError as exc:
-            summary_exc = exc
-            summary_error = str(exc)
-        else:
-            raise AssertionError("TON live summary accepted parser failure")
+            try:
+                module._summary(args, live)
+            except ValueError as exc:
+                summary_exc = exc
+                summary_error = str(exc)
+            else:
+                raise AssertionError("TON live summary accepted parser failure")
 
-        rendered = "\n".join((live_error, summary_error))
-        assert live_error == "TON verifier account code_boc is invalid"
-        assert summary_error == "TON live code BoC base64 metadata is invalid"
-        assert "secret-token" not in rendered
-        assert "parser detail" not in rendered
-        assert exception_type.__name__ not in rendered
-        assert "is invalid:" not in rendered
-        assert live_exc.__cause__ is None
-        assert live_exc.__suppress_context__ is True
-        assert summary_exc.__cause__ is None
-        assert summary_exc.__suppress_context__ is True
+            rendered = "\n".join((live_error, summary_error))
+            assert live_error == "TON verifier account code_boc is invalid"
+            assert summary_error == "TON live code BoC base64 metadata is invalid"
+            assert "secret-token" not in rendered
+            assert forbidden_detail not in rendered
+            assert exception_type.__name__ not in rendered
+            assert "is invalid:" not in rendered
+            assert live_exc.__cause__ is None
+            assert live_exc.__suppress_context__ is True
+            assert summary_exc.__cause__ is None
+            assert summary_exc.__suppress_context__ is True
 
 
 def test_live_ton_hash_decoder_redacts_base64_parser_causes(monkeypatch):
     module = load_live_module()
 
-    for exception_type in (TypeError, ValueError):
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
 
         def fail_b64decode(*_args, exception_type=exception_type, **_kwargs):
             raise exception_type("secret-token hash base64")
@@ -853,69 +924,73 @@ def test_live_ton_evidence_redacts_account_address_parser_failures(monkeypatch):
     module = load_live_module()
     normalize = module.evidence.normalize_ton_raw_address
 
-    def fail_account_address(value, *, label):
-        if label == "accountStates account address":
-            raise module.argparse.ArgumentTypeError(
-                f"secret-token {label} parser detail"
+    failure_cases = (
+        (
+            module.argparse.ArgumentTypeError,
+            "secret-token {label} parser detail",
+            "parser detail",
+        ),
+        (
+            SystemExit,
+            "secret-token {label} SystemExit detail",
+            "SystemExit detail",
+        ),
+        (
+            RuntimeError,
+            "secret-token {label} RuntimeError detail",
+            "RuntimeError detail",
+        ),
+        (
+            TypeError,
+            "secret-token {label} helper TypeError detail",
+            "helper TypeError detail",
+        ),
+        (
+            ValueError,
+            "secret-token {label} ValueError detail",
+            "ValueError detail",
+        ),
+    )
+    for exception_type, secret_template, forbidden_detail in failure_cases:
+        with monkeypatch.context() as patch:
+
+            def fail_account_address(
+                value,
+                *,
+                label,
+                exception_type=exception_type,
+                secret_template=secret_template,
+            ):
+                if label == "accountStates account address":
+                    raise exception_type(secret_template.format(label=label))
+                return normalize(value, label=label)
+
+            patch.setattr(
+                module.evidence,
+                "normalize_ton_raw_address",
+                fail_account_address,
             )
-        return normalize(value, label=label)
-
-    monkeypatch.setattr(
-        module.evidence,
-        "normalize_ton_raw_address",
-        fail_account_address,
-    )
-
-    caught_exc = None
-    try:
-        module.collect_live_evidence(
-            "https://toncenter.example",
-            verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
-            opener=fake_ton_opener(module).opener,
-            timeout=3.0,
-        )
-    except RuntimeError as exc:
-        caught_exc = exc
-        rendered = str(exc)
-    else:
-        raise AssertionError("TON live collection accepted parser failure")
-
-    assert rendered == "TON accountStates account address must be a canonical raw address"
-    assert "secret-token" not in rendered
-    assert "parser detail" not in rendered
-    assert "canonical raw address:" not in rendered
-    assert caught_exc is not None
-    assert caught_exc.__cause__ is None
-    assert caught_exc.__suppress_context__ is True
-
-    def fail_account_address_typeerror(value, *, label):
-        if label == "accountStates account address":
-            raise TypeError(f"secret-token {label} helper TypeError detail")
-        return normalize(value, label=label)
-
-    monkeypatch.setattr(
-        module.evidence,
-        "normalize_ton_raw_address",
-        fail_account_address_typeerror,
-    )
-    try:
-        module.collect_live_evidence(
-            "https://toncenter.example",
-            verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
-            opener=fake_ton_opener(module).opener,
-            timeout=3.0,
-        )
-    except RuntimeError as exc:
-        rendered = str(exc)
-        assert rendered == (
-            "TON accountStates account address must be a canonical raw address"
-        )
-        assert "secret-token" not in rendered
-        assert "helper TypeError detail" not in rendered
-        assert exc.__cause__ is None
-        assert exc.__suppress_context__ is True
-    else:
-        raise AssertionError("TON live collection accepted helper TypeError")
+            try:
+                module.collect_live_evidence(
+                    "https://toncenter.example",
+                    verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
+                    opener=fake_ton_opener(module).opener,
+                    timeout=3.0,
+                )
+            except RuntimeError as exc:
+                rendered = str(exc)
+                assert rendered == (
+                    "TON accountStates account address must be a canonical raw address"
+                )
+                assert "secret-token" not in rendered
+                assert forbidden_detail not in rendered
+                assert "canonical raw address:" not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    f"TON live collection accepted {exception_type.__name__}"
+                )
 
 
 def test_live_ton_evidence_redacts_imported_parser_failures(monkeypatch):
@@ -936,66 +1011,124 @@ def test_live_ton_evidence_redacts_imported_parser_failures(monkeypatch):
     )
 
     original_normalize = module.evidence.normalize_ton_raw_address
-    with monkeypatch.context() as patch:
-        def fail_account_address(value, *, label):
-            if label == "account address":
-                raise module.argparse.ArgumentTypeError(
-                    "secret-token account address parser detail"
+    normalize_failure_cases = (
+        (
+            module.argparse.ArgumentTypeError,
+            "secret-token {label} parser detail",
+            "parser detail",
+        ),
+        (
+            SystemExit,
+            "secret-token {label} SystemExit detail",
+            "SystemExit detail",
+        ),
+        (
+            RuntimeError,
+            "secret-token {label} RuntimeError detail",
+            "RuntimeError detail",
+        ),
+        (
+            TypeError,
+            "secret-token {label} helper TypeError detail",
+            "helper TypeError detail",
+        ),
+        (
+            ValueError,
+            "secret-token {label} ValueError detail",
+            "ValueError detail",
+        ),
+    )
+    for target_label, expected_message in (
+        ("account address", "TON live account address metadata is invalid"),
+        ("verifier contract address", "TON live verifier address metadata is invalid"),
+    ):
+        for exception_type, secret_template, forbidden_detail in normalize_failure_cases:
+            with monkeypatch.context() as patch:
+
+                def fail_address(
+                    value,
+                    *,
+                    label,
+                    target_label=target_label,
+                    exception_type=exception_type,
+                    secret_template=secret_template,
+                ):
+                    if label == target_label:
+                        raise exception_type(secret_template.format(label=label))
+                    return original_normalize(value, label=label)
+
+                patch.setattr(
+                    module.evidence,
+                    "normalize_ton_raw_address",
+                    fail_address,
                 )
-            return original_normalize(value, label=label)
+                try:
+                    module._summary(args, live)
+                except ValueError as exc:
+                    rendered = str(exc)
+                    assert rendered == expected_message
+                    assert "secret-token" not in rendered
+                    assert forbidden_detail not in rendered
+                    assert exc.__cause__ is None
+                    assert exc.__suppress_context__ is True
+                else:
+                    raise AssertionError(
+                        f"TON live summary leaked {target_label} "
+                        f"{exception_type.__name__}"
+                    )
 
-        patch.setattr(module.evidence, "normalize_ton_raw_address", fail_account_address)
-        try:
-            module._summary(args, live)
-        except ValueError as exc:
-            rendered = str(exc)
-            assert rendered == "TON live account address metadata is invalid"
-            assert "secret-token" not in rendered
-            assert "parser detail" not in rendered
-            assert exc.__cause__ is None
-            assert exc.__suppress_context__ is True
-        else:
-            raise AssertionError("TON live summary leaked account parser detail")
+    for exception_type, secret_template, forbidden_detail in (
+        (
+            module.argparse.ArgumentTypeError,
+            "secret-token {label} argument detail",
+            "argument detail",
+        ),
+        (
+            SystemExit,
+            "secret-token {label} SystemExit detail",
+            "SystemExit detail",
+        ),
+        (
+            RuntimeError,
+            "secret-token {label} parser detail",
+            "parser detail",
+        ),
+        (
+            TypeError,
+            "secret-token {label} TypeError detail",
+            "TypeError detail",
+        ),
+        (
+            ValueError,
+            "secret-token {label} ValueError detail",
+            "ValueError detail",
+        ),
+    ):
+        with monkeypatch.context() as patch:
 
-    with monkeypatch.context() as patch:
-        def fail_verifier_address_typeerror(value, *, label):
-            if label == "verifier contract address":
-                raise TypeError(f"secret-token {label} helper TypeError detail")
-            return original_normalize(value, label=label)
+            def fail_last_transaction_lt(
+                _value,
+                *,
+                label,
+                exception_type=exception_type,
+                secret_template=secret_template,
+            ):
+                raise exception_type(secret_template.format(label=label))
 
-        patch.setattr(
-            module.evidence,
-            "normalize_ton_raw_address",
-            fail_verifier_address_typeerror,
-        )
-        try:
-            module._summary(args, live)
-        except ValueError as exc:
-            rendered = str(exc)
-            assert rendered == "TON live verifier address metadata is invalid"
-            assert "secret-token" not in rendered
-            assert "helper TypeError detail" not in rendered
-            assert exc.__cause__ is None
-            assert exc.__suppress_context__ is True
-        else:
-            raise AssertionError("TON live summary leaked verifier helper TypeError")
-
-    with monkeypatch.context() as patch:
-        def fail_last_transaction_lt(_value, *, label):
-            raise RuntimeError(f"secret-token {label} parser detail")
-
-        patch.setattr(module, "_positive_decimal", fail_last_transaction_lt)
-        try:
-            module._summary(args, live)
-        except ValueError as exc:
-            rendered = str(exc)
-            assert rendered == "TON live last_transaction_lt metadata is invalid"
-            assert "secret-token" not in rendered
-            assert "parser detail" not in rendered
-            assert exc.__cause__ is None
-            assert exc.__suppress_context__ is True
-        else:
-            raise AssertionError("TON live summary leaked LT parser detail")
+            patch.setattr(module, "_positive_decimal", fail_last_transaction_lt)
+            try:
+                module._summary(args, live)
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == "TON live last_transaction_lt metadata is invalid"
+                assert "secret-token" not in rendered
+                assert forbidden_detail not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    f"TON live summary leaked LT {exception_type.__name__}"
+                )
 
 
 def test_live_ton_evidence_rejects_code_hash_drift():

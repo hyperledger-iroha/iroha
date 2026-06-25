@@ -2285,8 +2285,10 @@ object SccpEvm {
     private fun hex32Bytes(value: String, field: String): ByteArray {
         require(value.trim() == value) { "$field must be canonical hex" }
         var body = value
-        if (body.startsWith("0x", ignoreCase = true)) body = body.substring(2)
+        require(!body.startsWith("0X")) { "$field must be canonical hex" }
+        if (body.startsWith("0x")) body = body.substring(2)
         require(body.length == 64) { "$field must be 32 bytes" }
+        require(isLowercaseHexBody(body)) { "$field must be canonical hex" }
         val out = ByteArray(32)
         for (i in out.indices) {
             out[i] = body.substring(i * 2, i * 2 + 2).toIntOrNull(16)?.toByte()
@@ -2332,6 +2334,9 @@ object SccpEvm {
         }
         return normalized
     }
+
+    private fun isLowercaseHexBody(value: String): Boolean =
+        value.all { it in '0'..'9' || it in 'a'..'f' }
 
     private fun normalizeNativeEvmProverArtifactPath(value: String, field: String): String {
         require(value.isNotEmpty()) { "$field must be a non-empty relative POSIX path" }

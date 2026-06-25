@@ -177,6 +177,11 @@ def phase_command_lines(fragments) -> list[str]:
             lines.append("+ dotnet --version")
         if "dotnet --info" in fragments:
             lines.append("+ dotnet --info")
+        if "cargo build -p connect_norito_bridge" in fragments:
+            lines.append(
+                "+ env CARGO_TARGET_DIR=target/sccp-production-corridor "
+                "cargo build -p connect_norito_bridge"
+            )
         if "dotnet restore Hyperledger.Iroha.Sdk.sln" in fragments:
             lines.append("+ dotnet restore Hyperledger.Iroha.Sdk.sln")
         test_command = next(
@@ -242,6 +247,24 @@ def phase_success_lines(report, phase: str) -> list[str]:
         if phase == "dotnet-sdk" and fragment == "SCCP .NET SDK Architecture:":
             lines.append("SCCP .NET SDK Architecture: x64")
             continue
+        if (
+            phase == "dotnet-sdk"
+            and fragment == "connect_norito_bridge native bridge:"
+        ):
+            lines.append(
+                "connect_norito_bridge native bridge: "
+                "target/sccp-production-corridor/debug/connect_norito_bridge.dll"
+            )
+            continue
+        if (
+            phase == "dotnet-sdk"
+            and fragment == "connect_norito_bridge native bridge sha256:"
+        ):
+            lines.append(
+                "connect_norito_bridge native bridge sha256: "
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            )
+            continue
         if phase == "dotnet-sdk" and fragment == "Passed!":
             lines.append(
                 "Passed! - Failed: 0, Passed: 42, Skipped: 0, Total: 42, "
@@ -254,6 +277,9 @@ def phase_success_lines(report, phase: str) -> list[str]:
                 "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TestResults/"
                 "sccp-dotnet-sdk.trx"
             )
+            continue
+        if phase == "dotnet-sdk" and fragment == "SCCP .NET SDK TRX bytes:":
+            lines.append("SCCP .NET SDK TRX bytes: 4096")
             continue
         lines.append(fragment)
     return lines
@@ -292,8 +318,10 @@ def phase_successful_lines(report, phase: str) -> list[str]:
                 lines.append(success[0])
             elif command == "+ dotnet --info":
                 lines.extend(success[1:4])
+            elif "cargo build -p connect_norito_bridge" in command:
+                lines.extend(success[4:6])
             elif command.startswith("+ dotnet test "):
-                lines.extend(success[4:])
+                lines.extend(success[6:])
         return lines
     if phase == "contract-smoke":
         node_success = [
@@ -672,90 +700,106 @@ def test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift() 
         )
 
 
-def test_release_bundle_hex_predicates_redact_typeerror_parser_causes(
+def test_release_bundle_hex_predicates_redact_parser_exit_causes(
     monkeypatch,
 ) -> None:
-    """Bundle verifier hex checks must fail closed on parser TypeErrors."""
+    """Bundle verifier hex checks must fail closed on parser helper exits."""
 
     verifier = load_verify_helpers()
 
-    class SecretBytes:
-        @staticmethod
-        def fromhex(_text):
-            raise TypeError("secret-token bundle hex TypeError detail")
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
 
-    monkeypatch.setattr(verifier, "bytes", SecretBytes, raising=False)
+        class SecretBytes:
+            @staticmethod
+            def fromhex(_text, exception_type=exception_type):
+                raise exception_type(
+                    f"secret-token bundle hex {exception_type.__name__} detail"
+                )
 
-    assert verifier._is_nonzero_hex32(fixed_hex32(0xA6)) is False
-    assert verifier._is_hex32(fixed_hex32(0xA7)) is False
+        with monkeypatch.context() as patch:
+            patch.setattr(verifier, "bytes", SecretBytes, raising=False)
 
-    label = (
-        f"domain {verifier.ACTIVE_LAUNCH_DOMAIN} "
-        f"({verifier.ACTIVE_LAUNCH_CHAIN})"
-    )
-    canary = {
-        "evidence_hash": fixed_hex32(0xA8),
-        "evidence_source": verifier.ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE,
-        "transaction_hash": fixed_hex32(0xA9),
-        "receipt_block_hash": fixed_hex32(0xAA),
-        "block_receipts_root": fixed_hex32(0xAB),
-        "message_id": fixed_hex32(0xAC),
-        "receipt_block_number": 1,
-        "receipt_block_finalized": True,
-    }
-    blockers = verifier._active_launch_route_canary_metadata_blockers(label, canary)
-    rendered = "\n".join(blockers)
+            assert verifier._is_nonzero_hex32(fixed_hex32(0xA6)) is False
+            assert verifier._is_hex32(fixed_hex32(0xA7)) is False
 
-    assert (
-        "route canary evidence hash must be a canonical non-zero bytes32 hex string"
-        in rendered
-    )
-    assert "secret-token" not in rendered
-    assert "TypeError" not in rendered
+            label = (
+                f"domain {verifier.ACTIVE_LAUNCH_DOMAIN} "
+                f"({verifier.ACTIVE_LAUNCH_CHAIN})"
+            )
+            canary = {
+                "evidence_hash": fixed_hex32(0xA8),
+                "evidence_source": verifier.ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE,
+                "transaction_hash": fixed_hex32(0xA9),
+                "receipt_block_hash": fixed_hex32(0xAA),
+                "block_receipts_root": fixed_hex32(0xAB),
+                "message_id": fixed_hex32(0xAC),
+                "receipt_block_number": 1,
+                "receipt_block_finalized": True,
+            }
+            blockers = verifier._active_launch_route_canary_metadata_blockers(
+                label,
+                canary,
+            )
+            rendered = "\n".join(blockers)
+
+            assert (
+                "route canary evidence hash must be a canonical non-zero bytes32 "
+                "hex string"
+                in rendered
+            )
+            assert "secret-token" not in rendered
+            assert exception_type.__name__ not in rendered
 
 
-def test_release_bundle_solana_pubkey_redacts_typeerror_parser_causes(
+def test_release_bundle_solana_pubkey_redacts_parser_exit_causes(
     monkeypatch,
 ) -> None:
-    """Solana route-canary pubkey checks must fail closed on parser TypeErrors."""
+    """Solana route-canary pubkey checks must fail closed on parser helper exits."""
 
     bundle = load_bundle_module()
     verifier = load_verify_helpers()
 
-    class SecretVerifier:
-        SCCP_DOMAIN_SOL = verifier.SCCP_DOMAIN_SOL
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
 
-        @staticmethod
-        def _decode_solana_base58(_value):
-            raise TypeError("secret-token bundle Solana pubkey TypeError detail")
+        class SecretVerifier:
+            SCCP_DOMAIN_SOL = verifier.SCCP_DOMAIN_SOL
 
-    monkeypatch.setattr(bundle, "_verify_module", lambda: SecretVerifier())
-    monkeypatch.setattr(
-        verifier,
-        "_decode_solana_base58",
-        SecretVerifier._decode_solana_base58,
-    )
+            @staticmethod
+            def _decode_solana_base58(_value, exception_type=exception_type):
+                raise exception_type(
+                    "secret-token bundle Solana pubkey "
+                    f"{exception_type.__name__} detail"
+                )
 
-    candidate = "11111111111111111111111111111112"
-    assert bundle._is_canonical_solana_pubkey_text(candidate) is False
-    builder_errors = bundle._route_canary_solana_semantic_errors(
-        "bundle report lane domain 3",
-        {"domain": verifier.SCCP_DOMAIN_SOL},
-        {"solana_programdata_address": candidate},
-    )
-    verifier_errors = verifier._solana_pubkey_field_errors(
-        "strict report lane domain 3 route_canary",
-        {"solana_programdata_address": candidate},
-        "solana_programdata_address",
-    )
-    rendered = "\n".join([*builder_errors, *verifier_errors])
+        with monkeypatch.context() as patch:
+            patch.setattr(bundle, "_verify_module", lambda: SecretVerifier())
+            patch.setattr(
+                verifier,
+                "_decode_solana_base58",
+                SecretVerifier._decode_solana_base58,
+            )
 
-    assert (
-        "solana_programdata_address must be a non-zero canonical base58 Solana address"
-        in rendered
-    )
-    assert "secret-token" not in rendered
-    assert "TypeError" not in rendered
+            candidate = "11111111111111111111111111111112"
+            assert bundle._is_canonical_solana_pubkey_text(candidate) is False
+            builder_errors = bundle._route_canary_solana_semantic_errors(
+                "bundle report lane domain 3",
+                {"domain": verifier.SCCP_DOMAIN_SOL},
+                {"solana_programdata_address": candidate},
+            )
+            verifier_errors = verifier._solana_pubkey_field_errors(
+                "strict report lane domain 3 route_canary",
+                {"solana_programdata_address": candidate},
+                "solana_programdata_address",
+            )
+            rendered = "\n".join([*builder_errors, *verifier_errors])
+
+            assert (
+                "solana_programdata_address must be a non-zero canonical base58 "
+                "Solana address"
+                in rendered
+            )
+            assert "secret-token" not in rendered
+            assert exception_type.__name__ not in rendered
 
 
 def test_release_bundle_active_route_allowlist_metadata_rejects_exact_flag_and_role_reuse(
@@ -1200,6 +1244,16 @@ def load_report_module():
     return module
 
 
+def minimal_source_inventory() -> dict[str, dict[str, object]]:
+    """Return passing source-inventory rows for all strict verifier gates."""
+
+    verifier = load_verify_helpers()
+    return {
+        gate: {"validation_status": "passed", "validation_blockers": []}
+        for gate in verifier.SOURCE_INVENTORY_REQUIRED_GATES
+    }
+
+
 def minimal_release_bundle_report(*, production_ready: bool = True) -> dict[str, object]:
     """Return a structurally valid empty release-bundle report."""
 
@@ -1219,7 +1273,7 @@ def minimal_release_bundle_report(*, production_ready: bool = True) -> dict[str,
         "cryptographic_evidence": [],
         "user_prover_submission_surfaces": [],
         "native_evm_prover_bundle": {},
-        "source_inventory": {},
+        "source_inventory": minimal_source_inventory(),
         "evidence": {
             "production_ready": production_ready,
             "required_domains": [1, 2, 3, 4, 5],
@@ -3052,6 +3106,55 @@ def test_release_bundle_evidence_phase_accepts_pytest_runner_command_shape() -> 
             )
 
 
+def test_release_bundle_phase_command_matchers_accept_runner_overrides() -> None:
+    """Report and verifier parsers must accept configured runner paths."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+
+    for module in (report, verifier):
+        evidence_command = (
+            "+ /tmp/iroha-python-pytest -m pytest -q "
+            + " ".join(corridor_evidence_script_tests())
+        )
+        js_command = (
+            "+ /tmp/iroha-node20 --test "
+            + " ".join(module._node_expected_test_files_for_phase("js-sdk"))
+        )
+        contract_node_command = (
+            "+ /tmp/iroha-node20 --test "
+            + " ".join(module._node_expected_test_files_for_phase("contract-smoke"))
+        )
+        contract_check_command = (
+            "+ /tmp/iroha-node20 --check "
+            "contracts/evm/sccp/test/sccp_message_bridge_smoke.js"
+        )
+
+        for fragment in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]:
+            assert module._phase_command_matches_required_fragment(
+                "evidence-scripts",
+                evidence_command,
+                fragment,
+            )
+        for fragment in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["js-sdk"]:
+            assert module._phase_command_matches_required_fragment(
+                "js-sdk",
+                js_command,
+                fragment,
+            )
+        for fragment in module._node_expected_test_files_for_phase("contract-smoke"):
+            assert module._phase_command_matches_required_fragment(
+                "contract-smoke",
+                contract_node_command,
+                fragment,
+            )
+        assert module._phase_command_matches_required_fragment(
+            "contract-smoke",
+            contract_check_command,
+            "--check contracts/evm/sccp/test/sccp_message_bridge_smoke.js",
+        )
+
+
 def test_release_bundle_phase_command_matchers_accept_corridor_dry_run() -> None:
     """Report and verifier command matchers must accept real dry-run commands."""
 
@@ -3166,6 +3269,11 @@ def test_release_bundle_phase_command_matchers_reject_inert_option_values() -> N
 
     report = load_report_module()
     verifier = load_verify_helpers()
+    android_harness_assignment = next(
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["java-android"]
+        if fragment.startswith("ANDROID_HARNESS_MAINS=")
+    )
     cases = (
         (
             "evidence-scripts",
@@ -3212,7 +3320,7 @@ def test_release_bundle_phase_command_matchers_reject_inert_option_values() -> N
             "+ env ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTestsExtra "
             "./gradlew :core:test --console=plain "
             "--tests org.hyperledger.iroha.android.GradleHarnessTests",
-            "ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests",
+            android_harness_assignment,
         ),
         (
             "java-android",
@@ -3280,6 +3388,13 @@ def test_release_bundle_phase_command_matchers_reject_narrow_kotlin_selector() -
             fragment,
         )
         assert module._phase_command_matches_required_fragment(
+            "kotlin-sdk",
+            "+ ./gradlew :core-jvm:test --console=plain "
+            "--tests org.hyperledger.iroha.sdk.sccp.* "
+            "--tests org.hyperledger.iroha.sdk.sccp.TonSccpProverTest",
+            fragment,
+        )
+        assert not module._phase_command_matches_required_fragment(
             "kotlin-sdk",
             "+ ./gradlew :core-jvm:test --console=plain "
             "--tests org.hyperledger.iroha.sdk.sccp.*",
@@ -3475,14 +3590,19 @@ def test_release_bundle_java_android_phase_requires_source_proof_harness() -> No
     verifier = load_verify_helpers()
     source_harness = "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests"
     ton_harness = "org.hyperledger.iroha.android.sccp.TonSccpProverTests"
+    tron_harness = "org.hyperledger.iroha.android.sccp.TronSccpProverTests"
 
     assert source_harness in corridor_android_harness_mains()
     assert ton_harness in corridor_android_harness_mains()
+    assert tron_harness in corridor_android_harness_mains()
     for module in (report, verifier):
         assert source_harness in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
             "java-android"
         ]
         assert ton_harness in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+            "java-android"
+        ]
+        assert tron_harness in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
             "java-android"
         ]
 
@@ -4476,6 +4596,31 @@ def test_release_bundle_allow_not_ready_rejects_noncanonical_root_blockers(
             ["duplicate blocker", "duplicate blocker"],
             "preflight report blockers must not contain duplicate strings",
         ),
+        (
+            "root.mnemonic",
+            ["operator mnemonic recovery blocker"],
+            "preflight report blockers contains blocker with sensitive name",
+        ),
+        (
+            "root.seed-phrase",
+            ["operator seed phrase recovery blocker"],
+            "preflight report blockers contains blocker with sensitive name",
+        ),
+        (
+            "root.credential",
+            ["operator credential recovery blocker"],
+            "preflight report blockers contains blocker with sensitive name",
+        ),
+        (
+            "root.auth-header",
+            ["operator auth header recovery blocker"],
+            "preflight report blockers contains blocker with sensitive name",
+        ),
+        (
+            "root.signing-key",
+            ["operator signing key recovery blocker"],
+            "preflight report blockers contains blocker with sensitive name",
+        ),
     )
 
     for index, (case_id, blockers, expected_error) in enumerate(cases):
@@ -4512,6 +4657,9 @@ def test_release_bundle_allow_not_ready_rejects_noncanonical_root_blockers(
         captured = capsys.readouterr()
         assert "malformed SCCP release readiness report" in captured.err, case_id
         assert expected_error in captured.err, case_id
+        for blocker in blockers:
+            if isinstance(blocker, str) and blocker:
+                assert blocker not in captured.err, case_id
         assert not output_dir.exists()
 
 
@@ -5261,6 +5409,64 @@ def test_release_bundle_rejects_malformed_copied_checklist_before_render(
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
 
+def test_release_bundle_rejects_empty_copied_checklist_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The bundle-local release checklist must not bypass schema checks when empty."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["release_checklist"] = {}
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("empty copied release checklist was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("empty copied release checklist reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    checklist_label = "bundled report.release_checklist"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert f"{checklist_label} missing field: ready" in captured.err
+    assert f"{checklist_label} missing field: items" in captured.err
+    assert f"{checklist_label} ready must be true" in captured.err
+    assert f"{checklist_label}.items must be a list" in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
 def test_release_bundle_rejects_copied_checklist_binding_before_render(
     tmp_path: Path,
     monkeypatch,
@@ -5427,6 +5633,79 @@ def test_release_bundle_rejects_malformed_copied_corridor_before_render(
     )
     assert markdown_field not in captured.err
     assert confusable_field not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_empty_copied_corridor_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The bundle-local corridor section must not bypass schema checks when empty."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["corridor"] = {}
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("empty copied corridor was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("empty copied corridor reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    corridor_label = "bundled report.corridor"
+    assert "malformed SCCP release readiness report" in captured.err
+    for field in (
+        "production_ready",
+        "phases",
+        "evidence_artifacts",
+        "require_phase_evidence",
+        "blockers",
+    ):
+        assert f"{corridor_label} missing field: {field}" in captured.err
+    assert f"{corridor_label} production_ready must be true or false" in captured.err
+    assert (
+        f"{corridor_label} require_phase_evidence must be true or false"
+        in captured.err
+    )
+    assert f"{corridor_label}.phases must be an object" in captured.err
+    assert f"{corridor_label}.evidence_artifacts must be an object" in captured.err
+    assert (
+        f"{corridor_label} blockers must be a list of non-empty strings"
+        in captured.err
+    )
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -6687,7 +6966,7 @@ def test_release_bundle_rejects_copied_crypto_source_adapter_gate_hash_role_repl
     source_hash = fixed_hex32(0x91)
     deployment_hash = fixed_hex32(0x92)
     route_canary_hash = fixed_hex32(0x93)
-    gate_hash = fixed_hex32(0x94)
+    route_message_id = fixed_hex32(0x97)
     row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
     row.update(
         {
@@ -6702,15 +6981,16 @@ def test_release_bundle_rejects_copied_crypto_source_adapter_gate_hash_role_repl
             "destination_binding_hash": fixed_hex32(0x95),
             "route_allowlist_hash": fixed_hex32(0x96),
             "route_canary_evidence_hash": route_canary_hash,
+            "route_canary_message_id": route_message_id,
             "route_canary_evidence_bound": True,
             "route_canary_receipt_block_finalized": None,
             "source_adapter_gate_required": True,
-            "source_adapter_gate_hash": gate_hash,
+            "source_adapter_gate_hash": route_message_id,
             "source_adapter_gate_audit_hashes": {
                 "solana_tower_replay_verifier_hash": source_hash,
                 "solana_full_accountsdb_lattice_verifier_hash": deployment_hash,
                 "solana_bank_fork_choice_verifier_hash": route_canary_hash,
-                "solana_full_light_client_gate_hash": gate_hash,
+                "solana_full_light_client_gate_hash": route_message_id,
             },
         }
     )
@@ -6733,31 +7013,83 @@ def test_release_bundle_rejects_copied_crypto_source_adapter_gate_hash_role_repl
         "source_adapter_gate_audit_hashes.solana_bank_fork_choice_verifier_hash "
         "must not reuse route_canary_evidence_hash"
     ) in errors
+    assert (
+        f"{label} source_adapter_gate hash role "
+        "source_adapter_gate_audit_hashes.solana_full_light_client_gate_hash "
+        "must not reuse route_canary_message_id"
+    ) in errors
+
+
+def test_release_bundle_rejects_copied_crypto_route_canary_transcript_replay() -> None:
+    """Copied crypto rows must not publish transcript hashes as canary evidence."""
+
+    bundle = load_bundle_module()
+    label = "bundled report.cryptographic_evidence[0]"
+    route_message_id = fixed_hex32(0xA1)
+    gate_hash = fixed_hex32(0xA2)
+    row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+    row.update(
+        {
+            "domain": 1,
+            "chain": "eth",
+            "evm_source_rpc_chain_id": "1",
+            "evm_source_block_tag": "finalized",
+            "evm_destination_rpc_chain_id": "1",
+            "evm_destination_block_tag": "finalized",
+            "source_verifier_material_hash": fixed_hex32(0xA3),
+            "source_adapter_engine_deployment_hash": fixed_hex32(0xA4),
+            "destination_binding_hash": fixed_hex32(0xA5),
+            "route_allowlist_hash": fixed_hex32(0xA6),
+            "route_canary_evidence_hash": route_message_id,
+            "route_canary_evidence_source": bundle._route_canary_source_by_domain()[1],
+            "route_canary_evidence_bound": True,
+            "route_canary_transaction_hash": fixed_hex32(0xA7),
+            "route_canary_receipt_block_number": 123,
+            "route_canary_receipt_block_hash": fixed_hex32(0xA8),
+            "route_canary_receipt_block_finalized": True,
+            "route_canary_block_receipts_root": fixed_hex32(0xA9),
+            "route_canary_message_id": route_message_id,
+            "route_canary_block_number": None,
+            "route_canary_block_timestamp": None,
+            "source_adapter_gate_required": True,
+            "source_adapter_gate_hash": gate_hash,
+            "source_adapter_gate_audit_hashes": {"evm_source_gate_hash": gate_hash},
+        }
+    )
+
+    errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+
+    assert (
+        f"{label} route_canary hash role route_canary_evidence_hash "
+        "must not reuse route_canary_message_id"
+    ) in errors
 
 
 def test_release_bundle_rejects_public_source_adapter_gate_template_audit_replays() -> None:
     """Public source-gate audit hashes must not replay built-in templates."""
 
     bundle = load_bundle_module()
+    verifier = load_verify_helpers()
     all_lanes = bundle._all_lanes_module()
-    cases = (
-        (
-            all_lanes.SCCP_DOMAIN_SOL,
-            "solana",
-            all_lanes.SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS,
-            all_lanes._source_material_template_hashes(
-                all_lanes.LANE_PROFILES[all_lanes.SCCP_DOMAIN_SOL]
-            ),
-        ),
-        (
-            all_lanes.SCCP_DOMAIN_TON,
-            "ton",
-            all_lanes.TON_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS,
-            all_lanes._source_material_template_hashes(
-                all_lanes.LANE_PROFILES[all_lanes.SCCP_DOMAIN_TON]
-            ),
-        ),
+    domains = (
+        all_lanes.SCCP_DOMAIN_ETH,
+        all_lanes.SCCP_DOMAIN_BSC,
+        all_lanes.SCCP_DOMAIN_SOL,
+        all_lanes.SCCP_DOMAIN_TON,
+        all_lanes.SCCP_DOMAIN_TRON,
     )
+    cases = []
+    for domain in domains:
+        profile = all_lanes.LANE_PROFILES[domain]
+        _gate_field, audit_fields = all_lanes._source_adapter_gate_requirements(domain)
+        cases.append(
+            (
+                domain,
+                profile.chain,
+                audit_fields,
+                all_lanes._source_material_template_hashes(profile),
+            )
+        )
 
     for domain, row_chain, audit_fields, template_hashes in cases:
         expected_keys = sorted(
@@ -6806,6 +7138,17 @@ def test_release_bundle_rejects_public_source_adapter_gate_template_audit_replay
                     f"{label} source_adapter_gate_audit_hashes {audit_field} "
                     "must be deployed audit evidence, not built-in template material"
                 ) in crypto_errors, (domain, audit_field, template_field)
+                verifier_crypto_errors = (
+                    verifier._cryptographic_evidence_source_adapter_gate_schema_errors(
+                        row,
+                        row["source_adapter_gate_audit_hashes"],
+                    )
+                )
+                assert (
+                    "readiness report cryptographic evidence row "
+                    f"source_adapter_gate_audit_hashes {audit_field} must be "
+                    "deployed audit evidence, not built-in template material"
+                ) in verifier_crypto_errors, (domain, audit_field, template_field)
 
                 lane_label = "bundled report.evidence.lanes[0]"
                 lane = {"domain": domain, "chain": lane_chain}
@@ -6826,6 +7169,15 @@ def test_release_bundle_rejects_public_source_adapter_gate_template_audit_replay
                     f"{lane_label}.source_adapter_gate audit_hashes {audit_field} "
                     "must be deployed audit evidence, not built-in template material"
                 ) in gate_errors, (domain, audit_field, template_field)
+                verifier_gate_errors = verifier._source_adapter_gate_coherence_errors(
+                    f"{lane_label}.source_adapter_gate",
+                    lane,
+                    source_gate,
+                )
+                assert (
+                    f"{lane_label}.source_adapter_gate audit_hashes {audit_field} "
+                    "must be deployed audit evidence, not built-in template material"
+                ) in verifier_gate_errors, (domain, audit_field, template_field)
 
 
 def test_release_bundle_rejects_public_source_adapter_gate_template_hash_replays() -> None:
@@ -6834,22 +7186,23 @@ def test_release_bundle_rejects_public_source_adapter_gate_template_hash_replays
     bundle = load_bundle_module()
     verifier = load_verify_helpers()
     all_lanes = bundle._all_lanes_module()
-    cases = (
-        (
-            all_lanes.SCCP_DOMAIN_SOL,
-            "solana",
-            all_lanes._source_material_template_hashes(
-                all_lanes.LANE_PROFILES[all_lanes.SCCP_DOMAIN_SOL]
-            ),
-        ),
-        (
-            all_lanes.SCCP_DOMAIN_TON,
-            "ton",
-            all_lanes._source_material_template_hashes(
-                all_lanes.LANE_PROFILES[all_lanes.SCCP_DOMAIN_TON]
-            ),
-        ),
+    domains = (
+        all_lanes.SCCP_DOMAIN_ETH,
+        all_lanes.SCCP_DOMAIN_BSC,
+        all_lanes.SCCP_DOMAIN_SOL,
+        all_lanes.SCCP_DOMAIN_TON,
+        all_lanes.SCCP_DOMAIN_TRON,
     )
+    cases = []
+    for domain in domains:
+        profile = all_lanes.LANE_PROFILES[domain]
+        cases.append(
+            (
+                domain,
+                profile.chain,
+                all_lanes._source_material_template_hashes(profile),
+            )
+        )
 
     for domain, row_chain, template_hashes in cases:
         expected_keys = sorted(
@@ -6932,6 +7285,242 @@ def test_release_bundle_rejects_public_source_adapter_gate_template_hash_replays
                 f"{lane_label}.source_adapter_gate gate_hash must be deployed "
                 "gate evidence, not built-in template material"
             ) in verifier_gate_errors, (domain, template_field)
+
+
+def test_release_bundle_rejects_public_source_record_template_hash_replays() -> None:
+    """Copied source-record hashes must not replay built-in templates."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    all_lanes = bundle._all_lanes_module()
+    domains = (
+        all_lanes.SCCP_DOMAIN_ETH,
+        all_lanes.SCCP_DOMAIN_BSC,
+        all_lanes.SCCP_DOMAIN_SOL,
+        all_lanes.SCCP_DOMAIN_TON,
+        all_lanes.SCCP_DOMAIN_TRON,
+    )
+
+    for domain in domains:
+        profile = all_lanes.LANE_PROFILES[domain]
+        template_hashes = all_lanes._source_material_template_hashes(profile)
+        for source_field in (
+            "source_verifier_material_hash",
+            "source_adapter_engine_deployment_hash",
+        ):
+            for template_field, template_hash in template_hashes.items():
+                source_hashes = {
+                    "source_verifier_material_hash": fixed_hex32(0xB1),
+                    "source_adapter_engine_deployment_hash": fixed_hex32(0xB2),
+                }
+                source_hashes[source_field] = "0x" + template_hash.hex()
+                lane = {
+                    "domain": domain,
+                    "chain": profile.chain,
+                    "production_ready": True,
+                    "source_record_hashes": source_hashes,
+                }
+                builder_label = "bundled report.evidence.lanes[0]"
+                builder_errors = bundle._all_lanes_nested_bundle_errors(
+                    lane,
+                    builder_label,
+                )
+
+                assert (
+                    f"{builder_label}.source_record_hashes {source_field} must "
+                    "be deployed evidence, not built-in template material"
+                ) in builder_errors, (domain, source_field, template_field)
+
+                verifier_errors = verifier._all_lanes_lane_schema_errors(
+                    "all-lanes summary",
+                    [lane],
+                )
+
+                assert (
+                    f"all-lanes summary lane domain {domain} source_record_hashes "
+                    f"{source_field} must be deployed evidence, not built-in "
+                    "template material"
+                ) in verifier_errors, (domain, source_field, template_field)
+
+
+def test_release_bundle_rejects_claimed_ready_non_active_all_lanes_drift() -> None:
+    """Copied non-active lanes that claim readiness must pass ready-lane checks."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    all_lanes = bundle._all_lanes_module()
+    domain = all_lanes.SCCP_DOMAIN_BSC
+    profile = all_lanes.LANE_PROFILES[domain]
+    destination_hash = fixed_hex32(0xC1)
+    route_hash = fixed_hex32(0xD1)
+    route_canary = {
+        "status": "passed",
+        "evidence_hash": fixed_hex32(0xE1),
+        "evidence_source": verifier.ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN[domain],
+        "route_allowlist_hash": route_hash,
+        "destination_binding_hash": destination_hash,
+        "evidence_bound": True,
+        "transaction_hash": fixed_hex32(0xE2),
+        "log_index": 1,
+        "receipt_block_number": 2,
+        "receipt_block_hash": fixed_hex32(0xE3),
+        "block_receipts_root": fixed_hex32(0xE4),
+        "call_data_sha256": fixed_hex32(0xE5),
+        "message_id": fixed_hex32(0xE6),
+        "payload_hash": fixed_hex32(0xE7),
+        "target_domain": domain,
+        "statement_hash": fixed_hex32(0xE8),
+        "commitment_root": fixed_hex32(0xE9),
+        "finality_height": fixed_hex32(0xEA),
+        "finality_block_hash": fixed_hex32(0xEB),
+        "proof_version": 1,
+        "proof_source_domain": verifier.SCCP_DOMAIN_SORA,
+        "message_proof_used": True,
+        "receipt_block_finalized": True,
+    }
+    lane = {
+        "domain": domain,
+        "chain": profile.chain,
+        "records": {
+            "source_verifier_material": False,
+            "source_adapter_deployment": True,
+            "destination_rollout": True,
+            "route_allowlist": True,
+        },
+        "production_ready": True,
+        "source_record_hashes": {
+            "source_verifier_material_hash": "",
+            "source_adapter_engine_deployment_hash": fixed_hex32(0xB2),
+        },
+        "source_adapter_gate": {
+            "required": True,
+            "ready": True,
+            "gate_hash": fixed_hex32(0xB4),
+            "audit_hashes": {"evm_source_gate_hash": fixed_hex32(0xB4)},
+            "blockers": [],
+        },
+        "evm_live_metadata": {
+            "required": True,
+            "ready": True,
+            "source_rpc_chain_id": "57",
+            "source_block_tag": "latest",
+            "destination_rpc_chain_id": "56",
+            "destination_block_tag": "latest",
+        },
+        "destination_binding": {
+            "destination_binding_hash": "",
+            "destination_binding_key": "bsc-mainnet-destination-binding",
+            "expected_destination_binding_hash": destination_hash,
+            "expected_destination_binding_hash_matches": False,
+            "recomputed": False,
+            "destination_network_id": "0X" + "33" * 32,
+        },
+        "route_allowlist": {
+            "route_allowlist_hash": "",
+            "expected_route_allowlist_hash": route_hash,
+            "expected_route_allowlist_hash_matches": False,
+            "route_canary": route_canary,
+        },
+        "blockers": [],
+    }
+    summary = {
+        "production_ready": False,
+        "required_domains": [1, 2, 3, 4, 5],
+        "supported_launch_domains": [1, 2, 3, 4, 5],
+        "unsupported_launch_domains": [],
+        "lanes": [lane],
+        "blockers": ["BSC copied lane drift"],
+        "release_checklist": {"ready": False, "items": []},
+    }
+
+    builder_label = "bundled report.evidence"
+    builder_summary_errors = bundle._all_lanes_summary_bundle_errors(
+        summary,
+        builder_label,
+    )
+    assert (
+        f"{builder_label}.lanes[0].records source_verifier_material must be true"
+        in builder_summary_errors
+    )
+
+    lane_label = f"{builder_label}.lanes[0]"
+    builder_nested_errors = bundle._all_lanes_nested_bundle_errors(lane, lane_label)
+    for expected in (
+        (
+            f"{lane_label}.source_record_hashes source_verifier_material_hash "
+            "must be a non-zero canonical bytes32 hex string"
+        ),
+        (
+            f"{lane_label}.evm_live_metadata source_rpc_chain_id must be "
+            "canonical chain id 56"
+        ),
+        (
+            f"{lane_label}.destination_binding destination_binding_hash must be "
+            "a non-zero canonical bytes32 hex string"
+        ),
+        (
+            f"{lane_label}.destination_binding destination_network_id must be "
+            "a non-zero canonical bytes32 hex string"
+        ),
+        (
+            f"{lane_label}.destination_binding destination_bridge_address is "
+            "required for EVM-family lanes"
+        ),
+        (
+            f"{lane_label}.destination_binding "
+            "expected_destination_binding_hash_matches must be true"
+        ),
+        (f"{lane_label}.destination_binding recomputed must be true"),
+        (
+            f"{lane_label}.route_allowlist route_allowlist_hash must be a "
+            "non-zero canonical bytes32 hex string"
+        ),
+        (
+            f"{lane_label}.route_allowlist expected_route_allowlist_hash_matches "
+            "must be true"
+        ),
+    ):
+        assert expected in builder_nested_errors
+
+    verifier_errors = verifier._all_lanes_lane_schema_errors("all-lanes summary", [lane])
+    verifier_label = f"all-lanes summary lane domain {domain}"
+    for expected in (
+        f"{verifier_label} records source_verifier_material must be true",
+        (
+            f"{verifier_label} source_record_hashes source_verifier_material_hash "
+            "must be a canonical bytes32 hex string"
+        ),
+        (
+            f"{verifier_label} evm_live_metadata source_rpc_chain_id must be "
+            "canonical chain id 56"
+        ),
+        (
+            f"{verifier_label} destination_binding destination_binding_hash "
+            "must be a canonical bytes32 hex string"
+        ),
+        (
+            f"{verifier_label} destination_binding destination_network_id "
+            "must be a canonical bytes32 hex string"
+        ),
+        (
+            f"{verifier_label} destination_binding destination_bridge_address "
+            "is required for EVM-family lanes"
+        ),
+        (
+            f"{verifier_label} destination_binding "
+            "expected_destination_binding_hash_matches must be true"
+        ),
+        f"{verifier_label} destination_binding recomputed must be true",
+        (
+            f"{verifier_label} route_allowlist route_allowlist_hash must be "
+            "a canonical bytes32 hex string"
+        ),
+        (
+            f"{verifier_label} route_allowlist "
+            "expected_route_allowlist_hash_matches must be true"
+        ),
+    ):
+        assert expected in verifier_errors
 
 
 def test_release_bundle_redacts_sensitive_copied_source_gate_audit_fields_before_render() -> None:
@@ -8866,6 +9455,152 @@ def test_release_bundle_rejects_malformed_copied_evidence_before_render(
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
 
+def test_release_bundle_rejects_empty_copied_evidence_release_checklist_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied all-lanes evidence must not render with an empty checklist map."""
+
+    bundle = load_bundle_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending copied checklist certification"]
+    summary["release_checklist"] = {}
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("empty copied evidence checklist was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "empty copied evidence checklist reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    checklist_label = "bundled report.evidence.release_checklist"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert f"{checklist_label} missing field: ready" in captured.err
+    assert f"{checklist_label} missing field: items" in captured.err
+    assert f"{checklist_label} ready must be true or false" in captured.err
+    assert f"{checklist_label}.items must be a list" in captured.err
+    assert "operator pending copied checklist certification" not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_missing_copied_evidence_roots_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied all-lanes evidence must keep required root fields."""
+
+    bundle = load_bundle_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    summary["blockers"] = ["operator pending copied root field certification"]
+    missing_fields = tuple(
+        field
+        for field in evidence_module.ALL_LANES_PUBLIC_SUMMARY_FIELDS
+        if field != "blockers"
+    )
+    for field in missing_fields:
+        summary.pop(field, None)
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("missing copied evidence roots were rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("missing copied evidence roots reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    for field in missing_fields:
+        assert f"bundled report.evidence missing field: {field}" in captured.err
+    assert "operator pending copied root field certification" not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
 def test_release_bundle_rejects_malformed_copied_evidence_nested_maps_before_render(
     tmp_path: Path,
     monkeypatch,
@@ -9344,6 +10079,1940 @@ def test_release_bundle_rejects_copied_evidence_expected_hash_drift_before_rende
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
 
+def test_release_bundle_rejects_copied_evidence_destination_binding_recompute_drift_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied all-lanes destination hashes must recompute before rendering."""
+
+    bundle = load_bundle_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    bsc_index, bsc_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == evidence_module.SCCP_DOMAIN_BSC
+    )
+    destination = bsc_lane["destination_binding"]
+    route = bsc_lane["route_allowlist"]
+    route_canary = route["route_canary"]
+    source_hashes = bsc_lane["source_record_hashes"]
+    profile = evidence_module.LANE_PROFILES[evidence_module.SCCP_DOMAIN_BSC]
+    taken_hashes = {
+        source_hashes["source_verifier_material_hash"],
+        source_hashes["source_adapter_engine_deployment_hash"],
+        destination["destination_binding_hash"],
+        destination["expected_destination_binding_hash"],
+        route["route_allowlist_hash"],
+        route["expected_route_allowlist_hash"],
+    }
+    taken_hashes.update(
+        value
+        for value in route_canary.values()
+        if isinstance(value, str) and value.startswith("0x") and len(value) == 66
+    )
+    for seed in range(0xD0, 0x1D0):
+        forged_destination_hash = fixed_hex32(seed)
+        if forged_destination_hash in taken_hashes:
+            continue
+        forged_route_hash = (
+            "0x"
+            + evidence_module.route_allowlist_hash_for_lane_evidence(
+                profile,
+                helpers.raw_hex(source_hashes["source_verifier_material_hash"]),
+                helpers.raw_hex(
+                    source_hashes["source_adapter_engine_deployment_hash"]
+                ),
+                helpers.raw_hex(forged_destination_hash),
+            ).hex()
+        )
+        if forged_route_hash not in taken_hashes | {forged_destination_hash}:
+            break
+    else:
+        raise AssertionError("could not forge distinct destination binding hash")
+
+    destination["destination_binding_hash"] = forged_destination_hash
+    destination["expected_destination_binding_hash"] = forged_destination_hash
+    destination["expected_destination_binding_hash_matches"] = True
+    destination["recomputed"] = True
+    route["route_allowlist_hash"] = forged_route_hash
+    route["expected_route_allowlist_hash"] = forged_route_hash
+    route["expected_route_allowlist_hash_matches"] = True
+    route_canary["route_allowlist_hash"] = forged_route_hash
+    route_canary["destination_binding_hash"] = forged_destination_hash
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("destination-binding recompute drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "destination-binding recompute drift reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    lane_label = f"bundled report.evidence.lanes[{bsc_index}].destination_binding"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{lane_label} destination_binding_hash must recompute from "
+        "destination_binding_key"
+    ) in captured.err
+    assert forged_destination_hash not in captured.err
+    assert forged_route_hash not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_evidence_route_allowlist_recompute_drift_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied all-lanes route hashes must recompute before rendering."""
+
+    bundle = load_bundle_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    bsc_index, bsc_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == evidence_module.SCCP_DOMAIN_BSC
+    )
+    destination = bsc_lane["destination_binding"]
+    route = bsc_lane["route_allowlist"]
+    route_canary = route["route_canary"]
+    source_hashes = bsc_lane["source_record_hashes"]
+    taken_hashes = {
+        source_hashes["source_verifier_material_hash"],
+        source_hashes["source_adapter_engine_deployment_hash"],
+        destination["destination_binding_hash"],
+        destination["expected_destination_binding_hash"],
+        route["route_allowlist_hash"],
+        route["expected_route_allowlist_hash"],
+    }
+    taken_hashes.update(
+        value
+        for value in route_canary.values()
+        if isinstance(value, str) and value.startswith("0x") and len(value) == 66
+    )
+    for seed in range(0xE1, 0x1E1):
+        forged_route_hash = fixed_hex32(seed)
+        if forged_route_hash not in taken_hashes:
+            break
+    else:
+        raise AssertionError("could not forge distinct route allowlist hash")
+
+    route["route_allowlist_hash"] = forged_route_hash
+    route["expected_route_allowlist_hash"] = forged_route_hash
+    route["expected_route_allowlist_hash_matches"] = True
+    route_canary["route_allowlist_hash"] = forged_route_hash
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("route allowlist recompute drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("route allowlist recompute drift reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    lane_label = f"bundled report.evidence.lanes[{bsc_index}].route_allowlist"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{lane_label} route_allowlist_hash must recompute from source material, "
+        "source adapter deployment, and destination binding hashes"
+    ) in captured.err
+    assert forged_route_hash not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_active_copied_destination_binding_recompute_drift_when_lane_not_ready(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active launch lane must recompute destination hashes when copied not-ready."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = [
+        "operator pending active destination recompute certification"
+    ]
+    summary["production_ready"] = False
+    summary["blockers"] = [
+        "operator pending active destination recompute certification"
+    ]
+
+    taken_hashes: set[str] = set()
+
+    def collect_hashes(value: object) -> None:
+        if isinstance(value, dict):
+            for child in value.values():
+                collect_hashes(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect_hashes(child)
+        elif isinstance(value, str) and value.startswith("0x") and len(value) == 66:
+            taken_hashes.add(value)
+
+    collect_hashes(summary)
+    destination = active_lane["destination_binding"]
+    route = active_lane["route_allowlist"]
+    route_canary = route["route_canary"]
+    source_hashes = active_lane["source_record_hashes"]
+    profile = evidence_module.LANE_PROFILES[readiness.ACTIVE_LAUNCH_DOMAIN]
+    for seed in range(0xD7, 0x1D7):
+        forged_destination_hash = fixed_hex32(seed)
+        if forged_destination_hash in taken_hashes:
+            continue
+        forged_route_hash = (
+            "0x"
+            + evidence_module.route_allowlist_hash_for_lane_evidence(
+                profile,
+                helpers.raw_hex(source_hashes["source_verifier_material_hash"]),
+                helpers.raw_hex(
+                    source_hashes["source_adapter_engine_deployment_hash"]
+                ),
+                helpers.raw_hex(forged_destination_hash),
+            ).hex()
+        )
+        if forged_route_hash not in taken_hashes | {forged_destination_hash}:
+            break
+    else:
+        raise AssertionError("could not forge distinct active destination hash")
+
+    destination["destination_binding_hash"] = forged_destination_hash
+    destination["expected_destination_binding_hash"] = forged_destination_hash
+    destination["expected_destination_binding_hash_matches"] = True
+    destination["recomputed"] = True
+    route["route_allowlist_hash"] = forged_route_hash
+    route["expected_route_allowlist_hash"] = forged_route_hash
+    route["expected_route_allowlist_hash_matches"] = True
+    route_canary["route_allowlist_hash"] = forged_route_hash
+    route_canary["destination_binding_hash"] = forged_destination_hash
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError(
+                "active destination-binding recompute drift was rendered"
+            )
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "active destination-binding recompute drift reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    lane_label = f"bundled report.evidence.lanes[{active_index}].destination_binding"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{lane_label} destination_binding_hash must recompute from "
+        "destination_binding_key"
+    ) in captured.err
+    assert forged_destination_hash not in captured.err
+    assert forged_route_hash not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_active_copied_destination_family_drift_when_lane_not_ready(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active launch lane must keep EVM destination-family fields when copied not-ready."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = [
+        "operator pending active destination family certification"
+    ]
+    summary["production_ready"] = False
+    summary["blockers"] = [
+        "operator pending active destination family certification"
+    ]
+
+    forged_bridge_address = "0X" + "44" * 20
+    destination = active_lane["destination_binding"]
+    destination.pop("destination_network_id", None)
+    destination["destination_bridge_address"] = forged_bridge_address
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("active destination-family drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "active destination-family drift reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    lane_label = f"bundled report.evidence.lanes[{active_index}].destination_binding"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{lane_label} destination_network_id is required for EVM-family lanes"
+    ) in captured.err
+    assert (
+        f"{lane_label} destination_bridge_address must be a non-zero canonical "
+        "20-byte hex string"
+    ) in captured.err
+    assert "operator pending active destination family certification" not in captured.err
+    assert forged_bridge_address not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_active_copied_destination_binding_missing_fields_when_lane_not_ready(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active launch lane must keep destination-binding fields when copied not-ready."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = [
+        "operator pending active destination-binding field certification"
+    ]
+    summary["production_ready"] = False
+    summary["blockers"] = [
+        "operator pending active destination-binding field certification"
+    ]
+
+    destination = active_lane["destination_binding"]
+    missing_fields = tuple(evidence_module.PUBLIC_LANE_DESTINATION_BINDING_FIELDS)
+    for field in missing_fields:
+        destination.pop(field, None)
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("active destination-binding missing fields rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "active destination-binding missing fields reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    binding_label = f"bundled report.evidence.lanes[{active_index}].destination_binding"
+    assert "malformed SCCP release readiness report" in captured.err
+    for field in evidence_module.PUBLIC_LANE_DESTINATION_BINDING_REQUIRED_FIELDS:
+        assert f"{binding_label} missing field: {field}" in captured.err
+    assert (
+        f"{binding_label} destination_network_id is required for EVM-family lanes"
+        in captured.err
+    )
+    assert (
+        f"{binding_label} destination_bridge_address is required for EVM-family lanes"
+        in captured.err
+    )
+    assert "operator pending active destination-binding field certification" not in (
+        captured.err
+    )
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_active_copied_source_gate_drift_when_lane_not_ready(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active launch lane must keep source-gate semantics when copied not-ready."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = [
+        "operator pending active source gate certification"
+    ]
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending active source gate certification"]
+
+    taken_hashes: set[str] = set()
+
+    def collect_hashes(value: object) -> None:
+        if isinstance(value, dict):
+            for child in value.values():
+                collect_hashes(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect_hashes(child)
+        elif isinstance(value, str) and value.startswith("0x") and len(value) == 66:
+            taken_hashes.add(value)
+
+    collect_hashes(summary)
+    for seed in range(0x97, 0x197):
+        forged_gate_hash = fixed_hex32(seed)
+        if forged_gate_hash not in taken_hashes:
+            break
+    else:
+        raise AssertionError("could not forge distinct active source gate hash")
+
+    source_gate = active_lane["source_adapter_gate"]
+    source_gate["ready"] = False
+    source_gate["gate_hash"] = forged_gate_hash
+    unexpected_audit_hash = fixed_hex32(0x42)
+    if unexpected_audit_hash == forged_gate_hash:
+        unexpected_audit_hash = fixed_hex32(0x43)
+    source_gate["audit_hashes"]["operator_override"] = unexpected_audit_hash
+    source_gate["blockers"] = [
+        "operator pending active source gate certification"
+    ]
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("active source-gate drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("active source-gate drift reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    gate_label = f"bundled report.evidence.lanes[{active_index}].source_adapter_gate"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{gate_label} audit_hashes contains unexpected field: operator_override"
+        in captured.err
+    )
+    assert f"{gate_label} gate_hash must match one audit_hashes value" in (
+        captured.err
+    )
+    assert (
+        f"{gate_label} gate_hash must match audit_hashes.evm_source_gate_hash"
+        in captured.err
+    )
+    assert f"{gate_label} ready must be true when gate is required" in captured.err
+    assert f"{gate_label} blockers must be empty when gate is required" in (
+        captured.err
+    )
+    assert "operator pending active source gate certification" not in captured.err
+    assert forged_gate_hash not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_active_copied_source_gate_transcript_replay_when_lane_not_ready(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active source-gate audit hash must not replay canary transcripts."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = [
+        "operator pending active source gate transcript certification"
+    ]
+    summary["production_ready"] = False
+    summary["blockers"] = [
+        "operator pending active source gate transcript certification"
+    ]
+    route_message_id = active_lane["route_allowlist"]["route_canary"]["message_id"]
+    source_gate = active_lane["source_adapter_gate"]
+    source_gate["gate_hash"] = route_message_id
+    source_gate["audit_hashes"]["evm_source_gate_hash"] = route_message_id
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("active source-gate transcript replay was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("active source-gate transcript replay reached Markdown")
+
+    captured = capsys.readouterr()
+    gate_label = f"bundled report.evidence.lanes[{active_index}].source_adapter_gate"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{gate_label} hash role audit_hashes.evm_source_gate_hash must not "
+        "reuse route_canary.message_id"
+    ) in captured.err
+    assert "operator pending active source gate transcript certification" not in (
+        captured.err
+    )
+    assert route_message_id not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_active_copied_source_gate_missing_fields_when_lane_not_ready(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active launch lane must keep source-gate fields when copied not-ready."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = [
+        "operator pending active source gate field certification"
+    ]
+    summary["production_ready"] = False
+    summary["blockers"] = [
+        "operator pending active source gate field certification"
+    ]
+
+    source_gate = active_lane["source_adapter_gate"]
+    missing_fields = tuple(evidence_module.PUBLIC_LANE_SOURCE_ADAPTER_GATE_FIELDS)
+    for field in missing_fields:
+        source_gate.pop(field, None)
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("active source-gate missing fields rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "active source-gate missing fields reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    gate_label = f"bundled report.evidence.lanes[{active_index}].source_adapter_gate"
+    assert "malformed SCCP release readiness report" in captured.err
+    for field in missing_fields:
+        assert f"{gate_label} missing field: {field}" in captured.err
+    assert "operator pending active source gate field certification" not in (
+        captured.err
+    )
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_active_copied_route_canary_semantic_drift_when_lane_not_ready(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active launch lane must keep route-canary semantics when copied not-ready."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = [
+        "operator pending active route canary certification"
+    ]
+    summary["production_ready"] = False
+    summary["blockers"] = [
+        "operator pending active route canary certification"
+    ]
+
+    taken_hashes: set[str] = set()
+
+    def collect_hashes(value: object) -> None:
+        if isinstance(value, dict):
+            for child in value.values():
+                collect_hashes(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect_hashes(child)
+        elif isinstance(value, str) and value.startswith("0x") and len(value) == 66:
+            taken_hashes.add(value)
+
+    collect_hashes(summary)
+    forged_hashes: list[str] = []
+    for seed in range(0x6D, 0x16D):
+        candidate = fixed_hex32(seed)
+        if candidate not in taken_hashes:
+            forged_hashes.append(candidate)
+        if len(forged_hashes) == 2:
+            break
+    if len(forged_hashes) != 2:
+        raise AssertionError("could not forge distinct active route-canary hashes")
+
+    route_canary = active_lane["route_allowlist"]["route_canary"]
+    route_canary["status"] = "failed"
+    route_canary["evidence_source"] = "operator_review_note"
+    route_canary["evidence_bound"] = False
+    route_canary["route_allowlist_hash"] = forged_hashes[0]
+    route_canary["destination_binding_hash"] = forged_hashes[1]
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("active route-canary semantic drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "active route-canary semantic drift reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    canary_label = (
+        f"bundled report.evidence.lanes[{active_index}].route_allowlist.route_canary"
+    )
+    assert "malformed SCCP release readiness report" in captured.err
+    assert f"{canary_label} status must be passed" in captured.err
+    assert (
+        f"{canary_label} evidence_source must be "
+        "evm_message_proof_accepted_transaction"
+    ) in captured.err
+    assert f"{canary_label} evidence_bound must be true" in captured.err
+    assert (
+        f"{canary_label} route_allowlist_hash must match lane route_allowlist_hash"
+        in captured.err
+    )
+    assert (
+        f"{canary_label} destination_binding_hash must match lane "
+        "destination_binding_hash"
+    ) in captured.err
+    assert "operator pending active route canary certification" not in captured.err
+    assert "operator_review_note" not in captured.err
+    for forged_hash in forged_hashes:
+        assert forged_hash not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_active_copied_evm_route_canary_proof_drift_when_lane_not_ready(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active launch lane must keep EVM route-canary proof metadata when copied not-ready."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = [
+        "operator pending active route canary proof certification"
+    ]
+    summary["production_ready"] = False
+    summary["blockers"] = [
+        "operator pending active route canary proof certification"
+    ]
+
+    route_canary = active_lane["route_allowlist"]["route_canary"]
+    route_canary["target_domain"] = 2
+    route_canary["proof_version"] = 2
+    route_canary["proof_source_domain"] = readiness.ACTIVE_LAUNCH_DOMAIN
+    route_canary["message_proof_used"] = False
+    route_canary["receipt_block_finalized"] = False
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("active EVM route-canary proof drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "active EVM route-canary proof drift reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    canary_label = (
+        f"bundled report.evidence.lanes[{active_index}].route_allowlist.route_canary"
+    )
+    assert "malformed SCCP release readiness report" in captured.err
+    assert f"{canary_label} target_domain must be the lane domain" in captured.err
+    assert f"{canary_label} proof_version must be 1" in captured.err
+    assert f"{canary_label} proof_source_domain must be SORA" in captured.err
+    assert f"{canary_label} message_proof_used must be true" in captured.err
+    assert f"{canary_label} receipt_block_finalized must be true" in captured.err
+    assert "operator pending active route canary proof certification" not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_active_copied_evm_route_canary_transcript_drift_when_lane_not_ready(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active launch lane must keep EVM route-canary transcript hashes when copied not-ready."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = [
+        "operator pending active route canary transcript certification"
+    ]
+    summary["production_ready"] = False
+    summary["blockers"] = [
+        "operator pending active route canary transcript certification"
+    ]
+
+    route_canary = active_lane["route_allowlist"]["route_canary"]
+    route_canary["finality_block_hash"] = "0x" + "00" * 32
+    route_canary["receipt_block_hash"] = route_canary["transaction_hash"]
+    route_canary["message_id"] = active_lane["route_allowlist"]["route_allowlist_hash"]
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError(
+                "active EVM route-canary transcript drift was rendered"
+            )
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "active EVM route-canary transcript drift reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    canary_label = (
+        f"bundled report.evidence.lanes[{active_index}].route_allowlist.route_canary"
+    )
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{canary_label} finality_block_hash must be a non-zero canonical "
+        "bytes32 hex string"
+    ) in captured.err
+    assert (
+        f"{canary_label} transcript hash receipt_block_hash must not reuse "
+        "transaction_hash"
+    ) in captured.err
+    assert f"{canary_label} hash role message_id must not reuse route_allowlist_hash" in (
+        captured.err
+    )
+    assert (
+        "operator pending active route canary transcript certification"
+        not in captured.err
+    )
+    assert "0x" + "00" * 32 not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_active_copied_evm_route_canary_scalar_drift_when_lane_not_ready(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active launch lane must keep EVM route-canary scalar metadata when copied not-ready."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = [
+        "operator pending active route canary scalar certification"
+    ]
+    summary["production_ready"] = False
+    summary["blockers"] = [
+        "operator pending active route canary scalar certification"
+    ]
+
+    route_canary = active_lane["route_allowlist"]["route_canary"]
+    route_canary["log_index"] = -1
+    route_canary["receipt_block_number"] = 0
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("active EVM route-canary scalar drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "active EVM route-canary scalar drift reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    canary_label = (
+        f"bundled report.evidence.lanes[{active_index}].route_allowlist.route_canary"
+    )
+    assert "malformed SCCP release readiness report" in captured.err
+    assert f"{canary_label} log_index must be a u32 integer" in captured.err
+    assert (
+        f"{canary_label} receipt_block_number must be a positive integer"
+        in captured.err
+    )
+    assert "operator pending active route canary scalar certification" not in (
+        captured.err
+    )
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_active_copied_evm_route_canary_missing_fields_when_lane_not_ready(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active launch lane must keep EVM route-canary required fields when copied not-ready."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = [
+        "operator pending active route canary field certification"
+    ]
+    summary["production_ready"] = False
+    summary["blockers"] = [
+        "operator pending active route canary field certification"
+    ]
+
+    route_canary = active_lane["route_allowlist"]["route_canary"]
+    missing_fields = tuple(evidence_module.PUBLIC_LANE_EVM_ROUTE_CANARY_FIELDS)
+    for field in missing_fields:
+        route_canary.pop(field, None)
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("active EVM route-canary missing fields rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "active EVM route-canary missing fields reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    canary_label = (
+        f"bundled report.evidence.lanes[{active_index}].route_allowlist.route_canary"
+    )
+    assert "malformed SCCP release readiness report" in captured.err
+    for field in missing_fields:
+        assert f"{canary_label} missing field: {field}" in captured.err
+    assert "operator pending active route canary field certification" not in (
+        captured.err
+    )
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_active_copied_route_allowlist_recompute_drift_when_lane_not_ready(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active launch lane must recompute route hashes even when copied not-ready."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = [
+        "operator pending active lane recompute certification"
+    ]
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending active lane recompute certification"]
+
+    taken_hashes: set[str] = set()
+
+    def collect_hashes(value: object) -> None:
+        if isinstance(value, dict):
+            for child in value.values():
+                collect_hashes(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect_hashes(child)
+        elif isinstance(value, str) and value.startswith("0x") and len(value) == 66:
+            taken_hashes.add(value)
+
+    collect_hashes(summary)
+    for seed in range(0xF1, 0x1F1):
+        forged_route_hash = fixed_hex32(seed)
+        if forged_route_hash not in taken_hashes:
+            break
+    else:
+        raise AssertionError("could not forge distinct active route allowlist hash")
+
+    route = active_lane["route_allowlist"]
+    route["route_allowlist_hash"] = forged_route_hash
+    route["expected_route_allowlist_hash"] = forged_route_hash
+    route["expected_route_allowlist_hash_matches"] = True
+    route["route_canary"]["route_allowlist_hash"] = forged_route_hash
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("active route allowlist recompute drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "active route allowlist recompute drift reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    lane_label = f"bundled report.evidence.lanes[{active_index}].route_allowlist"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{lane_label} route_allowlist_hash must recompute from source material, "
+        "source adapter deployment, and destination binding hashes"
+    ) in captured.err
+    assert forged_route_hash not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_active_copied_route_allowlist_missing_fields_when_lane_not_ready(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active launch lane must keep route-allowlist fields when copied not-ready."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = [
+        "operator pending active route-allowlist field certification"
+    ]
+    summary["production_ready"] = False
+    summary["blockers"] = [
+        "operator pending active route-allowlist field certification"
+    ]
+
+    route = active_lane["route_allowlist"]
+    missing_fields = tuple(evidence_module.PUBLIC_LANE_ROUTE_ALLOWLIST_FIELDS)
+    for field in missing_fields:
+        route.pop(field, None)
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("active route-allowlist missing fields rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "active route-allowlist missing fields reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    route_label = f"bundled report.evidence.lanes[{active_index}].route_allowlist"
+    assert "malformed SCCP release readiness report" in captured.err
+    for field in missing_fields:
+        assert f"{route_label} missing field: {field}" in captured.err
+    assert "operator pending active route-allowlist field certification" not in (
+        captured.err
+    )
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_active_copied_record_flags_missing_when_lane_not_ready(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active launch lane must keep record flags when copied not-ready."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = [
+        "operator pending active record flag certification"
+    ]
+    active_lane["records"] = {}
+    summary["production_ready"] = False
+    summary["blockers"] = [
+        "operator pending active record flag certification"
+    ]
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("active record-flag missing fields rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "active record-flag missing fields reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    records_label = f"bundled report.evidence.lanes[{active_index}].records"
+    assert "malformed SCCP release readiness report" in captured.err
+    for field in evidence_module.PUBLIC_LANE_RECORD_FIELDS:
+        assert f"{records_label} missing field: {field}" in captured.err
+    assert "operator pending active record flag certification" not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_active_copied_lane_root_missing_fields_when_lane_not_ready(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active launch lane must keep lane-root fields when copied not-ready."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = ["operator pending active lane-root certification"]
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending active lane-root certification"]
+    missing_fields = tuple(
+        field for field in evidence_module.PUBLIC_LANE_FIELDS if field != "domain"
+    )
+    for field in missing_fields:
+        active_lane.pop(field, None)
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("active lane-root missing fields rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "active lane-root missing fields reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    lane_label = f"bundled report.evidence.lanes[{active_index}]"
+    assert "malformed SCCP release readiness report" in captured.err
+    for field in missing_fields:
+        assert f"{lane_label} missing field: {field}" in captured.err
+    assert "operator pending active lane-root certification" not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_active_copied_source_record_template_replay_when_lane_not_ready(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active launch lane must not replay source templates when copied blocked."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = ["operator pending active source-record audit"]
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending active source-record audit"]
+    template_hashes = tuple(
+        evidence_module._source_material_template_hashes(
+            evidence_module.LANE_PROFILES[readiness.ACTIVE_LAUNCH_DOMAIN]
+        ).values()
+    )
+    assert len(template_hashes) >= 2
+    forged_material_hash = "0x" + template_hashes[0].hex()
+    forged_deployment_hash = "0x" + template_hashes[1].hex()
+    source_hashes = active_lane["source_record_hashes"]
+    source_hashes["source_verifier_material_hash"] = forged_material_hash
+    source_hashes["source_adapter_engine_deployment_hash"] = forged_deployment_hash
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("active source-record template replay was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "active source-record template replay reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    source_label = (
+        f"bundled report.evidence.lanes[{active_index}].source_record_hashes"
+    )
+    assert "malformed SCCP release readiness report" in captured.err
+    for field in (
+        "source_verifier_material_hash",
+        "source_adapter_engine_deployment_hash",
+    ):
+        assert (
+            f"{source_label} {field} must be deployed evidence, "
+            "not built-in template material"
+        ) in captured.err
+    assert "operator pending active source-record audit" not in captured.err
+    for forged_hash in (forged_material_hash, forged_deployment_hash):
+        assert forged_hash not in captured.err
+        assert forged_hash[2:] not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_active_copied_source_record_missing_fields_when_lane_not_ready(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active launch lane must keep source-record hashes when copied not-ready."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = [
+        "operator pending active source-record field certification"
+    ]
+    summary["production_ready"] = False
+    summary["blockers"] = [
+        "operator pending active source-record field certification"
+    ]
+
+    source_hashes = active_lane["source_record_hashes"]
+    missing_fields = tuple(evidence_module.PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS)
+    for field in missing_fields:
+        source_hashes.pop(field, None)
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("active source-record missing fields rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "active source-record missing fields reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    source_label = (
+        f"bundled report.evidence.lanes[{active_index}].source_record_hashes"
+    )
+    assert "malformed SCCP release readiness report" in captured.err
+    for field in missing_fields:
+        assert f"{source_label} missing field: {field}" in captured.err
+    assert "operator pending active source-record field certification" not in (
+        captured.err
+    )
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
 def test_release_bundle_rejects_copied_evidence_evm_live_metadata_drift_before_render(
     tmp_path: Path,
     monkeypatch,
@@ -9502,6 +12171,96 @@ def test_release_bundle_rejects_copied_evidence_evm_live_metadata_drift_before_r
     assert (
         f"{lane_label} destination_block_tag must be finalized for Ethereum mainnet"
         in captured.err
+    )
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_active_copied_evm_metadata_missing_fields_when_lane_not_ready(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active launch lane must keep EVM live metadata fields when copied not-ready."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = [
+        "operator pending active EVM metadata field certification"
+    ]
+    summary["production_ready"] = False
+    summary["blockers"] = [
+        "operator pending active EVM metadata field certification"
+    ]
+
+    evm_metadata = active_lane["evm_live_metadata"]
+    missing_fields = tuple(evidence_module.PUBLIC_LANE_EVM_LIVE_METADATA_FIELDS)
+    for field in missing_fields:
+        evm_metadata.pop(field, None)
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("active EVM live metadata missing fields rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "active EVM live metadata missing fields reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    lane_label = f"bundled report.evidence.lanes[{active_index}].evm_live_metadata"
+    assert "malformed SCCP release readiness report" in captured.err
+    for field in missing_fields:
+        assert f"{lane_label} missing field: {field}" in captured.err
+    assert "operator pending active EVM metadata field certification" not in (
+        captured.err
     )
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
@@ -10024,6 +12783,102 @@ def test_release_bundle_rejects_copied_evidence_route_canary_evidence_hash_repla
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
 
+def test_release_bundle_rejects_active_copied_route_canary_hash_role_reuse_when_lane_not_ready(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active copied route canary keeps role separation even when blocked."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = ["operator pending active route-canary role audit"]
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending active route-canary role audit"]
+
+    route = active_lane["route_allowlist"]
+    route_canary = route["route_canary"]
+    source_hashes = active_lane["source_record_hashes"]
+    forged_evidence_hash = route["route_allowlist_hash"]
+    forged_message_id = source_hashes["source_verifier_material_hash"]
+    route_canary["evidence_hash"] = forged_evidence_hash
+    route_canary["message_id"] = forged_message_id
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("active route-canary role reuse was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "active route-canary role reuse reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    canary_label = (
+        f"bundled report.evidence.lanes[{active_index}]."
+        "route_allowlist.route_canary"
+    )
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{canary_label} hash role evidence_hash must not reuse "
+        "route_allowlist_hash"
+    ) in captured.err
+    assert (
+        f"{canary_label} hash role message_id must not reuse "
+        "source_verifier_material_hash"
+    ) in captured.err
+    for forged_value in (forged_evidence_hash, forged_message_id):
+        assert forged_value not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
 def test_release_bundle_rejects_copied_route_canary_source_gate_replay_before_render(
     tmp_path: Path,
     monkeypatch,
@@ -10121,6 +12976,97 @@ def test_release_bundle_rejects_copied_route_canary_source_gate_replay_before_re
     assert (
         f"{tron_canary} hash role evidence_hash must not reuse "
         "source_adapter_gate_hash"
+    ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_route_canary_transcript_replay_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied route-canary evidence hashes must not replay transcript roles."""
+
+    bundle = load_bundle_module()
+    real_report_module = load_report_module()
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    def mutate_report(report: dict[str, object]) -> None:
+        evidence_summary = report["evidence"]
+        assert isinstance(evidence_summary, dict)
+        lanes = evidence_summary["lanes"]
+        assert isinstance(lanes, list)
+        by_domain = {lane["domain"]: lane for lane in lanes}
+
+        by_domain[2]["route_allowlist"]["route_canary"]["evidence_hash"] = by_domain[
+            1
+        ]["route_allowlist"]["route_canary"]["message_id"]
+        by_domain[4]["route_allowlist"]["route_canary"]["evidence_hash"] = by_domain[
+            5
+        ]["route_allowlist"]["route_canary"]["transaction_id"]
+
+        evidence_by_domain = {lane["domain"]: lane for lane in lanes}
+        crypto_rows = report["cryptographic_evidence"]
+        assert isinstance(crypto_rows, list)
+        for row in crypto_rows:
+            row["route_canary_evidence_hash"] = evidence_by_domain[row["domain"]][
+                "route_allowlist"
+            ]["route_canary"]["evidence_hash"]
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return real_report_module._corridor_phases()
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = real_report_module._build_report(*args, **kwargs)
+            if self.calls == 2:
+                mutate_report(report)
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("route-canary transcript replay was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                "--phase-evidence-dir",
+                str(tmp_path / "phase-artifacts"),
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("route-canary transcript replay reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    bsc_canary = "bundled report.evidence.lanes[1].route_allowlist.route_canary"
+    ton_canary = "bundled report.evidence.lanes[3].route_allowlist.route_canary"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{bsc_canary} evidence_hash must not reuse route_canary.message_id "
+        "from bundled report.evidence.lanes[0]"
+    ) in captured.err
+    assert (
+        f"{ton_canary} evidence_hash must not reuse route_canary.transaction_id "
+        "from bundled report.evidence.lanes[4]"
     ) in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
@@ -11072,6 +14018,65 @@ def test_release_bundle_rejects_malformed_copied_source_inventory_before_render(
     assert confusable_gate not in captured.err
     assert secret_gate not in captured.err
     assert "secret-token gate blocker" not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_empty_copied_source_inventory_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The bundle-local source inventory must not pass with no required gates."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["source_inventory"] = {}
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("empty copied source inventory was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("empty copied source inventory reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    for gate in verifier.SOURCE_INVENTORY_REQUIRED_GATES:
+        assert (
+            f"bundled report.source_inventory missing required gate: {gate}"
+            in captured.err
+        )
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -18876,31 +21881,83 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
     ) in errors
 
     weakened = markdown.replace(
-        "BSC recursive source-adapter verifier deployment is not complete for "
-        "the SCCP inbound path",
-        "BSC source verifier deployment is pending",
+        "Required source-verifier evidence by lane:",
+        "Required source-verifier evidence:",
     )
     errors = verifier._readiness_markdown_invariant_errors(report, weakened)
     assert (
         "readiness report Markdown Required Release Evidence section missing "
         "release evidence marker: "
-        "BSC recursive source-adapter verifier deployment is not complete for "
-        "the SCCP inbound path"
+        "Required source-verifier evidence by lane:"
     ) in errors
 
+    for lane_blocker in (
+        "Ethereum recursive source-adapter verifier deployment and remaining "
+        "beacon light-client update/state branches are not complete for the "
+        "SCCP inbound path",
+        "BSC recursive source-adapter verifier deployment is not complete for "
+        "the SCCP inbound path",
+        "Solana audited Tower replay, full-bank AccountsDB lattice, "
+        "bank/fork-choice, and source-adapter verifier deployment evidence is "
+        "not complete for the SCCP inbound path",
+        "TON governed full-light-client verifier deployment, canary, and "
+        "source-adapter deployment evidence are not complete for the SCCP "
+        "inbound path",
+        "TRON transaction-Merkle source-call verifier deployment is not "
+        "complete for the SCCP inbound path",
+    ):
+        weakened = markdown.replace(
+            lane_blocker,
+            "source verifier deployment is pending",
+        )
+        errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+        assert (
+            "readiness report Markdown Required Release Evidence section missing "
+            f"release evidence marker: {lane_blocker}"
+        ) in errors
+
     weakened = markdown.replace(
-        "- Windows `.NET 8` SCCP SDK phase evidence must include the full C# "
-        "SCCP test run filtered by `FullyQualifiedName~Sccp`, canonical "
-        "Windows OS/RID/architecture markers, a non-zero passed VSTest summary "
-        "with `Failed: 0`, and the strict `SCCP .NET SDK TRX: "
-        ".../sccp-dotnet-sdk.trx` marker before release readiness can pass.\n",
+        "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# "
+        "SCCP test run filtered by `FullyQualifiedName~Sccp`, "
+        "canonical-case rejection coverage for proof-request, message-bundle, "
+        "source-proof, and optional Groth16 artifact hash fields, including "
+        "uppercase byte aliases and `0X` public-input, statement, "
+        "bundle/source-proof, proof-artifact, and proving-key hashes, the "
+        "`SCCP .NET SDK version:` marker emitted after `dotnet --version`, "
+        "phase commands in `dotnet --version`, `dotnet --info`, "
+        "`cargo build -p connect_norito_bridge`, `dotnet restore`, then strict "
+        "`dotnet test` order, "
+        "no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/"
+        "`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, "
+        "or restore/build failed markers, "
+        "exact host markers `SCCP .NET SDK OS: Windows`, "
+        "`SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and "
+        "`SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` "
+        "emitted after `dotnet --info`, "
+        "exact native bridge markers `connect_norito_bridge native bridge: "
+        "...connect_norito_bridge.dll` and "
+        "`connect_norito_bridge native bridge sha256: <64 lowercase hex>` "
+        "emitted after `cargo build -p connect_norito_bridge`, "
+        "`dotnet restore "
+        "Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, "
+        "a non-zero passed VSTest summary, "
+        "the strict `SCCP .NET SDK TRX: "
+        ".../sccp-dotnet-sdk.trx` marker, and "
+        "`SCCP .NET SDK TRX bytes: <positive integer>` emitted after the "
+        "strict `dotnet test` command, "
+        "with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` "
+        "reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a "
+        "numeric unit duration, and with a positive TRX byte count plus a "
+        "TRX marker that full-matches the C# test project "
+        "`TestResults/sccp-dotnet-sdk.trx` path before release readiness can "
+        "pass.\n",
         "",
     )
     errors = verifier._readiness_markdown_invariant_errors(report, weakened)
     assert (
         "readiness report Markdown Required Release Evidence section missing "
         "release evidence marker: "
-        "Windows `.NET 8` SCCP SDK phase evidence"
+        "Windows `.NET 8.0.x` SCCP SDK phase evidence"
     ) in errors
     assert (
         "readiness report Markdown Required Release Evidence section missing "
@@ -18909,8 +21966,117 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
     ) in errors
     assert (
         "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: canonical-case rejection coverage for "
+        "proof-request, message-bundle, source-proof, and optional Groth16 "
+        "artifact hash fields"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: uppercase byte aliases and `0X` public-input, "
+        "statement, bundle/source-proof, proof-artifact, and proving-key hashes"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "`SCCP .NET SDK version:` marker emitted after `dotnet --version`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "phase commands in `dotnet --version`, `dotnet --info`, "
+        "`cargo build -p connect_norito_bridge`, `dotnet restore`, then strict "
+        "`dotnet test` order"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: non-zero `Error(s)` counts"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: `Failed to restore`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "SCCP .NET SDK OS: Windows"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "SCCP .NET SDK RID: win-{x64,x86,arm64,arm}"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "SCCP .NET SDK Architecture: {x64,x86,arm64,arm}"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "emitted after `dotnet --info`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "connect_norito_bridge native bridge: ...connect_norito_bridge.dll"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "connect_norito_bridge native bridge sha256: <64 lowercase hex>"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "emitted after `cargo build -p connect_norito_bridge`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "Hyperledger.Iroha.Sdk.Tests.dll (net8.0)"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` "
+        "marker, and `SCCP .NET SDK TRX bytes: <positive integer>` emitted "
+        "after the strict `dotnet test` command"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
         "release evidence marker: "
         "SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "SCCP .NET SDK TRX bytes: <positive integer>"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "full-matches the C# test project `TestResults/sccp-dotnet-sdk.trx` path"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: Failed: 0"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: Skipped: 0"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: Total == Passed"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: numeric unit duration"
     ) in errors
 
     weakened = markdown.replace("copied-summary scalar exactness, ", "")
@@ -26119,7 +29285,7 @@ def test_release_bundle_verifier_rejects_hostile_public_blocker_strings(
     control_blocker = "operator\npublic-blocker"
     markdown_blocker = "operator|public-blocker"
     confusable_blocker = "operator public blоcker"
-    sensitive_blocker = "operator secret-token-public-blocker"
+    sensitive_blocker = "operator mnemonic recovery public-blocker"
 
     report_path = output_dir / "sccp-release-readiness.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -26204,7 +29370,7 @@ def test_release_bundle_verifier_rejects_hostile_public_blocker_strings(
         for line in verified.stdout.splitlines()
     )
     verifier_output = verified.stdout + verified.stderr
-    assert "secret-token-public-blocker" not in verifier_output
+    assert "mnemonic recovery public-blocker" not in verifier_output
     assert "operator|public-blocker" not in verifier_output
     assert "operator public blоcker" not in verifier_output
 
@@ -27207,6 +30373,92 @@ def test_release_bundle_verifier_recomputes_all_lanes_route_allowlist_hash(
         ) in verified.stdout
 
 
+def test_release_bundle_verifier_recomputes_all_lanes_destination_binding_hash(
+    tmp_path: Path,
+) -> None:
+    """Public bundle review must not trust self-attested destination hashes."""
+
+    verifier = load_verify_helpers()
+    forged_values: set[str] = set()
+
+    def replacement_hash(current: str) -> str:
+        replacement = "0x" + "d0" * 32
+        return "0x" + "d1" * 32 if current == replacement else replacement
+
+    def mutate_lanes(lanes: list[dict]) -> None:
+        bsc_lane = next(lane for lane in lanes if lane["domain"] == 2)
+        destination = bsc_lane["destination_binding"]
+        forged_destination_hash = replacement_hash(
+            destination["destination_binding_hash"]
+        )
+        destination["destination_binding_hash"] = forged_destination_hash
+        destination["expected_destination_binding_hash"] = forged_destination_hash
+        destination["expected_destination_binding_hash_matches"] = True
+        destination["recomputed"] = True
+
+        route = bsc_lane["route_allowlist"]
+        source_hashes = bsc_lane["source_record_hashes"]
+        forged_route_hash = verifier._canonical_route_allowlist_hash(
+            domain=bsc_lane["domain"],
+            chain=bsc_lane["chain"],
+            source_verifier_material_hash=bytes.fromhex(
+                source_hashes["source_verifier_material_hash"][2:]
+            ),
+            source_adapter_engine_deployment_hash=bytes.fromhex(
+                source_hashes["source_adapter_engine_deployment_hash"][2:]
+            ),
+            destination_binding_hash=bytes.fromhex(forged_destination_hash[2:]),
+        )
+        assert forged_route_hash is not None
+        route["route_allowlist_hash"] = forged_route_hash
+        route["expected_route_allowlist_hash"] = forged_route_hash
+        route["expected_route_allowlist_hash_matches"] = True
+        route["route_canary"]["route_allowlist_hash"] = forged_route_hash
+        route["route_canary"]["destination_binding_hash"] = forged_destination_hash
+        forged_values.update({forged_destination_hash, forged_route_hash})
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate_lanes(report["evidence"]["lanes"])
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    mutate_lanes(summary["lanes"])
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    for label in (
+        "readiness report embedded evidence",
+        "all-lanes summary",
+    ):
+        assert (
+            f"{label} lane domain 2 destination_binding destination_binding_hash "
+            "must recompute from destination_binding_key"
+        ) in verified.stdout
+    for forged_value in forged_values:
+        assert forged_value not in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_all_lanes_zero_source_gate_hashes(
     tmp_path: Path,
 ) -> None:
@@ -27644,6 +30896,12 @@ def test_release_bundle_verifier_rejects_source_gate_audit_hash_role_reuse(
 
     def mutate_lanes(lanes: list[dict]) -> None:
         by_domain = {lane["domain"]: lane for lane in lanes}
+        eth_lane = by_domain[1]
+        eth_gate = eth_lane["source_adapter_gate"]
+        route_message_id = eth_lane["route_allowlist"]["route_canary"]["message_id"]
+        eth_gate["gate_hash"] = route_message_id
+        eth_gate["audit_hashes"]["evm_source_gate_hash"] = route_message_id
+
         sol_lane = by_domain[3]
         source_gate = sol_lane["source_adapter_gate"]
         canary_hash = sol_lane["route_allowlist"]["route_canary"]["evidence_hash"]
@@ -27693,6 +30951,11 @@ def test_release_bundle_verifier_rejects_source_gate_audit_hash_role_reuse(
         "readiness report embedded evidence",
         "all-lanes summary",
     ):
+        assert (
+            f"{label} lane domain 1 source_adapter_gate hash role "
+            "audit_hashes.evm_source_gate_hash must not reuse "
+            "route_canary.message_id"
+        ) in verified.stdout
         assert (
             f"{label} lane domain 3 source_adapter_gate hash role "
             "audit_hashes.solana_full_light_client_gate_hash must not reuse "
@@ -28893,6 +32156,78 @@ def test_release_bundle_verifier_rejects_cross_lane_route_canary_evidence_replay
         "all-lanes summary lane domain 5 route_allowlist route_canary "
         "evidence_hash must not reuse source_adapter_engine_deployment_hash "
         "from all-lanes summary lane domain 4"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_cross_lane_route_canary_transcript_replay(
+    tmp_path: Path,
+) -> None:
+    """Route-canary evidence hashes must not replay another lane's transcript."""
+
+    def mutate_lanes(lanes: list[dict]) -> None:
+        by_domain = {lane["domain"]: lane for lane in lanes}
+        by_domain[2]["route_allowlist"]["route_canary"]["evidence_hash"] = by_domain[
+            1
+        ]["route_allowlist"]["route_canary"]["message_id"]
+        by_domain[4]["route_allowlist"]["route_canary"]["evidence_hash"] = by_domain[
+            5
+        ]["route_allowlist"]["route_canary"]["transaction_id"]
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate_lanes(report["evidence"]["lanes"])
+    evidence_by_domain = {lane["domain"]: lane for lane in report["evidence"]["lanes"]}
+    for row in report["cryptographic_evidence"]:
+        row["route_canary_evidence_hash"] = evidence_by_domain[row["domain"]][
+            "route_allowlist"
+        ]["route_canary"]["evidence_hash"]
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    mutate_lanes(summary["lanes"])
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    # Source-inventory marker: route_canary.message_id from readiness report embedded evidence lane domain 1
+    assert (
+        "readiness report embedded evidence lane domain 2 route_allowlist "
+        "route_canary evidence_hash must not reuse route_canary.message_id "
+        "from readiness report embedded evidence lane domain 1"
+    ) in verified.stdout
+    assert (
+        "all-lanes summary lane domain 2 route_allowlist route_canary "
+        "evidence_hash must not reuse route_canary.message_id from all-lanes "
+        "summary lane domain 1"
+    ) in verified.stdout
+    assert (
+        "readiness report embedded evidence lane domain 4 route_allowlist "
+        "route_canary evidence_hash must not reuse route_canary.transaction_id "
+        "from readiness report embedded evidence lane domain 5"
+    ) in verified.stdout
+    assert (
+        "all-lanes summary lane domain 4 route_allowlist route_canary "
+        "evidence_hash must not reuse route_canary.transaction_id from all-lanes "
+        "summary lane domain 5"
     ) in verified.stdout
 
 
@@ -31075,6 +34410,81 @@ def test_release_bundle_verifier_rejects_crypto_source_gate_hash_role_replay(
         "readiness report cryptographic evidence row source_adapter_gate hash role "
         "source_adapter_gate_audit_hashes.solana_bank_fork_choice_verifier_hash "
         "must not reuse route_canary_evidence_hash"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic_evidence does not match embedded lane evidence"
+        in verified.stdout
+    )
+
+
+def test_release_bundle_verifier_rejects_crypto_source_gate_transcript_replay(
+    tmp_path: Path,
+) -> None:
+    """Public crypto source-gate audit hashes must not replay canary transcripts."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    row = next(row for row in report["cryptographic_evidence"] if row["domain"] == 1)
+    route_message_id = row["route_canary_message_id"]
+    row["source_adapter_gate_hash"] = route_message_id
+    row["source_adapter_gate_audit_hashes"]["evm_source_gate_hash"] = route_message_id
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report cryptographic evidence row source_adapter_gate hash role "
+        "source_adapter_gate_audit_hashes.evm_source_gate_hash must not reuse "
+        "route_canary_message_id"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic_evidence does not match embedded lane evidence"
+        in verified.stdout
+    )
+
+
+def test_release_bundle_verifier_rejects_crypto_route_canary_transcript_replay(
+    tmp_path: Path,
+) -> None:
+    """Public crypto route-canary evidence hashes must not replay transcript fields."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    row = next(row for row in report["cryptographic_evidence"] if row["domain"] == 1)
+    row["route_canary_evidence_hash"] = row["route_canary_message_id"]
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report cryptographic evidence row route_canary hash role "
+        "route_canary_evidence_hash must not reuse route_canary_message_id"
     ) in verified.stdout
     assert (
         "readiness report cryptographic_evidence does not match embedded lane evidence"
@@ -34006,7 +37416,7 @@ def test_release_bundle_verifier_rejects_prefix_android_harness_phase_command_fr
     required_fragments = [
         fragment
         for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["java-android"]
-        if fragment != omitted_fragment
+        if fragment != omitted_fragment and omitted_fragment not in fragment
     ]
     phase_log = output_dir / "corridor" / "java-android.log"
     phase_log.write_text(
@@ -34039,6 +37449,64 @@ def test_release_bundle_verifier_rejects_prefix_android_harness_phase_command_fr
         "readiness report phase java-android evidence artifact is missing "
         f"expected phase-block command: {omitted_fragment}"
     ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_nonexact_android_harness_phase_command_fragment(
+    tmp_path: Path,
+) -> None:
+    """Published Android harness evidence must reject extra and duplicate classes."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    required_fragment = next(
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["java-android"]
+        if fragment.startswith("ANDROID_HARNESS_MAINS=")
+    )
+    harness_value = required_fragment.partition("=")[2]
+    first_harness = harness_value.split(",", 1)[0]
+    cases = (
+        (
+            "extra",
+            f"{harness_value},org.hyperledger.iroha.android.sccp.ExtraHarnessTests",
+        ),
+        ("duplicate", f"{harness_value},{first_harness}"),
+    )
+
+    for label, forged_harness_value in cases:
+        phase_log = output_dir / "corridor" / "java-android.log"
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: java-android",
+                    "+ java -version",
+                    f"+ env ANDROID_HARNESS_MAINS={forged_harness_value} "
+                    "./gradlew :core:test --console=plain "
+                    "--tests org.hyperledger.iroha.android.GradleHarnessTests",
+                    "+ ./gradlew :core:test --console=plain "
+                    "--tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests",
+                    *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["java-android"],
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "java-android")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, label
+        assert (
+            "readiness report phase java-android evidence artifact is missing "
+            f"expected phase-block command: {required_fragment}"
+        ) in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_narrow_kotlin_phase_command_fragment(
@@ -34084,6 +37552,59 @@ def test_release_bundle_verifier_rejects_narrow_kotlin_phase_command_fragment(
         "readiness report phase kotlin-sdk evidence artifact is missing "
         f"expected phase-block command: {omitted_fragment}"
     ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_nonexact_kotlin_selector_phase_command_fragment(
+    tmp_path: Path,
+) -> None:
+    """Published Kotlin Gradle evidence must reject extra and duplicate selectors."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    required_fragment = (
+        "./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp."
+    )
+    ton_fragment = "org.hyperledger.iroha.sdk.sccp.TonSccpProverTest"
+    cases = (
+        (
+            "extra",
+            "org.hyperledger.iroha.sdk.sccp.ExtraSelectorTest",
+        ),
+        ("duplicate", ton_fragment),
+    )
+
+    for label, forged_selector in cases:
+        phase_log = output_dir / "corridor" / "kotlin-sdk.log"
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: kotlin-sdk",
+                    "+ java -version",
+                    "+ ./gradlew :core-jvm:test --console=plain "
+                    "--tests org.hyperledger.iroha.sdk.sccp.* "
+                    f"--tests {ton_fragment} --tests {forged_selector}",
+                    *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["kotlin-sdk"],
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "kotlin-sdk")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, label
+        assert (
+            "readiness report phase kotlin-sdk evidence artifact is missing "
+            f"expected phase-block command: {required_fragment}"
+        ) in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_gradle_dry_run_phase_command_fragment(
@@ -34371,6 +37892,934 @@ def test_release_bundle_verifier_rejects_dotnet_success_before_test_command(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_extra_dotnet_success_before_test_command(
+    tmp_path: Path,
+) -> None:
+    """Published .NET success markers must not appear before the test command."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    test_index = next(index for index, line in enumerate(lines) if line.startswith("+ dotnet test "))
+    success_lines = phase_success_lines(report, "dotnet-sdk")
+    early_markers = [
+        line
+        for line in success_lines
+        if line.startswith("Passed!")
+        or line.startswith("SCCP .NET SDK TRX:")
+        or line.startswith("SCCP .NET SDK TRX bytes:")
+    ]
+    forged_lines = lines[:test_index] + early_markers + lines[test_index:]
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET success "
+        "marker appears outside its required command window: Passed!"
+    ) in verified.stdout
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET success "
+        "marker appears outside its required command window: SCCP .NET SDK TRX:"
+    ) in verified.stdout
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET success "
+        "marker appears outside its required command window: SCCP .NET SDK TRX bytes:"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_extra_dotnet_setup_markers_before_commands(
+    tmp_path: Path,
+) -> None:
+    """Published .NET setup markers must not appear before required commands."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    success_lines = phase_success_lines(report, "dotnet-sdk")
+    early_markers = [
+        line
+        for line in success_lines
+        if line.startswith("SCCP .NET SDK version:")
+        or line.startswith("SCCP .NET SDK OS:")
+        or line.startswith("SCCP .NET SDK RID:")
+        or line.startswith("SCCP .NET SDK Architecture:")
+        or line.startswith("connect_norito_bridge native bridge:")
+        or line.startswith("connect_norito_bridge native bridge sha256:")
+    ]
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *early_markers,
+                *phase_successful_lines(report, "dotnet-sdk"),
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    for marker in (
+        "SCCP .NET SDK version: 8.",
+        "SCCP .NET SDK OS: Windows",
+        "SCCP .NET SDK RID: win-",
+        "SCCP .NET SDK Architecture:",
+        "connect_norito_bridge native bridge:",
+        "connect_norito_bridge native bridge sha256:",
+    ):
+        assert (
+            "readiness report phase dotnet-sdk evidence artifact .NET success "
+            f"marker appears outside its required command window: {marker}"
+        ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_version_before_version_command(
+    tmp_path: Path,
+) -> None:
+    """Published .NET SDK version markers must follow `dotnet --version`."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    command_lines = phase_command_lines(
+        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+    )
+    test_command = next(
+        line for line in command_lines if line.startswith("+ dotnet test ")
+    )
+    success_lines = phase_success_lines(report, "dotnet-sdk")
+    version_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK version:")
+    )
+    os_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK OS:")
+    )
+    rid_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK RID:")
+    )
+    architecture_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK Architecture:")
+    )
+    passed_success = next(line for line in success_lines if line.startswith("Passed!"))
+    trx_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK TRX:")
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                version_success,
+                "+ dotnet --version",
+                "+ dotnet --info",
+                os_success,
+                rid_success,
+                architecture_success,
+                "+ dotnet restore Hyperledger.Iroha.Sdk.sln",
+                test_command,
+                passed_success,
+                trx_success,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: SCCP .NET SDK version: 8."
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_info_before_version_command(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must keep version/info/restore/test in order."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    command_lines = phase_command_lines(
+        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+    )
+    test_command = next(
+        line for line in command_lines if line.startswith("+ dotnet test ")
+    )
+    success_lines = phase_success_lines(report, "dotnet-sdk")
+    version_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK version:")
+    )
+    os_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK OS:")
+    )
+    rid_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK RID:")
+    )
+    architecture_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK Architecture:")
+    )
+    passed_success = next(line for line in success_lines if line.startswith("Passed!"))
+    trx_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK TRX:")
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                "+ dotnet --info",
+                os_success,
+                rid_success,
+                architecture_success,
+                "+ dotnet --version",
+                version_success,
+                "+ dotnet restore Hyperledger.Iroha.Sdk.sln",
+                test_command,
+                passed_success,
+                trx_success,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET commands "
+        "are not in required version-info-bridge-restore-test order"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_host_markers_before_info_command(
+    tmp_path: Path,
+) -> None:
+    """Published .NET host markers must follow `dotnet --info`."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    command_lines = phase_command_lines(
+        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+    )
+    test_command = next(
+        line for line in command_lines if line.startswith("+ dotnet test ")
+    )
+    success_lines = phase_success_lines(report, "dotnet-sdk")
+    version_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK version:")
+    )
+    os_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK OS:")
+    )
+    rid_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK RID:")
+    )
+    architecture_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK Architecture:")
+    )
+    passed_success = next(line for line in success_lines if line.startswith("Passed!"))
+    trx_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK TRX:")
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                "+ dotnet --version",
+                version_success,
+                os_success,
+                rid_success,
+                architecture_success,
+                "+ dotnet --info",
+                "+ dotnet restore Hyperledger.Iroha.Sdk.sln",
+                test_command,
+                passed_success,
+                trx_success,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: SCCP .NET SDK OS: Windows"
+    ) in verified.stdout
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: SCCP .NET SDK RID: win-"
+    ) in verified.stdout
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: SCCP .NET SDK Architecture:"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_bridge_markers_before_build_command(
+    tmp_path: Path,
+) -> None:
+    """Published .NET native bridge markers must follow the bridge build command."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    command_lines = phase_command_lines(
+        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+    )
+    bridge_command = next(
+        line for line in command_lines if "cargo build -p connect_norito_bridge" in line
+    )
+    test_command = next(
+        line for line in command_lines if line.startswith("+ dotnet test ")
+    )
+    success_lines = phase_success_lines(report, "dotnet-sdk")
+    version_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK version:")
+    )
+    os_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK OS:")
+    )
+    rid_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK RID:")
+    )
+    architecture_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK Architecture:")
+    )
+    bridge_path_success = next(
+        line
+        for line in success_lines
+        if line.startswith("connect_norito_bridge native bridge: ")
+    )
+    bridge_sha_success = next(
+        line
+        for line in success_lines
+        if line.startswith("connect_norito_bridge native bridge sha256:")
+    )
+    passed_success = next(line for line in success_lines if line.startswith("Passed!"))
+    trx_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK TRX:")
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                "+ dotnet --version",
+                version_success,
+                "+ dotnet --info",
+                os_success,
+                rid_success,
+                architecture_success,
+                bridge_path_success,
+                bridge_sha_success,
+                bridge_command,
+                "+ dotnet restore Hyperledger.Iroha.Sdk.sln",
+                test_command,
+                passed_success,
+                trx_success,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: connect_norito_bridge native bridge:"
+    ) in verified.stdout
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: connect_norito_bridge native bridge sha256:"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_bridge_sha_before_path(
+    tmp_path: Path,
+) -> None:
+    """Published .NET bridge hash evidence must follow the bound bridge path."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    bridge_path_line = next(
+        line
+        for line in lines
+        if line.startswith("connect_norito_bridge native bridge: ")
+    )
+    bridge_sha_line = next(
+        line
+        for line in lines
+        if line.startswith("connect_norito_bridge native bridge sha256:")
+    )
+    bridge_path_index = lines.index(bridge_path_line)
+    bridge_sha_index = lines.index(bridge_sha_line)
+    lines[bridge_path_index], lines[bridge_sha_index] = (
+        lines[bridge_sha_index],
+        lines[bridge_path_index],
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET native "
+        "bridge markers are not in required path-sha256 order"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_extra_dotnet_bridge_sha_before_path(
+    tmp_path: Path,
+) -> None:
+    """Published .NET bridge hash copies must follow the bound bridge path."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    bridge_path_index = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("connect_norito_bridge native bridge: ")
+    )
+    bridge_sha_line = next(
+        line
+        for line in lines
+        if line.startswith("connect_norito_bridge native bridge sha256:")
+    )
+    forged_lines = lines[:bridge_path_index] + [bridge_sha_line] + lines[bridge_path_index:]
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET native "
+        "bridge markers are not in required path-sha256 order"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_extra_dotnet_bridge_path_after_sha(
+    tmp_path: Path,
+) -> None:
+    """Published .NET bridge path copies must not follow the bridge hash."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    bridge_sha_index = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("connect_norito_bridge native bridge sha256:")
+    )
+    bridge_path_line = next(
+        line
+        for line in lines
+        if line.startswith("connect_norito_bridge native bridge: ")
+    )
+    forged_lines = (
+        lines[: bridge_sha_index + 1]
+        + [bridge_path_line]
+        + lines[bridge_sha_index + 1 :]
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET native "
+        "bridge markers are not in required path-sha256 order"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_duplicate_dotnet_bridge_sha_after_sha(
+    tmp_path: Path,
+) -> None:
+    """Published .NET bridge hash evidence must appear exactly once."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    bridge_sha_index = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("connect_norito_bridge native bridge sha256:")
+    )
+    bridge_sha_line = lines[bridge_sha_index]
+    forged_lines = (
+        lines[: bridge_sha_index + 1]
+        + [bridge_sha_line]
+        + lines[bridge_sha_index + 1 :]
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET evidence "
+        "marker appears more than once: connect_norito_bridge native bridge sha256:"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_malformed_bridge_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published .NET bridge evidence must name a Windows dll and lowercase sha256."""
+
+    cases = (
+        (
+            "connect_norito_bridge native bridge: "
+            "target/sccp-production-corridor/debug/libconnect_norito_bridge.so",
+            "connect_norito_bridge native bridge:",
+        ),
+        (
+            "connect_norito_bridge native bridge: "
+            "target/sccp-production-corridor/connect_norito_bridge.dll",
+            "connect_norito_bridge native bridge:",
+        ),
+        (
+            "connect_norito_bridge native bridge: "
+            "target/sccp-production-corridor/../debug/connect_norito_bridge.dll",
+            "connect_norito_bridge native bridge:",
+        ),
+        (
+            "connect_norito_bridge native bridge: "
+            "target/sccp-production-corridor//debug/connect_norito_bridge.dll",
+            "connect_norito_bridge native bridge:",
+        ),
+        (
+            "connect_norito_bridge native bridge: "
+            "target/sccp production-corridor/debug/connect_norito_bridge.dll",
+            "connect_norito_bridge native bridge:",
+        ),
+        (
+            "connect_norito_bridge native bridge: "
+            "target/sccp\tproduction-corridor/debug/connect_norito_bridge.dll",
+            "connect_norito_bridge native bridge:",
+        ),
+        (
+            "connect_norito_bridge native bridge: "
+            "target/sccp-production-corridor$copy/debug/connect_norito_bridge.dll",
+            "connect_norito_bridge native bridge:",
+        ),
+        (
+            "connect_norito_bridge native bridge: "
+            "target/[sccp-production-corridor]/debug/connect_norito_bridge.dll",
+            "connect_norito_bridge native bridge:",
+        ),
+        (
+            "connect_norito_bridge native bridge sha256: "
+            "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
+            "connect_norito_bridge native bridge sha256:",
+        ),
+    )
+    for index, (replacement, expected_marker) in enumerate(cases):
+        case_dir = tmp_path / f"case-{index}"
+        case_dir.mkdir()
+        output_dir = build_ready_bundle(case_dir)
+        report = load_report_module()
+        phase_lines = phase_successful_lines(report, "dotnet-sdk")
+        if expected_marker.endswith("sha256:"):
+            phase_lines = [
+                replacement
+                if line.startswith("connect_norito_bridge native bridge sha256:")
+                else line
+                for line in phase_lines
+            ]
+        else:
+            phase_lines = [
+                replacement
+                if line.startswith("connect_norito_bridge native bridge: ")
+                else line
+                for line in phase_lines
+            ]
+        phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: dotnet-sdk",
+                    *phase_lines,
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1
+        assert (
+            "readiness report phase dotnet-sdk evidence artifact is missing "
+            f"expected phase-block success marker: {expected_marker}"
+        ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_bridge_target_dir_drift(
+    tmp_path: Path,
+) -> None:
+    """Published .NET bridge evidence must bind the DLL path to CARGO_TARGET_DIR."""
+
+    cases = (
+        (
+            "+ cargo build -p connect_norito_bridge",
+            "readiness report phase dotnet-sdk evidence artifact is missing "
+            "expected phase-block command: cargo build -p connect_norito_bridge",
+        ),
+        (
+            "+ env CARGO_TARGET_DIR=target/other-corridor "
+            "cargo build -p connect_norito_bridge",
+            "readiness report phase dotnet-sdk evidence artifact .NET native "
+            "bridge path does not match CARGO_TARGET_DIR/debug handoff",
+        ),
+    )
+    for index, (replacement, expected_error) in enumerate(cases):
+        case_dir = tmp_path / f"case-{index}"
+        case_dir.mkdir()
+        output_dir = build_ready_bundle(case_dir)
+        report = load_report_module()
+        phase_lines = [
+            replacement if "cargo build -p connect_norito_bridge" in line else line
+            for line in phase_successful_lines(report, "dotnet-sdk")
+        ]
+        phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: dotnet-sdk",
+                    *phase_lines,
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1
+        assert expected_error in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_bridge_build_extra_env(
+    tmp_path: Path,
+) -> None:
+    """Published bridge-build evidence must not carry extra env assignments."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_lines = [
+        (
+            "+ env SECRET_TOKEN=secret-token "
+            "CARGO_TARGET_DIR=target/sccp-production-corridor "
+            "cargo build -p connect_norito_bridge"
+            if "cargo build -p connect_norito_bridge" in line
+            else line
+        )
+        for line in phase_successful_lines(report, "dotnet-sdk")
+    ]
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *phase_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET native "
+        "bridge build used a non-canonical environment prefix"
+    ) in verified.stdout
+    assert "secret-token" not in verified.stdout
+    assert "secret-token" not in verified.stderr
+
+
+def test_release_bundle_verifier_rejects_dotnet_test_before_restore_command(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must restore before the strict SCCP test command."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    command_lines = phase_command_lines(
+        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+    )
+    test_command = next(
+        line for line in command_lines if line.startswith("+ dotnet test ")
+    )
+    success_lines = phase_success_lines(report, "dotnet-sdk")
+    version_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK version:")
+    )
+    os_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK OS:")
+    )
+    rid_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK RID:")
+    )
+    architecture_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK Architecture:")
+    )
+    passed_success = next(line for line in success_lines if line.startswith("Passed!"))
+    trx_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK TRX:")
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                "+ dotnet --version",
+                version_success,
+                "+ dotnet --info",
+                os_success,
+                rid_success,
+                architecture_success,
+                test_command,
+                passed_success,
+                trx_success,
+                "+ dotnet restore Hyperledger.Iroha.Sdk.sln",
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET commands "
+        "are not in required version-info-bridge-restore-test order"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_duplicate_dotnet_restore_command(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must not repeat the restore command."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    restore_index = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("+ dotnet restore Hyperledger.Iroha.Sdk.sln")
+    )
+    restore_line = lines[restore_index]
+    forged_lines = (
+        lines[: restore_index + 1] + [restore_line] + lines[restore_index + 1 :]
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET command "
+        "appears more than once: dotnet restore Hyperledger.Iroha.Sdk.sln"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_dotnet_non_windows_transcript(
     tmp_path: Path,
 ) -> None:
@@ -34427,6 +38876,141 @@ def test_release_bundle_verifier_rejects_dotnet_malformed_version_transcript(
     phase_log = output_dir / "corridor" / "dotnet-sdk.log"
     success_fragments = tuple(
         "SCCP .NET SDK version: 8.not-a-version"
+        if fragment.startswith("SCCP .NET SDK version:")
+        else fragment
+        for fragment in phase_success_lines(report, "dotnet-sdk")
+    )
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: SCCP .NET SDK version: 8."
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_prerelease_version_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must use a stable .NET 8 SDK version."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    success_fragments = tuple(
+        "SCCP .NET SDK version: 8.0.204-preview.1"
+        if fragment.startswith("SCCP .NET SDK version:")
+        else fragment
+        for fragment in phase_success_lines(report, "dotnet-sdk")
+    )
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: SCCP .NET SDK version: 8."
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_zero_padded_version_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must use canonical numeric SDK version segments."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    success_fragments = tuple(
+        "SCCP .NET SDK version: 8.00.0204"
+        if fragment.startswith("SCCP .NET SDK version:")
+        else fragment
+        for fragment in phase_success_lines(report, "dotnet-sdk")
+    )
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: SCCP .NET SDK version: 8."
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_non_8_0_version_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must use the pinned 8.0.x SDK lane."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    success_fragments = tuple(
+        "SCCP .NET SDK version: 8.1.204"
         if fragment.startswith("SCCP .NET SDK version:")
         else fragment
         for fragment in phase_success_lines(report, "dotnet-sdk")
@@ -34596,6 +39180,66 @@ def test_release_bundle_verifier_rejects_dotnet_failed_summary_transcript(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_dotnet_error_output_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must reject restore/build diagnostics."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    patterns = report.PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS["dotnet-sdk"]
+    cases = (
+        (
+            "restore-error-code",
+            "C:\\src\\iroha\\csharp\\Hyperledger.Iroha.Sdk.csproj : error NU1301: Unable to load the service index",
+            patterns[2].pattern,
+        ),
+        (
+            "nonzero-error-count",
+            "Build FAILED. 1 Error(s)",
+            patterns[3].pattern,
+        ),
+        (
+            "failed-to-restore",
+            "Failed to restore C:\\src\\iroha\\csharp\\Hyperledger.Iroha.Sdk.csproj",
+            patterns[5].pattern,
+        ),
+    )
+    for label, diagnostic, expected_marker in cases:
+        phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: dotnet-sdk",
+                    *phase_command_lines(
+                        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                    ),
+                    diagnostic,
+                    *phase_success_lines(report, "dotnet-sdk"),
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, label
+        expected_diagnostic = report._phase_diagnostic_fragment(expected_marker)
+        assert (
+            "readiness report phase dotnet-sdk evidence artifact contains "
+            f"forbidden phase-block failure marker: {expected_diagnostic}"
+        ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_dotnet_zero_passed_summary_transcript(
     tmp_path: Path,
 ) -> None:
@@ -34607,6 +39251,191 @@ def test_release_bundle_verifier_rejects_dotnet_zero_passed_summary_transcript(
     success_fragments = tuple(
         "Passed! - Failed: 0, Passed: 0, Skipped: 0, Total: 0, "
         "Duration: 1 s - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)"
+        if fragment.startswith("Passed!")
+        else fragment
+        for fragment in phase_success_lines(report, "dotnet-sdk")
+    )
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: Passed!"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_skipped_summary_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must not certify a run with skipped SCCP tests."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    success_fragments = tuple(
+        "Passed! - Failed: 0, Passed: 42, Skipped: 1, Total: 43, "
+        "Duration: 1 s - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)"
+        if fragment.startswith("Passed!")
+        else fragment
+        for fragment in phase_success_lines(report, "dotnet-sdk")
+    )
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: Passed!"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_noncanonical_zero_skipped_summary(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must spell skipped-test evidence as `Skipped: 0`."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    success_fragments = tuple(
+        "Passed! - Failed: 0, Passed: 42, Skipped: 00, Total: 42, "
+        "Duration: 1 s - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)"
+        if fragment.startswith("Passed!")
+        else fragment
+        for fragment in phase_success_lines(report, "dotnet-sdk")
+    )
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: Passed!"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_malformed_duration_summary(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must report a VSTest-style numeric duration."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    success_fragments = tuple(
+        "Passed! - Failed: 0, Passed: 42, Skipped: 0, Total: 42, "
+        "Duration: definitely-not-a-duration - "
+        "Hyperledger.Iroha.Sdk.Tests.dll (net8.0)"
+        if fragment.startswith("Passed!")
+        else fragment
+        for fragment in phase_success_lines(report, "dotnet-sdk")
+    )
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: Passed!"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_wrong_assembly_summary_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must prove the expected SCCP test assembly."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    success_fragments = tuple(
+        "Passed! - Failed: 0, Passed: 42, Skipped: 0, Total: 42, "
+        "Duration: 1 s - Other.Tests.dll (net8.0)"
         if fragment.startswith("Passed!")
         else fragment
         for fragment in phase_success_lines(report, "dotnet-sdk")
@@ -34830,6 +39659,48 @@ def test_release_bundle_verifier_rejects_dotnet_malformed_architecture_transcrip
         ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_dotnet_rid_architecture_mismatch(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must report matching Windows RID and architecture."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    successful_lines = tuple(
+        "SCCP .NET SDK Architecture: arm64"
+        if line.startswith("SCCP .NET SDK Architecture:")
+        else line
+        for line in phase_successful_lines(report, "dotnet-sdk")
+    )
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *successful_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET RID "
+        "and architecture markers disagree"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_dotnet_missing_trx_transcript(
     tmp_path: Path,
 ) -> None:
@@ -34874,6 +39745,365 @@ def test_release_bundle_verifier_rejects_dotnet_missing_trx_transcript(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_dotnet_malformed_trx_bytes_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must include a positive TRX byte count."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    for index, forged_bytes in enumerate(("0", "0001", "4096 bytes", "-1")):
+        success_fragments = tuple(
+            f"SCCP .NET SDK TRX bytes: {forged_bytes}"
+            if fragment.startswith("SCCP .NET SDK TRX bytes:")
+            else fragment
+            for fragment in phase_success_lines(report, "dotnet-sdk")
+        )
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: dotnet-sdk",
+                    *phase_command_lines(
+                        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                    ),
+                    *success_fragments,
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1
+        assert (
+            "readiness report phase dotnet-sdk evidence artifact is missing "
+            "expected phase-block success marker: SCCP .NET SDK TRX bytes:"
+        ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_trx_bytes_before_trx_path(
+    tmp_path: Path,
+) -> None:
+    """Published .NET TRX byte evidence must follow the strict TRX path marker."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    trx_line = next(line for line in lines if line.startswith("SCCP .NET SDK TRX:"))
+    trx_bytes_line = next(
+        line for line in lines if line.startswith("SCCP .NET SDK TRX bytes:")
+    )
+    trx_index = lines.index(trx_line)
+    trx_bytes_index = lines.index(trx_bytes_line)
+    lines[trx_index], lines[trx_bytes_index] = (
+        lines[trx_bytes_index],
+        lines[trx_index],
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET success "
+        "markers are not in required passed-trx-bytes order"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_trx_path_before_passed_summary(
+    tmp_path: Path,
+) -> None:
+    """Published .NET TRX evidence must follow the VSTest success summary."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    passed_line = next(line for line in lines if line.startswith("Passed!"))
+    trx_line = next(line for line in lines if line.startswith("SCCP .NET SDK TRX:"))
+    passed_index = lines.index(passed_line)
+    trx_index = lines.index(trx_line)
+    lines[passed_index], lines[trx_index] = lines[trx_index], lines[passed_index]
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET success "
+        "markers are not in required passed-trx-bytes order"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_extra_dotnet_trx_path_before_passed_summary(
+    tmp_path: Path,
+) -> None:
+    """Published .NET TRX path copies must not appear before VSTest success."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    passed_index = next(
+        index for index, line in enumerate(lines) if line.startswith("Passed!")
+    )
+    trx_line = next(line for line in lines if line.startswith("SCCP .NET SDK TRX:"))
+    forged_lines = lines[:passed_index] + [trx_line] + lines[passed_index:]
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET success "
+        "markers are not in required passed-trx-bytes order"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_extra_dotnet_passed_summary_after_trx_path(
+    tmp_path: Path,
+) -> None:
+    """Published .NET VSTest success copies must not follow the TRX path."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    trx_index = next(
+        index for index, line in enumerate(lines) if line.startswith("SCCP .NET SDK TRX:")
+    )
+    passed_line = next(line for line in lines if line.startswith("Passed!"))
+    forged_lines = lines[: trx_index + 1] + [passed_line] + lines[trx_index + 1 :]
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET success "
+        "markers are not in required passed-trx-bytes order"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_extra_dotnet_trx_bytes_before_trx_path(
+    tmp_path: Path,
+) -> None:
+    """Published .NET TRX byte copies must not appear before the TRX path."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    trx_index = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("SCCP .NET SDK TRX:")
+    )
+    trx_bytes_line = next(
+        line for line in lines if line.startswith("SCCP .NET SDK TRX bytes:")
+    )
+    forged_lines = lines[:trx_index] + [trx_bytes_line] + lines[trx_index:]
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET success "
+        "markers are not in required passed-trx-bytes order"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_extra_dotnet_trx_path_after_trx_bytes(
+    tmp_path: Path,
+) -> None:
+    """Published .NET TRX path copies must not follow the TRX byte marker."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    trx_bytes_index = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("SCCP .NET SDK TRX bytes:")
+    )
+    trx_line = next(line for line in lines if line.startswith("SCCP .NET SDK TRX:"))
+    forged_lines = (
+        lines[: trx_bytes_index + 1] + [trx_line] + lines[trx_bytes_index + 1 :]
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET success "
+        "markers are not in required passed-trx-bytes order"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_duplicate_dotnet_trx_bytes_after_trx_bytes(
+    tmp_path: Path,
+) -> None:
+    """Published .NET TRX byte-count evidence must appear exactly once."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    trx_bytes_index = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("SCCP .NET SDK TRX bytes:")
+    )
+    trx_bytes_line = lines[trx_bytes_index]
+    forged_lines = (
+        lines[: trx_bytes_index + 1]
+        + [trx_bytes_line]
+        + lines[trx_bytes_index + 1 :]
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET evidence "
+        "marker appears more than once: SCCP .NET SDK TRX bytes:"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_dotnet_malformed_trx_transcript(
     tmp_path: Path,
 ) -> None:
@@ -34884,6 +40114,53 @@ def test_release_bundle_verifier_rejects_dotnet_malformed_trx_transcript(
     phase_log = output_dir / "corridor" / "dotnet-sdk.log"
     success_fragments = tuple(
         "SCCP .NET SDK TRX: ../../sccp-dotnet-sdk.trx"
+        if fragment.startswith("SCCP .NET SDK TRX:")
+        else fragment
+        for fragment in phase_success_lines(report, "dotnet-sdk")
+    )
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: SCCP .NET SDK TRX:"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_trx_traversal_component(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must reject traversal-like TRX path components."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    success_fragments = tuple(
+        "SCCP .NET SDK TRX: "
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TestResults/../"
+        "sccp-dotnet-sdk.trx"
         if fragment.startswith("SCCP .NET SDK TRX:")
         else fragment
         for fragment in phase_success_lines(report, "dotnet-sdk")
@@ -35092,6 +40369,574 @@ def test_release_bundle_verifier_rejects_narrow_dotnet_sccp_filter(
         "readiness report phase dotnet-sdk evidence artifact is missing "
         f"expected phase-block command: {required_fragment}"
     ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_extra_narrow_dotnet_test_command(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must not include stale narrow test commands."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    strict_test_index = next(
+        index for index, line in enumerate(lines) if line.startswith("+ dotnet test ")
+    )
+    stale_command = (
+        "+ dotnet test "
+        "tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+        "--filter FullyQualifiedName~SccpEthereumMainnetTests\\|"
+        "FullyQualifiedName~SccpBscMainnetTests "
+        "--nologo --logger trx;LogFileName=sccp-dotnet-sdk.trx"
+    )
+    forged_lines = lines[:strict_test_index] + [stale_command] + lines[strict_test_index:]
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET phase ran a "
+        "non-canonical dotnet test command"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_extra_dotnet_setup_command(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must not include non-canonical setup commands."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    restore_index = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("+ dotnet restore Hyperledger.Iroha.Sdk.sln")
+    )
+    forged_lines = (
+        lines[:restore_index]
+        + ["+ dotnet restore Other.sln"]
+        + lines[restore_index:]
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET phase ran a "
+        "non-canonical dotnet setup command"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_unparseable_dotnet_command(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must not hide malformed traced commands."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    strict_test_index = next(
+        index for index, line in enumerate(lines) if line.startswith("+ dotnet test ")
+    )
+    forged_lines = (
+        lines[:strict_test_index]
+        + ['+ dotnet test "secret-token-stale-filter']
+        + lines[strict_test_index:]
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact contains "
+        "unparseable traced command"
+    ) in verified.stdout
+    assert "secret-token" not in verified.stdout
+    assert "secret-token" not in verified.stderr
+    assert "No closing quotation" not in verified.stdout
+    assert "No closing quotation" not in verified.stderr
+
+
+def test_release_bundle_verifier_rejects_obfuscated_dotnet_command_trace(
+    tmp_path: Path,
+) -> None:
+    """Published .NET traces must be normalized before command validation."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    strict_test_index = next(
+        index for index, line in enumerate(lines) if line.startswith("+ dotnet test ")
+    )
+    forged_lines = (
+        lines[:strict_test_index]
+        + [
+            "\u200b+ dotnet test "
+            "tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+            "--filter secret-token-stale-filter --nologo --logger "
+            "trx;LogFileName=sccp-dotnet-sdk.trx"
+        ]
+        + lines[strict_test_index:]
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET phase ran a "
+        "non-canonical dotnet test command"
+    ) in verified.stdout
+    assert "secret-token" not in verified.stdout
+    assert "secret-token" not in verified.stderr
+
+
+def test_release_bundle_verifier_rejects_parenthesized_dotnet_logger_argument(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must not rewrite parenthesized arguments."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    filter_fragment = next(
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+        if fragment.startswith("FullyQualifiedName")
+    )
+    strict_test_index = next(
+        index for index, line in enumerate(lines) if line.startswith("+ dotnet test ")
+    )
+    forged_lines = (
+        lines[:strict_test_index]
+        + [
+            "+ dotnet test "
+            "tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+            f"--filter {filter_fragment} --nologo --logger "
+            "'(trx;LogFileName=sccp-dotnet-sdk.trx)'"
+        ]
+        + lines[strict_test_index:]
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET phase ran a "
+        "non-canonical dotnet test command"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_parenthesized_dotnet_command_group(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must reject non-runner command groups."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    strict_test_index = next(
+        index for index, line in enumerate(lines) if line.startswith("+ dotnet test ")
+    )
+    forged_lines = (
+        lines[:strict_test_index]
+        + [
+            "+ (dotnet test "
+            "tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+            "--filter secret-token-stale-filter --nologo --logger "
+            "trx;LogFileName=sccp-dotnet-sdk.trx)"
+        ]
+        + lines[strict_test_index:]
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact contains "
+        "unsupported parenthesized traced command"
+    ) in verified.stdout
+    assert "secret-token" not in verified.stdout
+    assert "secret-token" not in verified.stderr
+
+
+def test_release_bundle_verifier_rejects_wrong_dotnet_runner_cd_wrapper(
+    tmp_path: Path,
+) -> None:
+    """Published .NET wrappers must identify the C# SDK working directory."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    version_index = next(
+        index for index, line in enumerate(lines) if line.startswith("+ dotnet --version")
+    )
+    forged_lines = (
+        lines[:version_index]
+        + [
+            "+ (cd /tmp/secret-token-not-csharp && "
+            f"{lines[version_index][2:]})"
+        ]
+        + lines[version_index + 1 :]
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact contains "
+        "unexpected runner cd wrapper directory"
+    ) in verified.stdout
+    assert "secret-token" not in verified.stdout
+    assert "secret-token" not in verified.stderr
+
+
+def test_release_bundle_verifier_rejects_extra_dotnet_env_assignment(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must reject extra traced environment knobs."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    filter_fragment = next(
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+        if fragment.startswith("FullyQualifiedName")
+    )
+    strict_test_index = next(
+        index for index, line in enumerate(lines) if line.startswith("+ dotnet test ")
+    )
+    forged_lines = (
+        lines[:strict_test_index]
+        + [
+            "+ env DOTNET_ROOT=/tmp/dotnet "
+            "DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_UI_LANGUAGE=en "
+            "SECRET_TOKEN=secret-token dotnet test "
+            "tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+            f"--filter {filter_fragment} --nologo --logger "
+            "trx;LogFileName=sccp-dotnet-sdk.trx"
+        ]
+        + lines[strict_test_index:]
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET phase used "
+        "a non-canonical environment prefix"
+    ) in verified.stdout
+    assert "secret-token" not in verified.stdout
+    assert "secret-token" not in verified.stderr
+
+
+def test_release_bundle_verifier_rejects_mismatched_dotnet_root_binary(
+    tmp_path: Path,
+) -> None:
+    """Published DOTNET_ROOT prefixes must match the traced dotnet binary."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    version_index = next(
+        index for index, line in enumerate(lines) if line.startswith("+ dotnet --version")
+    )
+    forged_lines = (
+        lines[:version_index]
+        + [
+            "+ env DOTNET_ROOT=/tmp/canonical-dotnet "
+            "DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_UI_LANGUAGE=en "
+            "/tmp/secret-token-other-dotnet/dotnet --version"
+        ]
+        + lines[version_index + 1 :]
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET phase used "
+        "a non-canonical environment prefix"
+    ) in verified.stdout
+    assert "secret-token" not in verified.stdout
+    assert "secret-token" not in verified.stderr
+
+
+def test_release_bundle_verifier_rejects_env_prefixed_bare_dotnet_binary(
+    tmp_path: Path,
+) -> None:
+    """Published env-prefixed .NET traces must resolve the dotnet binary."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    version_index = next(
+        index for index, line in enumerate(lines) if line.startswith("+ dotnet --version")
+    )
+    forged_lines = (
+        lines[:version_index]
+        + [
+            "+ env DOTNET_ROOT=/tmp/secret-token-dotnet "
+            "DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_UI_LANGUAGE=en "
+            "dotnet --version"
+        ]
+        + lines[version_index + 1 :]
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET phase used "
+        "a non-canonical environment prefix"
+    ) in verified.stdout
+    assert "secret-token" not in verified.stdout
+    assert "secret-token" not in verified.stderr
+
+
+def test_release_bundle_verifier_rejects_mismatched_dotnet_path_prefix(
+    tmp_path: Path,
+) -> None:
+    """Published .NET PATH prefixes must start with the built bridge directory."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    restore_index = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("+ dotnet restore Hyperledger.Iroha.Sdk.sln")
+    )
+    forged_lines = (
+        lines[:restore_index]
+        + [
+            "+ env DOTNET_ROOT=/tmp/dotnet "
+            "DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_UI_LANGUAGE=en "
+            "PATH=/tmp/secret-token-bridge:$PATH "
+            "dotnet restore Hyperledger.Iroha.Sdk.sln"
+        ]
+        + lines[restore_index + 1 :]
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact .NET phase used "
+        "a non-canonical environment prefix"
+    ) in verified.stdout
+    assert "secret-token" not in verified.stdout
+    assert "secret-token" not in verified.stderr
 
 
 def test_release_bundle_verifier_rejects_inert_contract_smoke_test_fragment(
@@ -36711,6 +42556,14 @@ def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory
         "sourceStateProof must be a TON source-state stark-fri-v1 proof"
         in python_impl_markers
     )
+    assert (
+        "sourceProofBytes must be empty for SORA source bundle"
+        in python_impl_markers
+    )
+    assert (
+        "sourceProofBytes required for non-SORA source bundle"
+        in python_impl_markers
+    )
     python_test_markers = inventory_by_path[
         "python/iroha_torii_client/tests/sccp_test.py"
     ]
@@ -36735,6 +42588,14 @@ def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory
     assert "package_root_ton_debug_proof_family" in python_test_markers
     assert (
         "oversized_package_root_ton_source_state_proof"
+        in python_test_markers
+    )
+    assert (
+        "sourceProofBytes must be empty for SORA source bundle"
+        in python_test_markers
+    )
+    assert (
+        "sourceProofBytes required for non-SORA source bundle"
         in python_test_markers
     )
     assert "def sample_token_add_bundle_fixture" in python_test_markers
@@ -36888,6 +42749,9 @@ def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory
     assert "bundleBytes.sourceDomain must match sourceDomain" in dotnet_eth_test_markers
     assert "OutboundCallbackAndSubmissionSnapshotsRejectMutation" in dotnet_eth_test_markers
     assert "EthereumMainnetSccp.BuildEthereumCalldata" in dotnet_eth_test_markers
+    assert "OutboundProofRequestRejectsNonCanonicalFixedHexFields" in dotnet_eth_test_markers
+    assert "ProofArtifactHash = UpperFixedHex" in dotnet_eth_test_markers
+    assert "SourceVerifierMaterialHash = UpperFixedHex" in dotnet_eth_test_markers
     assert (
         "ProofBase64 = Convert.ToBase64String(mutatedProofBytes)"
         in dotnet_eth_test_markers
@@ -36903,6 +42767,8 @@ def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory
     assert "bundleBytes.commitment_root is too short" in dotnet_bsc_test_markers
     assert "OutboundCallbackAndSubmissionSnapshotsRejectMutation" in dotnet_bsc_test_markers
     assert "BscMainnetSccp.BuildBscCalldata" in dotnet_bsc_test_markers
+    assert "OutboundProofRequestRejectsNonCanonicalFixedHexFields" in dotnet_bsc_test_markers
+    assert "DestinationBindingHash = UpperFixedHex(binding.BindingHash)" in dotnet_bsc_test_markers
     assert (
         "ProofBase64 = Convert.ToBase64String(mutatedProofBytes)"
         in dotnet_bsc_test_markers
@@ -37203,6 +43069,19 @@ def test_release_bundle_verifier_guards_release_corridor_phase_transcript_invent
 
     verifier = load_verify_helpers()
     assert verifier._sccp_release_corridor_phase_transcript_inventory_errors() == []
+    inventory_markers = "\n".join(
+        marker
+        for _source_path, required_markers in verifier.SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS
+        for marker in required_markers
+    )
+    for required_marker in (
+        "def _dotnet_bridge_build_target_dir(",
+        'name == "CARGO_TARGET_DIR"',
+        "def _dotnet_phase_block_bridge_path_matches_target_dir(",
+        'bridge_path == f"{target_dir}/debug/connect_norito_bridge.dll"',
+        "test_release_bundle_verifier_rejects_dotnet_bridge_target_dir_drift",
+    ):
+        assert required_marker in inventory_markers
 
     for inventory_index, (source_path, required_markers) in enumerate(
         verifier.SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS
@@ -42091,11 +47970,11 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
         ),
         (
             "scripts/sccp_all_lanes_evidence.py",
-            "except (TypeError, ValueError, binascii.Error):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):",
         ),
         (
             "scripts/sccp_all_lanes_evidence.py",
-            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
+            "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
         ),
         (
             "scripts/sccp_all_lanes_evidence.py",
@@ -42132,10 +48011,6 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
             "def test_all_lanes_minimal_toml_parser_redacts_json_exception_causes",
-        ),
-        (
-            "pytests/scripts/sccp_all_lanes_evidence_test.py",
-            "for exception_type in (TypeError, ValueError, RuntimeError):",
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
@@ -42215,11 +48090,11 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
-            "secret-token all-lanes hex TypeError detail",
+            "secret-token all-lanes hex {exception_type.__name__} detail",
         ),
         (
             "scripts/sccp_all_lanes_evidence.py",
-            "except (TypeError, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, ValueError):",
         ),
         (
             "scripts/sccp_all_lanes_evidence.py",
@@ -42231,11 +48106,11 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
-            "def test_all_lanes_solana_base64_callers_redact_typeerror_helper_causes",
+            "def test_all_lanes_solana_base64_callers_redact_helper_exit_causes",
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
-            "secret-token all-lanes {label} TypeError detail",
+            "secret-token all-lanes {label} {exception_type.__name__} detail",
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
@@ -42263,7 +48138,7 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
         ),
         (
             "scripts/sccp_ton_live_evidence.py",
-            "except (TypeError, binascii.Error, ValueError):",
+            "except (SystemExit, RuntimeError, TypeError, binascii.Error, ValueError):",
         ),
         (
             "pytests/scripts/sccp_ton_live_evidence_test.py",
@@ -42275,7 +48150,7 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
         ),
         (
             "pytests/scripts/sccp_ton_live_evidence_test.py",
-            "for exception_type in (TypeError, ValueError):",
+            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
         ),
         (
             "pytests/scripts/sccp_ton_live_evidence_test.py",
@@ -42283,7 +48158,7 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
         ),
         (
             "scripts/sccp_ton_live_evidence.py",
-            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
+            "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
         ),
     ):
         required_markers = next(
@@ -42778,6 +48653,129 @@ def test_release_bundle_verifier_rejects_full_corridor_success_before_command(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_extra_rust_success_before_command(
+    tmp_path: Path,
+) -> None:
+    """Published extra phase success markers must not precede their command."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "rust-sccp.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: rust-sccp",
+                "test result: ok",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["rust-sccp"]
+                ),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["rust-sccp"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "rust-sccp")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase rust-sccp evidence artifact success marker "
+        "appears outside its required command window: test result: ok"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_duplicate_rust_command(
+    tmp_path: Path,
+) -> None:
+    """Published phase command traces must not repeat required fragments."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    command_lines = phase_command_lines(
+        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["rust-sccp"]
+    )
+    phase_log = output_dir / "corridor" / "rust-sccp.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: rust-sccp",
+                *command_lines,
+                *command_lines,
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["rust-sccp"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "rust-sccp")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase rust-sccp evidence artifact command appears "
+        "more than once: cargo test -p iroha_sccp -- --nocapture"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_duplicate_rust_success_after_command(
+    tmp_path: Path,
+) -> None:
+    """Published phase success markers must not repeat in one command window."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    command_lines = phase_command_lines(
+        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["rust-sccp"]
+    )
+    success_line = report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["rust-sccp"][0]
+    phase_log = output_dir / "corridor" / "rust-sccp.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: rust-sccp",
+                *command_lines,
+                success_line,
+                success_line,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "rust-sccp")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase rust-sccp evidence artifact success marker "
+        "appears more times than required command windows: test result: ok"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_full_corridor_final_command_only_success(
     tmp_path: Path,
 ) -> None:
@@ -43249,6 +49247,427 @@ def test_release_bundle_verifier_rejects_unicode_format_obfuscated_failure_outpu
         "readiness report phase evidence-scripts evidence artifact contains "
         f"forbidden phase-block failure marker: {failure_marker}"
     ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_cargo_diagnostic_output_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published Rust cargo phase evidence must reject compiler/test diagnostics."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    cases = (
+        (
+            "rust-sccp",
+            "compiler-error",
+            "error[E0432]: unresolved import `iroha_sccp::missing`",
+            6,
+        ),
+        (
+            "rust-sccp",
+            "panic",
+            "thread 'sccp::tests::rejects_forged_binding' panicked at 'forged proof accepted'",
+            4,
+        ),
+        (
+            "core-admission",
+            "failed-test",
+            "test bridge_proofs::rejects_forged_binding ... FAILED",
+            2,
+        ),
+        (
+            "core-admission",
+            "compile-failure",
+            "error: could not compile `iroha_core` (test \"iroha_core_group_01\")",
+            6,
+        ),
+    )
+    for phase, label, diagnostic, pattern_index in cases:
+        patterns = report.PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS[phase]
+        phase_log = output_dir / "corridor" / f"{phase}.log"
+        phase_log.write_text(
+            "\n".join(
+                (
+                    f"==> SCCP production corridor: {phase}",
+                    *phase_command_lines(report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]),
+                    diagnostic,
+                    *phase_success_lines(report, phase),
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, phase)
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, f"{phase}:{label}"
+        expected_diagnostic = report._phase_diagnostic_fragment(
+            patterns[pattern_index].pattern
+        )
+        assert (
+            f"readiness report phase {phase} evidence artifact contains "
+            f"forbidden phase-block failure marker: {expected_diagnostic}"
+        ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_js_node_diagnostic_output_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published JavaScript phase evidence must reject Node/TAP diagnostics."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    patterns = report.PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS["js-sdk"]
+    cases = (
+        ("tap-not-ok", "not ok 1 - rejects forged destination binding", patterns[1].pattern),
+        (
+            "node-err-code",
+            "# AssertionError [ERR_ASSERTION]: expected forged proof to reject",
+            patterns[2].pattern,
+        ),
+        ("syntax-error", "# SyntaxError: Unexpected token", patterns[3].pattern),
+        (
+            "unhandled-rejection",
+            "# unhandledRejection: callback prover rejected after success copy",
+            patterns[4].pattern,
+        ),
+    )
+    for label, diagnostic, expected_marker in cases:
+        phase_log = output_dir / "corridor" / "js-sdk.log"
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: js-sdk",
+                    *phase_command_lines(
+                        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["js-sdk"]
+                    ),
+                    diagnostic,
+                    *phase_success_lines(report, "js-sdk"),
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "js-sdk")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, label
+        expected_diagnostic = report._phase_diagnostic_fragment(expected_marker)
+        assert (
+            "readiness report phase js-sdk evidence artifact contains "
+            f"forbidden phase-block failure marker: {expected_diagnostic}"
+        ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_python_diagnostic_output_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published Python phase evidence must reject pytest/Python diagnostics."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    patterns = report.PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS["python-sdk"]
+    cases = (
+        ("traceback", "Traceback (most recent call last):", patterns[2].pattern),
+        (
+            "collection-error",
+            "ERROR collecting python/iroha_torii_client/tests/sccp_test.py",
+            patterns[3].pattern,
+        ),
+        (
+            "failed-node",
+            "FAILED python/iroha_torii_client/tests/sccp_test.py::test_rejects_forged_binding",
+            patterns[4].pattern,
+        ),
+        (
+            "module-not-found",
+            "E   ModuleNotFoundError: No module named 'iroha_torii_client'",
+            patterns[5].pattern,
+        ),
+    )
+    for label, diagnostic, expected_marker in cases:
+        phase_log = output_dir / "corridor" / "python-sdk.log"
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: python-sdk",
+                    *phase_command_lines(
+                        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["python-sdk"]
+                    ),
+                    diagnostic,
+                    *phase_success_lines(report, "python-sdk"),
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "python-sdk")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, label
+        expected_diagnostic = report._phase_diagnostic_fragment(expected_marker)
+        assert (
+            "readiness report phase python-sdk evidence artifact contains "
+            f"forbidden phase-block failure marker: {expected_diagnostic}"
+        ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_swift_diagnostic_output_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published Swift phase evidence must reject compiler/XCTest diagnostics."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    patterns = report.PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS["swift-sdk"]
+    cases = (
+        (
+            "compiler-error",
+            "error: emit-module command failed with exit code 1",
+            patterns[1].pattern,
+        ),
+        (
+            "test-case-failed",
+            "Test Case 'SccpSolanaProverTests.testRejectsForgedProof' failed (0.01 seconds)",
+            patterns[2].pattern,
+        ),
+        (
+            "fatal-error",
+            "fatal error while building SCCP proof",
+            patterns[4].pattern,
+        ),
+    )
+    for label, diagnostic, expected_marker in cases:
+        phase_log = output_dir / "corridor" / "swift-sdk.log"
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: swift-sdk",
+                    *phase_command_lines(
+                        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["swift-sdk"]
+                    ),
+                    diagnostic,
+                    *phase_success_lines(report, "swift-sdk"),
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "swift-sdk")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, label
+        expected_diagnostic = report._phase_diagnostic_fragment(expected_marker)
+        assert (
+            "readiness report phase swift-sdk evidence artifact contains "
+            f"forbidden phase-block failure marker: {expected_diagnostic}"
+        ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_gradle_diagnostic_output_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published Kotlin and Android evidence must reject Gradle diagnostics."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    cases = (
+        ("kotlin-sdk", "execution-failed", "Execution failed for task ':core-jvm:test'.", 2),
+        ("kotlin-sdk", "task-failed", "> Task :core-jvm:test FAILED", 3),
+        (
+            "java-android",
+            "failing-tests",
+            "There were failing tests. See the report at: build/reports/tests/test/index.html",
+            4,
+        ),
+        (
+            "java-android",
+            "could-not-resolve",
+            "Could not resolve all files for configuration ':core:debugRuntimeClasspath'.",
+            7,
+        ),
+    )
+    for phase, label, diagnostic, pattern_index in cases:
+        patterns = report.PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS[phase]
+        phase_log = output_dir / "corridor" / f"{phase}.log"
+        phase_log.write_text(
+            "\n".join(
+                (
+                    f"==> SCCP production corridor: {phase}",
+                    *phase_command_lines(report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]),
+                    diagnostic,
+                    *phase_success_lines(report, phase),
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, phase)
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, f"{phase}:{label}"
+        expected_marker = report._phase_diagnostic_fragment(
+            patterns[pattern_index].pattern
+        )
+        assert (
+            f"readiness report phase {phase} evidence artifact contains "
+            f"forbidden phase-block failure marker: {expected_marker}"
+        ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_evidence_script_diagnostic_output_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published evidence-script phase logs must reject pytest/Python diagnostics."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    patterns = report.PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS["evidence-scripts"]
+    cases = (
+        ("traceback", "Traceback (most recent call last):", patterns[2].pattern),
+        (
+            "collection-error",
+            "ERROR collecting pytests/scripts/sccp_release_bundle_test.py",
+            patterns[3].pattern,
+        ),
+        (
+            "failed-node",
+            "FAILED pytests/scripts/sccp_release_readiness_report_test.py::test_release_gate",
+            patterns[4].pattern,
+        ),
+        ("internal-error", "INTERNALERROR> recursive verifier failure", patterns[7].pattern),
+    )
+    for label, diagnostic, expected_marker in cases:
+        phase_log = output_dir / "corridor" / "evidence-scripts.log"
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: evidence-scripts",
+                    *phase_command_lines(
+                        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]
+                    ),
+                    diagnostic,
+                    *phase_success_lines(report, "evidence-scripts"),
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "evidence-scripts")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, label
+        expected_diagnostic = report._phase_diagnostic_fragment(expected_marker)
+        assert (
+            "readiness report phase evidence-scripts evidence artifact contains "
+            f"forbidden phase-block failure marker: {expected_diagnostic}"
+        ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_contract_smoke_diagnostic_output_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published contract-smoke logs must reject Node, Solidity, npm, and shell failures."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    patterns = report.PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS["contract-smoke"]
+    cases = (
+        ("tap-not-ok", "not ok 4 - bridge rejects forged message", patterns[1].pattern),
+        (
+            "node-error-code",
+            "# AssertionError [ERR_ASSERTION]: forged verifier material accepted",
+            patterns[2].pattern,
+        ),
+        (
+            "solidity-parser-error",
+            "ParserError: Expected identifier but got ';'",
+            patterns[6].pattern,
+        ),
+        ("npm-error", "npm ERR! code EAI_AGAIN", patterns[8].pattern),
+        ("shell-command-missing", "snarkjs: command not found", patterns[9].pattern),
+    )
+    for label, diagnostic, expected_marker in cases:
+        phase_log = output_dir / "corridor" / "contract-smoke.log"
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: contract-smoke",
+                    *phase_command_lines(
+                        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                    ),
+                    diagnostic,
+                    *phase_success_lines(report, "contract-smoke"),
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, label
+        expected_diagnostic = report._phase_diagnostic_fragment(expected_marker)
+        assert (
+            "readiness report phase contract-smoke evidence artifact contains "
+            f"forbidden phase-block failure marker: {expected_diagnostic}"
+        ) in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_command_line_only_completion_marker(

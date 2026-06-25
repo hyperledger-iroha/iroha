@@ -1647,6 +1647,33 @@ def test_live_evm_full_toml_revalidates_imported_summary_metadata(monkeypatch):
         else:
             raise AssertionError(f"EVM full TOML accepted invalid {field} metadata")
 
+    runtime_failure_cases = (
+        (
+            module.argparse.ArgumentTypeError,
+            "secret-token {label} imported argument detail",
+            "imported argument detail",
+        ),
+        (
+            SystemExit,
+            "secret-token {label} imported SystemExit detail",
+            "imported SystemExit detail",
+        ),
+        (
+            RuntimeError,
+            "secret-token {label} imported RuntimeError detail",
+            "imported RuntimeError detail",
+        ),
+        (
+            TypeError,
+            "secret-token {label} imported parser detail",
+            "imported parser detail",
+        ),
+        (
+            ValueError,
+            "secret-token {label} imported ValueError detail",
+            "imported ValueError detail",
+        ),
+    )
     original_parse_runtime_bytecode_hex = module.evidence.parse_runtime_bytecode_hex
     for field, label, expected_message in (
         (
@@ -1660,52 +1687,101 @@ def test_live_evm_full_toml_revalidates_imported_summary_metadata(monkeypatch):
             "EVM verifier runtime bytecode metadata is invalid",
         ),
     ):
-        with monkeypatch.context() as patch:
-            def fail_runtime_parse(value, *, label, expected_label=label):
-                if label == expected_label:
-                    raise TypeError(f"secret-token {label} imported parser detail")
-                return original_parse_runtime_bytecode_hex(value, label=label)
+        for exception_type, secret_template, forbidden_detail in runtime_failure_cases:
+            with monkeypatch.context() as patch:
 
-            patch.setattr(
-                module.evidence,
-                "parse_runtime_bytecode_hex",
-                fail_runtime_parse,
-            )
+                def fail_runtime_parse(
+                    value,
+                    *,
+                    label,
+                    expected_label=label,
+                    exception_type=exception_type,
+                    secret_template=secret_template,
+                ):
+                    if label == expected_label:
+                        raise exception_type(secret_template.format(label=label))
+                    return original_parse_runtime_bytecode_hex(value, label=label)
+
+                patch.setattr(
+                    module.evidence,
+                    "parse_runtime_bytecode_hex",
+                    fail_runtime_parse,
+                )
+                try:
+                    module.render_offline_toml(summary)
+                except ValueError as exc:
+                    rendered = str(exc)
+                    assert rendered == expected_message
+                    assert "secret-token" not in rendered
+                    assert forbidden_detail not in rendered
+                    assert exc.__cause__ is None
+                    assert exc.__suppress_context__ is True
+                else:
+                    raise AssertionError(
+                        f"EVM full TOML accepted imported {field} "
+                        f"{exception_type.__name__}"
+                    )
+
+    original_parse_hex_bytes = module._parse_hex_bytes
+    for exception_type, secret_template, forbidden_detail in (
+        (
+            module.argparse.ArgumentTypeError,
+            "secret-token bridge address parser detail",
+            "parser detail",
+        ),
+        (
+            SystemExit,
+            "secret-token bridge address SystemExit detail",
+            "SystemExit detail",
+        ),
+        (
+            RuntimeError,
+            "secret-token bridge address RuntimeError detail",
+            "RuntimeError detail",
+        ),
+        (
+            TypeError,
+            "secret-token bridge address TypeError detail",
+            "TypeError detail",
+        ),
+        (
+            ValueError,
+            "secret-token bridge address ValueError detail",
+            "ValueError detail",
+        ),
+    ):
+        with monkeypatch.context() as patch:
+
+            def fail_bridge_address_parse(
+                value,
+                *,
+                label,
+                byte_length,
+                exception_type=exception_type,
+                secret_template=secret_template,
+            ):
+                if label == "bridge address":
+                    raise exception_type(secret_template)
+                return original_parse_hex_bytes(
+                    value,
+                    label=label,
+                    byte_length=byte_length,
+                )
+
+            patch.setattr(module, "_parse_hex_bytes", fail_bridge_address_parse)
             try:
                 module.render_offline_toml(summary)
             except ValueError as exc:
                 rendered = str(exc)
-                assert rendered == expected_message
+                assert rendered == "bridge address metadata is invalid"
                 assert "secret-token" not in rendered
-                assert "imported parser detail" not in rendered
+                assert forbidden_detail not in rendered
                 assert exc.__cause__ is None
                 assert exc.__suppress_context__ is True
             else:
                 raise AssertionError(
-                    f"EVM full TOML accepted imported {field} parser TypeError"
+                    "EVM full TOML leaked parser detail for bridge address"
                 )
-
-    original_parse_hex_bytes = module._parse_hex_bytes
-    with monkeypatch.context() as patch:
-        def fail_bridge_address_parse(value, *, label, byte_length):
-            if label == "bridge address":
-                raise module.argparse.ArgumentTypeError(
-                    "secret-token bridge address parser detail"
-                )
-            return original_parse_hex_bytes(value, label=label, byte_length=byte_length)
-
-        patch.setattr(module, "_parse_hex_bytes", fail_bridge_address_parse)
-        try:
-            module.render_offline_toml(summary)
-        except ValueError as exc:
-            rendered = str(exc)
-            assert rendered == "bridge address metadata is invalid"
-            assert "secret-token" not in rendered
-            assert "parser detail" not in rendered
-            assert exc.__cause__ is None
-            assert exc.__suppress_context__ is True
-        else:
-            raise AssertionError("EVM full TOML leaked parser detail for bridge address")
 
     forged = copy.deepcopy(summary)
     forged["route_canary_transaction"]["receipt_block_matches"] = False
@@ -1993,39 +2069,51 @@ def test_live_evm_expected_rpc_chain_id_parser_requires_canonical_decimal():
 def test_evm_live_hex_parsers_redact_typeerror_parser_causes(monkeypatch):
     module = load_live_module()
 
-    class SecretBytes:
-        @staticmethod
-        def fromhex(_text):
-            raise TypeError("secret-token EVM live hex TypeError detail")
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
 
-    monkeypatch.setattr(module, "bytes", SecretBytes, raising=False)
+        class SecretBytes:
+            @staticmethod
+            def fromhex(_text, *, exception_type=exception_type):
+                raise exception_type(
+                    f"secret-token EVM live hex {exception_type.__name__} detail"
+                )
 
-    try:
-        module._rpc_hex_data("0x6000", method="eth_getCode bridge")
-    except RuntimeError as exc:
-        rendered = str(exc)
-        assert rendered == "eth_getCode bridge returned non-canonical lowercase 0x hex data"
-        assert "secret-token" not in rendered
-        assert "TypeError" not in rendered
-        assert exc.__cause__ is None
-        assert exc.__suppress_context__ is True
-    else:
-        raise AssertionError("EVM live RPC hex parser TypeError was accepted")
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "bytes", SecretBytes, raising=False)
+            try:
+                module._rpc_hex_data("0x6000", method="eth_getCode bridge")
+            except RuntimeError as exc:
+                rendered = str(exc)
+                assert rendered == (
+                    "eth_getCode bridge returned non-canonical lowercase 0x hex data"
+                )
+                assert "secret-token" not in rendered
+                assert exception_type.__name__ not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    "EVM live RPC hex parser helper failure was accepted"
+                )
 
-    try:
-        module._parse_exact_hex32_blob(
-            "0x" + "11" * 32,
-            label="route-canary receipt blockHash",
-        )
-    except RuntimeError as exc:
-        rendered = str(exc)
-        assert rendered == "route-canary receipt blockHash must be canonical lowercase 0x hex"
-        assert "secret-token" not in rendered
-        assert "TypeError" not in rendered
-        assert exc.__cause__ is None
-        assert exc.__suppress_context__ is True
-    else:
-        raise AssertionError("EVM live exact hex parser TypeError was accepted")
+            try:
+                module._parse_exact_hex32_blob(
+                    "0x" + "11" * 32,
+                    label="route-canary receipt blockHash",
+                )
+            except RuntimeError as exc:
+                rendered = str(exc)
+                assert rendered == (
+                    "route-canary receipt blockHash must be canonical lowercase 0x hex"
+                )
+                assert "secret-token" not in rendered
+                assert exception_type.__name__ not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    "EVM live exact hex parser helper failure was accepted"
+                )
 
 
 def test_live_evm_default_domain_lookups_redact_lookup_causes(monkeypatch):
@@ -2041,7 +2129,20 @@ def test_live_evm_default_domain_lookups_redact_lookup_causes(monkeypatch):
                 "secret-token-evm-live-chain-id argparse detail"
             )
 
-    for chain_ids in (SecretChainIds(), SecretArgparseChainIds()):
+    class SecretSystemExitChainIds:
+        def __getitem__(self, _domain):
+            raise SystemExit("secret-token-evm-live-chain-id SystemExit detail")
+
+    class SecretRuntimeChainIds:
+        def __getitem__(self, _domain):
+            raise RuntimeError("secret-token-evm-live-chain-id RuntimeError detail")
+
+    for chain_ids in (
+        SecretChainIds(),
+        SecretArgparseChainIds(),
+        SecretSystemExitChainIds(),
+        SecretRuntimeChainIds(),
+    ):
         with monkeypatch.context() as patch:
             patch.setattr(module, "EXPECTED_RPC_CHAIN_IDS", chain_ids)
             try:
@@ -2058,6 +2159,8 @@ def test_live_evm_default_domain_lookups_redact_lookup_causes(monkeypatch):
 
     for exception_type in (
         module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
         TypeError,
         ValueError,
     ):

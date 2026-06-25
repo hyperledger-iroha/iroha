@@ -192,11 +192,25 @@ class EvmSccpProverTest {
         assertTrue(paddedPayload.message?.contains("payloadHash") == true)
         assertTrue(paddedPayload.message?.contains("canonical hex") == true)
 
+        val uppercasePayload = assertFailsWith<IllegalArgumentException> {
+            SccpEvm.buildProofRequest(
+                sampleProofRequestInput(publicInputs = samplePublicInputs().copy(payloadHash = "0x" + "AA".repeat(32))),
+            )
+        }
+        assertTrue(uppercasePayload.message?.contains("payloadHash") == true)
+        assertTrue(uppercasePayload.message?.contains("canonical hex") == true)
+
         val paddedStatement = assertFailsWith<IllegalArgumentException> {
             SccpEvm.buildProofRequest(sampleProofRequestInput(statementHash = "56".repeat(32) + " "))
         }
         assertTrue(paddedStatement.message?.contains("statementHash") == true)
         assertTrue(paddedStatement.message?.contains("canonical hex") == true)
+
+        val uppercaseStatement = assertFailsWith<IllegalArgumentException> {
+            SccpEvm.buildProofRequest(sampleProofRequestInput(statementHash = "0X" + "56".repeat(32)))
+        }
+        assertTrue(uppercaseStatement.message?.contains("statementHash") == true)
+        assertTrue(uppercaseStatement.message?.contains("canonical hex") == true)
 
         for (finalityHeight in listOf("019", "0x13", "+19", " 19", "19 ")) {
             val invalidFinalityHeight = assertFailsWith<IllegalArgumentException> {
@@ -1263,7 +1277,11 @@ class EvmSccpProverTest {
             )
         }.also { error ->
             assertTrue(error.message?.contains("auditHashes.circuit_security_audit") == true)
-            assertTrue(error.message?.contains("canonical lowercase") == true)
+            assertTrue(
+                error.message?.contains("canonical hex") == true ||
+                    error.message?.contains("canonical lowercase") == true,
+                "actual error: ${error.message}",
+            )
         }
         assertFailsWith<IllegalArgumentException> {
             SccpEvm.EthereumMainnetNativeEvmProverBundle.fromJson(

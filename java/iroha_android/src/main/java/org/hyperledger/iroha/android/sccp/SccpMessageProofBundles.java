@@ -620,7 +620,7 @@ final class SccpMessageProofBundles {
     final String payload = text.substring(2);
     for (int index = 0; index < payload.length(); index++) {
       final char symbol = payload.charAt(index);
-      if (hexDigit(symbol) < 0) {
+      if (!isEvmAddressHexDigit(symbol)) {
         throw new IllegalArgumentException(label + " must be a 0x-prefixed 20-byte EVM address");
       }
     }
@@ -641,6 +641,10 @@ final class SccpMessageProofBundles {
         throw new IllegalArgumentException(label + " must be a canonical EIP-55 EVM address");
       }
     }
+  }
+
+  private static boolean isEvmAddressHexDigit(final char ch) {
+    return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
   }
 
   private static void validateTonRawAddress(final String text, final String label) {
@@ -867,7 +871,10 @@ final class SccpMessageProofBundles {
 
   private static byte[] hex32Bytes(final String value, final String field) {
     String body = value;
-    if (body.startsWith("0x") || body.startsWith("0X")) {
+    if (body.startsWith("0X")) {
+      throw new IllegalArgumentException(field + " must be canonical hex");
+    }
+    if (body.startsWith("0x")) {
       body = body.substring(2);
     }
     if (body.length() != 64) {
@@ -898,9 +905,6 @@ final class SccpMessageProofBundles {
     }
     if (ch >= 'a' && ch <= 'f') {
       return ch - 'a' + 10;
-    }
-    if (ch >= 'A' && ch <= 'F') {
-      return ch - 'A' + 10;
     }
     return -1;
   }

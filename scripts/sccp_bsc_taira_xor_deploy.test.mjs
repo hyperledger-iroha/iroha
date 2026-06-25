@@ -80,6 +80,10 @@ const TRUSTED_SETUP_TRANSCRIPT_SCHEMA =
   "iroha-sccp-bsc-trusted-setup-transcript/v1";
 const REPRODUCIBLE_BUILD_TRANSCRIPT_SCHEMA =
   "iroha-sccp-bsc-reproducible-build-transcript/v1";
+const BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA =
+  "iroha-sccp-bsc-groth16-semantic-review-evidence/v1";
+const BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA =
+  "iroha-sccp-bsc-groth16-circuit-security-audit-evidence/v1";
 const BSC_GROTH16_PUBLIC_SIGNAL_NAMES = [
   "message_id",
   "payload_hash",
@@ -221,10 +225,6 @@ const DESTINATION_BROWSER_MANIFEST_HASH = fixtureHash(
 const SOURCE_BROWSER_MANIFEST_HASH = fixtureHash("bsc source browser manifest");
 const BSC_GROTH16_ATTESTATION_SIGNATURE_SCHEMA =
   "iroha-sccp-bsc-groth16-attestation-signature/v1";
-const BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA =
-  "iroha-sccp-bsc-groth16-semantic-review-evidence/v1";
-const BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA =
-  "iroha-sccp-bsc-groth16-circuit-security-audit-evidence/v1";
 const TEST_ATTESTATION_SIGNER = generateKeyPairSync("ed25519");
 const TEST_ATTESTATION_PUBLIC_KEY_PEM = TEST_ATTESTATION_SIGNER.publicKey.export({
   type: "spki",
@@ -1604,8 +1604,8 @@ async function writeNativeGroth16AttestationFiles(fixture, overrides = {}) {
       "iroha-sccp-bsc-groth16-semantic-circuit-attestation/v1",
       {
         semanticReviewEvidenceSchema: BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA,
-        semanticReviewEvidenceSha256: fixtureHash("semantic review evidence"),
-        semanticReviewReportSha256: fixtureHash("semantic review report"),
+        semanticReviewEvidenceSha256: fixtureHash("bsc semantic review evidence"),
+        semanticReviewReportSha256: fixtureHash("bsc semantic review report"),
         fullSccpMessageSemantics: true,
         sourceFinalitySemantics: true,
         destinationBindingSemantics: true,
@@ -1621,9 +1621,11 @@ async function writeNativeGroth16AttestationFiles(fixture, overrides = {}) {
         circuitSecurityAuditEvidenceSchema:
           BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA,
         circuitSecurityAuditEvidenceSha256: fixtureHash(
-          "circuit security audit evidence",
+          "bsc circuit security audit evidence",
         ),
-        circuitSecurityAuditReportSha256: fixtureHash("circuit security audit report"),
+        circuitSecurityAuditReportSha256: fixtureHash(
+          "bsc circuit security audit report",
+        ),
         auditResult: "pass",
         approved: true,
         criticalFindings: 0,

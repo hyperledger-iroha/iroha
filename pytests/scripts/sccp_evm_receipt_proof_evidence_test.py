@@ -130,33 +130,79 @@ def test_receipt_hex_parser_redacts_parser_causes():
         raise AssertionError("invalid EVM receipt transaction hash hex was accepted")
 
 
-def test_receipt_hex_parser_redacts_typeerror_parser_causes(monkeypatch):
-    """Parser TypeErrors must collapse to the same fixed public hex category."""
+def test_receipt_hex_parser_redacts_helper_exit_parser_causes(monkeypatch):
+    """Parser helper exits must collapse to the same fixed public hex category."""
 
     module = load_module()
 
-    class SecretBytes:
-        @staticmethod
-        def fromhex(_text):
-            raise TypeError("secret-token EVM receipt hex TypeError detail")
-
-    monkeypatch.setattr(module, "bytes", SecretBytes, raising=False)
-
-    try:
-        module.parse_hex_bytes(
-            "0x" + "11" * 32,
-            label="transaction hash",
-            byte_length=32,
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+        detail = (
+            "secret-token EVM receipt hex TypeError detail"
+            if exception_type is TypeError
+            else f"secret-token EVM receipt hex {exception_type.__name__} detail"
         )
-    except module.argparse.ArgumentTypeError as exc:
-        rendered = str(exc)
-        assert rendered == "transaction hash must be hex"
-        assert "secret-token" not in rendered
-        assert "TypeError" not in rendered
-        assert exc.__cause__ is None
-        assert exc.__suppress_context__ is True
-    else:
-        raise AssertionError("EVM receipt parser TypeError was accepted")
+
+        class SecretBytes:
+            @staticmethod
+            def fromhex(_text, detail=detail, exception_type=exception_type):
+                raise exception_type(detail)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "bytes", SecretBytes, raising=False)
+
+            try:
+                module.parse_hex_bytes(
+                    "0x" + "11" * 32,
+                    label="transaction hash",
+                    byte_length=32,
+                )
+            except module.argparse.ArgumentTypeError as exc:
+                rendered = str(exc)
+                assert rendered == "transaction hash must be hex"
+                assert "secret-token" not in rendered
+                assert exception_type.__name__ not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    f"EVM receipt parser {exception_type.__name__} was accepted"
+                )
+
+
+def test_receipt_rpc_hex_data_redacts_helper_exit_parser_causes(monkeypatch):
+    """RPC hex helper exits must collapse to the fixed public RPC hex category."""
+
+    module = load_module()
+
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+
+        class SecretBytes:
+            @staticmethod
+            def fromhex(_text, exception_type=exception_type):
+                raise exception_type(
+                    "secret-token EVM receipt RPC hex "
+                    f"{exception_type.__name__} detail"
+                )
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "bytes", SecretBytes, raising=False)
+
+            try:
+                module._rpc_hex_data("0x11", method="eth_getBlockReceipts")
+            except RuntimeError as exc:
+                rendered = str(exc)
+                assert (
+                    rendered
+                    == "eth_getBlockReceipts returned non-canonical lowercase 0x hex data"
+                )
+                assert "secret-token" not in rendered
+                assert exception_type.__name__ not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    f"EVM receipt RPC hex {exception_type.__name__} was accepted"
+                )
 
 
 def source_log(module, *, duplicate=False, **overrides):

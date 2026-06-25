@@ -107,6 +107,7 @@ docs/source/da/_generated/threat_model_report.json
 
 # Developer-local caches and sandboxes
 .cargo-temp/
+.codex-target/
 .venv-*/
 .cache/
 .swift_test_home/
