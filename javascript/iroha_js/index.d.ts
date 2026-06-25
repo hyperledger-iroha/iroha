@@ -11112,6 +11112,12 @@ export interface ToriiSseEvent<T = ToriiEventPayload> {
   raw: string | null;
 }
 
+export interface ToriiWebSocketEvent<T = unknown> {
+  event: string | null;
+  data: T | string;
+  raw: string;
+}
+
 export interface AccountPermissionsListOptions {
   limit?: NumericLike;
   offset?: NumericLike;
@@ -11409,9 +11415,229 @@ export interface SorafsReplicationOrder {
   metadata: ReadonlyArray<SorafsReplicationMetadataEntry>;
 }
 
+export declare const SORAFS_ORDERBOOK_PAYLOAD_KINDS: Readonly<{
+  ORDER_REQUEST: "order-request";
+  ORDER_CANCEL: "order-cancel";
+  TRADE_EVENT: "trade-event";
+  SETTLEMENT_CHANNEL: "settlement-channel";
+  SETTLEMENT_RECEIPT: "settlement-receipt";
+  RUNTIME_SNAPSHOT: "runtime-snapshot";
+}>;
+
+export type SorafsOrderbookPayloadKind =
+  | "order"
+  | "order-request"
+  | "orderbook-order-request"
+  | "request"
+  | "cancel"
+  | "order-cancel"
+  | "orderbook-order-cancel"
+  | "trade"
+  | "trade-event"
+  | "orderbook-trade-event"
+  | "channel"
+  | "settlement-channel"
+  | "receipt"
+  | "settlement-receipt"
+  | "snapshot"
+  | "runtime-snapshot"
+  | "orderbook-runtime-snapshot";
+
+export type SorafsOrderbookSignablePayloadKind =
+  | "order"
+  | "order-request"
+  | "orderbook-order-request"
+  | "request"
+  | "cancel"
+  | "order-cancel"
+  | "orderbook-order-cancel"
+  | "receipt"
+  | "settlement-receipt";
+
+export type SorafsOrderbookCancelReason =
+  | "owner-requested"
+  | "owner_requested"
+  | "owner"
+  | "requested"
+  | "expired"
+  | "governance"
+  | "replaced";
+
+export type SorafsOrderbookIntegerInput = number | bigint | string;
+export type SorafsOrderbookBytesInput = ArrayBufferView | ArrayBuffer | Buffer;
+
+export interface SorafsSignedOrderbookOrderRequestFields {
+  orderId?: SorafsOrderbookBytesInput;
+  order_id?: SorafsOrderbookBytesInput;
+  side: SorafsOrderbookSide;
+  tier: SorafsOrderbookTier;
+  pricePerGibMicroXor?: SorafsOrderbookIntegerInput;
+  price_per_gib_micro_xor?: SorafsOrderbookIntegerInput;
+  quantityGib?: SorafsOrderbookIntegerInput;
+  quantity_gib?: SorafsOrderbookIntegerInput;
+  remainingGib?: SorafsOrderbookIntegerInput;
+  remaining_gib?: SorafsOrderbookIntegerInput;
+  ownerAccount?: SorafsOrderbookBytesInput;
+  owner_account?: SorafsOrderbookBytesInput;
+  expiryUnix?: SorafsOrderbookIntegerInput;
+  expiry_unix?: SorafsOrderbookIntegerInput;
+  nonce: SorafsOrderbookIntegerInput;
+  makerFeeBps?: SorafsOrderbookIntegerInput;
+  maker_fee_bps?: SorafsOrderbookIntegerInput;
+  takerFeeBps?: SorafsOrderbookIntegerInput;
+  taker_fee_bps?: SorafsOrderbookIntegerInput;
+}
+
+export interface SorafsSignedOrderbookOrderCancelFields {
+  orderId?: SorafsOrderbookBytesInput;
+  order_id?: SorafsOrderbookBytesInput;
+  ownerAccount?: SorafsOrderbookBytesInput;
+  owner_account?: SorafsOrderbookBytesInput;
+  reason: SorafsOrderbookCancelReason;
+  nonce: SorafsOrderbookIntegerInput;
+}
+
+export interface SorafsSignedOrderbookSettlementReceiptFields {
+  receiptId?: SorafsOrderbookBytesInput;
+  receipt_id?: SorafsOrderbookBytesInput;
+  channelId?: SorafsOrderbookBytesInput;
+  channel_id?: SorafsOrderbookBytesInput;
+  tradeId?: SorafsOrderbookBytesInput;
+  trade_id?: SorafsOrderbookBytesInput;
+  rangeStart?: SorafsOrderbookIntegerInput;
+  range_start?: SorafsOrderbookIntegerInput;
+  rangeEnd?: SorafsOrderbookIntegerInput;
+  range_end?: SorafsOrderbookIntegerInput;
+  chunkHash?: SorafsOrderbookBytesInput;
+  chunk_hash?: SorafsOrderbookBytesInput;
+  bytesDelivered?: SorafsOrderbookIntegerInput;
+  bytes_delivered?: SorafsOrderbookIntegerInput;
+  xorDebitedMicroXor?: SorafsOrderbookIntegerInput;
+  xor_debited_micro_xor?: SorafsOrderbookIntegerInput;
+  providerCreditMicroXor?: SorafsOrderbookIntegerInput;
+  provider_credit_micro_xor?: SorafsOrderbookIntegerInput;
+  feeAmountMicroXor?: SorafsOrderbookIntegerInput;
+  fee_amount_micro_xor?: SorafsOrderbookIntegerInput;
+  issuedAtUnix?: SorafsOrderbookIntegerInput;
+  issued_at_unix?: SorafsOrderbookIntegerInput;
+}
+
+export declare const SORAFS_PDP_PAYLOAD_KINDS: Readonly<{
+  COMMITMENT: "commitment";
+  CHALLENGE: "challenge";
+  PROOF: "proof";
+}>;
+
+export type SorafsPdpPayloadKind =
+  | "commitment"
+  | "pdp-commitment"
+  | "challenge"
+  | "pdp-challenge"
+  | "proof"
+  | "pdp-proof";
+
+export interface SorafsValidationContextField {
+  key: string;
+  value: string;
+}
+
+export interface SorafsValidationInput {
+  kind: string;
+  path: string;
+}
+
+export interface SorafsValidationOutcome {
+  status: "Ok" | "Error" | string;
+  code: string;
+  category: string;
+  message: string;
+  action: string | null;
+  docs_url: string | null;
+  telemetry_tags: ReadonlyArray<string>;
+  context: ReadonlyArray<SorafsValidationContextField>;
+  inputs: ReadonlyArray<SorafsValidationInput>;
+  version: number;
+  generated_at: number;
+}
+
+export interface SorafsOrderbookValidationOptions {
+  label?: string;
+  generatedAtUnix?: number | bigint;
+  generated_at?: number | bigint;
+}
+
+export interface SorafsPdpPayloadValidationOptions {
+  label?: string;
+  generatedAtUnix?: number | bigint;
+  generated_at?: number | bigint;
+}
+
+export interface SorafsPdpPairValidationOptions {
+  commitmentLabel?: string;
+  commitment_label?: string;
+  challengeLabel?: string;
+  challenge_label?: string;
+  proofLabel?: string;
+  proof_label?: string;
+  generatedAtUnix?: number | bigint;
+  generated_at?: number | bigint;
+}
+
 export function decodeReplicationOrder(
   bytes: ArrayBufferView | ArrayBuffer | Buffer,
 ): SorafsReplicationOrder;
+
+export function validateOrderbookPayload(
+  kind: SorafsOrderbookPayloadKind,
+  bytes: ArrayBufferView | ArrayBuffer | Buffer,
+  options?: SorafsOrderbookValidationOptions,
+): SorafsValidationOutcome;
+
+export function signOrderbookPayload(
+  kind: SorafsOrderbookSignablePayloadKind,
+  bytes: ArrayBufferView | ArrayBuffer | Buffer,
+  privateKey: ArrayBufferView | ArrayBuffer | Buffer,
+): Buffer;
+
+export function buildSignedOrderbookOrderRequest(
+  fields: SorafsSignedOrderbookOrderRequestFields,
+  privateKey: ArrayBufferView | ArrayBuffer | Buffer,
+): Buffer;
+
+export function buildSignedOrderbookOrderCancel(
+  fields: SorafsSignedOrderbookOrderCancelFields,
+  privateKey: ArrayBufferView | ArrayBuffer | Buffer,
+): Buffer;
+
+export function buildSignedOrderbookSettlementReceipt(
+  fields: SorafsSignedOrderbookSettlementReceiptFields,
+  privateKey: ArrayBufferView | ArrayBuffer | Buffer,
+): Buffer;
+
+export function validatePdpPayload(
+  kind: SorafsPdpPayloadKind,
+  bytes: ArrayBufferView | ArrayBuffer | Buffer,
+  options?: SorafsPdpPayloadValidationOptions,
+): SorafsValidationOutcome;
+
+export function validatePdpCommitmentChallenge(
+  commitmentBytes: ArrayBufferView | ArrayBuffer | Buffer,
+  challengeBytes: ArrayBufferView | ArrayBuffer | Buffer,
+  options?: SorafsPdpPairValidationOptions,
+): SorafsValidationOutcome;
+
+export function validatePdpChallengeProof(
+  challengeBytes: ArrayBufferView | ArrayBuffer | Buffer,
+  proofBytes: ArrayBufferView | ArrayBuffer | Buffer,
+  options?: SorafsPdpPairValidationOptions,
+): SorafsValidationOutcome;
+
+export function validatePdpBundle(
+  commitmentBytes: ArrayBufferView | ArrayBuffer | Buffer,
+  challengeBytes: ArrayBufferView | ArrayBuffer | Buffer,
+  proofBytes: ArrayBufferView | ArrayBuffer | Buffer,
+  options?: SorafsPdpPairValidationOptions,
+): SorafsValidationOutcome;
 
 export function captureSumeragiTelemetrySnapshot(
   client: ToriiClient,
@@ -16143,6 +16369,243 @@ export interface SorafsReplicationListOptions {
   signal?: AbortSignal;
 }
 
+export interface SorafsOrderbookReadOptions {
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+}
+
+export interface SorafsOrderbookEventsOptions extends SorafsOrderbookReadOptions {
+  since?: NumericLike;
+  limit?: NumericLike;
+  ifNoneMatch?: string;
+  etag?: string;
+}
+
+export interface SorafsOrderbookEventStreamOptions {
+  since?: NumericLike;
+  limit?: NumericLike;
+  lastEventId?: string;
+  signal?: AbortSignal;
+}
+
+export interface SorafsOrderbookEventsWebSocketParams {
+  since?: NumericLike;
+  limit?: NumericLike;
+  endpointPath?: string;
+}
+
+export interface SorafsOrderbookEventsWebSocketDialOptions<
+  T = unknown,
+> extends SorafsOrderbookEventsWebSocketParams {
+  baseUrl: string;
+  protocols?: ConnectWebSocketProtocols;
+  websocketOptions?: unknown;
+  WebSocketImpl?: ConnectWebSocketConstructor<T>;
+}
+
+export interface ClientSorafsOrderbookEventsWebSocketOptions<
+  T = unknown,
+> extends SorafsOrderbookEventsWebSocketParams {
+  protocols?: ConnectWebSocketProtocols;
+  websocketOptions?: unknown;
+  WebSocketImpl?: ConnectWebSocketConstructor<T>;
+}
+
+export interface SorafsOrderbookEventsWebSocketStreamOptions<
+  T = unknown,
+> extends ClientSorafsOrderbookEventsWebSocketOptions<T> {
+  signal?: AbortSignal;
+  closeOnReturn?: boolean;
+}
+
+export type SorafsOrderbookSide = "bid" | "ask";
+export type SorafsOrderbookTier = "hot" | "warm" | "archive";
+export type SorafsOrderbookChannelStatus =
+  | "open"
+  | "closing"
+  | "closed"
+  | "breached"
+  | "refunded";
+export type SorafsOrderbookEventKind =
+  | "order_accepted"
+  | "order_cancelled"
+  | "settlement_receipt_accepted";
+
+export interface SorafsOrderbookSignature {
+  algorithm: string;
+  public_key_hex: string;
+  signature_hex: string;
+}
+
+export interface SorafsOrderbookOrder {
+  version: number;
+  order_id_hex: string;
+  side: SorafsOrderbookSide;
+  tier: SorafsOrderbookTier;
+  price_per_gib_micro_xor: string;
+  quantity_gib: number;
+  remaining_gib: number;
+  owner_account_hex: string;
+  expiry_unix: number;
+  nonce: number;
+  maker_fee_bps: number;
+  taker_fee_bps: number;
+  signature: SorafsOrderbookSignature;
+}
+
+export interface SorafsOrderbookEntry {
+  sequence: number;
+  order: SorafsOrderbookOrder;
+}
+
+export interface SorafsOrderbookTrade {
+  version: number;
+  trade_id_hex: string;
+  maker_order_id_hex: string;
+  taker_order_id_hex: string;
+  tier: SorafsOrderbookTier;
+  price_per_gib_micro_xor: string;
+  filled_gib: number;
+  maker_fee_micro_xor: string;
+  taker_fee_micro_xor: string;
+  timestamp_unix: number;
+}
+
+export interface SorafsOrderbookFill {
+  trade: SorafsOrderbookTrade;
+  maker_remaining_gib: number;
+  taker_remaining_gib: number;
+  gross_value_micro_xor: string;
+}
+
+export interface SorafsOrderbookChannel {
+  version: number;
+  channel_id_hex: string;
+  trade_id_hex: string;
+  buyer_account_hex: string;
+  provider_id_hex: string;
+  total_bytes: number;
+  remaining_bytes: number;
+  xor_locked_micro: string;
+  status: SorafsOrderbookChannelStatus;
+  opened_at_unix: number;
+  updated_at_unix: number;
+}
+
+export interface SorafsOrderbookByteRange {
+  start: number;
+  end: number;
+}
+
+export interface SorafsOrderbookReceipt {
+  version: number;
+  receipt_id_hex: string;
+  channel_id_hex: string;
+  trade_id_hex: string;
+  range: SorafsOrderbookByteRange;
+  chunk_hash_hex: string;
+  bytes_delivered: number;
+  xor_debited_micro: string;
+  provider_credit_micro: string;
+  fee_amount_micro: string;
+  issued_at_unix: number;
+  settlement_signature: SorafsOrderbookSignature;
+}
+
+export interface SorafsOrderbookDepth {
+  hot_bid_gib: number;
+  hot_ask_gib: number;
+  warm_bid_gib: number;
+  warm_ask_gib: number;
+  archive_bid_gib: number;
+  archive_ask_gib: number;
+}
+
+export interface SorafsOrderbookBookResponse {
+  schema: string;
+  source: string;
+  generated_at_unix: number;
+  next_sequence: number;
+  open_order_count: number;
+  trade_count: number;
+  settlement_channel_count: number;
+  settlement_receipt_count: number;
+  depth: SorafsOrderbookDepth;
+  open_orders: ReadonlyArray<SorafsOrderbookEntry>;
+  trades: ReadonlyArray<SorafsOrderbookTrade>;
+  settlement_channels: ReadonlyArray<SorafsOrderbookChannel>;
+  settlement_receipts: ReadonlyArray<SorafsOrderbookReceipt>;
+  expired_order_ids_hex: ReadonlyArray<string>;
+}
+
+export interface SorafsOrderbookTradesResponse {
+  count: number;
+  trades: ReadonlyArray<SorafsOrderbookTrade>;
+}
+
+export interface SorafsOrderbookChannelsResponse {
+  count: number;
+  channels: ReadonlyArray<SorafsOrderbookChannel>;
+}
+
+export interface SorafsOrderbookReceiptsResponse {
+  count: number;
+  receipts: ReadonlyArray<SorafsOrderbookReceipt>;
+}
+
+export interface SorafsOrderbookSubmitOptions {
+  canonicalAuth: CanonicalRequestAuth;
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+}
+
+export interface SorafsOrderbookSubmitResponse {
+  status: "accepted";
+  sequence: number;
+  open_order_count: number;
+  accepted_order: SorafsOrderbookOrder;
+  fills: ReadonlyArray<SorafsOrderbookFill>;
+  settlement_channels_opened: ReadonlyArray<SorafsOrderbookChannel>;
+  expired_order_ids_hex: ReadonlyArray<string>;
+}
+
+export interface SorafsOrderbookCancelResponse {
+  status: "cancelled";
+  reason: string;
+  open_order_count: number;
+  cancelled_order: SorafsOrderbookOrder;
+}
+
+export interface SorafsOrderbookReceiptSubmitResponse {
+  status: "accepted";
+  settlement_receipt_count: number;
+  open_settlement_channel_count: number;
+  accepted_receipt: SorafsOrderbookReceipt;
+  updated_channel: SorafsOrderbookChannel;
+}
+
+export interface SorafsOrderbookEvent {
+  sequence: number;
+  kind: SorafsOrderbookEventKind;
+  generated_at_unix: number;
+  order_id_hex: string | null;
+  trade_ids_hex: ReadonlyArray<string>;
+  settlement_channel_ids_hex: ReadonlyArray<string>;
+  receipt_id_hex: string | null;
+  expired_order_ids_hex: ReadonlyArray<string>;
+  open_order_count: number;
+  open_settlement_channel_count: number;
+  settlement_receipt_count: number;
+}
+
+export interface SorafsOrderbookEventsResponse {
+  since: number | null;
+  limit: number;
+  count: number;
+  next_since: number | null;
+  events: ReadonlyArray<SorafsOrderbookEvent>;
+}
+
 export interface SorafsReputationCacheOptions {
   ifNoneMatch?: string;
   etag?: string;
@@ -16869,6 +17332,10 @@ export declare function buildConnectWebSocketUrl(
   baseUrl: string,
   options: ConnectWebSocketParams,
 ): string;
+export declare function buildSorafsOrderbookEventsWebSocketUrl(
+  baseUrl: string,
+  options?: SorafsOrderbookEventsWebSocketParams,
+): string;
 
 export declare function buildRbcSampleRequest(
   session: SumeragiRbcSession,
@@ -16876,6 +17343,9 @@ export declare function buildRbcSampleRequest(
 ): RbcSampleRequestOptions;
 export declare function openConnectWebSocket<T = unknown>(
   options: ConnectWebSocketDialOptions<T>,
+): T;
+export declare function openSorafsOrderbookEventsWebSocket<T = unknown>(
+  options: SorafsOrderbookEventsWebSocketDialOptions<T>,
 ): T;
 
 export interface InstructionBuilders {
@@ -17333,6 +17803,45 @@ export declare class ToriiClient {
   iterateSorafsReplicationOrders(
     options?: SorafsReplicationListOptions & PaginationIteratorOptions,
   ): AsyncGenerator<SorafsReplicationOrderRecord, void, unknown>;
+  submitSorafsOrderbookOrder(
+    payload: BinaryLike | number[],
+    options: SorafsOrderbookSubmitOptions,
+  ): Promise<SorafsOrderbookSubmitResponse>;
+  submitSorafsOrderbookCancel(
+    payload: BinaryLike | number[],
+    options: SorafsOrderbookSubmitOptions,
+  ): Promise<SorafsOrderbookCancelResponse>;
+  submitSorafsOrderbookReceipt(
+    payload: BinaryLike | number[],
+    options: SorafsOrderbookSubmitOptions,
+  ): Promise<SorafsOrderbookReceiptSubmitResponse>;
+  getSorafsOrderbook(
+    options?: SorafsOrderbookReadOptions,
+  ): Promise<SorafsOrderbookBookResponse>;
+  listSorafsOrderbookTrades(
+    options?: SorafsOrderbookReadOptions,
+  ): Promise<SorafsOrderbookTradesResponse>;
+  listSorafsOrderbookChannels(
+    options?: SorafsOrderbookReadOptions,
+  ): Promise<SorafsOrderbookChannelsResponse>;
+  listSorafsOrderbookReceipts(
+    options?: SorafsOrderbookReadOptions,
+  ): Promise<SorafsOrderbookReceiptsResponse>;
+  listSorafsOrderbookEvents(
+    options?: SorafsOrderbookEventsOptions,
+  ): Promise<SorafsOrderbookEventsResponse | null>;
+  streamSorafsOrderbookEvents(
+    options?: SorafsOrderbookEventStreamOptions,
+  ): AsyncGenerator<ToriiSseEvent<SorafsOrderbookEvent>, void, unknown>;
+  buildSorafsOrderbookEventsWebSocketUrl(
+    options?: SorafsOrderbookEventsWebSocketParams,
+  ): string;
+  openSorafsOrderbookEventsWebSocket<T = unknown>(
+    options?: ClientSorafsOrderbookEventsWebSocketOptions<T>,
+  ): T;
+  streamSorafsOrderbookEventsWebSocket<T = unknown>(
+    options?: SorafsOrderbookEventsWebSocketStreamOptions<T>,
+  ): AsyncGenerator<ToriiWebSocketEvent<SorafsOrderbookEvent>, void, unknown>;
   getSorafsReputationLatest(
     options?: SorafsReputationCacheOptions,
   ): Promise<SorafsReputationSnapshotSummary | null>;

@@ -880,7 +880,10 @@ mod app {
             | SorafsCommand::Handshake(_)
             | SorafsCommand::Toolkit(_)
             | SorafsCommand::GuardDirectory(_)
+            | SorafsCommand::Appeals(_)
             | SorafsCommand::Gar(_)
+            | SorafsCommand::Transparency(_)
+            | SorafsCommand::Moderation(_)
             | SorafsCommand::Repair(_)
             | SorafsCommand::Gc(_)
             | SorafsCommand::Fetch(_) => false,

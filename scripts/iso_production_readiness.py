@@ -4706,13 +4706,16 @@ def _verify_receipt_summary(
         source_material_values = tuple(
             (field, receipt.get(field)) for field in source_material_fields
         )
-        if source_material_values and all(
-            isinstance(value, str) for _field, value in source_material_values
-        ):
-            source_material_signature = (receipt_kind, source_material_values)
+        string_source_material_values = tuple(
+            (field, value)
+            for field, value in source_material_values
+            if isinstance(value, str)
+        )
+        if string_source_material_values:
+            source_material_signature = (receipt_kind, string_source_material_values)
             if source_material_signature in seen_source_material_signatures:
                 first_offset = seen_source_material_signatures[source_material_signature]
-                for field, _value in source_material_values:
+                for field, _value in string_source_material_values:
                     code = source_material_code_by_field.get(field)
                     if code is None:
                         continue
@@ -4727,7 +4730,7 @@ def _verify_receipt_summary(
                     )
             else:
                 seen_source_material_signatures[source_material_signature] = offset
-            for field, value in source_material_values:
+            for field, value in string_source_material_values:
                 seen_for_field = seen_source_material_fields.setdefault(
                     (receipt_kind, field),
                     {},

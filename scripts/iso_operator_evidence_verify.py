@@ -2614,19 +2614,22 @@ def _verify_receipt_verifier_summary(
         source_material_values = tuple(
             (field, receipt_entry.get(field)) for field in source_material_fields
         )
-        if source_material_values and all(
-            isinstance(value, str) for _field, value in source_material_values
-        ):
-            source_material_signature = (entry_kind, source_material_values)
+        string_source_material_values = tuple(
+            (field, value)
+            for field, value in source_material_values
+            if isinstance(value, str)
+        )
+        if string_source_material_values:
+            source_material_signature = (entry_kind, string_source_material_values)
             if source_material_signature in seen_source_material_signatures:
                 first_offset = seen_source_material_signatures[source_material_signature]
-                field = source_material_values[0][0]
+                field = string_source_material_values[0][0]
                 raise EvidenceError(
                     f"{entry_label}.{field} duplicates "
                     f"{label}.receipts[{first_offset}].{field}"
                 )
             seen_source_material_signatures[source_material_signature] = offset
-            for field, value in source_material_values:
+            for field, value in string_source_material_values:
                 seen_for_field = seen_source_material_fields.setdefault(
                     (entry_kind, field),
                     {},

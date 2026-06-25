@@ -37,6 +37,8 @@ CLI commands:
 Operator features:
 - `sorafs_cli proof stream` reads NDJSON, verifies PoR samples locally, and
   records a summary JSON blob for CI/governance archives.
+- Torii validates PoR/PDP `sample_count` in the shared request envelope and
+  rejects values outside `1..=500` before manifest lookup.
 - `--governance-evidence-dir` copies the manifest, metadata, and proof summary
   into a deterministic evidence directory.
 - `--max-failures` and `--max-verification-failures` let rehearsals tolerate a
@@ -64,7 +66,7 @@ Operator features:
       manifest_digest: Hash,
       provider_id: ProviderId,
       proof_kind: ProofKind,         // Por | Pdp | Potr
-      sample_count: Option<u32>,     // Required for PoR/PDP
+      sample_count: Option<u32>,     // Required for PoR/PDP; 1..=500
       deadline_ms: Option<u32>,      // Required for PoTR
       nonce: [u8; 16],               // Client-supplied to prevent replay
       orchestrator_job_id: Option<Uuid>,

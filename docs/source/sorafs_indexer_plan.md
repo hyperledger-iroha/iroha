@@ -8,7 +8,9 @@ summary: SFM-1 indexer architecture, implemented provider-discovery baseline, an
 > **Status (Jun 2026):** The local provider-discovery baseline is implemented:
 > Torii ingests signed `ProviderAdvertV1` payloads at
 > `/v1/sorafs/providers/advert`, serves the current in-memory advert cache at
-> `/v1/sorafs/providers`, validates chunk-range capability metadata, and exports
+> `/v1/sorafs/providers`, exposes configured gateway/pin Torii peers at
+> `/v1/sorafs/storage/peers`, bounds both local readback arrays with `limit`,
+> validates chunk-range capability metadata, and exports
 > range-capability telemetry. The IPNI-compatible `/routing/v1/*` delegated
 > routing indexer described below remains a future service/deployment track, not
 > a local Torii endpoint available today.
@@ -20,7 +22,9 @@ summary: SFM-1 indexer architecture, implemented provider-discovery baseline, an
 
 ## Components
 - Implemented baseline: Torii provider advert ingest/list endpoints,
-  in-memory TTL pruning, capability validation, and range-capability metrics.
+  in-memory TTL pruning, capability validation, range-capability metrics, and
+  `limit`-bounded provider/configured-peer list readback with full counts plus
+  returned-count/truncation metadata.
 - Future service: governance-DAG ingest pipeline for adverts/proofs.
 - Future service: API endpoints (`/routing/v1/find`, etc.).
 - Future service: durable caching layer and regional TTL policies.

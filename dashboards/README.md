@@ -25,8 +25,8 @@ parity/CI dashboards that feed the roadmap and `status.md`.
   admission outcomes, stale refresh debt, missing envelopes, and downgrade
   warning reasons.
 - `grafana/sorafs_appeal_finance.json` — Grafana board for SoraFS appeal finance
-  report/weekly-rollup publication freshness, failures, payload bytes, and DAG
-  backlog using the Governance DAG publication metrics.
+  report/weekly-rollup/settlement-receipt publication freshness, failures,
+  payload bytes, and DAG backlog using the Governance DAG publication metrics.
 - `alerts/fastpq_acceleration_rules.yml` + `alerts/tests/fastpq_acceleration_rules.test.yml`
   — Alerting pack and promtool coverage for Metal downgrades/fallback bursts.
 - `alerts/sorafs_provider_admission_rules.yml` +
@@ -35,8 +35,9 @@ parity/CI dashboards that feed the roadmap and `status.md`.
   material, policy reject spikes, and downgrade-warning bursts.
 - `alerts/sorafs_appeal_finance_rules.yml` +
   `alerts/tests/sorafs_appeal_finance_rules.test.yml` — Alerting pack and
-  promtool coverage for appeal finance report/weekly-rollup publication
-  failures, stale finance reports, stale weekly rollups, and lagging rollups.
+  promtool coverage for appeal finance report/weekly-rollup/settlement-receipt
+  publication failures, stale finance reports, stale weekly rollups, stale
+  settlement receipts, lagging rollups, and receipt/report lag.
 
 The JSON structure for these dashboards is documented in
 `docs/source/references/ios_metrics.md`. Exporters should populate real feeds in

@@ -885,6 +885,15 @@ fn minimal_config_snapshot() {
                         default_rate_limit_bytes: 8388608,
                         default_requests_per_minute: 120,
                     },
+                    orderbook: SorafsOrderbook {
+                        min_order_gib: 1,
+                        price_tick_micro_xor: 1000,
+                    },
+                    privacy_aggregates: SorafsPrivacyAggregateSchedule {
+                        enabled: false,
+                        cycle_seconds: 604800,
+                        publish_delay_seconds: 3600,
+                    },
                     governance_dag_dir: None,
                     governance_dag_publisher_peer_id: None,
                     governance_dag_signing_key_path: None,
@@ -1034,6 +1043,11 @@ fn minimal_config_snapshot() {
                     response_window_secs: 900,
                     governance_dag_dir: "./storage/sorafs/governance",
                     randomness_seed: None,
+                },
+                sorafs_appeal_finance_settlement: SorafsAppealFinanceSettlement {
+                    submitter_signers: [],
+                    worker_scan_interval: 30s,
+                    worker_max_retry_attempts: 3,
                 },
                 transport: ToriiTransport {
                     trusted_proxy_cidrs: [],

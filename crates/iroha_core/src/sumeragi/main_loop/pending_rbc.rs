@@ -472,13 +472,18 @@ impl Actor {
     pub(super) fn clear_pending_rbc(&mut self, key: &SessionKey) {
         if let Some(pending) = self.subsystems.da_rbc.rbc.pending.remove(key) {
             self.release_pending_rbc_dedup(&pending);
+            self.publish_rbc_backlog_snapshot();
         }
     }
 
     pub(super) fn clear_all_pending_rbc(&mut self) {
         let pending = std::mem::take(&mut self.subsystems.da_rbc.rbc.pending);
+        let had_pending = !pending.is_empty();
         for pending in pending.into_values() {
             self.release_pending_rbc_dedup(&pending);
+        }
+        if had_pending {
+            self.publish_rbc_backlog_snapshot();
         }
     }
 
@@ -487,6 +492,7 @@ impl Actor {
             return Ok(());
         };
         self.release_pending_rbc_dedup(&pending);
+        self.publish_rbc_backlog_snapshot();
 
         for entry in pending.chunks {
             self.handle_rbc_chunk(entry.chunk, entry.sender)?;

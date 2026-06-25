@@ -111,6 +111,8 @@ sorafs_cli proof stream \
 
 - Emits NDJSON items for each streamed proof (replay disabled with
   `--emit-events=false`).
+- PoR `--samples` defaults to `32` and must not exceed `500`; gateways reject
+  oversized proof-stream requests before manifest lookup.
 - Aggregates success/failure counts, latency histogram, and sampled failures in
   the summary JSON so dashboards can plot outcomes without scraping logs.
 - Exits non-zero when the gateway reports any failures or when local PoR

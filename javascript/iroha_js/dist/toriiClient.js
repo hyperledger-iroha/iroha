@@ -458,6 +458,60 @@ const SORAFS_REPUTATION_STREAM_OPTION_KEYS = new Set([
   "limit",
   "lastEventId",
 ]);
+const SORAFS_ORDERBOOK_READ_OPTION_KEYS = new Set(["headers"]);
+const SORAFS_ORDERBOOK_SUBMIT_OPTION_KEYS = new Set([
+  "canonicalAuth",
+  "headers",
+]);
+const SORAFS_ORDERBOOK_EVENT_OPTION_KEYS = new Set([
+  "since",
+  "limit",
+  "ifNoneMatch",
+  "etag",
+  "headers",
+]);
+const SORAFS_ORDERBOOK_STREAM_OPTION_KEYS = new Set([
+  "since",
+  "limit",
+  "lastEventId",
+]);
+const SORAFS_ORDERBOOK_WEBSOCKET_OPTION_KEYS = new Set([
+  "since",
+  "limit",
+  "endpointPath",
+]);
+const SORAFS_ORDERBOOK_WEBSOCKET_DIAL_OPTION_KEYS = new Set([
+  "since",
+  "limit",
+  "endpointPath",
+  "protocols",
+  "websocketOptions",
+  "WebSocketImpl",
+]);
+const SORAFS_ORDERBOOK_WEBSOCKET_STREAM_OPTION_KEYS = new Set([
+  "since",
+  "limit",
+  "endpointPath",
+  "protocols",
+  "websocketOptions",
+  "WebSocketImpl",
+  "signal",
+  "closeOnReturn",
+]);
+const SORAFS_ORDERBOOK_SIDE_VALUES = new Set(["bid", "ask"]);
+const SORAFS_ORDERBOOK_TIER_VALUES = new Set(["hot", "warm", "archive"]);
+const SORAFS_ORDERBOOK_CHANNEL_STATUS_VALUES = new Set([
+  "open",
+  "closing",
+  "closed",
+  "breached",
+  "refunded",
+]);
+const SORAFS_ORDERBOOK_EVENT_KIND_VALUES = new Set([
+  "order_accepted",
+  "order_cancelled",
+  "settlement_receipt_accepted",
+]);
 const ITERABLE_QUERY_OPTION_KEYS = new Set([
   "limit",
   "offset",
@@ -2819,6 +2873,305 @@ export class ToriiClient {
       options,
       SORAFS_REPLICATION_ITERATOR_OPTION_KEYS,
       ["replication_orders"],
+    );
+  }
+
+  /**
+   * Submit canonical Norito `OrderRequestV1` bytes to the local SoraFS orderbook mirror.
+   * The payload must already carry its embedded orderbook signature; `canonicalAuth`
+   * signs the Torii request envelope over these exact bytes.
+   * @param {Buffer|Uint8Array|ArrayBuffer|ArrayBufferView|number[]} payload
+   * @param {{canonicalAuth: CanonicalRequestAuth, headers?: Record<string, string>, signal?: AbortSignal}} [options]
+   * @returns {Promise<SorafsOrderbookSubmitResponse>}
+   */
+  async submitSorafsOrderbookOrder(payload, options = {}) {
+    return this._submitSorafsOrderbookPayload(
+      "/v1/sorafs/orderbook/orders",
+      payload,
+      options,
+      "submitSorafsOrderbookOrder",
+      normalizeSorafsOrderbookSubmitResponse,
+    );
+  }
+
+  /**
+   * Submit canonical Norito `OrderCancelV1` bytes to the local SoraFS orderbook mirror.
+   * @param {Buffer|Uint8Array|ArrayBuffer|ArrayBufferView|number[]} payload
+   * @param {{canonicalAuth: CanonicalRequestAuth, headers?: Record<string, string>, signal?: AbortSignal}} [options]
+   * @returns {Promise<SorafsOrderbookCancelResponse>}
+   */
+  async submitSorafsOrderbookCancel(payload, options = {}) {
+    return this._submitSorafsOrderbookPayload(
+      "/v1/sorafs/orderbook/cancel",
+      payload,
+      options,
+      "submitSorafsOrderbookCancel",
+      normalizeSorafsOrderbookCancelResponse,
+    );
+  }
+
+  /**
+   * Submit canonical Norito `SettlementReceiptV1` bytes to the local SoraFS orderbook mirror.
+   * @param {Buffer|Uint8Array|ArrayBuffer|ArrayBufferView|number[]} payload
+   * @param {{canonicalAuth: CanonicalRequestAuth, headers?: Record<string, string>, signal?: AbortSignal}} [options]
+   * @returns {Promise<SorafsOrderbookReceiptSubmitResponse>}
+   */
+  async submitSorafsOrderbookReceipt(payload, options = {}) {
+    return this._submitSorafsOrderbookPayload(
+      "/v1/sorafs/orderbook/receipts",
+      payload,
+      options,
+      "submitSorafsOrderbookReceipt",
+      normalizeSorafsOrderbookReceiptSubmitResponse,
+    );
+  }
+
+  /**
+   * Fetch the local SoraFS orderbook mirror snapshot.
+   * @param {{headers?: Record<string, string>, signal?: AbortSignal}} [options]
+   * @returns {Promise<SorafsOrderbookBookResponse>}
+   */
+  async getSorafsOrderbook(options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "getSorafsOrderbook",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      SORAFS_ORDERBOOK_READ_OPTION_KEYS,
+      "getSorafsOrderbook options",
+    );
+    const response = await this._request("GET", "/v1/sorafs/orderbook/book", {
+      headers: buildSorafsOrderbookHeaders(rest, "getSorafsOrderbook"),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("sorafs orderbook book endpoint returned no payload");
+    }
+    return normalizeSorafsOrderbookBookResponse(payload);
+  }
+
+  /**
+   * List trades emitted by the local SoraFS orderbook mirror.
+   * @param {{headers?: Record<string, string>, signal?: AbortSignal}} [options]
+   * @returns {Promise<SorafsOrderbookTradesResponse>}
+   */
+  async listSorafsOrderbookTrades(options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "listSorafsOrderbookTrades",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      SORAFS_ORDERBOOK_READ_OPTION_KEYS,
+      "listSorafsOrderbookTrades options",
+    );
+    const response = await this._request("GET", "/v1/sorafs/orderbook/trades", {
+      headers: buildSorafsOrderbookHeaders(rest, "listSorafsOrderbookTrades"),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("sorafs orderbook trades endpoint returned no payload");
+    }
+    return normalizeSorafsOrderbookListResponse(
+      payload,
+      "trades",
+      normalizeSorafsOrderbookTrade,
+      "sorafs orderbook trades response",
+    );
+  }
+
+  /**
+   * List settlement channels opened by the local SoraFS orderbook mirror.
+   * @param {{headers?: Record<string, string>, signal?: AbortSignal}} [options]
+   * @returns {Promise<SorafsOrderbookChannelsResponse>}
+   */
+  async listSorafsOrderbookChannels(options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "listSorafsOrderbookChannels",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      SORAFS_ORDERBOOK_READ_OPTION_KEYS,
+      "listSorafsOrderbookChannels options",
+    );
+    const response = await this._request("GET", "/v1/sorafs/orderbook/channels", {
+      headers: buildSorafsOrderbookHeaders(rest, "listSorafsOrderbookChannels"),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("sorafs orderbook channels endpoint returned no payload");
+    }
+    return normalizeSorafsOrderbookListResponse(
+      payload,
+      "channels",
+      normalizeSorafsOrderbookChannel,
+      "sorafs orderbook channels response",
+    );
+  }
+
+  /**
+   * List settlement receipts accepted by the local SoraFS orderbook mirror.
+   * @param {{headers?: Record<string, string>, signal?: AbortSignal}} [options]
+   * @returns {Promise<SorafsOrderbookReceiptsResponse>}
+   */
+  async listSorafsOrderbookReceipts(options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "listSorafsOrderbookReceipts",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      SORAFS_ORDERBOOK_READ_OPTION_KEYS,
+      "listSorafsOrderbookReceipts options",
+    );
+    const response = await this._request("GET", "/v1/sorafs/orderbook/receipts", {
+      headers: buildSorafsOrderbookHeaders(rest, "listSorafsOrderbookReceipts"),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("sorafs orderbook receipts endpoint returned no payload");
+    }
+    return normalizeSorafsOrderbookListResponse(
+      payload,
+      "receipts",
+      normalizeSorafsOrderbookReceipt,
+      "sorafs orderbook receipts response",
+    );
+  }
+
+  /**
+   * List replayable local SoraFS orderbook events.
+   * Returns `null` when `If-None-Match` returns 304.
+   * @param {{since?: number | string | bigint, limit?: number | string | bigint, ifNoneMatch?: string, etag?: string, headers?: Record<string, string>, signal?: AbortSignal}} [options]
+   * @returns {Promise<SorafsOrderbookEventsResponse | null>}
+   */
+  async listSorafsOrderbookEvents(options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "listSorafsOrderbookEvents",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      SORAFS_ORDERBOOK_EVENT_OPTION_KEYS,
+      "listSorafsOrderbookEvents options",
+    );
+    const response = await this._request("GET", "/v1/sorafs/orderbook/events", {
+      headers: buildSorafsOrderbookHeaders(rest, "listSorafsOrderbookEvents", {
+        cache: true,
+      }),
+      params: buildSorafsOrderbookEventsParams(
+        {
+          since: rest.since,
+          limit: rest.limit,
+        },
+        "listSorafsOrderbookEvents",
+      ),
+      signal,
+    });
+    await this._expectStatus(response, [200, 304]);
+    if (response.status === 304) {
+      return null;
+    }
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("sorafs orderbook events endpoint returned no payload");
+    }
+    return normalizeSorafsOrderbookEventsResponse(payload);
+  }
+
+  /**
+   * Stream replayed and live local SoraFS orderbook events via SSE.
+   * @param {{since?: number | string | bigint, limit?: number | string | bigint, lastEventId?: string, signal?: AbortSignal}} [options]
+   * @returns {AsyncGenerator<SseEvent<SorafsOrderbookEvent>, void, unknown>}
+   */
+  streamSorafsOrderbookEvents(options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "streamSorafsOrderbookEvents",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      SORAFS_ORDERBOOK_STREAM_OPTION_KEYS,
+      "streamSorafsOrderbookEvents options",
+    );
+    const params = buildSorafsOrderbookEventsParams(
+      {
+        since: rest.since,
+        limit: rest.limit,
+      },
+      "streamSorafsOrderbookEvents",
+    );
+    const streamOptions = { params, signal };
+    if (rest.lastEventId !== undefined && rest.lastEventId !== null) {
+      streamOptions.lastEventId = requireNonEmptyString(
+        rest.lastEventId,
+        "streamSorafsOrderbookEvents.lastEventId",
+      );
+    }
+    return normalizeSorafsOrderbookEventStream(
+      this._streamSse("/v1/sorafs/orderbook/events/stream", streamOptions),
+    );
+  }
+
+  /**
+   * Build a WebSocket URL for the local SoraFS orderbook event stream.
+   * @param {{since?: number | string | bigint, limit?: number | string | bigint, endpointPath?: string}} [options]
+   * @returns {string}
+   */
+  buildSorafsOrderbookEventsWebSocketUrl(options = {}) {
+    return buildSorafsOrderbookEventsWebSocketUrlInternal(
+      this._baseUrl,
+      options,
+      "ToriiClient.buildSorafsOrderbookEventsWebSocketUrl",
+    );
+  }
+
+  /**
+   * Open the local SoraFS orderbook event WebSocket.
+   * @template [T=unknown]
+   * @param {{since?: number | string | bigint, limit?: number | string | bigint, endpointPath?: string, protocols?: string | string[], websocketOptions?: unknown, WebSocketImpl?: typeof WebSocket}} [options]
+   * @returns {T}
+   */
+  openSorafsOrderbookEventsWebSocket(options = {}) {
+    return openSorafsOrderbookEventsWebSocketInternal(
+      { ...options, baseUrl: this._baseUrl },
+      "ToriiClient.openSorafsOrderbookEventsWebSocket",
+    );
+  }
+
+  /**
+   * Stream local SoraFS orderbook events from the WebSocket JSON frame route.
+   * @param {{since?: number | string | bigint, limit?: number | string | bigint, endpointPath?: string, protocols?: string | string[], websocketOptions?: unknown, WebSocketImpl?: typeof WebSocket, signal?: AbortSignal, closeOnReturn?: boolean}} [options]
+   * @returns {AsyncGenerator<WebSocketEventFrame<SorafsOrderbookEvent>, void, unknown>}
+   */
+  streamSorafsOrderbookEventsWebSocket(options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "streamSorafsOrderbookEventsWebSocket",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      SORAFS_ORDERBOOK_WEBSOCKET_STREAM_OPTION_KEYS,
+      "streamSorafsOrderbookEventsWebSocket options",
+    );
+    const { closeOnReturn, ...dialOptions } = rest;
+    const socket = this.openSorafsOrderbookEventsWebSocket(dialOptions);
+    return normalizeSorafsOrderbookWebSocketEventStream(
+      streamWebSocketJsonEvents(socket, {
+        signal,
+        closeOnReturn,
+        context: "streamSorafsOrderbookEventsWebSocket",
+      }),
     );
   }
 
@@ -9552,6 +9905,46 @@ export class ToriiClient {
       }
     }
     return params;
+  }
+
+  async _submitSorafsOrderbookPayload(path, payload, options, context, normalizer) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, context);
+    assertSupportedOptionKeys(
+      rest,
+      SORAFS_ORDERBOOK_SUBMIT_OPTION_KEYS,
+      `${context} options`,
+    );
+    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(
+      rest.canonicalAuth,
+      `${context}.canonicalAuth`,
+    );
+    if (!canonicalAuth) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.canonicalAuth is required`,
+        `${context}.canonicalAuth`,
+      );
+    }
+    const body = toBuffer(payload);
+    if (body.length === 0) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.payload must not be empty`,
+        `${context}.payload`,
+      );
+    }
+    const response = await this._request("POST", path, {
+      headers: buildSorafsOrderbookSubmitHeaders(rest, context),
+      body,
+      signal,
+      canonicalAuth,
+    });
+    await this._expectStatus(response, [200]);
+    const responsePayload = await this._maybeJson(response);
+    if (!responsePayload) {
+      throw new Error(`${context} endpoint returned no payload`);
+    }
+    return normalizer(responsePayload);
   }
 
   /**
@@ -23242,6 +23635,681 @@ function buildSorafsReputationEventsParams(options = {}, context) {
   return Object.keys(params).length === 0 ? undefined : params;
 }
 
+function buildSorafsOrderbookHeaders(options = {}, context, { cache = false } = {}) {
+  const headers = { Accept: "application/json" };
+  if (options.headers !== undefined && options.headers !== null) {
+    if (!isPlainObject(options.headers)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.headers must be an object`,
+        `${context}.headers`,
+      );
+    }
+    for (const [key, value] of Object.entries(options.headers)) {
+      if (value !== undefined && value !== null) {
+        headers[key] = String(value);
+      }
+    }
+  }
+  if (!cache) {
+    return headers;
+  }
+  if (
+    options.ifNoneMatch !== undefined &&
+    options.ifNoneMatch !== null &&
+    options.etag !== undefined &&
+    options.etag !== null
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} accepts only one of ifNoneMatch or etag`,
+      `${context}.ifNoneMatch`,
+    );
+  }
+  const ifNoneMatch = options.ifNoneMatch ?? options.etag;
+  if (ifNoneMatch !== undefined && ifNoneMatch !== null) {
+    headers["If-None-Match"] = requireNonEmptyString(
+      ifNoneMatch,
+      `${context}.ifNoneMatch`,
+    );
+  }
+  return headers;
+}
+
+function buildSorafsOrderbookSubmitHeaders(options = {}, context) {
+  return {
+    ...buildSorafsOrderbookHeaders(options, context),
+    "Content-Type": "application/octet-stream",
+  };
+}
+
+function buildSorafsOrderbookEventsParams(options = {}, context) {
+  return buildSorafsReputationEventsParams(options, context);
+}
+
+function normalizeSorafsOrderbookBookResponse(
+  payload,
+  context = "sorafs orderbook book response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    schema: requireNonEmptyString(record.schema, `${context}.schema`),
+    source: requireNonEmptyString(record.source, `${context}.source`),
+    generated_at_unix: ToriiClient._normalizeUnsignedInteger(
+      record.generated_at_unix,
+      `${context}.generated_at_unix`,
+      { allowZero: true },
+    ),
+    next_sequence: ToriiClient._normalizeUnsignedInteger(
+      record.next_sequence,
+      `${context}.next_sequence`,
+      { allowZero: true },
+    ),
+    open_order_count: ToriiClient._normalizeUnsignedInteger(
+      record.open_order_count,
+      `${context}.open_order_count`,
+      { allowZero: true },
+    ),
+    trade_count: ToriiClient._normalizeUnsignedInteger(
+      record.trade_count,
+      `${context}.trade_count`,
+      { allowZero: true },
+    ),
+    settlement_channel_count: ToriiClient._normalizeUnsignedInteger(
+      record.settlement_channel_count,
+      `${context}.settlement_channel_count`,
+      { allowZero: true },
+    ),
+    settlement_receipt_count: ToriiClient._normalizeUnsignedInteger(
+      record.settlement_receipt_count,
+      `${context}.settlement_receipt_count`,
+      { allowZero: true },
+    ),
+    depth: normalizeSorafsOrderbookDepth(record.depth, `${context}.depth`),
+    open_orders: normalizeSorafsOrderbookArray(
+      record.open_orders,
+      `${context}.open_orders`,
+      normalizeSorafsOrderbookEntry,
+    ),
+    trades: normalizeSorafsOrderbookArray(
+      record.trades,
+      `${context}.trades`,
+      normalizeSorafsOrderbookTrade,
+    ),
+    settlement_channels: normalizeSorafsOrderbookArray(
+      record.settlement_channels,
+      `${context}.settlement_channels`,
+      normalizeSorafsOrderbookChannel,
+    ),
+    settlement_receipts: normalizeSorafsOrderbookArray(
+      record.settlement_receipts,
+      `${context}.settlement_receipts`,
+      normalizeSorafsOrderbookReceipt,
+    ),
+    expired_order_ids_hex: normalizeSorafsOrderbookHexList(
+      record.expired_order_ids_hex,
+      `${context}.expired_order_ids_hex`,
+    ),
+  };
+}
+
+function normalizeSorafsOrderbookListResponse(payload, field, normalizer, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  const items = normalizeSorafsOrderbookArray(record[field], `${context}.${field}`, normalizer);
+  return {
+    count: ToriiClient._normalizeUnsignedInteger(record.count, `${context}.count`, {
+      allowZero: true,
+    }),
+    [field]: items,
+  };
+}
+
+function normalizeSorafsOrderbookSubmitResponse(
+  payload,
+  context = "sorafs orderbook submit response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    status: normalizeSorafsOrderbookStatus(record.status, "accepted", `${context}.status`),
+    sequence: ToriiClient._normalizeUnsignedInteger(record.sequence, `${context}.sequence`, {
+      allowZero: true,
+    }),
+    open_order_count: ToriiClient._normalizeUnsignedInteger(
+      record.open_order_count,
+      `${context}.open_order_count`,
+      { allowZero: true },
+    ),
+    accepted_order: normalizeSorafsOrderbookOrder(
+      record.accepted_order,
+      `${context}.accepted_order`,
+    ),
+    fills: normalizeSorafsOrderbookArray(
+      record.fills,
+      `${context}.fills`,
+      normalizeSorafsOrderbookFill,
+    ),
+    settlement_channels_opened: normalizeSorafsOrderbookArray(
+      record.settlement_channels_opened,
+      `${context}.settlement_channels_opened`,
+      normalizeSorafsOrderbookChannel,
+    ),
+    expired_order_ids_hex: normalizeSorafsOrderbookHexList(
+      record.expired_order_ids_hex,
+      `${context}.expired_order_ids_hex`,
+    ),
+  };
+}
+
+function normalizeSorafsOrderbookCancelResponse(
+  payload,
+  context = "sorafs orderbook cancel response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    status: normalizeSorafsOrderbookStatus(record.status, "cancelled", `${context}.status`),
+    reason: requireNonEmptyString(record.reason, `${context}.reason`),
+    open_order_count: ToriiClient._normalizeUnsignedInteger(
+      record.open_order_count,
+      `${context}.open_order_count`,
+      { allowZero: true },
+    ),
+    cancelled_order: normalizeSorafsOrderbookOrder(
+      record.cancelled_order,
+      `${context}.cancelled_order`,
+    ),
+  };
+}
+
+function normalizeSorafsOrderbookReceiptSubmitResponse(
+  payload,
+  context = "sorafs orderbook receipt submit response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    status: normalizeSorafsOrderbookStatus(record.status, "accepted", `${context}.status`),
+    settlement_receipt_count: ToriiClient._normalizeUnsignedInteger(
+      record.settlement_receipt_count,
+      `${context}.settlement_receipt_count`,
+      { allowZero: true },
+    ),
+    open_settlement_channel_count: ToriiClient._normalizeUnsignedInteger(
+      record.open_settlement_channel_count,
+      `${context}.open_settlement_channel_count`,
+      { allowZero: true },
+    ),
+    accepted_receipt: normalizeSorafsOrderbookReceipt(
+      record.accepted_receipt,
+      `${context}.accepted_receipt`,
+    ),
+    updated_channel: normalizeSorafsOrderbookChannel(
+      record.updated_channel,
+      `${context}.updated_channel`,
+    ),
+  };
+}
+
+function normalizeSorafsOrderbookStatus(value, expected, context) {
+  const status = requireNonEmptyString(value, context);
+  if (status !== expected) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} must be ${expected}`,
+      context,
+    );
+  }
+  return status;
+}
+
+function normalizeSorafsOrderbookFill(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    trade: normalizeSorafsOrderbookTrade(record.trade, `${context}.trade`),
+    maker_remaining_gib: ToriiClient._normalizeUnsignedInteger(
+      record.maker_remaining_gib,
+      `${context}.maker_remaining_gib`,
+      { allowZero: true },
+    ),
+    taker_remaining_gib: ToriiClient._normalizeUnsignedInteger(
+      record.taker_remaining_gib,
+      `${context}.taker_remaining_gib`,
+      { allowZero: true },
+    ),
+    gross_value_micro_xor: normalizeSorafsOrderbookDecimalString(
+      record.gross_value_micro_xor,
+      `${context}.gross_value_micro_xor`,
+    ),
+  };
+}
+
+function normalizeSorafsOrderbookEventsResponse(
+  payload,
+  context = "sorafs orderbook events response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    since:
+      record.since === undefined || record.since === null
+        ? null
+        : ToriiClient._normalizeUnsignedInteger(record.since, `${context}.since`, {
+            allowZero: true,
+          }),
+    limit: ToriiClient._normalizeUnsignedInteger(record.limit, `${context}.limit`, {
+      allowZero: false,
+    }),
+    count: ToriiClient._normalizeUnsignedInteger(record.count, `${context}.count`, {
+      allowZero: true,
+    }),
+    next_since:
+      record.next_since === undefined || record.next_since === null
+        ? null
+        : ToriiClient._normalizeUnsignedInteger(
+            record.next_since,
+            `${context}.next_since`,
+            { allowZero: true },
+          ),
+    events: normalizeSorafsOrderbookArray(
+      record.events,
+      `${context}.events`,
+      normalizeSorafsOrderbookEvent,
+    ),
+  };
+}
+
+async function* normalizeSorafsOrderbookEventStream(events) {
+  for await (const event of events) {
+    if (
+      event?.event !== "lagged" &&
+      event?.data &&
+      typeof event.data === "object" &&
+      !Array.isArray(event.data)
+    ) {
+      yield {
+        ...event,
+        data: normalizeSorafsOrderbookEvent(
+          event.data,
+          `sorafs orderbook stream event${event.id ? ` ${event.id}` : ""}`,
+        ),
+      };
+    } else {
+      yield event;
+    }
+  }
+}
+
+async function* normalizeSorafsOrderbookWebSocketEventStream(events) {
+  for await (const event of events) {
+    if (
+      event?.event !== "lagged" &&
+      event?.data &&
+      typeof event.data === "object" &&
+      !Array.isArray(event.data)
+    ) {
+      yield {
+        ...event,
+        data: normalizeSorafsOrderbookEvent(
+          event.data,
+          `sorafs orderbook websocket event ${event.event ?? ""}`.trim(),
+        ),
+      };
+    } else {
+      yield event;
+    }
+  }
+}
+
+function normalizeSorafsOrderbookDepth(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    hot_bid_gib: ToriiClient._normalizeUnsignedInteger(
+      record.hot_bid_gib,
+      `${context}.hot_bid_gib`,
+      { allowZero: true },
+    ),
+    hot_ask_gib: ToriiClient._normalizeUnsignedInteger(
+      record.hot_ask_gib,
+      `${context}.hot_ask_gib`,
+      { allowZero: true },
+    ),
+    warm_bid_gib: ToriiClient._normalizeUnsignedInteger(
+      record.warm_bid_gib,
+      `${context}.warm_bid_gib`,
+      { allowZero: true },
+    ),
+    warm_ask_gib: ToriiClient._normalizeUnsignedInteger(
+      record.warm_ask_gib,
+      `${context}.warm_ask_gib`,
+      { allowZero: true },
+    ),
+    archive_bid_gib: ToriiClient._normalizeUnsignedInteger(
+      record.archive_bid_gib,
+      `${context}.archive_bid_gib`,
+      { allowZero: true },
+    ),
+    archive_ask_gib: ToriiClient._normalizeUnsignedInteger(
+      record.archive_ask_gib,
+      `${context}.archive_ask_gib`,
+      { allowZero: true },
+    ),
+  };
+}
+
+function normalizeSorafsOrderbookEntry(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    sequence: ToriiClient._normalizeUnsignedInteger(record.sequence, `${context}.sequence`, {
+      allowZero: true,
+    }),
+    order: normalizeSorafsOrderbookOrder(record.order, `${context}.order`),
+  };
+}
+
+function normalizeSorafsOrderbookOrder(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    order_id_hex: normalizeHex32String(record.order_id_hex, `${context}.order_id_hex`),
+    side: normalizeSorafsOrderbookLabel(
+      record.side,
+      SORAFS_ORDERBOOK_SIDE_VALUES,
+      `${context}.side`,
+    ),
+    tier: normalizeSorafsOrderbookLabel(
+      record.tier,
+      SORAFS_ORDERBOOK_TIER_VALUES,
+      `${context}.tier`,
+    ),
+    price_per_gib_micro_xor: normalizeSorafsOrderbookDecimalString(
+      record.price_per_gib_micro_xor,
+      `${context}.price_per_gib_micro_xor`,
+    ),
+    quantity_gib: ToriiClient._normalizeUnsignedInteger(
+      record.quantity_gib,
+      `${context}.quantity_gib`,
+      { allowZero: true },
+    ),
+    remaining_gib: ToriiClient._normalizeUnsignedInteger(
+      record.remaining_gib,
+      `${context}.remaining_gib`,
+      { allowZero: true },
+    ),
+    owner_account_hex: normalizeHexBytesString(
+      record.owner_account_hex,
+      `${context}.owner_account_hex`,
+    ),
+    expiry_unix: ToriiClient._normalizeUnsignedInteger(
+      record.expiry_unix,
+      `${context}.expiry_unix`,
+      { allowZero: true },
+    ),
+    nonce: ToriiClient._normalizeUnsignedInteger(record.nonce, `${context}.nonce`, {
+      allowZero: true,
+    }),
+    maker_fee_bps: ToriiClient._normalizeUnsignedInteger(
+      record.maker_fee_bps,
+      `${context}.maker_fee_bps`,
+      { allowZero: true },
+    ),
+    taker_fee_bps: ToriiClient._normalizeUnsignedInteger(
+      record.taker_fee_bps,
+      `${context}.taker_fee_bps`,
+      { allowZero: true },
+    ),
+    signature: normalizeSorafsOrderbookSignature(record.signature, `${context}.signature`),
+  };
+}
+
+function normalizeSorafsOrderbookSignature(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    algorithm: requireNonEmptyString(record.algorithm, `${context}.algorithm`),
+    public_key_hex: normalizeHexBytesString(record.public_key_hex, `${context}.public_key_hex`),
+    signature_hex: normalizeHexBytesString(record.signature_hex, `${context}.signature_hex`),
+  };
+}
+
+function normalizeSorafsOrderbookTrade(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    trade_id_hex: normalizeHex32String(record.trade_id_hex, `${context}.trade_id_hex`),
+    maker_order_id_hex: normalizeHex32String(
+      record.maker_order_id_hex,
+      `${context}.maker_order_id_hex`,
+    ),
+    taker_order_id_hex: normalizeHex32String(
+      record.taker_order_id_hex,
+      `${context}.taker_order_id_hex`,
+    ),
+    tier: normalizeSorafsOrderbookLabel(
+      record.tier,
+      SORAFS_ORDERBOOK_TIER_VALUES,
+      `${context}.tier`,
+    ),
+    price_per_gib_micro_xor: normalizeSorafsOrderbookDecimalString(
+      record.price_per_gib_micro_xor,
+      `${context}.price_per_gib_micro_xor`,
+    ),
+    filled_gib: ToriiClient._normalizeUnsignedInteger(
+      record.filled_gib,
+      `${context}.filled_gib`,
+      { allowZero: true },
+    ),
+    maker_fee_micro_xor: normalizeSorafsOrderbookDecimalString(
+      record.maker_fee_micro_xor,
+      `${context}.maker_fee_micro_xor`,
+    ),
+    taker_fee_micro_xor: normalizeSorafsOrderbookDecimalString(
+      record.taker_fee_micro_xor,
+      `${context}.taker_fee_micro_xor`,
+    ),
+    timestamp_unix: ToriiClient._normalizeUnsignedInteger(
+      record.timestamp_unix,
+      `${context}.timestamp_unix`,
+      { allowZero: true },
+    ),
+  };
+}
+
+function normalizeSorafsOrderbookChannel(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    channel_id_hex: normalizeHex32String(record.channel_id_hex, `${context}.channel_id_hex`),
+    trade_id_hex: normalizeHex32String(record.trade_id_hex, `${context}.trade_id_hex`),
+    buyer_account_hex: normalizeHexBytesString(
+      record.buyer_account_hex,
+      `${context}.buyer_account_hex`,
+    ),
+    provider_id_hex: normalizeHex32String(record.provider_id_hex, `${context}.provider_id_hex`),
+    total_bytes: ToriiClient._normalizeUnsignedInteger(
+      record.total_bytes,
+      `${context}.total_bytes`,
+      { allowZero: true },
+    ),
+    remaining_bytes: ToriiClient._normalizeUnsignedInteger(
+      record.remaining_bytes,
+      `${context}.remaining_bytes`,
+      { allowZero: true },
+    ),
+    xor_locked_micro: normalizeSorafsOrderbookDecimalString(
+      record.xor_locked_micro,
+      `${context}.xor_locked_micro`,
+    ),
+    status: normalizeSorafsOrderbookLabel(
+      record.status,
+      SORAFS_ORDERBOOK_CHANNEL_STATUS_VALUES,
+      `${context}.status`,
+    ),
+    opened_at_unix: ToriiClient._normalizeUnsignedInteger(
+      record.opened_at_unix,
+      `${context}.opened_at_unix`,
+      { allowZero: true },
+    ),
+    updated_at_unix: ToriiClient._normalizeUnsignedInteger(
+      record.updated_at_unix,
+      `${context}.updated_at_unix`,
+      { allowZero: true },
+    ),
+  };
+}
+
+function normalizeSorafsOrderbookReceipt(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    receipt_id_hex: normalizeHex32String(record.receipt_id_hex, `${context}.receipt_id_hex`),
+    channel_id_hex: normalizeHex32String(record.channel_id_hex, `${context}.channel_id_hex`),
+    trade_id_hex: normalizeHex32String(record.trade_id_hex, `${context}.trade_id_hex`),
+    range: normalizeSorafsOrderbookByteRange(record.range, `${context}.range`),
+    chunk_hash_hex: normalizeHex32String(record.chunk_hash_hex, `${context}.chunk_hash_hex`),
+    bytes_delivered: ToriiClient._normalizeUnsignedInteger(
+      record.bytes_delivered,
+      `${context}.bytes_delivered`,
+      { allowZero: true },
+    ),
+    xor_debited_micro: normalizeSorafsOrderbookDecimalString(
+      record.xor_debited_micro,
+      `${context}.xor_debited_micro`,
+    ),
+    provider_credit_micro: normalizeSorafsOrderbookDecimalString(
+      record.provider_credit_micro,
+      `${context}.provider_credit_micro`,
+    ),
+    fee_amount_micro: normalizeSorafsOrderbookDecimalString(
+      record.fee_amount_micro,
+      `${context}.fee_amount_micro`,
+    ),
+    issued_at_unix: ToriiClient._normalizeUnsignedInteger(
+      record.issued_at_unix,
+      `${context}.issued_at_unix`,
+      { allowZero: true },
+    ),
+    settlement_signature: normalizeSorafsOrderbookSignature(
+      record.settlement_signature,
+      `${context}.settlement_signature`,
+    ),
+  };
+}
+
+function normalizeSorafsOrderbookByteRange(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    start: ToriiClient._normalizeUnsignedInteger(record.start, `${context}.start`, {
+      allowZero: true,
+    }),
+    end: ToriiClient._normalizeUnsignedInteger(record.end, `${context}.end`, {
+      allowZero: true,
+    }),
+  };
+}
+
+function normalizeSorafsOrderbookEvent(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    sequence: ToriiClient._normalizeUnsignedInteger(record.sequence, `${context}.sequence`, {
+      allowZero: true,
+    }),
+    kind: normalizeSorafsOrderbookLabel(
+      record.kind,
+      SORAFS_ORDERBOOK_EVENT_KIND_VALUES,
+      `${context}.kind`,
+    ),
+    generated_at_unix: ToriiClient._normalizeUnsignedInteger(
+      record.generated_at_unix,
+      `${context}.generated_at_unix`,
+      { allowZero: true },
+    ),
+    order_id_hex: normalizeSorafsOrderbookOptionalHex32(
+      record.order_id_hex,
+      `${context}.order_id_hex`,
+    ),
+    trade_ids_hex: normalizeSorafsOrderbookHexList(
+      record.trade_ids_hex,
+      `${context}.trade_ids_hex`,
+    ),
+    settlement_channel_ids_hex: normalizeSorafsOrderbookHexList(
+      record.settlement_channel_ids_hex,
+      `${context}.settlement_channel_ids_hex`,
+    ),
+    receipt_id_hex: normalizeSorafsOrderbookOptionalHex32(
+      record.receipt_id_hex,
+      `${context}.receipt_id_hex`,
+    ),
+    expired_order_ids_hex: normalizeSorafsOrderbookHexList(
+      record.expired_order_ids_hex,
+      `${context}.expired_order_ids_hex`,
+    ),
+    open_order_count: ToriiClient._normalizeUnsignedInteger(
+      record.open_order_count,
+      `${context}.open_order_count`,
+      { allowZero: true },
+    ),
+    open_settlement_channel_count: ToriiClient._normalizeUnsignedInteger(
+      record.open_settlement_channel_count,
+      `${context}.open_settlement_channel_count`,
+      { allowZero: true },
+    ),
+    settlement_receipt_count: ToriiClient._normalizeUnsignedInteger(
+      record.settlement_receipt_count,
+      `${context}.settlement_receipt_count`,
+      { allowZero: true },
+    ),
+  };
+}
+
+function normalizeSorafsOrderbookArray(value, context, normalizer) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return value.map((entry, index) => normalizer(entry, `${context}[${index}]`));
+}
+
+function normalizeSorafsOrderbookHexList(value, context) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return value.map((entry, index) => normalizeHex32String(entry, `${context}[${index}]`));
+}
+
+function normalizeSorafsOrderbookOptionalHex32(value, context) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return normalizeHex32String(value, context);
+}
+
+function normalizeSorafsOrderbookLabel(value, allowed, context) {
+  const normalized = requireNonEmptyString(value, context).toLowerCase();
+  if (!allowed.has(normalized)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be one of ${Array.from(allowed).join(", ")}`,
+      context,
+    );
+  }
+  return normalized;
+}
+
+function normalizeSorafsOrderbookDecimalString(value, context) {
+  const normalized = requireNonEmptyString(value, context);
+  if (!/^(0|[1-9][0-9]*)$/u.test(normalized)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be a non-negative decimal integer string`,
+      context,
+    );
+  }
+  return normalized;
+}
+
 function requireSorafsReputationJson(payload, context) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new Error(`${context} returned no payload`);
@@ -29606,7 +30674,241 @@ function normalizeConnectStatusPolicySnapshot(payload, context) {
   };
 }
 
+const DEFAULT_SORAFS_ORDERBOOK_EVENTS_WS_PATH = "/v1/sorafs/orderbook/events/ws";
 const DEFAULT_CONNECT_WS_PATH = "/v1/connect/ws";
+
+function buildSorafsOrderbookEventsWebSocketUrlInternal(baseUrl, options, context) {
+  const resolvedBase = requireNonEmptyString(baseUrl, `${context}.baseUrl`);
+  const baseParsed = new URL(resolvedBase);
+  const params =
+    options === undefined
+      ? {}
+      : requirePlainObjectOption(options, `${context} options`, {
+          message: "must be an object",
+        });
+  assertSupportedOptionKeys(
+    params,
+    SORAFS_ORDERBOOK_WEBSOCKET_OPTION_KEYS,
+    `${context} options`,
+  );
+  const endpointPath = params.endpointPath ?? DEFAULT_SORAFS_ORDERBOOK_EVENTS_WS_PATH;
+  const baseWithSlash = resolvedBase.endsWith("/") ? resolvedBase : `${resolvedBase}/`;
+  const endpoint = new URL(endpointPath, baseWithSlash);
+  if (endpoint.host !== baseParsed.host) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}: endpointPath host ${endpoint.host} must match baseUrl host ${baseParsed.host}.`,
+      `${context}.endpointPath`,
+    );
+  }
+  endpoint.protocol = mapHttpProtocolToWebSocket(endpoint.protocol, context);
+  endpoint.search = "";
+  const query = buildSorafsOrderbookEventsParams(
+    {
+      since: params.since,
+      limit: params.limit,
+    },
+    context,
+  ) ?? {};
+  for (const [key, value] of Object.entries(query)) {
+    endpoint.searchParams.set(key, String(value));
+  }
+  return endpoint.toString();
+}
+
+function openSorafsOrderbookEventsWebSocketInternal(options, context) {
+  const normalizedOptions = requirePlainObjectOption(options, `${context} options`, {
+    message: "must be an object",
+  });
+  assertSupportedOptionKeys(
+    normalizedOptions,
+    new Set(["baseUrl", ...SORAFS_ORDERBOOK_WEBSOCKET_DIAL_OPTION_KEYS]),
+    `${context} options`,
+  );
+  const { baseUrl, protocols, websocketOptions, WebSocketImpl, ...urlOptions } = normalizedOptions;
+  const url = buildSorafsOrderbookEventsWebSocketUrlInternal(baseUrl, urlOptions, context);
+  const WebSocketClass = resolveWebSocketImplementation(WebSocketImpl, context);
+  const resolvedOptions =
+    websocketOptions === undefined || websocketOptions === null ? undefined : { ...websocketOptions };
+  if (resolvedOptions !== undefined) {
+    if (protocols !== undefined) {
+      return new WebSocketClass(url, protocols, resolvedOptions);
+    }
+    return new WebSocketClass(url, resolvedOptions);
+  }
+  if (protocols !== undefined) {
+    return new WebSocketClass(url, protocols);
+  }
+  return new WebSocketClass(url);
+}
+
+async function* streamWebSocketJsonEvents(socket, options = {}) {
+  const context = options.context ?? "streamWebSocketJsonEvents";
+  const closeOnReturn = options.closeOnReturn !== false;
+  const queue = [];
+  let wake = null;
+  let closed = false;
+  let failure = null;
+
+  const notify = () => {
+    if (wake) {
+      const resolve = wake;
+      wake = null;
+      resolve();
+    }
+  };
+  const enqueue = (item) => {
+    queue.push(item);
+    notify();
+  };
+  const onMessage = (...args) => {
+    enqueue({ type: "message", data: extractWebSocketMessageData(args) });
+  };
+  const onError = (event) => {
+    failure = websocketErrorFromEvent(event, context);
+    closed = true;
+    notify();
+  };
+  const onClose = () => {
+    closed = true;
+    notify();
+  };
+  const onAbort = () => {
+    failure = new Error(`${context}: aborted`);
+    closed = true;
+    closeWebSocketQuietly(socket);
+    notify();
+  };
+  const removers = [
+    addWebSocketListener(socket, "message", onMessage, context),
+    addWebSocketListener(socket, "error", onError, context),
+    addWebSocketListener(socket, "close", onClose, context),
+  ];
+  const { signal } = options;
+  if (signal) {
+    if (signal.aborted) {
+      onAbort();
+    } else if (typeof signal.addEventListener === "function") {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  }
+
+  try {
+    for (;;) {
+      if (queue.length > 0) {
+        const item = queue.shift();
+        const text = await decodeWebSocketMessageText(item.data, context);
+        yield parseWebSocketJsonEventFrame(text, context);
+        continue;
+      }
+      if (failure) {
+        throw failure;
+      }
+      if (closed) {
+        break;
+      }
+      await new Promise((resolve) => {
+        wake = resolve;
+      });
+    }
+  } finally {
+    for (const remove of removers) {
+      remove();
+    }
+    if (signal && typeof signal.removeEventListener === "function") {
+      signal.removeEventListener("abort", onAbort);
+    }
+    if (closeOnReturn && !closed) {
+      closeWebSocketQuietly(socket);
+    }
+  }
+}
+
+function addWebSocketListener(socket, eventName, listener, context) {
+  if (socket && typeof socket.addEventListener === "function") {
+    socket.addEventListener(eventName, listener);
+    return () => socket.removeEventListener?.(eventName, listener);
+  }
+  if (socket && typeof socket.on === "function") {
+    socket.on(eventName, listener);
+    return () => {
+      if (typeof socket.off === "function") {
+        socket.off(eventName, listener);
+      } else if (typeof socket.removeListener === "function") {
+        socket.removeListener(eventName, listener);
+      }
+    };
+  }
+  throw new Error(`${context}: WebSocket implementation must support addEventListener or on`);
+}
+
+function extractWebSocketMessageData(args) {
+  const first = args[0];
+  if (
+    args.length === 1 &&
+    first &&
+    typeof first === "object" &&
+    Object.prototype.hasOwnProperty.call(first, "data")
+  ) {
+    return first.data;
+  }
+  return first;
+}
+
+async function decodeWebSocketMessageText(data, context) {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (data instanceof ArrayBuffer) {
+    return new TextDecoder().decode(new Uint8Array(data));
+  }
+  if (ArrayBuffer.isView(data)) {
+    return new TextDecoder().decode(data);
+  }
+  if (data && typeof data.text === "function") {
+    return data.text();
+  }
+  throw new TypeError(`${context}: WebSocket message must be text or bytes`);
+}
+
+function parseWebSocketJsonEventFrame(text, context) {
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${context}: WebSocket frame is not valid JSON: ${error.message}`);
+  }
+  const record = ensureRecord(payload, `${context} frame`);
+  const event =
+    record.event === undefined || record.event === null
+      ? null
+      : requireNonEmptyString(record.event, `${context}.event`);
+  return {
+    event,
+    data: record.data === undefined ? "" : record.data,
+    raw: text,
+  };
+}
+
+function websocketErrorFromEvent(event, context) {
+  if (event instanceof Error) {
+    return event;
+  }
+  if (event?.error instanceof Error) {
+    return event.error;
+  }
+  return new Error(`${context}: WebSocket stream failed`);
+}
+
+function closeWebSocketQuietly(socket) {
+  if (socket && typeof socket.close === "function") {
+    try {
+      socket.close();
+    } catch {
+      // Best effort cleanup for caller-owned WebSocket implementations.
+    }
+  }
+}
 
 function buildConnectWebSocketDescriptor(baseUrl, options, context) {
   const resolvedBase = requireNonEmptyString(baseUrl, `${context}.baseUrl`);
@@ -30703,6 +32005,14 @@ export function buildConnectWebSocketUrl(baseUrl, options = {}) {
   );
 }
 
+export function buildSorafsOrderbookEventsWebSocketUrl(baseUrl, options = {}) {
+  return buildSorafsOrderbookEventsWebSocketUrlInternal(
+    baseUrl,
+    options,
+    "buildSorafsOrderbookEventsWebSocketUrl",
+  );
+}
+
 export function openConnectWebSocket(options = {}) {
   const normalizedOptions = requirePlainObjectOption(
     options,
@@ -30710,4 +32020,11 @@ export function openConnectWebSocket(options = {}) {
     { message: "must be an object" },
   );
   return openConnectWebSocketInternal(normalizedOptions, "openConnectWebSocket");
+}
+
+export function openSorafsOrderbookEventsWebSocket(options = {}) {
+  return openSorafsOrderbookEventsWebSocketInternal(
+    options,
+    "openSorafsOrderbookEventsWebSocket",
+  );
 }

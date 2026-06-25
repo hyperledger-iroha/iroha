@@ -122,7 +122,10 @@ rollout checks required before hosted production settlement.
 - Capacity disputes are first-class in the capacity registry: `/v1/sorafs/capacity/state`
   now emits a `disputes` array (with base64 payloads, evidence digests, and status metadata) while
   `/v1/sorafs/capacity/dispute` accepts governance-signed submissions. Use the CLI helper to craft
-  requests and note the response’s `dispute_id_hex` for revocation and audit tracking.【crates/iroha_torii/src/sorafs/api.rs:520】【crates/iroha_torii/src/routing.rs:4889】【docs/source/sorafs/dispute_revocation_runbook.md:45】
+  requests and note the response’s `dispute_id_hex` for revocation and audit tracking. The capacity
+  state response bounds declarations, fee-ledger entries, credit-ledger entries, and disputes with
+  `limit` (default 50, max 500) while preserving full totals plus returned-count and truncation
+  metadata.【crates/iroha_torii/src/sorafs/api.rs:520】【crates/iroha_torii/src/routing.rs:4889】【docs/source/sorafs/dispute_revocation_runbook.md:45】
 - `sorafs_manifest_stub capacity dispute` accepts a declarative spec when filing governance disputes.
   Required fields: `provider_id_hex`, `complainant_id_hex`, `kind` (`replication_shortfall`, `uptime_breach`,
   `proof_failure`, `fee_dispute`, or `other`), `submitted_epoch`, `description`, and an `evidence` object with

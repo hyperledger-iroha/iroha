@@ -38,6 +38,7 @@ use iroha_data_model::{
         types::{BlobDigest, ExtraMetadata},
     },
     nexus::{AssetPermissionManifest, UniversalAccountId},
+    sorafs::moderation::{SoraFsModerationBallotCommitV1, SoraFsModerationBallotRevealV1},
 };
 use iroha_logger::prelude::*;
 pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
@@ -1978,11 +1979,15 @@ fn compact_privacy_backend_label(value: &str) -> String {
 }
 
 fn normalize_hex32_lower(value: &str, context: &str) -> Result<String> {
-    let hex_value = value.strip_prefix("0x").unwrap_or(value);
+    normalize_hex_lower::<32>(value, context)
+}
+
+fn normalize_hex_lower<const N: usize>(value: &str, context: &str) -> Result<String> {
+    let hex_value = value.trim().strip_prefix("0x").unwrap_or(value.trim());
     let bytes = hex::decode(hex_value)
-        .wrap_err_with(|| format!("{context} must be a 32-byte hex string"))?;
-    if bytes.len() != 32 {
-        return Err(eyre!("{context} must be a 32-byte hex string"));
+        .wrap_err_with(|| format!("{context} must be a {N}-byte hex string"))?;
+    if bytes.len() != N {
+        return Err(eyre!("{context} must be a {N}-byte hex string"));
     }
     Ok(hex::encode(bytes))
 }
@@ -2102,6 +2107,192 @@ impl SorafsRepairStatusFilter<'_> {
         }
         req
     }
+}
+
+/// Filters for `/v1/sorafs/moderation/quarantine` listing endpoint.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SorafsModerationQuarantineFilter {
+    /// Maximum number of quarantine records to return.
+    pub limit: Option<u32>,
+}
+
+impl SorafsModerationQuarantineFilter {
+    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+        if let Some(limit) = self.limit {
+            req = req.param("limit", &limit);
+        }
+        req
+    }
+}
+
+/// Filters for `/v1/sorafs/moderation/model-registry` listing endpoint.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SorafsModerationModelRegistryFilter {
+    /// Maximum number of registry records to return from each registry section.
+    pub limit: Option<u32>,
+}
+
+impl SorafsModerationModelRegistryFilter {
+    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+        if let Some(limit) = self.limit {
+            req = req.param("limit", &limit);
+        }
+        req
+    }
+}
+
+/// Filters for `/v1/sorafs/moderation/ballots` listing endpoint.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SorafsModerationBallotsFilter {
+    /// Maximum number of ballots, commits, and reveals to return.
+    pub limit: Option<u32>,
+}
+
+impl SorafsModerationBallotsFilter {
+    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+        if let Some(limit) = self.limit {
+            req = req.param("limit", &limit);
+        }
+        req
+    }
+}
+
+/// Filters for `/v1/sorafs/moderation/ballots/events` listing endpoint.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SorafsModerationBallotEventsFilter {
+    /// Optional event sequence to resume from.
+    pub since: Option<u64>,
+    /// Maximum number of events to return.
+    pub limit: Option<u32>,
+}
+
+impl SorafsModerationBallotEventsFilter {
+    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+        if let Some(since) = self.since {
+            req = req.param("since", &since);
+        }
+        if let Some(limit) = self.limit {
+            req = req.param("limit", &limit);
+        }
+        req
+    }
+}
+
+/// Filters for SoraFS transparency readback endpoints.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SorafsTransparencyReadbackFilter {
+    /// Maximum number of records to return.
+    pub limit: Option<u32>,
+}
+
+impl SorafsTransparencyReadbackFilter {
+    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+        if let Some(limit) = self.limit {
+            req = req.param("limit", &limit);
+        }
+        req
+    }
+}
+
+/// Filters for SoraFS appeal finance readback endpoints.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SorafsAppealFinanceReadbackFilter {
+    /// Maximum number of records to return.
+    pub limit: Option<u32>,
+}
+
+impl SorafsAppealFinanceReadbackFilter {
+    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+        if let Some(limit) = self.limit {
+            req = req.param("limit", &limit);
+        }
+        req
+    }
+}
+
+/// Filters for `/v1/sorafs/moderation/screening-results` listing endpoint.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SorafsModerationScreeningResultsFilter {
+    /// Maximum number of screening records to return.
+    pub limit: Option<u32>,
+}
+
+impl SorafsModerationScreeningResultsFilter {
+    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+        if let Some(limit) = self.limit {
+            req = req.param("limit", &limit);
+        }
+        req
+    }
+}
+
+/// Request body for submitting one local moderation screening result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SorafsModerationScreeningResultRequest<'a> {
+    /// Gateway or content subject identifier.
+    pub subject: &'a str,
+    /// Hex-encoded BLAKE3 digest of the screened payload or stable content reference.
+    pub subject_digest_hex: &'a str,
+    /// Hex-encoded governance-approved reproducibility manifest id.
+    pub manifest_id_hex: &'a str,
+    /// Hex-encoded BLAKE3 digest of the deterministic runner binary.
+    pub runner_hash_hex: &'a str,
+    /// Combined moderation score in basis points.
+    pub combined_score_bps: u16,
+    /// Verdict label: pass, warn, quarantine, escalate, or block.
+    pub verdict: &'a str,
+    /// Unix timestamp in seconds; omitted values let Torii apply server time.
+    pub screened_at_unix: Option<u64>,
+    /// Optional evidence digest encoded as hexadecimal.
+    pub evidence_digest_hex: Option<&'a str>,
+    /// Optional policy/configuration digest encoded as hexadecimal.
+    pub policy_digest_hex: Option<&'a str>,
+    /// Optional operator note.
+    pub notes: Option<&'a str>,
+}
+
+/// Request body for finalizing one local moderation ballot tally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SorafsModerationBallotTallyRequest<'a> {
+    /// Moderation or appeal case identifier.
+    pub case_id: &'a str,
+    /// Moderation ballot round identifier.
+    pub round_id: &'a str,
+}
+
+/// Request body for marking one local moderation quarantine record reviewed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SorafsModerationQuarantineReviewRequest<'a> {
+    /// Operator identity recorded in the local checkpoint.
+    pub reviewed_by: &'a str,
+    /// Unix timestamp in seconds; omitted values let Torii apply server time.
+    pub reviewed_at_unix: Option<u64>,
+    /// Optional operator notes recorded with the transition.
+    pub notes: Option<&'a str>,
+}
+
+/// Request body for releasing one reviewed local moderation quarantine record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SorafsModerationQuarantineReleaseRequest<'a> {
+    /// Release authority identity recorded in the local checkpoint.
+    pub release_authority: &'a str,
+    /// Unix timestamp in seconds; omitted values let Torii apply server time.
+    pub released_at_unix: Option<u64>,
+    /// Optional release notes recorded with the transition.
+    pub notes: Option<&'a str>,
+}
+
+/// Request body for sealing one local moderation quarantine payload object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SorafsModerationQuarantineObjectStoreRequest<'a> {
+    /// Plaintext payload bytes. Torii stores standard base64 in JSON.
+    pub payload: &'a [u8],
+    /// Unix timestamp in seconds; omitted values let Torii apply server time.
+    pub captured_at_unix: Option<u64>,
+    /// Optional content type label recorded with the object.
+    pub content_type: Option<&'a str>,
+    /// Optional object notes recorded with the object.
+    pub notes: Option<&'a str>,
 }
 
 /// Optional overrides supplied when requesting a `SoraFS` stream token.
@@ -12869,6 +13060,961 @@ impl Client {
             .send()
     }
 
+    /// Convenience: GET `/v1/sorafs/moderation/quarantine` to list local moderation quarantine records.
+    ///
+    /// # Errors
+    /// Returns an error if request construction or the HTTP call fails.
+    pub fn get_sorafs_moderation_quarantine(
+        &self,
+        filter: &SorafsModerationQuarantineFilter,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/quarantine");
+        filter
+            .apply(self.default_request(HttpMethod::GET, url))
+            .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: GET `/v1/sorafs/moderation/model-registry` to list local model registry records.
+    ///
+    /// # Errors
+    /// Returns an error if request construction or the HTTP call fails.
+    pub fn get_sorafs_moderation_model_registry(
+        &self,
+        filter: &SorafsModerationModelRegistryFilter,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/model-registry");
+        filter
+            .apply(self.default_request(HttpMethod::GET, url))
+            .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/moderation/model-registry/repro-manifests`.
+    ///
+    /// `manifest_bytes` must be the canonical Norito reproducibility manifest bytes.
+    ///
+    /// # Errors
+    /// Returns an error if the payload is empty, request construction,
+    /// serialization, signing, or the HTTP call fails.
+    pub fn post_sorafs_moderation_model_registry_repro_manifest(
+        &self,
+        manifest_bytes: &[u8],
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(
+            &self.torii_url,
+            "v1/sorafs/moderation/model-registry/repro-manifests",
+        );
+        let body = Self::sorafs_moderation_model_registry_manifest_body(manifest_bytes)?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/moderation/model-registry/corpora`.
+    ///
+    /// `manifest_bytes` must be the canonical Norito adversarial corpus manifest bytes.
+    ///
+    /// # Errors
+    /// Returns an error if the payload is empty, request construction,
+    /// serialization, signing, or the HTTP call fails.
+    pub fn post_sorafs_moderation_model_registry_corpus(
+        &self,
+        manifest_bytes: &[u8],
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(
+            &self.torii_url,
+            "v1/sorafs/moderation/model-registry/corpora",
+        );
+        let body = Self::sorafs_moderation_model_registry_manifest_body(manifest_bytes)?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Convenience: GET `/v1/sorafs/moderation/ballots` to list local ballot records.
+    ///
+    /// # Errors
+    /// Returns an error if request construction or the HTTP call fails.
+    pub fn get_sorafs_moderation_ballots(
+        &self,
+        filter: &SorafsModerationBallotsFilter,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/ballots");
+        filter
+            .apply(self.default_request(HttpMethod::GET, url))
+            .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: GET `/v1/sorafs/moderation/ballots/{case_id}/{round_id}`.
+    ///
+    /// # Errors
+    /// Returns an error if identifiers are blank, request construction, or the HTTP call fails.
+    pub fn get_sorafs_moderation_ballot(
+        &self,
+        case_id: &str,
+        round_id: &str,
+        filter: &SorafsModerationBallotsFilter,
+    ) -> Result<Response<Vec<u8>>> {
+        let case_id = require_non_empty_path_segment(case_id, "case_id")?;
+        let round_id = require_non_empty_path_segment(round_id, "round_id")?;
+        let url = join_torii_url_with_path_segments(
+            &self.torii_url,
+            "v1/sorafs/moderation/ballots",
+            &[case_id, round_id],
+        );
+        filter
+            .apply(self.default_request(HttpMethod::GET, url))
+            .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: GET `/v1/sorafs/moderation/ballots/events`.
+    ///
+    /// # Errors
+    /// Returns an error if request construction or the HTTP call fails.
+    pub fn get_sorafs_moderation_ballot_events(
+        &self,
+        filter: &SorafsModerationBallotEventsFilter,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/ballots/events");
+        filter
+            .apply(self.default_request(HttpMethod::GET, url))
+            .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/moderation/ballots/commits`.
+    ///
+    /// # Errors
+    /// Returns an error if the commit payload fails validation, request construction,
+    /// serialization, signing, or the HTTP call fails.
+    pub fn post_sorafs_moderation_ballot_commit(
+        &self,
+        commit: &SoraFsModerationBallotCommitV1,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/ballots/commits");
+        let body = Self::sorafs_moderation_ballot_commit_body(commit)?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/moderation/ballots/reveals`.
+    ///
+    /// # Errors
+    /// Returns an error if the reveal payload fails validation, request construction,
+    /// serialization, signing, or the HTTP call fails.
+    pub fn post_sorafs_moderation_ballot_reveal(
+        &self,
+        reveal: &SoraFsModerationBallotRevealV1,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/ballots/reveals");
+        let body = Self::sorafs_moderation_ballot_reveal_body(reveal)?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/moderation/ballots/tally`.
+    ///
+    /// # Errors
+    /// Returns an error if identifiers are blank, request construction,
+    /// serialization, signing, or the HTTP call fails.
+    pub fn post_sorafs_moderation_ballot_tally(
+        &self,
+        request: &SorafsModerationBallotTallyRequest<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/ballots/tally");
+        let body = Self::sorafs_moderation_ballot_tally_body(request)?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Convenience: GET `/v1/sorafs/transparency/cycles`.
+    ///
+    /// # Errors
+    /// Returns an error if request construction or the HTTP call fails.
+    pub fn get_sorafs_transparency_cycles(
+        &self,
+        filter: &SorafsTransparencyReadbackFilter,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/transparency/cycles");
+        filter
+            .apply(self.default_request(HttpMethod::GET, url))
+            .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: GET `/v1/sorafs/transparency/cycles/{cycle_id_hex}`.
+    ///
+    /// # Errors
+    /// Returns an error if the cycle id is malformed, request construction,
+    /// or the HTTP call fails.
+    pub fn get_sorafs_transparency_cycle(
+        &self,
+        cycle_id_hex: &str,
+        filter: &SorafsTransparencyReadbackFilter,
+    ) -> Result<Response<Vec<u8>>> {
+        let cycle_id_hex = normalize_hex_lower::<16>(cycle_id_hex, "cycle_id_hex")?;
+        let path = format!("v1/sorafs/transparency/cycles/{cycle_id_hex}");
+        let url = join_torii_url(&self.torii_url, &path);
+        filter
+            .apply(self.default_request(HttpMethod::GET, url))
+            .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: GET `/v1/sorafs/transparency/cycles/{cycle_id_hex}/entries/{entry_id_hex}`.
+    ///
+    /// # Errors
+    /// Returns an error if either id is malformed, request construction,
+    /// or the HTTP call fails.
+    pub fn get_sorafs_transparency_cycle_entry(
+        &self,
+        cycle_id_hex: &str,
+        entry_id_hex: &str,
+    ) -> Result<Response<Vec<u8>>> {
+        let cycle_id_hex = normalize_hex_lower::<16>(cycle_id_hex, "cycle_id_hex")?;
+        let entry_id_hex = normalize_hex_lower::<16>(entry_id_hex, "entry_id_hex")?;
+        let path = format!("v1/sorafs/transparency/cycles/{cycle_id_hex}/entries/{entry_id_hex}");
+        let url = join_torii_url(&self.torii_url, &path);
+        self.default_request(HttpMethod::GET, url)
+            .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: GET `/v1/sorafs/transparency/explorer`.
+    ///
+    /// # Errors
+    /// Returns an error if request construction or the HTTP call fails.
+    pub fn get_sorafs_transparency_explorer(
+        &self,
+        filter: &SorafsTransparencyReadbackFilter,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/transparency/explorer");
+        filter
+            .apply(self.default_request(HttpMethod::GET, url))
+            .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: GET `/v1/sorafs/transparency/tokens`.
+    ///
+    /// # Errors
+    /// Returns an error if request construction or the HTTP call fails.
+    pub fn get_sorafs_transparency_token_issuances(
+        &self,
+        filter: &SorafsTransparencyReadbackFilter,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/transparency/tokens");
+        filter
+            .apply(self.default_request(HttpMethod::GET, url))
+            .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/transparency/source-entries/{source_kind}`.
+    ///
+    /// # Errors
+    /// Returns an error if the source kind is blank, the payload is not JSON,
+    /// request construction fails, signing fails, or the HTTP call fails.
+    pub fn post_sorafs_transparency_source_entry_json(
+        &self,
+        source_kind: &str,
+        payload: &[u8],
+    ) -> Result<Response<Vec<u8>>> {
+        let source_kind = require_non_empty_path_segment(source_kind, "source_kind")?;
+        let payload = Self::sorafs_json_request_body(payload, "transparency source entry")?;
+        let url = join_torii_url_with_path_segments(
+            &self.torii_url,
+            "v1/sorafs/transparency/source-entries",
+            &[source_kind],
+        );
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, payload)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/transparency/tokens/issuances`.
+    ///
+    /// # Errors
+    /// Returns an error if the payload is not JSON, request construction fails,
+    /// signing fails, or the HTTP call fails.
+    pub fn post_sorafs_transparency_token_issuance_json(
+        &self,
+        payload: &[u8],
+    ) -> Result<Response<Vec<u8>>> {
+        self.post_sorafs_signed_json(
+            "v1/sorafs/transparency/tokens/issuances",
+            payload,
+            "transparency proof-token issuance",
+        )
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/transparency/privacy-aggregates/source-events`.
+    ///
+    /// # Errors
+    /// Returns an error if the payload is not JSON, request construction fails,
+    /// signing fails, or the HTTP call fails.
+    pub fn post_sorafs_transparency_privacy_aggregate_source_event_json(
+        &self,
+        payload: &[u8],
+    ) -> Result<Response<Vec<u8>>> {
+        self.post_sorafs_signed_json(
+            "v1/sorafs/transparency/privacy-aggregates/source-events",
+            payload,
+            "transparency privacy aggregate source event",
+        )
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/transparency/privacy-aggregates/publish-due`.
+    ///
+    /// # Errors
+    /// Returns an error if the payload is not JSON, request construction fails,
+    /// signing fails, or the HTTP call fails.
+    pub fn post_sorafs_transparency_privacy_aggregate_publish_due_json(
+        &self,
+        payload: &[u8],
+    ) -> Result<Response<Vec<u8>>> {
+        self.post_sorafs_signed_json(
+            "v1/sorafs/transparency/privacy-aggregates/publish-due",
+            payload,
+            "transparency privacy aggregate publish-due",
+        )
+    }
+
+    /// Convenience: GET `/v1/sorafs/appeals/pricing/config`.
+    ///
+    /// # Errors
+    /// Returns an error if request construction or the HTTP call fails.
+    pub fn get_sorafs_appeal_pricing_config(&self) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/appeals/pricing/config");
+        self.default_request(HttpMethod::GET, url)
+            .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: GET `/v1/sorafs/appeals/pricing/status`.
+    ///
+    /// # Errors
+    /// Returns an error if request construction or the HTTP call fails.
+    pub fn get_sorafs_appeal_pricing_status(&self) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/appeals/pricing/status");
+        self.default_request(HttpMethod::GET, url)
+            .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: POST `/v1/sorafs/appeals/pricing/quote`.
+    ///
+    /// # Errors
+    /// Returns an error if the payload is not JSON, request construction, or
+    /// the HTTP call fails.
+    pub fn post_sorafs_appeal_pricing_quote_json(
+        &self,
+        payload: &[u8],
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/appeals/pricing/quote");
+        let payload = Self::sorafs_json_request_body(payload, "appeal pricing quote")?;
+        self.default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_JSON)
+            .header("Accept", APPLICATION_JSON)
+            .body(payload)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/appeals/finance/deposits`.
+    ///
+    /// # Errors
+    /// Returns an error if the payload is not JSON, request construction fails,
+    /// signing fails, or the HTTP call fails.
+    pub fn post_sorafs_appeal_finance_deposit_json(
+        &self,
+        payload: &[u8],
+    ) -> Result<Response<Vec<u8>>> {
+        self.post_sorafs_signed_json(
+            "v1/sorafs/appeals/finance/deposits",
+            payload,
+            "appeal finance deposit",
+        )
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/appeals/finance/deposits/confirm`.
+    ///
+    /// # Errors
+    /// Returns an error if the payload is not JSON, request construction fails,
+    /// signing fails, or the HTTP call fails.
+    pub fn post_sorafs_appeal_finance_deposit_confirm_json(
+        &self,
+        payload: &[u8],
+    ) -> Result<Response<Vec<u8>>> {
+        self.post_sorafs_signed_json(
+            "v1/sorafs/appeals/finance/deposits/confirm",
+            payload,
+            "appeal finance deposit confirmation",
+        )
+    }
+
+    /// Convenience: signed GET `/v1/sorafs/appeals/finance/deposits/{escrow_id_hex}`.
+    ///
+    /// # Errors
+    /// Returns an error if the escrow id is malformed, request construction
+    /// fails, signing fails, or the HTTP call fails.
+    pub fn get_sorafs_appeal_finance_deposit(
+        &self,
+        escrow_id_hex: &str,
+    ) -> Result<Response<Vec<u8>>> {
+        let escrow_id_hex = normalize_hex_lower::<32>(escrow_id_hex, "escrow_id_hex")?;
+        let path = format!("v1/sorafs/appeals/finance/deposits/{escrow_id_hex}");
+        let url = join_torii_url(&self.torii_url, &path);
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/appeals/finance/deposits/settle`.
+    ///
+    /// # Errors
+    /// Returns an error if the payload is not JSON, request construction fails,
+    /// signing fails, or the HTTP call fails.
+    pub fn post_sorafs_appeal_finance_deposit_settle_json(
+        &self,
+        payload: &[u8],
+    ) -> Result<Response<Vec<u8>>> {
+        self.post_sorafs_signed_json(
+            "v1/sorafs/appeals/finance/deposits/settle",
+            payload,
+            "appeal finance deposit settlement",
+        )
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/appeals/finance/deposits/reconcile`.
+    ///
+    /// # Errors
+    /// Returns an error if the payload is not JSON, request construction fails,
+    /// signing fails, or the HTTP call fails.
+    pub fn post_sorafs_appeal_finance_deposit_reconcile_json(
+        &self,
+        payload: &[u8],
+    ) -> Result<Response<Vec<u8>>> {
+        self.post_sorafs_signed_json(
+            "v1/sorafs/appeals/finance/deposits/reconcile",
+            payload,
+            "appeal finance deposit settlement reconciliation",
+        )
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/appeals/finance/deposits/submit-settlement`.
+    ///
+    /// # Errors
+    /// Returns an error if the payload is not JSON, request construction fails,
+    /// signing fails, or the HTTP call fails.
+    pub fn post_sorafs_appeal_finance_deposit_submit_settlement_json(
+        &self,
+        payload: &[u8],
+    ) -> Result<Response<Vec<u8>>> {
+        self.post_sorafs_signed_json(
+            "v1/sorafs/appeals/finance/deposits/submit-settlement",
+            payload,
+            "appeal finance deposit settlement submission",
+        )
+    }
+
+    /// Convenience: GET `/v1/sorafs/appeals/finance/reports`.
+    ///
+    /// # Errors
+    /// Returns an error if request construction or the HTTP call fails.
+    pub fn get_sorafs_appeal_finance_reports(
+        &self,
+        filter: &SorafsAppealFinanceReadbackFilter,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/appeals/finance/reports");
+        filter
+            .apply(self.default_request(HttpMethod::GET, url))
+            .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: GET `/v1/sorafs/appeals/finance/weekly-rollups`.
+    ///
+    /// # Errors
+    /// Returns an error if request construction or the HTTP call fails.
+    pub fn get_sorafs_appeal_finance_weekly_rollups(
+        &self,
+        filter: &SorafsAppealFinanceReadbackFilter,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/appeals/finance/weekly-rollups");
+        filter
+            .apply(self.default_request(HttpMethod::GET, url))
+            .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: GET `/v1/sorafs/appeals/finance/settlement-receipts`.
+    ///
+    /// # Errors
+    /// Returns an error if request construction or the HTTP call fails.
+    pub fn get_sorafs_appeal_finance_settlement_receipts(
+        &self,
+        filter: &SorafsAppealFinanceReadbackFilter,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(
+            &self.torii_url,
+            "v1/sorafs/appeals/finance/settlement-receipts",
+        );
+        filter
+            .apply(self.default_request(HttpMethod::GET, url))
+            .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: GET `/v1/sorafs/moderation/screening-results` to list local screening records.
+    ///
+    /// # Errors
+    /// Returns an error if request construction or the HTTP call fails.
+    pub fn get_sorafs_moderation_screening_results(
+        &self,
+        filter: &SorafsModerationScreeningResultsFilter,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/screening-results");
+        filter
+            .apply(self.default_request(HttpMethod::GET, url))
+            .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/moderation/screening-results`.
+    ///
+    /// # Errors
+    /// Returns an error if request construction, validation, serialization,
+    /// signing, or the HTTP call fails.
+    pub fn post_sorafs_moderation_screening_result(
+        &self,
+        request: &SorafsModerationScreeningResultRequest<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/screening-results");
+        let body = Self::sorafs_moderation_screening_result_body(request)?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/moderation/quarantine/{id}/review`.
+    ///
+    /// # Errors
+    /// Returns an error if the quarantine id is malformed, request construction
+    /// or serialization fails, signing fails, or the HTTP call fails.
+    pub fn post_sorafs_moderation_quarantine_review(
+        &self,
+        quarantine_id_hex: &str,
+        request: &SorafsModerationQuarantineReviewRequest<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        let quarantine_id_hex = normalize_hex_lower::<16>(quarantine_id_hex, "quarantine_id_hex")?;
+        let path = format!("v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review");
+        let url = join_torii_url(&self.torii_url, &path);
+        let body = Self::sorafs_moderation_quarantine_review_body(request)?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/moderation/quarantine/{id}/release`.
+    ///
+    /// # Errors
+    /// Returns an error if the quarantine id is malformed, request construction
+    /// or serialization fails, signing fails, or the HTTP call fails.
+    pub fn post_sorafs_moderation_quarantine_release(
+        &self,
+        quarantine_id_hex: &str,
+        request: &SorafsModerationQuarantineReleaseRequest<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        let quarantine_id_hex = normalize_hex_lower::<16>(quarantine_id_hex, "quarantine_id_hex")?;
+        let path = format!("v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release");
+        let url = join_torii_url(&self.torii_url, &path);
+        let body = Self::sorafs_moderation_quarantine_release_body(request)?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/moderation/quarantine/{id}/appeal-handoff`.
+    ///
+    /// # Errors
+    /// Returns an error if the quarantine id is malformed, payload validation
+    /// fails, request construction fails, signing fails, or the HTTP call fails.
+    pub fn post_sorafs_moderation_quarantine_appeal_handoff_json(
+        &self,
+        quarantine_id_hex: &str,
+        payload: &[u8],
+    ) -> Result<Response<Vec<u8>>> {
+        let quarantine_id_hex = normalize_hex_lower::<16>(quarantine_id_hex, "quarantine_id_hex")?;
+        let path = format!("v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff");
+        let url = join_torii_url(&self.torii_url, &path);
+        let payload =
+            Self::sorafs_json_request_body(payload, "moderation quarantine appeal handoff")?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, payload)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/moderation/quarantine/{id}/appeal-ballot`.
+    ///
+    /// # Errors
+    /// Returns an error if the quarantine id is malformed, payload validation
+    /// fails, request construction fails, signing fails, or the HTTP call fails.
+    pub fn post_sorafs_moderation_quarantine_appeal_ballot_json(
+        &self,
+        quarantine_id_hex: &str,
+        payload: &[u8],
+    ) -> Result<Response<Vec<u8>>> {
+        let quarantine_id_hex = normalize_hex_lower::<16>(quarantine_id_hex, "quarantine_id_hex")?;
+        let path = format!("v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-ballot");
+        let url = join_torii_url(&self.torii_url, &path);
+        let payload =
+            Self::sorafs_json_request_body(payload, "moderation quarantine appeal ballot")?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, payload)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Convenience: signed GET `/v1/sorafs/moderation/quarantine/{id}/operator-panel`.
+    ///
+    /// # Errors
+    /// Returns an error if the quarantine id is malformed, request construction
+    /// fails, signing fails, or the HTTP call fails.
+    pub fn get_sorafs_moderation_quarantine_operator_panel(
+        &self,
+        quarantine_id_hex: &str,
+        filter: &SorafsModerationQuarantineFilter,
+    ) -> Result<Response<Vec<u8>>> {
+        let quarantine_id_hex = normalize_hex_lower::<16>(quarantine_id_hex, "quarantine_id_hex")?;
+        let path = format!("v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel");
+        let url = join_torii_url(&self.torii_url, &path);
+        let request = self.account_signed_request(HttpMethod::GET, url, Vec::new())?;
+        self.send_builder(filter.apply(request).header("Accept", APPLICATION_JSON))
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/moderation/quarantine/{id}/object`.
+    ///
+    /// # Errors
+    /// Returns an error if the quarantine id is malformed, request construction
+    /// or serialization fails, signing fails, or the HTTP call fails.
+    pub fn post_sorafs_moderation_quarantine_object(
+        &self,
+        quarantine_id_hex: &str,
+        request: &SorafsModerationQuarantineObjectStoreRequest<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        let quarantine_id_hex = normalize_hex_lower::<16>(quarantine_id_hex, "quarantine_id_hex")?;
+        let path = format!("v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object");
+        let url = join_torii_url(&self.torii_url, &path);
+        let body = Self::sorafs_moderation_quarantine_object_store_body(request)?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Convenience: signed GET `/v1/sorafs/moderation/quarantine/{id}/object`.
+    ///
+    /// # Errors
+    /// Returns an error if the quarantine id is malformed, request construction
+    /// fails, signing fails, or the HTTP call fails.
+    pub fn get_sorafs_moderation_quarantine_object(
+        &self,
+        quarantine_id_hex: &str,
+    ) -> Result<Response<Vec<u8>>> {
+        let quarantine_id_hex = normalize_hex_lower::<16>(quarantine_id_hex, "quarantine_id_hex")?;
+        let path = format!("v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object");
+        let url = join_torii_url(&self.torii_url, &path);
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    fn sorafs_required_text(value: &str, field: &str) -> Result<String> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(eyre!("{field} must not be empty"));
+        }
+        Ok(trimmed.to_owned())
+    }
+
+    fn sorafs_optional_text(value: Option<&str>, field: &str) -> Result<Option<String>> {
+        value
+            .map(|text| Self::sorafs_required_text(text, field))
+            .transpose()
+    }
+
+    fn sorafs_moderation_model_registry_manifest_body(manifest_bytes: &[u8]) -> Result<Vec<u8>> {
+        if manifest_bytes.is_empty() {
+            return Err(eyre!("manifest_bytes must not be empty"));
+        }
+        let mut map = JsonMap::new();
+        map.insert(
+            "manifest_b64".into(),
+            JsonValue::from(base64::engine::general_purpose::STANDARD.encode(manifest_bytes)),
+        );
+        Ok(norito::json::to_vec(&JsonValue::Object(map))?)
+    }
+
+    fn sorafs_moderation_ballot_commit_body(
+        commit: &SoraFsModerationBallotCommitV1,
+    ) -> Result<Vec<u8>> {
+        commit
+            .validate()
+            .wrap_err("moderation ballot commit validation failed")?;
+        let commit_bytes =
+            to_bytes(commit).wrap_err("failed to encode moderation ballot commit")?;
+        let mut map = JsonMap::new();
+        map.insert(
+            "commit_b64".into(),
+            JsonValue::from(base64::engine::general_purpose::STANDARD.encode(commit_bytes)),
+        );
+        map.insert("now_unix_ms".into(), JsonValue::Null);
+        Ok(norito::json::to_vec(&JsonValue::Object(map))?)
+    }
+
+    fn sorafs_moderation_ballot_reveal_body(
+        reveal: &SoraFsModerationBallotRevealV1,
+    ) -> Result<Vec<u8>> {
+        reveal
+            .validate()
+            .wrap_err("moderation ballot reveal validation failed")?;
+        let reveal_bytes =
+            to_bytes(reveal).wrap_err("failed to encode moderation ballot reveal")?;
+        let mut map = JsonMap::new();
+        map.insert(
+            "reveal_b64".into(),
+            JsonValue::from(base64::engine::general_purpose::STANDARD.encode(reveal_bytes)),
+        );
+        map.insert("now_unix_ms".into(), JsonValue::Null);
+        Ok(norito::json::to_vec(&JsonValue::Object(map))?)
+    }
+
+    fn sorafs_moderation_ballot_tally_body(
+        request: &SorafsModerationBallotTallyRequest<'_>,
+    ) -> Result<Vec<u8>> {
+        let case_id = Self::sorafs_required_text(request.case_id, "case_id")?;
+        let round_id = Self::sorafs_required_text(request.round_id, "round_id")?;
+        let mut map = JsonMap::new();
+        map.insert("case_id".into(), JsonValue::from(case_id));
+        map.insert("round_id".into(), JsonValue::from(round_id));
+        map.insert("now_unix_ms".into(), JsonValue::Null);
+        Ok(norito::json::to_vec(&JsonValue::Object(map))?)
+    }
+
+    fn sorafs_json_request_body(payload: &[u8], context: &str) -> Result<Vec<u8>> {
+        if payload.is_empty() {
+            return Err(eyre!("{context} payload must not be empty"));
+        }
+        let value: JsonValue = norito::json::from_slice(payload)
+            .wrap_err_with(|| format!("failed to decode {context} JSON"))?;
+        Ok(norito::json::to_vec(&value)?)
+    }
+
+    fn post_sorafs_signed_json(
+        &self,
+        path: &str,
+        payload: &[u8],
+        context: &str,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, path);
+        let payload = Self::sorafs_json_request_body(payload, context)?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, payload)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    fn sorafs_moderation_quarantine_review_body(
+        request: &SorafsModerationQuarantineReviewRequest<'_>,
+    ) -> Result<Vec<u8>> {
+        let reviewed_by = Self::sorafs_required_text(request.reviewed_by, "reviewed_by")?;
+        let notes = Self::sorafs_optional_text(request.notes, "notes")?;
+        let mut map = JsonMap::new();
+        map.insert("reviewed_by".into(), JsonValue::from(reviewed_by));
+        map.insert(
+            "reviewed_at_unix".into(),
+            request
+                .reviewed_at_unix
+                .map_or(JsonValue::Null, JsonValue::from),
+        );
+        map.insert(
+            "notes".into(),
+            notes.map_or(JsonValue::Null, JsonValue::from),
+        );
+        Ok(norito::json::to_vec(&JsonValue::Object(map))?)
+    }
+
+    fn sorafs_moderation_screening_result_body(
+        request: &SorafsModerationScreeningResultRequest<'_>,
+    ) -> Result<Vec<u8>> {
+        let subject = Self::sorafs_required_text(request.subject, "subject")?;
+        let subject_digest_hex =
+            normalize_hex_lower::<32>(request.subject_digest_hex, "subject_digest_hex")?;
+        let manifest_id_hex =
+            normalize_hex_lower::<16>(request.manifest_id_hex, "manifest_id_hex")?;
+        let runner_hash_hex =
+            normalize_hex_lower::<32>(request.runner_hash_hex, "runner_hash_hex")?;
+        if request.combined_score_bps > 10_000 {
+            return Err(eyre!("combined_score_bps must be <= 10000"));
+        }
+        if request.screened_at_unix == Some(0) {
+            return Err(eyre!("screened_at_unix must be non-zero"));
+        }
+        let verdict = request.verdict.trim().to_ascii_lowercase();
+        if !matches!(
+            verdict.as_str(),
+            "pass" | "warn" | "quarantine" | "escalate" | "block"
+        ) {
+            return Err(eyre!(
+                "verdict must be pass, warn, quarantine, escalate, or block"
+            ));
+        }
+        let evidence_digest_hex = request
+            .evidence_digest_hex
+            .map(|value| normalize_hex_lower::<32>(value, "evidence_digest_hex"))
+            .transpose()?;
+        let policy_digest_hex = request
+            .policy_digest_hex
+            .map(|value| normalize_hex_lower::<32>(value, "policy_digest_hex"))
+            .transpose()?;
+        let notes = Self::sorafs_optional_text(request.notes, "notes")?;
+
+        let mut map = JsonMap::new();
+        map.insert("subject".into(), JsonValue::from(subject));
+        map.insert(
+            "subject_digest_hex".into(),
+            JsonValue::from(subject_digest_hex),
+        );
+        map.insert("manifest_id_hex".into(), JsonValue::from(manifest_id_hex));
+        map.insert("runner_hash_hex".into(), JsonValue::from(runner_hash_hex));
+        map.insert(
+            "combined_score_bps".into(),
+            JsonValue::from(u64::from(request.combined_score_bps)),
+        );
+        map.insert("verdict".into(), JsonValue::from(verdict));
+        map.insert(
+            "screened_at_unix".into(),
+            request
+                .screened_at_unix
+                .map_or(JsonValue::Null, JsonValue::from),
+        );
+        map.insert(
+            "evidence_digest_hex".into(),
+            evidence_digest_hex.map_or(JsonValue::Null, JsonValue::from),
+        );
+        map.insert(
+            "policy_digest_hex".into(),
+            policy_digest_hex.map_or(JsonValue::Null, JsonValue::from),
+        );
+        map.insert(
+            "notes".into(),
+            notes.map_or(JsonValue::Null, JsonValue::from),
+        );
+        Ok(norito::json::to_vec(&JsonValue::Object(map))?)
+    }
+
+    fn sorafs_moderation_quarantine_release_body(
+        request: &SorafsModerationQuarantineReleaseRequest<'_>,
+    ) -> Result<Vec<u8>> {
+        let release_authority =
+            Self::sorafs_required_text(request.release_authority, "release_authority")?;
+        let notes = Self::sorafs_optional_text(request.notes, "notes")?;
+        let mut map = JsonMap::new();
+        map.insert(
+            "release_authority".into(),
+            JsonValue::from(release_authority),
+        );
+        map.insert(
+            "released_at_unix".into(),
+            request
+                .released_at_unix
+                .map_or(JsonValue::Null, JsonValue::from),
+        );
+        map.insert(
+            "notes".into(),
+            notes.map_or(JsonValue::Null, JsonValue::from),
+        );
+        Ok(norito::json::to_vec(&JsonValue::Object(map))?)
+    }
+
+    fn sorafs_moderation_quarantine_object_store_body(
+        request: &SorafsModerationQuarantineObjectStoreRequest<'_>,
+    ) -> Result<Vec<u8>> {
+        if request.payload.is_empty() {
+            return Err(eyre!("payload must not be empty"));
+        }
+        let content_type = Self::sorafs_optional_text(request.content_type, "content_type")?;
+        let notes = Self::sorafs_optional_text(request.notes, "notes")?;
+        let mut map = JsonMap::new();
+        map.insert(
+            "payload_b64".into(),
+            JsonValue::from(base64::engine::general_purpose::STANDARD.encode(request.payload)),
+        );
+        map.insert(
+            "captured_at_unix".into(),
+            request
+                .captured_at_unix
+                .map_or(JsonValue::Null, JsonValue::from),
+        );
+        map.insert(
+            "content_type".into(),
+            content_type.map_or(JsonValue::Null, JsonValue::from),
+        );
+        map.insert(
+            "notes".into(),
+            notes.map_or(JsonValue::Null, JsonValue::from),
+        );
+        Ok(norito::json::to_vec(&JsonValue::Object(map))?)
+    }
+
     /// Convenience: POST `/v1/sorafs/storage/pin` with manifest and payload bytes.
     ///
     /// # Errors
@@ -17764,7 +18910,15 @@ mod tests {
         nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
         peer::PeerId,
         query::parameters::Pagination,
-        sorafs::pin_registry::ManifestDigest,
+        sorafs::{
+            moderation::{
+                SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
+                SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
+                SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1, SoraFsModerationBallotContextV1,
+                SoraFsModerationVoteChoice,
+            },
+            pin_registry::ManifestDigest,
+        },
     };
     use iroha_telemetry::metrics::GovernanceStatus;
     use iroha_test_samples::{ALICE_ID, gen_account_in};
@@ -23291,6 +24445,1630 @@ mod tests {
             "/v1/sorafs/audit/repair/status/deadbeef"
         );
         assert_eq!(snapshot.url.query(), Some("status=completed"));
+    }
+
+    #[test]
+    fn sorafs_moderation_quarantine_filter_sets_query_params() {
+        let client = Client::new(config_factory());
+        let url = join_torii_url(&client.torii_url, "v1/sorafs/moderation/quarantine");
+        let filter = SorafsModerationQuarantineFilter { limit: Some(25) };
+        let request = filter
+            .apply(client.default_request(HttpMethod::GET, url))
+            .build()
+            .expect("build request");
+        assert_eq!(request.uri().query(), Some("limit=25"));
+    }
+
+    #[test]
+    fn sorafs_moderation_quarantine_list_targets_endpoint() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let filter = SorafsModerationQuarantineFilter { limit: Some(7) };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_sorafs_moderation_quarantine(&filter)
+                .expect("moderation quarantine list request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(snapshot.url.path(), "/v1/sorafs/moderation/quarantine");
+        assert_eq!(snapshot.url.query(), Some("limit=7"));
+    }
+
+    #[test]
+    fn sorafs_moderation_model_registry_filter_sets_query_params() {
+        let client = Client::new(config_factory());
+        let url = join_torii_url(&client.torii_url, "v1/sorafs/moderation/model-registry");
+        let filter = SorafsModerationModelRegistryFilter { limit: Some(25) };
+        let request = filter
+            .apply(client.default_request(HttpMethod::GET, url))
+            .build()
+            .expect("build request");
+        assert_eq!(request.uri().query(), Some("limit=25"));
+    }
+
+    #[test]
+    fn sorafs_moderation_model_registry_list_targets_endpoint() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let filter = SorafsModerationModelRegistryFilter { limit: Some(11) };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_sorafs_moderation_model_registry(&filter)
+                .expect("moderation model registry list request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(snapshot.url.path(), "/v1/sorafs/moderation/model-registry");
+        assert_eq!(snapshot.url.query(), Some("limit=11"));
+    }
+
+    #[test]
+    fn sorafs_moderation_model_registry_repro_manifest_sends_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"repro"}"#);
+        let manifest_bytes = b"canonical repro manifest bytes";
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_moderation_model_registry_repro_manifest(manifest_bytes)
+                .expect("moderation model registry repro request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot.url.path(),
+            "/v1/sorafs/moderation/model-registry/repro-manifests"
+        );
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert!(headers.contains_key(HEADER_ACCOUNT));
+        assert!(headers.contains_key(HEADER_SIGNATURE));
+        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
+        assert!(headers.contains_key(HEADER_NONCE));
+        assert_eq!(
+            headers.get("content-type"),
+            Some(&APPLICATION_JSON.to_owned())
+        );
+        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        let expected_manifest_b64 =
+            base64::engine::general_purpose::STANDARD.encode(manifest_bytes);
+        assert_eq!(
+            body.get("manifest_b64").and_then(JsonValue::as_str),
+            Some(expected_manifest_b64.as_str())
+        );
+    }
+
+    #[test]
+    fn sorafs_moderation_model_registry_corpus_sends_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"corpus"}"#);
+        let manifest_bytes = b"canonical corpus manifest bytes";
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_moderation_model_registry_corpus(manifest_bytes)
+                .expect("moderation model registry corpus request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot.url.path(),
+            "/v1/sorafs/moderation/model-registry/corpora"
+        );
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert!(headers.contains_key(HEADER_ACCOUNT));
+        assert!(headers.contains_key(HEADER_SIGNATURE));
+        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
+        assert!(headers.contains_key(HEADER_NONCE));
+
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        let expected_manifest_b64 =
+            base64::engine::general_purpose::STANDARD.encode(manifest_bytes);
+        assert_eq!(
+            body.get("manifest_b64").and_then(JsonValue::as_str),
+            Some(expected_manifest_b64.as_str())
+        );
+    }
+
+    #[test]
+    fn sorafs_moderation_model_registry_rejects_empty_manifest() {
+        let client = client_with_base_url(base_url());
+        let err = client
+            .post_sorafs_moderation_model_registry_repro_manifest(&[])
+            .expect_err("empty manifest must be rejected");
+        assert!(err.to_string().contains("manifest_bytes"));
+    }
+
+    fn moderation_ballot_context_fixture() -> SoraFsModerationBallotContextV1 {
+        SoraFsModerationBallotContextV1 {
+            version: SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
+            case_id: "case-401".to_string(),
+            evidence_bundle_digest: [0xA1; 32],
+            appeal_finance_config_version: "appeal-fee-v1".to_string(),
+            panel_roster_hash: [0xB2; 32],
+            policy_reference: "moderation-policy-v1".to_string(),
+            evidence_uri: Some("dag://evidence/case-401".to_string()),
+        }
+    }
+
+    fn moderation_ballot_reveal_fixture() -> SoraFsModerationBallotRevealV1 {
+        SoraFsModerationBallotRevealV1 {
+            version: SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1,
+            context: moderation_ballot_context_fixture(),
+            round_id: "round-7".to_string(),
+            juror_id: "juror-1@moderation".to_string(),
+            choice: SoraFsModerationVoteChoice::Uphold,
+            nonce: vec![0xC3; 32],
+            revealed_at_unix_ms: 1_800_000_400_000,
+        }
+    }
+
+    fn moderation_ballot_commit_fixture() -> SoraFsModerationBallotCommitV1 {
+        let reveal = moderation_ballot_reveal_fixture();
+        SoraFsModerationBallotCommitV1 {
+            version: SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
+            context: reveal.context.clone(),
+            round_id: reveal.round_id.clone(),
+            juror_id: reveal.juror_id.clone(),
+            commitment_blake2b_256: reveal.compute_commitment(),
+            committed_at_unix_ms: 1_800_000_300_000,
+        }
+    }
+
+    #[test]
+    fn sorafs_moderation_ballots_filter_sets_query_params() {
+        let client = Client::new(config_factory());
+        let url = join_torii_url(&client.torii_url, "v1/sorafs/moderation/ballots");
+        let filter = SorafsModerationBallotsFilter { limit: Some(25) };
+        let request = filter
+            .apply(client.default_request(HttpMethod::GET, url))
+            .build()
+            .expect("build request");
+        assert_eq!(request.uri().query(), Some("limit=25"));
+    }
+
+    #[test]
+    fn sorafs_moderation_ballot_events_filter_sets_query_params() {
+        let client = Client::new(config_factory());
+        let url = join_torii_url(&client.torii_url, "v1/sorafs/moderation/ballots/events");
+        let filter = SorafsModerationBallotEventsFilter {
+            since: Some(40),
+            limit: Some(25),
+        };
+        let request = filter
+            .apply(client.default_request(HttpMethod::GET, url))
+            .build()
+            .expect("build request");
+        assert_eq!(request.uri().query(), Some("since=40&limit=25"));
+    }
+
+    #[test]
+    fn sorafs_moderation_ballots_list_targets_endpoint() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let filter = SorafsModerationBallotsFilter { limit: Some(13) };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_sorafs_moderation_ballots(&filter)
+                .expect("moderation ballots list request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(snapshot.url.path(), "/v1/sorafs/moderation/ballots");
+        assert_eq!(snapshot.url.query(), Some("limit=13"));
+    }
+
+    #[test]
+    fn sorafs_moderation_ballot_get_targets_endpoint() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let filter = SorafsModerationBallotsFilter { limit: Some(5) };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_sorafs_moderation_ballot("case/401", "round 7", &filter)
+                .expect("moderation ballot get request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(
+            snapshot.url.path(),
+            "/v1/sorafs/moderation/ballots/case%2F401/round%207"
+        );
+        assert_eq!(snapshot.url.query(), Some("limit=5"));
+    }
+
+    #[test]
+    fn sorafs_moderation_ballot_events_targets_endpoint() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let filter = SorafsModerationBallotEventsFilter {
+            since: Some(10),
+            limit: Some(2),
+        };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_sorafs_moderation_ballot_events(&filter)
+                .expect("moderation ballot events request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(snapshot.url.path(), "/v1/sorafs/moderation/ballots/events");
+        assert_eq!(snapshot.url.query(), Some("since=10&limit=2"));
+    }
+
+    #[test]
+    fn sorafs_moderation_ballot_commit_sends_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"commit"}"#);
+        let commit = moderation_ballot_commit_fixture();
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_moderation_ballot_commit(&commit)
+                .expect("moderation ballot commit request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/sorafs/moderation/ballots/commits");
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert!(headers.contains_key(HEADER_ACCOUNT));
+        assert!(headers.contains_key(HEADER_SIGNATURE));
+        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
+        assert!(headers.contains_key(HEADER_NONCE));
+        assert_eq!(
+            headers.get("content-type"),
+            Some(&APPLICATION_JSON.to_owned())
+        );
+        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        let commit_b64 = body
+            .get("commit_b64")
+            .and_then(JsonValue::as_str)
+            .expect("commit body has base64 payload");
+        let commit_bytes = base64::engine::general_purpose::STANDARD
+            .decode(commit_b64)
+            .expect("decode commit base64");
+        let decoded: SoraFsModerationBallotCommitV1 =
+            norito::decode_from_bytes(&commit_bytes).expect("decode commit norito");
+        assert_eq!(decoded, commit);
+        assert!(body.get("now_unix_ms").is_some_and(JsonValue::is_null));
+    }
+
+    #[test]
+    fn sorafs_moderation_ballot_reveal_sends_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"reveal"}"#);
+        let reveal = moderation_ballot_reveal_fixture();
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_moderation_ballot_reveal(&reveal)
+                .expect("moderation ballot reveal request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/sorafs/moderation/ballots/reveals");
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert!(headers.contains_key(HEADER_ACCOUNT));
+        assert!(headers.contains_key(HEADER_SIGNATURE));
+        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
+        assert!(headers.contains_key(HEADER_NONCE));
+
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        let reveal_b64 = body
+            .get("reveal_b64")
+            .and_then(JsonValue::as_str)
+            .expect("reveal body has base64 payload");
+        let reveal_bytes = base64::engine::general_purpose::STANDARD
+            .decode(reveal_b64)
+            .expect("decode reveal base64");
+        let decoded: SoraFsModerationBallotRevealV1 =
+            norito::decode_from_bytes(&reveal_bytes).expect("decode reveal norito");
+        assert_eq!(decoded, reveal);
+        assert!(body.get("now_unix_ms").is_some_and(JsonValue::is_null));
+    }
+
+    #[test]
+    fn sorafs_moderation_ballot_tally_sends_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"tally"}"#);
+        let request = SorafsModerationBallotTallyRequest {
+            case_id: " case-401 ",
+            round_id: " round-7 ",
+        };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_moderation_ballot_tally(&request)
+                .expect("moderation ballot tally request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/sorafs/moderation/ballots/tally");
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert!(headers.contains_key(HEADER_ACCOUNT));
+        assert!(headers.contains_key(HEADER_SIGNATURE));
+        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
+        assert!(headers.contains_key(HEADER_NONCE));
+
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        assert_eq!(
+            body.get("case_id").and_then(JsonValue::as_str),
+            Some("case-401")
+        );
+        assert_eq!(
+            body.get("round_id").and_then(JsonValue::as_str),
+            Some("round-7")
+        );
+        assert!(body.get("now_unix_ms").is_some_and(JsonValue::is_null));
+    }
+
+    #[test]
+    fn sorafs_moderation_ballot_tally_rejects_blank_case_id() {
+        let client = client_with_base_url(base_url());
+        let request = SorafsModerationBallotTallyRequest {
+            case_id: "   ",
+            round_id: "round-7",
+        };
+        let err = client
+            .post_sorafs_moderation_ballot_tally(&request)
+            .expect_err("blank case id must be rejected");
+        assert!(err.to_string().contains("case_id"));
+    }
+
+    #[test]
+    fn sorafs_transparency_readback_filter_sets_query_params() {
+        let client = Client::new(config_factory());
+        let url = join_torii_url(&client.torii_url, "v1/sorafs/transparency/cycles");
+        let filter = SorafsTransparencyReadbackFilter { limit: Some(25) };
+        let request = filter
+            .apply(client.default_request(HttpMethod::GET, url))
+            .build()
+            .expect("build request");
+        assert_eq!(request.uri().query(), Some("limit=25"));
+    }
+
+    #[test]
+    fn sorafs_transparency_cycles_list_targets_endpoint() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let filter = SorafsTransparencyReadbackFilter { limit: Some(13) };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_sorafs_transparency_cycles(&filter)
+                .expect("transparency cycles list request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(snapshot.url.path(), "/v1/sorafs/transparency/cycles");
+        assert_eq!(snapshot.url.query(), Some("limit=13"));
+    }
+
+    #[test]
+    fn sorafs_transparency_cycle_get_normalizes_hex_id() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let filter = SorafsTransparencyReadbackFilter { limit: Some(5) };
+        let cycle_id = format!("0x{}", "AB".repeat(16));
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_sorafs_transparency_cycle(&cycle_id, &filter)
+                .expect("transparency cycle get request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(
+            snapshot.url.path(),
+            format!("/v1/sorafs/transparency/cycles/{}", "ab".repeat(16))
+        );
+        assert_eq!(snapshot.url.query(), Some("limit=5"));
+    }
+
+    #[test]
+    fn sorafs_transparency_cycle_entry_get_normalizes_hex_ids() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let cycle_id = format!("0x{}", "AA".repeat(16));
+        let entry_id = "BB".repeat(16);
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_sorafs_transparency_cycle_entry(&cycle_id, &entry_id)
+                .expect("transparency cycle entry get request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(
+            snapshot.url.path(),
+            format!(
+                "/v1/sorafs/transparency/cycles/{}/entries/{}",
+                "aa".repeat(16),
+                "bb".repeat(16)
+            )
+        );
+        assert!(snapshot.url.query().is_none());
+    }
+
+    #[test]
+    fn sorafs_transparency_explorer_targets_endpoint() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let filter = SorafsTransparencyReadbackFilter { limit: Some(9) };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_sorafs_transparency_explorer(&filter)
+                .expect("transparency explorer request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(snapshot.url.path(), "/v1/sorafs/transparency/explorer");
+        assert_eq!(snapshot.url.query(), Some("limit=9"));
+    }
+
+    #[test]
+    fn sorafs_transparency_token_issuances_targets_endpoint() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let filter = SorafsTransparencyReadbackFilter { limit: Some(7) };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_sorafs_transparency_token_issuances(&filter)
+                .expect("transparency token issuance request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(snapshot.url.path(), "/v1/sorafs/transparency/tokens");
+        assert_eq!(snapshot.url.query(), Some("limit=7"));
+    }
+
+    #[test]
+    fn sorafs_transparency_source_entry_sends_signed_json_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"source"}"#);
+        let payload = norito::json::to_vec(&norito::json!({
+            "event_id": "legal-hold-1",
+            "occurred_at_unix": 1_800_000_500_u64,
+            "subject": "case-401",
+            "payload_digest_hex": ("a1".repeat(32)),
+        }))
+        .expect("encode source entry payload");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_transparency_source_entry_json("legal hold", &payload)
+                .expect("transparency source entry request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot.url.path(),
+            "/v1/sorafs/transparency/source-entries/legal%20hold"
+        );
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert!(headers.contains_key(HEADER_ACCOUNT));
+        assert!(headers.contains_key(HEADER_SIGNATURE));
+        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
+        assert!(headers.contains_key(HEADER_NONCE));
+        assert_eq!(
+            headers.get("content-type"),
+            Some(&APPLICATION_JSON.to_owned())
+        );
+        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        assert_eq!(
+            body.get("event_id").and_then(JsonValue::as_str),
+            Some("legal-hold-1")
+        );
+        assert_eq!(
+            body.get("payload_digest_hex").and_then(JsonValue::as_str),
+            Some("a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1")
+        );
+    }
+
+    #[test]
+    fn sorafs_transparency_source_entry_rejects_empty_json_payload() {
+        let client = client_with_base_url(base_url());
+        let err = client
+            .post_sorafs_transparency_source_entry_json("legal-hold-notice", &[])
+            .expect_err("empty payload must be rejected");
+        assert!(err.to_string().contains("payload"));
+    }
+
+    #[test]
+    fn sorafs_transparency_token_issuance_sends_signed_json_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(
+            StatusCode::ACCEPTED,
+            r#"{"schema":"sorafs.transparency.proof_token_issuance.ingest.v1"}"#,
+        );
+        let payload = norito::json::to_vec(&norito::json!({
+            "token_b64": "proof-token-frame",
+            "signer_key_hex": ("a1".repeat(32)),
+            "evidence_digest_hex": ("b2".repeat(32)),
+            "policy_digest_hex": ("c3".repeat(32)),
+            "metadata": [
+                { "key": "producer", "value": "gateway-a" }
+            ]
+        }))
+        .expect("encode proof-token issuance payload");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_transparency_token_issuance_json(&payload)
+                .expect("proof-token issuance request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot.url.path(),
+            "/v1/sorafs/transparency/tokens/issuances"
+        );
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert!(headers.contains_key(HEADER_ACCOUNT));
+        assert!(headers.contains_key(HEADER_SIGNATURE));
+        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
+        assert!(headers.contains_key(HEADER_NONCE));
+        assert_eq!(
+            headers.get("content-type"),
+            Some(&APPLICATION_JSON.to_owned())
+        );
+        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        assert_eq!(
+            body.get("token_b64").and_then(JsonValue::as_str),
+            Some("proof-token-frame")
+        );
+        assert_eq!(
+            body.get("signer_key_hex").and_then(JsonValue::as_str),
+            Some("a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1")
+        );
+    }
+
+    #[test]
+    fn sorafs_transparency_token_issuance_rejects_empty_json_payload() {
+        let client = client_with_base_url(base_url());
+        let err = client
+            .post_sorafs_transparency_token_issuance_json(&[])
+            .expect_err("empty payload must be rejected");
+        assert!(err.to_string().contains("payload"));
+    }
+
+    #[test]
+    fn sorafs_transparency_privacy_aggregate_source_event_sends_signed_json_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"source-event"}"#);
+        let payload = norito::json::to_vec(&norito::json!({
+            "event_id": "privacy-event-1",
+            "occurred_at_unix": 1_800_000_500_u64,
+            "population_label": "moderation.global",
+            "metrics": [
+                { "key": "quarantined", "value": 3_u64 }
+            ],
+            "policy_digest_hex": ("a1".repeat(32)),
+        }))
+        .expect("encode privacy aggregate source-event payload");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_transparency_privacy_aggregate_source_event_json(&payload)
+                .expect("privacy aggregate source-event request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot.url.path(),
+            "/v1/sorafs/transparency/privacy-aggregates/source-events"
+        );
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert!(headers.contains_key(HEADER_ACCOUNT));
+        assert!(headers.contains_key(HEADER_SIGNATURE));
+        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
+        assert!(headers.contains_key(HEADER_NONCE));
+        assert_eq!(
+            headers.get("content-type"),
+            Some(&APPLICATION_JSON.to_owned())
+        );
+        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        assert_eq!(
+            body.get("event_id").and_then(JsonValue::as_str),
+            Some("privacy-event-1")
+        );
+        assert_eq!(
+            body.get("population_label").and_then(JsonValue::as_str),
+            Some("moderation.global")
+        );
+    }
+
+    #[test]
+    fn sorafs_transparency_privacy_aggregate_publish_due_sends_signed_json_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, r#"{"schema":"publish-due"}"#);
+        let payload = norito::json::to_vec(&norito::json!({
+            "now_unix": 1_800_000_800_u64,
+            "aggregate_id_prefix": "moderation",
+            "privacy_mode": "suppression",
+            "suppression_threshold": 4_u64,
+            "metadata": [
+                { "key": "producer", "value": "scheduler-a" }
+            ],
+        }))
+        .expect("encode privacy aggregate publish-due payload");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_transparency_privacy_aggregate_publish_due_json(&payload)
+                .expect("privacy aggregate publish-due request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot.url.path(),
+            "/v1/sorafs/transparency/privacy-aggregates/publish-due"
+        );
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert!(headers.contains_key(HEADER_ACCOUNT));
+        assert!(headers.contains_key(HEADER_SIGNATURE));
+        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
+        assert!(headers.contains_key(HEADER_NONCE));
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        assert_eq!(
+            body.get("aggregate_id_prefix").and_then(JsonValue::as_str),
+            Some("moderation")
+        );
+        assert_eq!(
+            body.get("privacy_mode").and_then(JsonValue::as_str),
+            Some("suppression")
+        );
+    }
+
+    #[test]
+    fn sorafs_transparency_privacy_aggregate_json_rejects_empty_payload() {
+        let client = client_with_base_url(base_url());
+        let err = client
+            .post_sorafs_transparency_privacy_aggregate_source_event_json(&[])
+            .expect_err("empty source-event payload must be rejected");
+        assert!(err.to_string().contains("privacy aggregate source event"));
+        let err = client
+            .post_sorafs_transparency_privacy_aggregate_publish_due_json(&[])
+            .expect_err("empty publish-due payload must be rejected");
+        assert!(err.to_string().contains("privacy aggregate publish-due"));
+    }
+
+    #[test]
+    fn sorafs_appeal_finance_readback_filter_sets_query_params() {
+        let client = Client::new(config_factory());
+        let url = join_torii_url(&client.torii_url, "v1/sorafs/appeals/finance/reports");
+        let filter = SorafsAppealFinanceReadbackFilter { limit: Some(25) };
+        let request = filter
+            .apply(client.default_request(HttpMethod::GET, url))
+            .build()
+            .expect("build request");
+        assert_eq!(request.uri().query(), Some("limit=25"));
+    }
+
+    #[test]
+    fn sorafs_appeal_pricing_readback_targets_endpoints() {
+        let client = client_with_base_url(base_url());
+        let config_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let status_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        with_mock_http(
+            respond_with(&config_store, json_response(StatusCode::OK, "{}")),
+            || {
+                client
+                    .get_sorafs_appeal_pricing_config()
+                    .expect("pricing config request");
+            },
+        );
+        with_mock_http(
+            respond_with(&status_store, json_response(StatusCode::OK, "{}")),
+            || {
+                client
+                    .get_sorafs_appeal_pricing_status()
+                    .expect("pricing status request");
+            },
+        );
+
+        assert_eq!(
+            config_store
+                .lock()
+                .expect("config snapshots")
+                .first()
+                .expect("config snapshot")
+                .url
+                .path(),
+            "/v1/sorafs/appeals/pricing/config"
+        );
+        assert_eq!(
+            status_store
+                .lock()
+                .expect("status snapshots")
+                .first()
+                .expect("status snapshot")
+                .url
+                .path(),
+            "/v1/sorafs/appeals/pricing/status"
+        );
+    }
+
+    #[test]
+    fn sorafs_appeal_pricing_quote_sends_json_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, r#"{"schema":"quote"}"#);
+        let payload = norito::json::to_vec(&norito::json!({
+            "class": "content",
+            "backlog": 4_u64,
+            "evidence_size_mb": 12_u64,
+            "urgency": "normal",
+        }))
+        .expect("encode quote payload");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_appeal_pricing_quote_json(&payload)
+                .expect("appeal pricing quote request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/sorafs/appeals/pricing/quote");
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert_eq!(
+            headers.get("content-type"),
+            Some(&APPLICATION_JSON.to_owned())
+        );
+        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+        assert!(!headers.contains_key(HEADER_SIGNATURE));
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        assert_eq!(
+            body.get("class").and_then(JsonValue::as_str),
+            Some("content")
+        );
+    }
+
+    #[test]
+    fn sorafs_appeal_finance_deposit_sends_signed_json_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, r#"{"schema":"deposit"}"#);
+        let payload = norito::json::to_vec(&norito::json!({
+            "case_id": "case-401",
+            "payer_account": "payer",
+            "destination_account": "treasury",
+            "asset_definition_id": "xor#wonderland",
+            "deposit_xor": "100",
+            "idempotency_key": "case-401-round-7",
+        }))
+        .expect("encode deposit payload");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_appeal_finance_deposit_json(&payload)
+                .expect("appeal finance deposit request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/sorafs/appeals/finance/deposits");
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert!(headers.contains_key(HEADER_ACCOUNT));
+        assert!(headers.contains_key(HEADER_SIGNATURE));
+        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
+        assert!(headers.contains_key(HEADER_NONCE));
+        assert_eq!(
+            headers.get("content-type"),
+            Some(&APPLICATION_JSON.to_owned())
+        );
+        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        assert_eq!(
+            body.get("case_id").and_then(JsonValue::as_str),
+            Some("case-401")
+        );
+    }
+
+    #[test]
+    fn sorafs_appeal_finance_deposit_get_normalizes_escrow_id_and_signs() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let escrow_id = format!("0x{}", "AB".repeat(32));
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_sorafs_appeal_finance_deposit(&escrow_id)
+                .expect("appeal finance deposit get request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(
+            snapshot.url.path(),
+            format!("/v1/sorafs/appeals/finance/deposits/{}", "ab".repeat(32))
+        );
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert!(headers.contains_key(HEADER_ACCOUNT));
+        assert!(headers.contains_key(HEADER_SIGNATURE));
+        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
+        assert!(headers.contains_key(HEADER_NONCE));
+        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+    }
+
+    #[test]
+    fn sorafs_appeal_finance_deposit_settle_sends_signed_json_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, r#"{"schema":"settle"}"#);
+        let payload = norito::json::to_vec(&norito::json!({
+            "deposit_confirmation": {
+                "escrow_id_hex": ("11".repeat(32)),
+                "case_id": "case-401",
+                "payer_account": "payer",
+                "destination_account": "treasury",
+                "asset_definition_id": "xor#wonderland",
+                "deposit_xor": "100",
+                "idempotency_key": "case-401-round-7"
+            },
+            "outcome": "uphold"
+        }))
+        .expect("encode settle payload");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_appeal_finance_deposit_settle_json(&payload)
+                .expect("appeal finance deposit settle request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot.url.path(),
+            "/v1/sorafs/appeals/finance/deposits/settle"
+        );
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert!(headers.contains_key(HEADER_SIGNATURE));
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        assert_eq!(
+            body.get("outcome").and_then(JsonValue::as_str),
+            Some("uphold")
+        );
+    }
+
+    #[test]
+    fn sorafs_appeal_finance_deposit_reconcile_and_submit_target_endpoints() {
+        let client = client_with_base_url(base_url());
+        let reconcile_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let submit_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let payload = norito::json::to_vec(&norito::json!({
+            "deposit_confirmation": {
+                "escrow_id_hex": ("22".repeat(32)),
+                "case_id": "case-402",
+                "payer_account": "payer",
+                "destination_account": "treasury",
+                "asset_definition_id": "xor#wonderland",
+                "deposit_xor": "100",
+                "idempotency_key": "case-402-round-7"
+            },
+            "outcome": "frivolous"
+        }))
+        .expect("encode reconcile payload");
+
+        with_mock_http(
+            respond_with(&reconcile_store, json_response(StatusCode::OK, "{}")),
+            || {
+                client
+                    .post_sorafs_appeal_finance_deposit_reconcile_json(&payload)
+                    .expect("appeal finance deposit reconcile request");
+            },
+        );
+        with_mock_http(
+            respond_with(&submit_store, json_response(StatusCode::ACCEPTED, "{}")),
+            || {
+                client
+                    .post_sorafs_appeal_finance_deposit_submit_settlement_json(&payload)
+                    .expect("appeal finance deposit submit-settlement request");
+            },
+        );
+
+        assert_eq!(
+            reconcile_store
+                .lock()
+                .expect("reconcile snapshots")
+                .first()
+                .expect("reconcile snapshot")
+                .url
+                .path(),
+            "/v1/sorafs/appeals/finance/deposits/reconcile"
+        );
+        assert_eq!(
+            submit_store
+                .lock()
+                .expect("submit snapshots")
+                .first()
+                .expect("submit snapshot")
+                .url
+                .path(),
+            "/v1/sorafs/appeals/finance/deposits/submit-settlement"
+        );
+    }
+
+    #[test]
+    fn sorafs_appeal_finance_readback_targets_endpoints() {
+        let client = client_with_base_url(base_url());
+        let reports_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let rollups_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let receipts_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let filter = SorafsAppealFinanceReadbackFilter { limit: Some(7) };
+
+        with_mock_http(
+            respond_with(&reports_store, json_response(StatusCode::OK, "{}")),
+            || {
+                client
+                    .get_sorafs_appeal_finance_reports(&filter)
+                    .expect("appeal finance reports request");
+            },
+        );
+        with_mock_http(
+            respond_with(&rollups_store, json_response(StatusCode::OK, "{}")),
+            || {
+                client
+                    .get_sorafs_appeal_finance_weekly_rollups(&filter)
+                    .expect("appeal finance weekly rollups request");
+            },
+        );
+        with_mock_http(
+            respond_with(&receipts_store, json_response(StatusCode::OK, "{}")),
+            || {
+                client
+                    .get_sorafs_appeal_finance_settlement_receipts(&filter)
+                    .expect("appeal finance settlement receipts request");
+            },
+        );
+
+        assert_eq!(
+            reports_store
+                .lock()
+                .expect("reports snapshots")
+                .first()
+                .expect("reports snapshot")
+                .url
+                .path(),
+            "/v1/sorafs/appeals/finance/reports"
+        );
+        assert_eq!(
+            rollups_store
+                .lock()
+                .expect("rollups snapshots")
+                .first()
+                .expect("rollups snapshot")
+                .url
+                .path(),
+            "/v1/sorafs/appeals/finance/weekly-rollups"
+        );
+        assert_eq!(
+            receipts_store
+                .lock()
+                .expect("receipts snapshots")
+                .first()
+                .expect("receipts snapshot")
+                .url
+                .path(),
+            "/v1/sorafs/appeals/finance/settlement-receipts"
+        );
+    }
+
+    #[test]
+    fn sorafs_appeal_finance_json_rejects_empty_payload() {
+        let client = client_with_base_url(base_url());
+        let err = client
+            .post_sorafs_appeal_finance_deposit_json(&[])
+            .expect_err("empty payload must be rejected");
+        assert!(err.to_string().contains("appeal finance deposit"));
+    }
+
+    #[test]
+    fn sorafs_moderation_screening_filter_sets_query_params() {
+        let client = Client::new(config_factory());
+        let url = join_torii_url(&client.torii_url, "v1/sorafs/moderation/screening-results");
+        let filter = SorafsModerationScreeningResultsFilter { limit: Some(25) };
+        let request = filter
+            .apply(client.default_request(HttpMethod::GET, url))
+            .build()
+            .expect("build request");
+        assert_eq!(request.uri().query(), Some("limit=25"));
+    }
+
+    #[test]
+    fn sorafs_moderation_screening_list_targets_endpoint() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let filter = SorafsModerationScreeningResultsFilter { limit: Some(9) };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_sorafs_moderation_screening_results(&filter)
+                .expect("moderation screening list request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(
+            snapshot.url.path(),
+            "/v1/sorafs/moderation/screening-results"
+        );
+        assert_eq!(snapshot.url.query(), Some("limit=9"));
+    }
+
+    #[test]
+    fn sorafs_moderation_screening_submit_sends_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"screening"}"#);
+        let subject_digest = "AA".repeat(32);
+        let manifest_id = "BB".repeat(16);
+        let runner_hash = "CC".repeat(32);
+        let evidence_digest = "DD".repeat(32);
+        let policy_digest = "EE".repeat(32);
+        let subject_digest_lower = subject_digest.to_ascii_lowercase();
+        let manifest_id_lower = manifest_id.to_ascii_lowercase();
+        let runner_hash_lower = runner_hash.to_ascii_lowercase();
+        let evidence_digest_lower = evidence_digest.to_ascii_lowercase();
+        let policy_digest_lower = policy_digest.to_ascii_lowercase();
+        let request = SorafsModerationScreeningResultRequest {
+            subject: " cid:bafyfixture ",
+            subject_digest_hex: &subject_digest,
+            manifest_id_hex: &manifest_id,
+            runner_hash_hex: &runner_hash,
+            combined_score_bps: 6_500,
+            verdict: " Quarantine ",
+            screened_at_unix: Some(1_800_000_110),
+            evidence_digest_hex: Some(&evidence_digest),
+            policy_digest_hex: Some(&policy_digest),
+            notes: Some(" local runner fixture "),
+        };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_moderation_screening_result(&request)
+                .expect("moderation screening submit request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot.url.path(),
+            "/v1/sorafs/moderation/screening-results"
+        );
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert!(headers.contains_key(HEADER_ACCOUNT));
+        assert!(headers.contains_key(HEADER_SIGNATURE));
+        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
+        assert!(headers.contains_key(HEADER_NONCE));
+        assert_eq!(
+            headers.get("content-type"),
+            Some(&APPLICATION_JSON.to_owned())
+        );
+        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        assert_eq!(
+            body.get("subject").and_then(JsonValue::as_str),
+            Some("cid:bafyfixture")
+        );
+        assert_eq!(
+            body.get("subject_digest_hex").and_then(JsonValue::as_str),
+            Some(subject_digest_lower.as_str())
+        );
+        assert_eq!(
+            body.get("manifest_id_hex").and_then(JsonValue::as_str),
+            Some(manifest_id_lower.as_str())
+        );
+        assert_eq!(
+            body.get("runner_hash_hex").and_then(JsonValue::as_str),
+            Some(runner_hash_lower.as_str())
+        );
+        assert_eq!(
+            body.get("combined_score_bps").and_then(JsonValue::as_u64),
+            Some(6_500)
+        );
+        assert_eq!(
+            body.get("verdict").and_then(JsonValue::as_str),
+            Some("quarantine")
+        );
+        assert_eq!(
+            body.get("screened_at_unix").and_then(JsonValue::as_u64),
+            Some(1_800_000_110)
+        );
+        assert_eq!(
+            body.get("evidence_digest_hex").and_then(JsonValue::as_str),
+            Some(evidence_digest_lower.as_str())
+        );
+        assert_eq!(
+            body.get("policy_digest_hex").and_then(JsonValue::as_str),
+            Some(policy_digest_lower.as_str())
+        );
+        assert_eq!(
+            body.get("notes").and_then(JsonValue::as_str),
+            Some("local runner fixture")
+        );
+    }
+
+    #[test]
+    fn sorafs_moderation_screening_submit_rejects_invalid_score() {
+        let client = client_with_base_url(base_url());
+        let subject_digest = "11".repeat(32);
+        let manifest_id = "22".repeat(16);
+        let runner_hash = "33".repeat(32);
+        let request = SorafsModerationScreeningResultRequest {
+            subject: "cid:bafyfixture",
+            subject_digest_hex: &subject_digest,
+            manifest_id_hex: &manifest_id,
+            runner_hash_hex: &runner_hash,
+            combined_score_bps: 10_001,
+            verdict: "pass",
+            screened_at_unix: Some(1),
+            evidence_digest_hex: None,
+            policy_digest_hex: None,
+            notes: None,
+        };
+        let err = client
+            .post_sorafs_moderation_screening_result(&request)
+            .expect_err("invalid score must be rejected");
+        assert!(err.to_string().contains("combined_score_bps"));
+    }
+
+    #[test]
+    fn sorafs_moderation_quarantine_review_sends_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"review"}"#);
+        let quarantine_id = "AB".repeat(16);
+        let request = SorafsModerationQuarantineReviewRequest {
+            reviewed_by: " operator@moderation ",
+            reviewed_at_unix: Some(1_800_000_210),
+            notes: Some(" verified evidence "),
+        };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_moderation_quarantine_review(&quarantine_id, &request)
+                .expect("moderation quarantine review request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot.url.path(),
+            &format!(
+                "/v1/sorafs/moderation/quarantine/{}/review",
+                quarantine_id.to_ascii_lowercase()
+            )
+        );
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert!(headers.contains_key(HEADER_ACCOUNT));
+        assert!(headers.contains_key(HEADER_SIGNATURE));
+        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
+        assert!(headers.contains_key(HEADER_NONCE));
+        assert_eq!(
+            headers.get("content-type"),
+            Some(&APPLICATION_JSON.to_owned())
+        );
+        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        assert_eq!(
+            body.get("reviewed_by").and_then(JsonValue::as_str),
+            Some("operator@moderation")
+        );
+        assert_eq!(
+            body.get("reviewed_at_unix").and_then(JsonValue::as_u64),
+            Some(1_800_000_210)
+        );
+        assert_eq!(
+            body.get("notes").and_then(JsonValue::as_str),
+            Some("verified evidence")
+        );
+    }
+
+    #[test]
+    fn sorafs_moderation_quarantine_release_sends_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"release"}"#);
+        let quarantine_id = "CD".repeat(16);
+        let request = SorafsModerationQuarantineReleaseRequest {
+            release_authority: "release-authority@moderation",
+            released_at_unix: Some(1_800_000_220),
+            notes: None,
+        };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_moderation_quarantine_release(&quarantine_id, &request)
+                .expect("moderation quarantine release request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot.url.path(),
+            &format!(
+                "/v1/sorafs/moderation/quarantine/{}/release",
+                quarantine_id.to_ascii_lowercase()
+            )
+        );
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert!(headers.contains_key(HEADER_ACCOUNT));
+        assert!(headers.contains_key(HEADER_SIGNATURE));
+        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
+        assert!(headers.contains_key(HEADER_NONCE));
+
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        assert_eq!(
+            body.get("release_authority").and_then(JsonValue::as_str),
+            Some("release-authority@moderation")
+        );
+        assert_eq!(
+            body.get("released_at_unix").and_then(JsonValue::as_u64),
+            Some(1_800_000_220)
+        );
+        assert!(body.get("notes").is_some_and(JsonValue::is_null));
+    }
+
+    #[test]
+    fn sorafs_moderation_quarantine_appeal_handoff_sends_signed_json_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, r#"{"schema":"appeal_handoff"}"#);
+        let quarantine_id = "9A".repeat(16);
+        let payload = norito::json::to_vec(&norito::json!({
+            "class": "content",
+            "backlog": 3_u64,
+            "evidence_size_mb": 9_u64,
+            "payer_account": "payer",
+            "destination_account": "treasury",
+            "asset_definition_id": "xor#wonderland"
+        }))
+        .expect("encode appeal handoff payload");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_moderation_quarantine_appeal_handoff_json(&quarantine_id, &payload)
+                .expect("moderation quarantine appeal handoff request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot.url.path(),
+            &format!(
+                "/v1/sorafs/moderation/quarantine/{}/appeal-handoff",
+                quarantine_id.to_ascii_lowercase()
+            )
+        );
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert!(headers.contains_key(HEADER_ACCOUNT));
+        assert!(headers.contains_key(HEADER_SIGNATURE));
+        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
+        assert!(headers.contains_key(HEADER_NONCE));
+        assert_eq!(
+            headers.get("content-type"),
+            Some(&APPLICATION_JSON.to_owned())
+        );
+        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        assert_eq!(
+            body.get("class").and_then(JsonValue::as_str),
+            Some("content")
+        );
+    }
+
+    #[test]
+    fn sorafs_moderation_quarantine_appeal_ballot_sends_signed_json_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"appeal_ballot"}"#);
+        let quarantine_id = "A7".repeat(16);
+        let payload = norito::json::to_vec(&norito::json!({
+            "deposit_confirmation": {
+                "escrow_id_hex": ("11".repeat(32)),
+                "case_id": "case-401",
+                "round_id": "round-7",
+                "payer_account": "payer",
+                "destination_account": "treasury",
+                "asset_definition_id": "xor#wonderland",
+                "deposit_xor": "100",
+                "idempotency_key": "case-401-round-7",
+                "evidence_hashes_hex": [("22".repeat(32))]
+            },
+            "juror_ids": ["juror-1", "juror-2"],
+            "quorum": 2_u64,
+            "commit_deadline_unix_ms": 1_800_000_500_000_u64,
+            "challenge_deadline_unix_ms": 1_800_000_600_000_u64,
+            "reveal_deadline_unix_ms": 1_800_000_700_000_u64
+        }))
+        .expect("encode appeal ballot payload");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_moderation_quarantine_appeal_ballot_json(&quarantine_id, &payload)
+                .expect("moderation quarantine appeal ballot request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot.url.path(),
+            &format!(
+                "/v1/sorafs/moderation/quarantine/{}/appeal-ballot",
+                quarantine_id.to_ascii_lowercase()
+            )
+        );
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert!(headers.contains_key(HEADER_ACCOUNT));
+        assert!(headers.contains_key(HEADER_SIGNATURE));
+        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
+        assert!(headers.contains_key(HEADER_NONCE));
+        assert_eq!(
+            headers.get("content-type"),
+            Some(&APPLICATION_JSON.to_owned())
+        );
+        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        assert_eq!(body.get("quorum").and_then(JsonValue::as_u64), Some(2));
+    }
+
+    #[test]
+    fn sorafs_moderation_quarantine_appeal_ballot_rejects_empty_payload() {
+        let client = client_with_base_url(base_url());
+        let err = client
+            .post_sorafs_moderation_quarantine_appeal_ballot_json(&"A7".repeat(16), &[])
+            .expect_err("empty payload must be rejected");
+        assert!(
+            err.to_string()
+                .contains("moderation quarantine appeal ballot")
+        );
+    }
+
+    #[test]
+    fn sorafs_moderation_quarantine_operator_panel_sends_signed_get_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, r#"{"schema":"operator_panel"}"#);
+        let quarantine_id = "B8".repeat(16);
+        let filter = SorafsModerationQuarantineFilter { limit: Some(3) };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_sorafs_moderation_quarantine_operator_panel(&quarantine_id, &filter)
+                .expect("moderation quarantine operator panel request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(
+            snapshot.url.path(),
+            &format!(
+                "/v1/sorafs/moderation/quarantine/{}/operator-panel",
+                quarantine_id.to_ascii_lowercase()
+            )
+        );
+        assert_eq!(snapshot.url.query(), Some("limit=3"));
+        assert!(snapshot.body.is_empty());
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert!(headers.contains_key(HEADER_ACCOUNT));
+        assert!(headers.contains_key(HEADER_SIGNATURE));
+        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
+        assert!(headers.contains_key(HEADER_NONCE));
+        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+    }
+
+    #[test]
+    fn sorafs_moderation_quarantine_object_store_sends_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"object"}"#);
+        let quarantine_id = "EF".repeat(16);
+        let request = SorafsModerationQuarantineObjectStoreRequest {
+            payload: b"quarantine payload fixture",
+            captured_at_unix: Some(1_800_000_310),
+            content_type: Some(" application/octet-stream "),
+            notes: Some(" sealed locally "),
+        };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_sorafs_moderation_quarantine_object(&quarantine_id, &request)
+                .expect("moderation quarantine object store request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot.url.path(),
+            &format!(
+                "/v1/sorafs/moderation/quarantine/{}/object",
+                quarantine_id.to_ascii_lowercase()
+            )
+        );
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert!(headers.contains_key(HEADER_ACCOUNT));
+        assert!(headers.contains_key(HEADER_SIGNATURE));
+        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
+        assert!(headers.contains_key(HEADER_NONCE));
+        assert_eq!(
+            headers.get("content-type"),
+            Some(&APPLICATION_JSON.to_owned())
+        );
+        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode request body");
+        let expected_payload_b64 =
+            base64::engine::general_purpose::STANDARD.encode(request.payload);
+        assert_eq!(
+            body.get("payload_b64").and_then(JsonValue::as_str),
+            Some(expected_payload_b64.as_str())
+        );
+        assert_eq!(
+            body.get("captured_at_unix").and_then(JsonValue::as_u64),
+            Some(1_800_000_310)
+        );
+        assert_eq!(
+            body.get("content_type").and_then(JsonValue::as_str),
+            Some("application/octet-stream")
+        );
+        assert_eq!(
+            body.get("notes").and_then(JsonValue::as_str),
+            Some("sealed locally")
+        );
+    }
+
+    #[test]
+    fn sorafs_moderation_quarantine_object_read_sends_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, r#"{"schema":"object.payload"}"#);
+        let quarantine_id = "12".repeat(16);
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_sorafs_moderation_quarantine_object(&quarantine_id)
+                .expect("moderation quarantine object read request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(
+            snapshot.url.path(),
+            &format!("/v1/sorafs/moderation/quarantine/{}/object", quarantine_id)
+        );
+        assert!(snapshot.body.is_empty());
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert!(headers.contains_key(HEADER_ACCOUNT));
+        assert!(headers.contains_key(HEADER_SIGNATURE));
+        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
+        assert!(headers.contains_key(HEADER_NONCE));
+        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+    }
+
+    #[test]
+    fn sorafs_moderation_quarantine_transition_rejects_bad_id() {
+        let client = client_with_base_url(base_url());
+        let request = SorafsModerationQuarantineReviewRequest {
+            reviewed_by: "operator@moderation",
+            reviewed_at_unix: Some(1),
+            notes: None,
+        };
+        let err = client
+            .post_sorafs_moderation_quarantine_review("deadbeef", &request)
+            .expect_err("short quarantine id must be rejected");
+        assert!(err.to_string().contains("quarantine_id_hex"));
     }
 
     #[test]

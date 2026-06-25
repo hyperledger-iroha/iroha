@@ -13,6 +13,7 @@ use thiserror::Error;
 use crate::{
     capacity::ReplicationOrderV1,
     deal::DealSettlementV1,
+    orderbook::SettlementReceiptV1,
     por::{AuditVerdictV1, PorChallengeV1, PorProofV1, PorReportIsoWeek},
     reputation::ReputationSnapshotV1,
 };
@@ -34,6 +35,12 @@ pub const SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1: u16 = 1;
 
 /// Current SoraFS appeal finance weekly rollup schema version.
 pub const SORAFS_APPEAL_FINANCE_WEEKLY_ROLLUP_VERSION_V1: u16 = 1;
+
+/// Current SoraFS appeal finance settlement receipt schema version.
+pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1: u16 = 1;
+
+/// Current generic external Governance DAG payload schema version.
+pub const SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_VERSION_V1: u16 = 1;
 
 const GOVERNANCE_DAG_BLOCK_CID_DOMAIN_V1: &[u8] = b"sorafs.governance_dag.block.cid.v1";
 const GOVERNANCE_LOG_NODE_CID_DOMAIN_V1: &[u8] = b"sorafs.governance_log.node.cid.v1";
@@ -507,6 +514,196 @@ pub struct SoraFsAppealFinanceReportV1 {
     /// Canonical juror account ids that forfeited payout by no-show.
     #[norito(default)]
     pub no_show_juror_ids: Vec<String>,
+}
+
+/// Governance DAG receipt for a server-submitted appeal finance settlement step.
+#[derive(
+    Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
+)]
+pub struct SoraFsAppealFinanceSettlementReceiptV1 {
+    /// Schema version (`SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1`).
+    pub version: u16,
+    /// Stable receipt identifier derived from the submitted transaction context.
+    pub receipt_id: [u8; 16],
+    /// Moderation or appeal case identifier.
+    pub case_id: String,
+    /// Optional moderation ballot round identifier.
+    #[norito(default)]
+    pub round_id: Option<String>,
+    /// UTC timestamp (milliseconds) when the settlement transaction was queued.
+    pub generated_at_unix_ms: u64,
+    /// Appeal finance config version used to derive the plan.
+    pub appeal_finance_config_version: String,
+    /// Final appeal outcome used by settlement calculation.
+    pub outcome: SoraFsAppealFinanceOutcomeV1,
+    /// Canonical escrow id as lowercase hexadecimal.
+    pub escrow_id_hex: String,
+    /// Account that funded the deposit.
+    pub payer_account: String,
+    /// Account holding the locked asset.
+    pub destination_account: String,
+    /// Optional authority allowed to draw down non-refund funds.
+    #[norito(default)]
+    pub release_authority_account: Option<String>,
+    /// Submitted settlement step label.
+    pub submitted_step: String,
+    /// Required transaction authority for the submitted step.
+    pub required_authority: String,
+    /// Exact XOR amount affected by the submitted step.
+    pub amount_xor: String,
+    /// Queued transaction hash as lowercase hexadecimal.
+    pub tx_hash_hex: String,
+    /// Digest of the reconciliation snapshot that justified submission.
+    pub reconciliation_digest_hex: String,
+    /// Reconciliation status before this step was queued.
+    pub reconciliation_status: String,
+    /// Ledger lifecycle status observed before this step was queued.
+    pub observed_lifecycle_status: String,
+    /// Ledger remaining amount observed before this step was queued.
+    pub observed_remaining_xor: String,
+    /// Exact deposited XOR amount.
+    pub deposit_xor: String,
+    /// Exact refund XOR amount expected by the settlement plan.
+    pub refund_xor: String,
+    /// Exact treasury XOR amount expected by the settlement plan.
+    pub treasury_xor: String,
+    /// Exact held XOR amount expected by the settlement plan.
+    pub held_xor: String,
+    /// Declared panel size.
+    pub panel_size: u32,
+    /// Number of configured submitter signers available on this node.
+    pub configured_signer_count: u32,
+}
+
+impl SoraFsAppealFinanceSettlementReceiptV1 {
+    /// Validate structural invariants for a settlement submission receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SoraFsAppealFinanceSettlementReceiptValidationError`] when
+    /// required identifiers are missing, digest fields are malformed, or
+    /// decimal amounts are not canonical.
+    pub fn validate(&self) -> Result<(), SoraFsAppealFinanceSettlementReceiptValidationError> {
+        if self.version != SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1 {
+            return Err(
+                SoraFsAppealFinanceSettlementReceiptValidationError::UnsupportedVersion {
+                    expected: SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
+                    found: self.version,
+                },
+            );
+        }
+        if self.receipt_id == [0u8; 16] {
+            return Err(SoraFsAppealFinanceSettlementReceiptValidationError::MissingReceiptId);
+        }
+        validate_non_empty_settlement_receipt_label(
+            &self.case_id,
+            SoraFsAppealFinanceSettlementReceiptValidationError::MissingCaseId,
+        )?;
+        if let Some(round_id) = self.round_id.as_deref() {
+            validate_non_empty_settlement_receipt_label(
+                round_id,
+                SoraFsAppealFinanceSettlementReceiptValidationError::MissingRoundId,
+            )?;
+        }
+        if self.generated_at_unix_ms == 0 {
+            return Err(SoraFsAppealFinanceSettlementReceiptValidationError::MissingGeneratedAt);
+        }
+        validate_non_empty_settlement_receipt_label(
+            &self.appeal_finance_config_version,
+            SoraFsAppealFinanceSettlementReceiptValidationError::MissingFinanceConfigVersion,
+        )?;
+        validate_receipt_hex(
+            &self.escrow_id_hex,
+            "escrow_id_hex",
+            32,
+            SoraFsAppealFinanceSettlementReceiptValidationError::MissingEscrowId,
+        )?;
+        for (field, value, error) in [
+            (
+                "payer_account",
+                &self.payer_account,
+                SoraFsAppealFinanceSettlementReceiptValidationError::MissingPayerAccount,
+            ),
+            (
+                "destination_account",
+                &self.destination_account,
+                SoraFsAppealFinanceSettlementReceiptValidationError::MissingDestinationAccount,
+            ),
+            (
+                "submitted_step",
+                &self.submitted_step,
+                SoraFsAppealFinanceSettlementReceiptValidationError::MissingSubmittedStep,
+            ),
+            (
+                "required_authority",
+                &self.required_authority,
+                SoraFsAppealFinanceSettlementReceiptValidationError::MissingRequiredAuthority,
+            ),
+            (
+                "reconciliation_status",
+                &self.reconciliation_status,
+                SoraFsAppealFinanceSettlementReceiptValidationError::MissingReconciliationStatus,
+            ),
+            (
+                "observed_lifecycle_status",
+                &self.observed_lifecycle_status,
+                SoraFsAppealFinanceSettlementReceiptValidationError::MissingObservedLifecycleStatus,
+            ),
+        ] {
+            validate_non_empty_settlement_receipt_label(value, error)?;
+            if value.trim() != value {
+                return Err(
+                    SoraFsAppealFinanceSettlementReceiptValidationError::InvalidLabel { field },
+                );
+            }
+        }
+        if let Some(account) = self.release_authority_account.as_deref() {
+            validate_non_empty_settlement_receipt_label(
+                account,
+                SoraFsAppealFinanceSettlementReceiptValidationError::MissingReleaseAuthorityAccount,
+            )?;
+            if account.trim() != account {
+                return Err(
+                    SoraFsAppealFinanceSettlementReceiptValidationError::InvalidLabel {
+                        field: "release_authority_account",
+                    },
+                );
+            }
+        }
+        validate_receipt_hex(
+            &self.tx_hash_hex,
+            "tx_hash_hex",
+            32,
+            SoraFsAppealFinanceSettlementReceiptValidationError::MissingTxHash,
+        )?;
+        validate_receipt_hex(
+            &self.reconciliation_digest_hex,
+            "reconciliation_digest_hex",
+            32,
+            SoraFsAppealFinanceSettlementReceiptValidationError::MissingReconciliationDigest,
+        )?;
+        for (field, value) in [
+            ("amount_xor", &self.amount_xor),
+            ("observed_remaining_xor", &self.observed_remaining_xor),
+            ("deposit_xor", &self.deposit_xor),
+            ("refund_xor", &self.refund_xor),
+            ("treasury_xor", &self.treasury_xor),
+            ("held_xor", &self.held_xor),
+        ] {
+            validate_appeal_finance_decimal(value).map_err(|reason| {
+                SoraFsAppealFinanceSettlementReceiptValidationError::InvalidAmount { field, reason }
+            })?;
+        }
+        if self.panel_size == 0 {
+            return Err(SoraFsAppealFinanceSettlementReceiptValidationError::InvalidPanelSize);
+        }
+        if self.configured_signer_count == 0 {
+            return Err(
+                SoraFsAppealFinanceSettlementReceiptValidationError::InvalidConfiguredSignerCount,
+            );
+        }
+        Ok(())
+    }
 }
 
 impl SoraFsAppealFinanceReportV1 {
@@ -1294,6 +1491,128 @@ fn validate_sorted_non_empty_labels(
     Ok(())
 }
 
+/// Public metadata attached to an external Governance DAG payload.
+#[derive(
+    Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
+)]
+pub struct GovernanceExternalPayloadMetadataV1 {
+    /// Sorted metadata key.
+    pub key: String,
+    /// Public metadata value.
+    pub value: String,
+}
+
+/// Canonical external payload bytes signed into the Governance DAG.
+#[derive(
+    Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
+)]
+pub struct GovernanceExternalPayloadV1 {
+    /// External payload wrapper schema version.
+    pub version: u16,
+    /// Stable public payload kind label.
+    pub payload_kind: String,
+    /// Schema version of the embedded canonical payload.
+    pub payload_version: u16,
+    /// BLAKE3 digest of `encoded_payload`.
+    pub encoded_blake3: [u8; 32],
+    /// Byte length of `encoded_payload`.
+    pub encoded_len: u64,
+    /// Canonical Norito payload bytes.
+    pub encoded_payload: Vec<u8>,
+    /// Sorted public metadata about the payload.
+    pub metadata: Vec<GovernanceExternalPayloadMetadataV1>,
+}
+
+impl GovernanceExternalPayloadV1 {
+    /// Validate the external payload wrapper and embedded byte commitment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GovernanceExternalPayloadValidationError`] when the wrapper
+    /// version, labels, length, digest, or metadata ordering are invalid.
+    pub fn validate(&self) -> Result<(), GovernanceExternalPayloadValidationError> {
+        if self.version != SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_VERSION_V1 {
+            return Err(
+                GovernanceExternalPayloadValidationError::UnsupportedVersion {
+                    expected: SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_VERSION_V1,
+                    found: self.version,
+                },
+            );
+        }
+        validate_external_payload_label(&self.payload_kind).map_err(|_| {
+            GovernanceExternalPayloadValidationError::InvalidPayloadKind {
+                payload_kind: self.payload_kind.clone(),
+            }
+        })?;
+        if self.payload_version == 0 {
+            return Err(GovernanceExternalPayloadValidationError::InvalidPayloadVersion);
+        }
+        if self.encoded_payload.is_empty() {
+            return Err(GovernanceExternalPayloadValidationError::MissingEncodedPayload);
+        }
+        let actual_len = self.encoded_payload.len() as u64;
+        if self.encoded_len != actual_len {
+            return Err(
+                GovernanceExternalPayloadValidationError::EncodedLengthMismatch {
+                    declared: self.encoded_len,
+                    actual: actual_len,
+                },
+            );
+        }
+        if self.encoded_blake3 != *blake3::hash(&self.encoded_payload).as_bytes() {
+            return Err(GovernanceExternalPayloadValidationError::EncodedDigestMismatch);
+        }
+        let mut last_key: Option<&str> = None;
+        let mut seen_keys = BTreeSet::new();
+        for item in &self.metadata {
+            validate_external_payload_label(&item.key).map_err(|_| {
+                GovernanceExternalPayloadValidationError::InvalidMetadataKey {
+                    key: item.key.clone(),
+                }
+            })?;
+            validate_external_payload_text(&item.value).map_err(|_| {
+                GovernanceExternalPayloadValidationError::InvalidMetadataValue {
+                    key: item.key.clone(),
+                }
+            })?;
+            if let Some(last) = last_key
+                && last > item.key.as_str()
+            {
+                return Err(GovernanceExternalPayloadValidationError::MetadataKeysUnsorted);
+            }
+            if !seen_keys.insert(item.key.as_str()) {
+                return Err(
+                    GovernanceExternalPayloadValidationError::DuplicateMetadataKey {
+                        key: item.key.clone(),
+                    },
+                );
+            }
+            last_key = Some(item.key.as_str());
+        }
+        Ok(())
+    }
+}
+
+fn validate_external_payload_label(value: &str) -> Result<(), ()> {
+    if value.is_empty() || value.trim() != value {
+        return Err(());
+    }
+    if !value
+        .bytes()
+        .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'-' | b'.'))
+    {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn validate_external_payload_text(value: &str) -> Result<(), ()> {
+    if value.is_empty() || value.trim() != value || value.chars().any(char::is_control) {
+        return Err(());
+    }
+    Ok(())
+}
+
 /// Governance log node payload enumeration.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub enum GovernanceLogPayloadV1 {
@@ -1317,6 +1636,12 @@ pub enum GovernanceLogPayloadV1 {
     AppealFinanceReport(SoraFsAppealFinanceReportV1),
     /// SoraFS weekly appeal finance transparency rollup.
     AppealFinanceWeeklyRollup(SoraFsAppealFinanceWeeklyRollupV1),
+    /// SoraFS appeal finance settlement submission receipt.
+    AppealFinanceSettlementReceipt(SoraFsAppealFinanceSettlementReceiptV1),
+    /// SoraFS orderbook streaming-settlement receipt.
+    OrderbookSettlementReceipt(SettlementReceiptV1),
+    /// Canonical external SoraFS governance payload bytes.
+    ExternalPayload(GovernanceExternalPayloadV1),
 }
 
 impl GovernanceLogPayloadV1 {
@@ -1355,6 +1680,15 @@ impl GovernanceLogPayloadV1 {
             GovernanceLogPayloadV1::AppealFinanceWeeklyRollup(rollup) => rollup
                 .validate()
                 .map_err(GovernanceLogValidationError::AppealFinanceWeeklyRollup),
+            GovernanceLogPayloadV1::AppealFinanceSettlementReceipt(receipt) => receipt
+                .validate()
+                .map_err(GovernanceLogValidationError::AppealFinanceSettlementReceipt),
+            GovernanceLogPayloadV1::OrderbookSettlementReceipt(receipt) => receipt
+                .validate()
+                .map_err(GovernanceLogValidationError::OrderbookSettlementReceipt),
+            GovernanceLogPayloadV1::ExternalPayload(payload) => payload
+                .validate()
+                .map_err(GovernanceLogValidationError::ExternalPayload),
         }
     }
 }
@@ -1375,6 +1709,40 @@ fn validate_non_empty_appeal_finance_label(
 ) -> Result<(), SoraFsAppealFinanceReportValidationError> {
     if value.trim().is_empty() {
         return Err(error);
+    }
+    Ok(())
+}
+
+fn validate_non_empty_settlement_receipt_label(
+    value: &str,
+    error: SoraFsAppealFinanceSettlementReceiptValidationError,
+) -> Result<(), SoraFsAppealFinanceSettlementReceiptValidationError> {
+    if value.trim().is_empty() {
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn validate_receipt_hex(
+    value: &str,
+    field: &'static str,
+    byte_len: usize,
+    missing: SoraFsAppealFinanceSettlementReceiptValidationError,
+) -> Result<(), SoraFsAppealFinanceSettlementReceiptValidationError> {
+    if value.trim().is_empty() {
+        return Err(missing);
+    }
+    if value.len() != byte_len.saturating_mul(2)
+        || !value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(
+            SoraFsAppealFinanceSettlementReceiptValidationError::InvalidHex {
+                field,
+                expected_bytes: byte_len,
+            },
+        );
     }
     Ok(())
 }
@@ -1920,6 +2288,69 @@ pub enum GovernanceLogValidationError {
     AppealFinanceReport(SoraFsAppealFinanceReportValidationError),
     #[error("appeal finance weekly rollup validation failed: {0}")]
     AppealFinanceWeeklyRollup(SoraFsAppealFinanceWeeklyRollupValidationError),
+    #[error("appeal finance settlement receipt validation failed: {0}")]
+    AppealFinanceSettlementReceipt(SoraFsAppealFinanceSettlementReceiptValidationError),
+    #[error("orderbook settlement receipt validation failed: {0}")]
+    OrderbookSettlementReceipt(crate::orderbook::OrderbookValidationError),
+    #[error("external governance payload validation failed: {0}")]
+    ExternalPayload(GovernanceExternalPayloadValidationError),
+}
+
+/// Validation errors for generic external Governance DAG payloads.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum GovernanceExternalPayloadValidationError {
+    /// External payload wrapper uses an unsupported schema version.
+    #[error("unsupported external governance payload version `{found}` (expected {expected})")]
+    UnsupportedVersion {
+        /// Expected schema version.
+        expected: u16,
+        /// Version observed in the payload.
+        found: u16,
+    },
+    /// Payload kind is empty, padded, or contains unsupported characters.
+    #[error("external governance payload kind `{payload_kind}` is not a valid public label")]
+    InvalidPayloadKind {
+        /// Invalid payload kind.
+        payload_kind: String,
+    },
+    /// Embedded payload schema version must be non-zero.
+    #[error("external governance payload version must be non-zero")]
+    InvalidPayloadVersion,
+    /// Embedded canonical payload bytes are missing.
+    #[error("external governance payload bytes are required")]
+    MissingEncodedPayload,
+    /// Declared encoded length does not match the embedded bytes.
+    #[error("external governance payload length mismatch: declared {declared}, actual {actual}")]
+    EncodedLengthMismatch {
+        /// Declared byte length.
+        declared: u64,
+        /// Actual byte length.
+        actual: u64,
+    },
+    /// Embedded payload digest does not match the embedded bytes.
+    #[error("external governance payload digest does not match encoded bytes")]
+    EncodedDigestMismatch,
+    /// Metadata key is empty, padded, or contains unsupported characters.
+    #[error("external governance payload metadata key `{key}` is not a valid public label")]
+    InvalidMetadataKey {
+        /// Invalid metadata key.
+        key: String,
+    },
+    /// Metadata value is empty, padded, or contains a control character.
+    #[error("external governance payload metadata value for `{key}` is not public text")]
+    InvalidMetadataValue {
+        /// Metadata key whose value is invalid.
+        key: String,
+    },
+    /// Metadata keys are not sorted.
+    #[error("external governance payload metadata keys must be sorted")]
+    MetadataKeysUnsorted,
+    /// Metadata key appears more than once.
+    #[error("duplicate external governance payload metadata key `{key}`")]
+    DuplicateMetadataKey {
+        /// Duplicate metadata key.
+        key: String,
+    },
 }
 
 /// Validation errors for SoraFS moderation ballot governance events.
@@ -2084,6 +2515,96 @@ pub enum SoraFsAppealFinanceReportValidationError {
         /// Number of paid plus no-show juror lines.
         accounted: usize,
     },
+}
+
+/// Validation errors for SoraFS appeal finance settlement receipts.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum SoraFsAppealFinanceSettlementReceiptValidationError {
+    /// Receipt uses an unsupported schema version.
+    #[error(
+        "unsupported SoraFS appeal finance settlement receipt version `{found}` (expected {expected})"
+    )]
+    UnsupportedVersion {
+        /// Expected schema version.
+        expected: u16,
+        /// Version observed in the payload.
+        found: u16,
+    },
+    /// Missing non-zero receipt id.
+    #[error("SoraFS appeal finance settlement receipt id is required")]
+    MissingReceiptId,
+    /// Missing case id.
+    #[error("SoraFS appeal finance settlement receipt case id is required")]
+    MissingCaseId,
+    /// Missing round id when the optional field is present.
+    #[error("SoraFS appeal finance settlement receipt round id must not be empty")]
+    MissingRoundId,
+    /// Missing generated timestamp.
+    #[error("SoraFS appeal finance settlement receipt generated timestamp is required")]
+    MissingGeneratedAt,
+    /// Missing finance config version.
+    #[error("SoraFS appeal finance settlement receipt config version is required")]
+    MissingFinanceConfigVersion,
+    /// Missing escrow id.
+    #[error("SoraFS appeal finance settlement receipt escrow id is required")]
+    MissingEscrowId,
+    /// Missing payer account.
+    #[error("SoraFS appeal finance settlement receipt payer account is required")]
+    MissingPayerAccount,
+    /// Missing destination account.
+    #[error("SoraFS appeal finance settlement receipt destination account is required")]
+    MissingDestinationAccount,
+    /// Missing optional release authority when present.
+    #[error("SoraFS appeal finance settlement receipt release authority account is required")]
+    MissingReleaseAuthorityAccount,
+    /// Missing submitted step.
+    #[error("SoraFS appeal finance settlement receipt submitted step is required")]
+    MissingSubmittedStep,
+    /// Missing required authority.
+    #[error("SoraFS appeal finance settlement receipt required authority is required")]
+    MissingRequiredAuthority,
+    /// Missing transaction hash.
+    #[error("SoraFS appeal finance settlement receipt transaction hash is required")]
+    MissingTxHash,
+    /// Missing reconciliation digest.
+    #[error("SoraFS appeal finance settlement receipt reconciliation digest is required")]
+    MissingReconciliationDigest,
+    /// Missing reconciliation status.
+    #[error("SoraFS appeal finance settlement receipt reconciliation status is required")]
+    MissingReconciliationStatus,
+    /// Missing observed lifecycle status.
+    #[error("SoraFS appeal finance settlement receipt observed lifecycle status is required")]
+    MissingObservedLifecycleStatus,
+    /// Label contained leading or trailing whitespace.
+    #[error("SoraFS appeal finance settlement receipt label `{field}` is not canonical")]
+    InvalidLabel {
+        /// Field containing the invalid label.
+        field: &'static str,
+    },
+    /// Hex field had the wrong length or non-hex characters.
+    #[error(
+        "SoraFS appeal finance settlement receipt `{field}` must be {expected_bytes} bytes of hex"
+    )]
+    InvalidHex {
+        /// Field containing invalid hex.
+        field: &'static str,
+        /// Expected decoded byte length.
+        expected_bytes: usize,
+    },
+    /// Decimal amount was malformed.
+    #[error("SoraFS appeal finance settlement receipt amount `{field}` is invalid: {reason}")]
+    InvalidAmount {
+        /// Field containing the invalid amount.
+        field: &'static str,
+        /// Human-readable validation reason.
+        reason: String,
+    },
+    /// Panel size must be non-zero.
+    #[error("SoraFS appeal finance settlement receipt panel size must be greater than zero")]
+    InvalidPanelSize,
+    /// Submitter signer count must be non-zero for a queued receipt.
+    #[error("SoraFS appeal finance settlement receipt configured signer count must be non-zero")]
+    InvalidConfiguredSignerCount,
 }
 
 /// Errors raised while building a weekly appeal finance rollup.
@@ -3093,6 +3614,73 @@ mod tests {
             .expect("valid appeal finance report");
     }
 
+    fn sample_external_payload() -> GovernanceExternalPayloadV1 {
+        let encoded_payload =
+            norito::to_bytes(&sample_appeal_finance_report()).expect("encode report");
+        GovernanceExternalPayloadV1 {
+            version: SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_VERSION_V1,
+            payload_kind: "transparency_ledger_publication".to_string(),
+            payload_version: 1,
+            encoded_blake3: *blake3::hash(&encoded_payload).as_bytes(),
+            encoded_len: encoded_payload.len() as u64,
+            encoded_payload,
+            metadata: vec![
+                GovernanceExternalPayloadMetadataV1 {
+                    key: "block_hash_hex".to_string(),
+                    value: "11".repeat(32),
+                },
+                GovernanceExternalPayloadMetadataV1 {
+                    key: "cycle_id_hex".to_string(),
+                    value: "22".repeat(16),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn governance_payload_accepts_external_payload() {
+        let payload = GovernanceLogPayloadV1::ExternalPayload(sample_external_payload());
+
+        payload
+            .validate(1_800_000_031)
+            .expect("valid external governance payload");
+    }
+
+    #[test]
+    fn external_payload_rejects_digest_mismatch() {
+        let mut payload = sample_external_payload();
+        payload.encoded_blake3[0] ^= 0xFF;
+
+        let err = payload.validate().expect_err("digest mismatch rejected");
+        assert_eq!(
+            err,
+            GovernanceExternalPayloadValidationError::EncodedDigestMismatch
+        );
+        let err = GovernanceLogPayloadV1::ExternalPayload(payload)
+            .validate(1_800_000_031)
+            .expect_err("governance payload rejects digest mismatch");
+        assert!(matches!(
+            err,
+            GovernanceLogValidationError::ExternalPayload(
+                GovernanceExternalPayloadValidationError::EncodedDigestMismatch
+            )
+        ));
+    }
+
+    #[test]
+    fn external_payload_rejects_unsorted_metadata() {
+        let mut payload = sample_external_payload();
+        payload.metadata.swap(0, 1);
+
+        let err = payload
+            .validate()
+            .expect_err("metadata ordering is canonical");
+        assert_eq!(
+            err,
+            GovernanceExternalPayloadValidationError::MetadataKeysUnsorted
+        );
+    }
+
     #[test]
     fn appeal_finance_report_rejects_panel_reconciliation_mismatch() {
         let mut report = sample_appeal_finance_report();
@@ -3104,6 +3692,97 @@ mod tests {
             SoraFsAppealFinanceReportValidationError::PanelReconciliation {
                 panel_size: 3,
                 accounted: 2,
+            }
+        );
+    }
+
+    fn sample_appeal_finance_settlement_receipt() -> SoraFsAppealFinanceSettlementReceiptV1 {
+        SoraFsAppealFinanceSettlementReceiptV1 {
+            version: SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
+            receipt_id: [0x52; 16],
+            case_id: "case-42".to_string(),
+            round_id: Some("round-1".to_string()),
+            generated_at_unix_ms: 1_800_000_032_000,
+            appeal_finance_config_version: "baseline-v1".to_string(),
+            outcome: SoraFsAppealFinanceOutcomeV1::Frivolous,
+            escrow_id_hex: "11".repeat(32),
+            payer_account: "payer-account".to_string(),
+            destination_account: "escrow-account".to_string(),
+            release_authority_account: Some("release-authority".to_string()),
+            submitted_step: "drawdown_non_refund".to_string(),
+            required_authority: "release-authority".to_string(),
+            amount_xor: "420".to_string(),
+            tx_hash_hex: "22".repeat(32),
+            reconciliation_digest_hex: "33".repeat(32),
+            reconciliation_status: "pending_client_submission".to_string(),
+            observed_lifecycle_status: "locked".to_string(),
+            observed_remaining_xor: "420".to_string(),
+            deposit_xor: "420".to_string(),
+            refund_xor: "0".to_string(),
+            treasury_xor: "210".to_string(),
+            held_xor: "210".to_string(),
+            panel_size: 7,
+            configured_signer_count: 1,
+        }
+    }
+
+    #[test]
+    fn governance_payload_accepts_appeal_finance_settlement_receipt() {
+        let receipt = sample_appeal_finance_settlement_receipt();
+        let payload = GovernanceLogPayloadV1::AppealFinanceSettlementReceipt(receipt);
+
+        payload
+            .validate(1_800_000_032)
+            .expect("settlement receipt payload validates");
+    }
+
+    fn sample_orderbook_settlement_receipt() -> SettlementReceiptV1 {
+        SettlementReceiptV1 {
+            version: crate::SETTLEMENT_RECEIPT_VERSION_V1,
+            receipt_id: [0x72; 32],
+            channel_id: [0x73; 32],
+            trade_id: [0x74; 32],
+            range: crate::ByteRangeV1 {
+                start: 0,
+                end: crate::BYTES_PER_GIB,
+            },
+            chunk_hash: [0x75; 32],
+            bytes_delivered: crate::BYTES_PER_GIB,
+            xor_debited: crate::XorAmount::from_micro(500),
+            provider_credit: crate::XorAmount::from_micro(450),
+            fee_amount: crate::XorAmount::from_micro(50),
+            issued_at_unix: 1_800_000_033,
+            settlement_signature: crate::OrderbookSignatureV1 {
+                algorithm: crate::provider_advert::SignatureAlgorithm::Ed25519,
+                public_key: vec![0x76; 32],
+                signature: vec![0x77; 64],
+            },
+        }
+    }
+
+    #[test]
+    fn governance_payload_accepts_orderbook_settlement_receipt() {
+        let receipt = sample_orderbook_settlement_receipt();
+        let payload = GovernanceLogPayloadV1::OrderbookSettlementReceipt(receipt);
+
+        payload
+            .validate(1_800_000_033)
+            .expect("orderbook settlement receipt payload validates");
+    }
+
+    #[test]
+    fn appeal_finance_settlement_receipt_rejects_invalid_reconciliation_digest() {
+        let mut receipt = sample_appeal_finance_settlement_receipt();
+        receipt.reconciliation_digest_hex = "AA".repeat(32);
+
+        let err = receipt
+            .validate()
+            .expect_err("uppercase digest rejected as non-canonical");
+        assert_eq!(
+            err,
+            SoraFsAppealFinanceSettlementReceiptValidationError::InvalidHex {
+                field: "reconciliation_digest_hex",
+                expected_bytes: 32,
             }
         );
     }

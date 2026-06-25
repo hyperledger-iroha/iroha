@@ -68,7 +68,7 @@ Coverage:
 
 | Component | Task | Owner(s) |
 |-----------|------|----------|
-| Torii Service | Ships `/v1/sorafs/pin`, `/v1/sorafs/pin/{digest}`, `/v1/sorafs/aliases`, and `/v1/sorafs/replication` listing/lookup endpoints with deterministic pagination and filters. | Networking TL / Core Infra |
+| Torii Service | Ships `/v1/sorafs/pin`, `/v1/sorafs/pin/{digest}`, `/v1/sorafs/aliases`, and `/v1/sorafs/replication` listing/lookup endpoints with deterministic pagination and filters. Manifest detail readback bounds embedded alias and replication-order arrays with `limit` (default 50, max 500) while preserving full count and truncation metadata. | Networking TL / Core Infra |
 | Attestation | Listing and detail responses include the attestation object derived from the latest block hash. | Core Infra |
 | CLI | `iroha app sorafs pin register`, `pin list`, `pin show`, `alias list`, and `replication list` wrap the REST and ISI surfaces for operator audits. | Tooling WG |
 | SDK | Rust request builders and the JavaScript, Python, Swift, and C# guard lanes mirror the manifest payload and pin-register validation surface. | SDK Teams |
@@ -76,6 +76,11 @@ Coverage:
 Operations:
 - GET endpoints use attested snapshots, deterministic pagination, and the cache
   behavior documented in the alias policy where alias proofs are involved.
+- `GET /v1/sorafs/pin/{digest}` exposes `alias_count`,
+  `returned_alias_count`, `replication_order_count`,
+  `returned_replication_order_count`, `limit`, and truncation flags so operator
+  probes can page heavy manifests through the list endpoints without requiring a
+  large detail response.
 - Mutating operations go through ISI/governance permissions; REST handling keeps
   the same Torii auth and resource-guard model as the surrounding SoraFS APIs.
 

@@ -445,6 +445,8 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             sorafs_alias_cache: iroha_config::parameters::actual::SorafsAliasCachePolicy::default(),
             sorafs_gateway: iroha_config::parameters::actual::SorafsGateway::default(),
             sorafs_por: iroha_config::parameters::actual::SorafsPor::default(),
+            sorafs_appeal_finance_settlement:
+                iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default(),
             onboarding: None,
             faucet: None,
             offline_issuer: None,

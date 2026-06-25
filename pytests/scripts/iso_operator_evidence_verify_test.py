@@ -5801,6 +5801,40 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                         args,
                     )
 
+    def test_null_rail_message_id_does_not_suppress_source_material_replay(self):
+        args = argparse.Namespace(
+            allow_failed_receipts=False,
+            allow_insecure_http=False,
+            allow_legacy_colr007=False,
+            allow_default_profile=False,
+            allow_receipt_source_missing=False,
+        )
+        receipt_summary = json.loads(receipt_stdout())
+        rail_receipt = next(
+            receipt
+            for receipt in receipt_summary["receipts"]
+            if receipt["receipt_kind"] == "iso-rail-gateway"
+        )
+        rail_receipt["rail_message_id"] = None
+        copied = dict(rail_receipt)
+        copied["path"] = "/ops/iso/relabelled-within/null-rail-message-id.receipt.json"
+        copied["receipt_sha256"] = "9" * 64
+        copied["response_body_sha256"] = "8" * 64
+        copied["payload_sha256"] = "7" * 64
+        receipt_summary["receipts"].append(copied)
+        receipt_summary["verified_receipts"] = len(receipt_summary["receipts"])
+        digest_receipt_summary(receipt_summary)
+
+        with self.assertRaisesRegex(
+            EVIDENCE.EvidenceError,
+            r"receipts\[2\]\.source_path duplicates .*receipts\[1\]\.source_path",
+        ):
+            EVIDENCE._verify_receipt_verifier_summary(
+                receipt_summary,
+                "receipt verifier summary",
+                args,
+            )
+
     def test_cross_canary_source_material_replay_rejects_each_compact_field(self):
         source_fields = (
             "source_path",

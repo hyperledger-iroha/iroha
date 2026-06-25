@@ -64,12 +64,14 @@ snapshot through the SoraFS-scoped reputation API:
 - `POST /v1/sorafs/reputation/latest`: accept a canonical
   `ReputationSnapshotV1`, validate it, persist it through the configured
   governance publisher, and cache it as the latest snapshot.
-- `GET /v1/sorafs/reputation/latest`: return the latest snapshot summary,
-  including provider scores and the Merkle root.
+- `GET /v1/sorafs/reputation/latest?limit=N`: return the latest snapshot
+  summary, including the Merkle root and up to `limit` provider scores while
+  preserving total provider counts.
 - `GET /v1/sorafs/reputation/providers/{provider_id}`: return the provider
   entry and a `ReputationMerkleProofV1` for the latest snapshot.
-- `GET /v1/sorafs/reputation/snapshots/{snapshot_id_hex}`: return a previously
-  accepted snapshot summary by 16-byte snapshot id.
+- `GET /v1/sorafs/reputation/snapshots/{snapshot_id_hex}?limit=N`: return a
+  previously accepted snapshot summary by 16-byte snapshot id with the same
+  bounded provider-score readback.
 - `GET /v1/sorafs/reputation/weights`: return the weights and smoothing
   parameters used by the latest snapshot.
 - `GET /v1/sorafs/reputation/events?since=N&limit=N`: return sequenced

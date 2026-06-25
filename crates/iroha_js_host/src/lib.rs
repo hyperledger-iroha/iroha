@@ -203,11 +203,21 @@ use sorafs_car::{
     },
 };
 use sorafs_manifest::{
+    OrderCancelReasonV1, OrderSideV1, OrderTierV1, OrderbookOrderCancelFieldsV1,
+    OrderbookOrderRequestFieldsV1, OrderbookSettlementReceiptFieldsV1,
+    OrderbookValidationPayloadKindV1,
     alias_cache::{AliasCachePolicy, AliasProofState, decode_alias_proof, unix_now_secs},
+    build_signed_orderbook_order_cancel_bytes_ed25519_v1,
+    build_signed_orderbook_order_request_bytes_ed25519_v1,
+    build_signed_orderbook_settlement_receipt_bytes_ed25519_v1,
     capacity::ReplicationOrderV1,
     pin_registry::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
     },
+    sign_orderbook_payload_bytes_ed25519_v1, validate_orderbook_payload_bytes,
+    validate_pdp_challenge_bytes, validate_pdp_challenge_proof_bytes,
+    validate_pdp_commitment_bytes, validate_pdp_commitment_challenge_bytes,
+    validate_pdp_commitment_challenge_proof_bytes, validate_pdp_proof_bytes,
 };
 use sorafs_orchestrator::{
     AnonymityPolicy, FetchSession, GatewayOrchestratorError, OrchestratorConfig, OrchestratorError,
@@ -4012,7 +4022,7 @@ pub struct JsTelemetryEntry {
     pub token_health: Option<f64>,
     /// Stake weight observed for the provider.
     pub staking_weight: Option<f64>,
-    /// Reputation score in basis points, where 10_000 is full reputation.
+    /// Reputation score in basis points, where `10_000` is full reputation.
     pub reputation_score_bps: Option<u16>,
     /// Whether the provider is currently penalised.
     pub penalty: Option<bool>,
@@ -6801,6 +6811,399 @@ pub fn sorafs_decode_replication_order(bytes: Uint8Array) -> napi::Result<JsRepl
         .validate()
         .map_err(|err| norito_to_napi(format!("invalid replication order: {err}")))?;
     to_js_replication_order(order)
+}
+
+fn parse_sorafs_generated_at_unix(generated_at_unix: i64) -> napi::Result<u64> {
+    u64::try_from(generated_at_unix).map_err(|_| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            "generated_at_unix must be a non-negative UNIX timestamp",
+        )
+    })
+}
+
+fn parse_sorafs_orderbook_payload_kind(
+    kind: &str,
+) -> napi::Result<OrderbookValidationPayloadKindV1> {
+    let normalized = kind.trim().to_ascii_lowercase().replace('_', "-");
+    match normalized.as_str() {
+        "order" | "order-request" | "request" | "orderbook-order-request" => {
+            Ok(OrderbookValidationPayloadKindV1::OrderRequest)
+        }
+        "cancel" | "order-cancel" | "orderbook-order-cancel" => {
+            Ok(OrderbookValidationPayloadKindV1::OrderCancel)
+        }
+        "trade" | "trade-event" | "orderbook-trade-event" => {
+            Ok(OrderbookValidationPayloadKindV1::TradeEvent)
+        }
+        "channel" | "settlement-channel" => Ok(OrderbookValidationPayloadKindV1::SettlementChannel),
+        "receipt" | "settlement-receipt" => Ok(OrderbookValidationPayloadKindV1::SettlementReceipt),
+        "snapshot" | "runtime-snapshot" | "orderbook-runtime-snapshot" => {
+            Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot)
+        }
+        _ => Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("unsupported SoraFS orderbook payload kind `{kind}`"),
+        )),
+    }
+}
+
+fn parse_sorafs_orderbook_side(side: &str) -> napi::Result<OrderSideV1> {
+    let normalized = side.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "bid" => Ok(OrderSideV1::Bid),
+        "ask" => Ok(OrderSideV1::Ask),
+        _ => Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("unsupported SoraFS orderbook side `{side}`"),
+        )),
+    }
+}
+
+fn parse_sorafs_orderbook_tier(tier: &str) -> napi::Result<OrderTierV1> {
+    let normalized = tier.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "hot" => Ok(OrderTierV1::Hot),
+        "warm" => Ok(OrderTierV1::Warm),
+        "archive" => Ok(OrderTierV1::Archive),
+        _ => Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("unsupported SoraFS orderbook tier `{tier}`"),
+        )),
+    }
+}
+
+fn parse_sorafs_orderbook_cancel_reason(reason: &str) -> napi::Result<OrderCancelReasonV1> {
+    let normalized = reason.trim().to_ascii_lowercase().replace('_', "-");
+    match normalized.as_str() {
+        "owner-requested" | "owner" | "requested" => Ok(OrderCancelReasonV1::OwnerRequested),
+        "expired" => Ok(OrderCancelReasonV1::Expired),
+        "governance" => Ok(OrderCancelReasonV1::Governance),
+        "replaced" => Ok(OrderCancelReasonV1::Replaced),
+        _ => Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("unsupported SoraFS orderbook cancel reason `{reason}`"),
+        )),
+    }
+}
+
+fn parse_sorafs_decimal_u64(value: &str, context: &str) -> napi::Result<u64> {
+    value.trim().parse::<u64>().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must be an unsigned 64-bit decimal integer: {err}"),
+        )
+    })
+}
+
+fn parse_sorafs_decimal_u128(value: &str, context: &str) -> napi::Result<u128> {
+    value.trim().parse::<u128>().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must be an unsigned 128-bit decimal integer: {err}"),
+        )
+    })
+}
+
+fn parse_sorafs_fee_bps(value: u32, context: &str) -> napi::Result<u16> {
+    u16::try_from(value).map_err(|_| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must fit in u16 basis points"),
+        )
+    })
+}
+
+fn parse_sorafs_fixed32(value: &Uint8Array, context: &str) -> napi::Result<[u8; 32]> {
+    parse_zk_ace_fixed32(value, context)
+}
+
+/// Validate a Norito-encoded orderbook payload and return canonical outcome JSON.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+pub fn sorafs_validate_orderbook_payload_json(
+    kind: String,
+    bytes: Uint8Array,
+    label: String,
+    generated_at_unix: i64,
+) -> napi::Result<String> {
+    let kind = parse_sorafs_orderbook_payload_kind(&kind)?;
+    let generated_at = parse_sorafs_generated_at_unix(generated_at_unix)?;
+    let outcome = validate_orderbook_payload_bytes(kind, bytes.as_ref(), label, generated_at);
+    json::to_string(&outcome).map_err(norito_to_napi)
+}
+
+/// Sign an already-encoded mutable orderbook payload and return signed Norito bytes.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+pub fn sorafs_sign_orderbook_payload(
+    kind: String,
+    bytes: Uint8Array,
+    private_key: Uint8Array,
+) -> napi::Result<Buffer> {
+    let kind = parse_sorafs_orderbook_payload_kind(&kind)?;
+    let signed =
+        sign_orderbook_payload_bytes_ed25519_v1(kind, bytes.as_ref(), private_key.as_ref())
+            .map_err(norito_to_napi)?;
+    Ok(Buffer::from(signed))
+}
+
+/// Build and sign a canonical SoraFS orderbook order request from fields.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+pub fn sorafs_build_signed_orderbook_order_request(
+    order_id: Uint8Array,
+    side: String,
+    tier: String,
+    price_per_gib_micro_xor: String,
+    quantity_gib: String,
+    remaining_gib: Option<String>,
+    owner_account: Uint8Array,
+    expiry_unix: String,
+    nonce: String,
+    maker_fee_bps: u32,
+    taker_fee_bps: u32,
+    private_key: Uint8Array,
+) -> napi::Result<Buffer> {
+    let quantity_gib = parse_sorafs_decimal_u64(&quantity_gib, "quantity_gib")?;
+    let fields = OrderbookOrderRequestFieldsV1 {
+        order_id: parse_sorafs_fixed32(&order_id, "order_id")?,
+        side: parse_sorafs_orderbook_side(&side)?,
+        tier: parse_sorafs_orderbook_tier(&tier)?,
+        price_per_gib_micro_xor: parse_sorafs_decimal_u128(
+            &price_per_gib_micro_xor,
+            "price_per_gib_micro_xor",
+        )?,
+        quantity_gib,
+        remaining_gib: match remaining_gib {
+            Some(value) => parse_sorafs_decimal_u64(&value, "remaining_gib")?,
+            None => quantity_gib,
+        },
+        owner_account: owner_account.as_ref().to_vec(),
+        expiry_unix: parse_sorafs_decimal_u64(&expiry_unix, "expiry_unix")?,
+        nonce: parse_sorafs_decimal_u64(&nonce, "nonce")?,
+        maker_fee_bps: parse_sorafs_fee_bps(maker_fee_bps, "maker_fee_bps")?,
+        taker_fee_bps: parse_sorafs_fee_bps(taker_fee_bps, "taker_fee_bps")?,
+    };
+    build_signed_orderbook_order_request_bytes_ed25519_v1(fields, private_key.as_ref())
+        .map(Buffer::from)
+        .map_err(norito_to_napi)
+}
+
+/// Build and sign a canonical SoraFS orderbook cancellation from fields.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+pub fn sorafs_build_signed_orderbook_order_cancel(
+    order_id: Uint8Array,
+    owner_account: Uint8Array,
+    reason: String,
+    nonce: String,
+    private_key: Uint8Array,
+) -> napi::Result<Buffer> {
+    let fields = OrderbookOrderCancelFieldsV1 {
+        order_id: parse_sorafs_fixed32(&order_id, "order_id")?,
+        owner_account: owner_account.as_ref().to_vec(),
+        reason: parse_sorafs_orderbook_cancel_reason(&reason)?,
+        nonce: parse_sorafs_decimal_u64(&nonce, "nonce")?,
+    };
+    build_signed_orderbook_order_cancel_bytes_ed25519_v1(fields, private_key.as_ref())
+        .map(Buffer::from)
+        .map_err(norito_to_napi)
+}
+
+/// Build and sign a canonical SoraFS settlement receipt from fields.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+pub fn sorafs_build_signed_orderbook_settlement_receipt(
+    receipt_id: Uint8Array,
+    channel_id: Uint8Array,
+    trade_id: Uint8Array,
+    range_start: String,
+    range_end: String,
+    chunk_hash: Uint8Array,
+    bytes_delivered: String,
+    xor_debited_micro_xor: String,
+    provider_credit_micro_xor: String,
+    fee_amount_micro_xor: String,
+    issued_at_unix: String,
+    private_key: Uint8Array,
+) -> napi::Result<Buffer> {
+    let fields = OrderbookSettlementReceiptFieldsV1 {
+        receipt_id: parse_sorafs_fixed32(&receipt_id, "receipt_id")?,
+        channel_id: parse_sorafs_fixed32(&channel_id, "channel_id")?,
+        trade_id: parse_sorafs_fixed32(&trade_id, "trade_id")?,
+        range_start: parse_sorafs_decimal_u64(&range_start, "range_start")?,
+        range_end: parse_sorafs_decimal_u64(&range_end, "range_end")?,
+        chunk_hash: parse_sorafs_fixed32(&chunk_hash, "chunk_hash")?,
+        bytes_delivered: parse_sorafs_decimal_u64(&bytes_delivered, "bytes_delivered")?,
+        xor_debited_micro_xor: parse_sorafs_decimal_u128(
+            &xor_debited_micro_xor,
+            "xor_debited_micro_xor",
+        )?,
+        provider_credit_micro_xor: parse_sorafs_decimal_u128(
+            &provider_credit_micro_xor,
+            "provider_credit_micro_xor",
+        )?,
+        fee_amount_micro_xor: parse_sorafs_decimal_u128(
+            &fee_amount_micro_xor,
+            "fee_amount_micro_xor",
+        )?,
+        issued_at_unix: parse_sorafs_decimal_u64(&issued_at_unix, "issued_at_unix")?,
+    };
+    build_signed_orderbook_settlement_receipt_bytes_ed25519_v1(fields, private_key.as_ref())
+        .map(Buffer::from)
+        .map_err(norito_to_napi)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SorafsPdpPayloadKind {
+    Commitment,
+    Challenge,
+    Proof,
+}
+
+fn parse_sorafs_pdp_payload_kind(kind: &str) -> napi::Result<SorafsPdpPayloadKind> {
+    let normalized = kind.trim().to_ascii_lowercase().replace('_', "-");
+    match normalized.as_str() {
+        "commitment" | "pdp-commitment" => Ok(SorafsPdpPayloadKind::Commitment),
+        "challenge" | "pdp-challenge" => Ok(SorafsPdpPayloadKind::Challenge),
+        "proof" | "pdp-proof" => Ok(SorafsPdpPayloadKind::Proof),
+        _ => Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("unsupported SoraFS PDP payload kind `{kind}`"),
+        )),
+    }
+}
+
+/// Validate a Norito-encoded PDP payload and return canonical outcome JSON.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+pub fn sorafs_validate_pdp_payload_json(
+    kind: String,
+    bytes: Uint8Array,
+    label: String,
+    generated_at_unix: i64,
+) -> napi::Result<String> {
+    let kind = parse_sorafs_pdp_payload_kind(&kind)?;
+    let generated_at = parse_sorafs_generated_at_unix(generated_at_unix)?;
+    let outcome = match kind {
+        SorafsPdpPayloadKind::Commitment => {
+            validate_pdp_commitment_bytes(bytes.as_ref(), label, generated_at)
+        }
+        SorafsPdpPayloadKind::Challenge => {
+            validate_pdp_challenge_bytes(bytes.as_ref(), label, generated_at)
+        }
+        SorafsPdpPayloadKind::Proof => {
+            validate_pdp_proof_bytes(bytes.as_ref(), label, generated_at)
+        }
+    };
+    json::to_string(&outcome).map_err(norito_to_napi)
+}
+
+/// Validate PDP commitment/challenge binding and return canonical outcome JSON.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+pub fn sorafs_validate_pdp_commitment_challenge_json(
+    commitment: Uint8Array,
+    commitment_label: String,
+    challenge: Uint8Array,
+    challenge_label: String,
+    generated_at_unix: i64,
+) -> napi::Result<String> {
+    let generated_at = parse_sorafs_generated_at_unix(generated_at_unix)?;
+    let outcome = validate_pdp_commitment_challenge_bytes(
+        commitment.as_ref(),
+        challenge.as_ref(),
+        commitment_label,
+        challenge_label,
+        generated_at,
+    );
+    json::to_string(&outcome).map_err(norito_to_napi)
+}
+
+/// Validate PDP challenge/proof binding and return canonical outcome JSON.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+pub fn sorafs_validate_pdp_challenge_proof_json(
+    challenge: Uint8Array,
+    challenge_label: String,
+    proof: Uint8Array,
+    proof_label: String,
+    generated_at_unix: i64,
+) -> napi::Result<String> {
+    let generated_at = parse_sorafs_generated_at_unix(generated_at_unix)?;
+    let outcome = validate_pdp_challenge_proof_bytes(
+        challenge.as_ref(),
+        proof.as_ref(),
+        challenge_label,
+        proof_label,
+        generated_at,
+    );
+    json::to_string(&outcome).map_err(norito_to_napi)
+}
+
+/// Validate PDP commitment/challenge/proof binding and return canonical outcome JSON.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+pub fn sorafs_validate_pdp_bundle_json(
+    commitment: Uint8Array,
+    commitment_label: String,
+    challenge: Uint8Array,
+    challenge_label: String,
+    proof: Uint8Array,
+    proof_label: String,
+    generated_at_unix: i64,
+) -> napi::Result<String> {
+    let generated_at = parse_sorafs_generated_at_unix(generated_at_unix)?;
+    let outcome = validate_pdp_commitment_challenge_proof_bytes(
+        commitment.as_ref(),
+        challenge.as_ref(),
+        proof.as_ref(),
+        commitment_label,
+        challenge_label,
+        proof_label,
+        generated_at,
+    );
+    json::to_string(&outcome).map_err(norito_to_napi)
+}
+
+#[cfg(test)]
+mod sorafs_orderbook_validation_tests {
+    use super::*;
+
+    #[test]
+    fn parse_sorafs_orderbook_payload_kind_accepts_sdk_aliases() {
+        assert_eq!(
+            parse_sorafs_orderbook_payload_kind("order").unwrap(),
+            OrderbookValidationPayloadKindV1::OrderRequest
+        );
+        assert_eq!(
+            parse_sorafs_orderbook_payload_kind("settlement_channel").unwrap(),
+            OrderbookValidationPayloadKindV1::SettlementChannel
+        );
+        assert_eq!(
+            parse_sorafs_orderbook_payload_kind("runtime-snapshot").unwrap(),
+            OrderbookValidationPayloadKindV1::RuntimeSnapshot
+        );
+        assert!(parse_sorafs_orderbook_payload_kind("unknown").is_err());
+    }
+
+    #[test]
+    fn parse_sorafs_pdp_payload_kind_accepts_sdk_aliases() {
+        assert_eq!(
+            parse_sorafs_pdp_payload_kind("commitment").unwrap(),
+            SorafsPdpPayloadKind::Commitment
+        );
+        assert_eq!(
+            parse_sorafs_pdp_payload_kind("pdp_challenge").unwrap(),
+            SorafsPdpPayloadKind::Challenge
+        );
+        assert_eq!(
+            parse_sorafs_pdp_payload_kind("pdp-proof").unwrap(),
+            SorafsPdpPayloadKind::Proof
+        );
+        assert!(parse_sorafs_pdp_payload_kind("unknown").is_err());
+    }
 }
 
 fn parse_hash_string(input: &str, context: &str) -> napi::Result<Hash> {
@@ -18287,8 +18690,8 @@ mod tests {
                 >= iroha_core::zk::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS,
             "recursive compact public instance columns include the semantic prefix"
         );
-        const ZK1_MAX_INST_COLS_FOR_JS_HOST: usize = 64;
-        let side_columns_before_scalar = ZK1_MAX_INST_COLS_FOR_JS_HOST
+        let zk1_max_inst_cols_for_js_host = 64_usize;
+        let side_columns_before_scalar = zk1_max_inst_cols_for_js_host
             .checked_sub(instance_columns.len())
             .and_then(|remaining| remaining.checked_sub(1))
             .expect("ZK1 side-column capacity reserves the final scalar projection column");
@@ -18698,7 +19101,7 @@ mod tests {
                 ),
             "unexpected reordered recursive compact Pallas error: {reordered_pallas}"
         );
-        const VALID_MULTI_HOP_RECURSIVE_COMPACT_TOKEN_MESSAGE: &str =
+        let valid_multi_hop_recursive_compact_token_message =
             "valid multi-hop recursive compact archive must produce a token";
         let multi_hop = match kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
             Uint8Array::from(multi_hop_record_archive),
@@ -18706,11 +19109,11 @@ mod tests {
             Uint8Array::from(recursive_compact_key_artifacts_archive_for_js_host().to_vec()),
         ) {
             Ok(token_archive) => token_archive,
-            Err(err) => panic!("{VALID_MULTI_HOP_RECURSIVE_COMPACT_TOKEN_MESSAGE}: {err}"),
+            Err(err) => panic!("{valid_multi_hop_recursive_compact_token_message}: {err}"),
         };
         assert!(
             !multi_hop.is_empty(),
-            "{VALID_MULTI_HOP_RECURSIVE_COMPACT_TOKEN_MESSAGE}"
+            "{valid_multi_hop_recursive_compact_token_message}"
         );
         let shape_token_archive =
             recursive_compact_shape_token_archive_for_js_host(&one_hop_record_bundle, false, None);

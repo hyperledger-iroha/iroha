@@ -904,6 +904,27 @@ def _bsc_groth16_material_documentation_gate_inventory_errors(
         ]
 
 
+def _bsc_groth16_material_evidence_guard_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for BSC Groth16 material evidence guards."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_bsc_groth16_material_evidence_guard_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception:  # pragma: no cover - exercised through blocker text.
+        return [
+            "BSC Groth16 material evidence guard source inventory "
+            "cannot run release-bundle verifier helper"
+        ]
+
+
 def _ethereum_data_collection_no_proxy_gate_inventory_errors(
     regions: dict[str, tuple[str | Path, str, str, tuple[str, ...]]] | None = None,
 ) -> list[str]:
@@ -6198,6 +6219,9 @@ def _build_report(
     bsc_groth16_material_documentation_gate_blockers = (
         _bsc_groth16_material_documentation_gate_inventory_errors()
     )
+    bsc_groth16_material_evidence_guard_gate_blockers = (
+        _bsc_groth16_material_evidence_guard_gate_inventory_errors()
+    )
     ethereum_data_collection_no_proxy_gate_blockers = (
         _ethereum_data_collection_no_proxy_gate_inventory_errors()
     )
@@ -6378,6 +6402,16 @@ def _build_report(
             ),
             "validation_blockers": (
                 bsc_groth16_material_documentation_gate_blockers
+            ),
+        },
+        "bsc_groth16_material_evidence_guard_gate": {
+            "validation_status": (
+                "passed"
+                if not bsc_groth16_material_evidence_guard_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": (
+                bsc_groth16_material_evidence_guard_gate_blockers
             ),
         },
         "ethereum_data_collection_no_proxy_gate": {
@@ -6946,6 +6980,7 @@ def _build_report(
         and not ethereum_launch_policy_documentation_gate_blockers
         and not public_discovery_documentation_gate_blockers
         and not bsc_groth16_material_documentation_gate_blockers
+        and not bsc_groth16_material_evidence_guard_gate_blockers
         and not ethereum_data_collection_no_proxy_gate_blockers
         and not ethereum_inbound_adversarial_gate_blockers
         and not bsc_inbound_adversarial_gate_blockers
@@ -7027,6 +7062,7 @@ def _build_report(
     blockers.extend(ethereum_launch_policy_documentation_gate_blockers)
     blockers.extend(public_discovery_documentation_gate_blockers)
     blockers.extend(bsc_groth16_material_documentation_gate_blockers)
+    blockers.extend(bsc_groth16_material_evidence_guard_gate_blockers)
     blockers.extend(ethereum_data_collection_no_proxy_gate_blockers)
     blockers.extend(ethereum_inbound_adversarial_gate_blockers)
     blockers.extend(bsc_inbound_adversarial_gate_blockers)
@@ -8219,6 +8255,7 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- SCCP Ethereum launch-policy documentation source inventory must pin the active Ethereum-mainnet policy wording and reject stale BSC-only production-packaging text.",
             "- SCCP public discovery documentation source inventory must pin supported launch-lane and verifier-target wording so unsupported lanes cannot re-enter Torii discovery evidence silently.",
             "- BSC Groth16 material documentation source inventory must pin PTAU-bound zkey verification, attestation request and finalize flow, and proof self-test operator steps before public bundle readiness can pass.",
+            "- BSC Groth16 material evidence guard source inventory must pin closed review/audit evidence schemas, alias-conflict rejection, safe relative evidence path validation, non-symlink report/transcript reads, bounded public evidence files, required review/audit evidence flags, and adversarial tests before public bundle readiness can pass.",
             "- SCCP Ethereum no-proxy data-collection source inventory must pin app-owned execution/Beacon provider reads and reject Torii proxy or embedded HTTP-client fallbacks across public SDKs.",
             "- SCCP Ethereum inbound adversarial source inventory must pin public SDK regressions for failed receipts, source-event drift, hash-only proof bypasses, immutable evidence snapshots, oversized proof bytes, finality mismatches, sync-committee quorum checks, and wrong-domain receipt transcripts before inbound source proofs can be accepted.",
             "- SCCP BSC inbound adversarial source inventory must pin public SDK regressions for hash-only proof bypasses, receipt-proof metadata binding, source-event digest drift, malformed source logs, and missing source-event validation before BSC inbound source proofs can be accepted.",

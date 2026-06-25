@@ -14042,6 +14042,57 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertIn(canary_code, codes)
                     self.assertIn(archive_code, codes)
 
+    def test_null_rail_message_id_does_not_suppress_source_material_replay(self):
+        def append_relabelled_null_id_rail_receipt(receipt_summary):
+            rail_receipt = next(
+                receipt
+                for receipt in receipt_summary["receipts"]
+                if receipt["receipt_kind"] == "iso-rail-gateway"
+            )
+            rail_receipt["rail_message_id"] = None
+            copied = json.loads(json.dumps(rail_receipt))
+            copied["path"] = (
+                "/ops/iso/relabelled-within/"
+                "null-rail-message-id.receipt.json"
+            )
+            copied["receipt_sha256"] = "9" * 64
+            copied["response_body_sha256"] = "8" * 64
+            copied["payload_sha256"] = "7" * 64
+            receipt_summary["receipts"].append(copied)
+            receipt_summary["verified_receipts"] = len(receipt_summary["receipts"])
+            refresh_digest(receipt_summary)
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            append_relabelled_null_id_rail_receipt(
+                evidence["canary_summaries"][0]["receipt_summary"],
+            )
+            append_relabelled_null_id_rail_receipt(evidence["receipt_verification"])
+            refresh_digest(evidence)
+            mutated_path = write_json(
+                root / "null-rail-message-id-source-replay.summary.json",
+                evidence,
+            )
+
+            rc, stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(xsd_summary),
+                    "--evidence-summary",
+                    str(mutated_path),
+                ]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("evidence.canary_receipt_source_path_reused", codes)
+            self.assertIn("evidence.archive_receipt_source_path_reused", codes)
+
     def test_compact_summary_digests_cannot_reuse_nested_material_roles(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

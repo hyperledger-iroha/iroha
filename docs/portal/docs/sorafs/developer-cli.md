@@ -116,13 +116,15 @@ sorafs_cli proof stream \
 
 - Emits NDJSON items for each streamed proof (disable replay with
   `--emit-events=false`).
+- PoR `--samples` defaults to `32` and must not exceed `500`; gateways reject
+  oversized proof-stream requests before manifest lookup.
 - Aggregates success/failure counts, latency histograms, and sampled failures in
   the summary JSON so dashboards can plot outcomes without scraping logs.
 - Exits non-zero when the gateway reports failures or local PoR verification
   (via `--por-root-hex`) rejects proofs. Adjust the thresholds with
   `--max-failures` and `--max-verification-failures` for rehearsal runs.
-- Supports PoR today; PDP and PoTR reuse the same envelope once SF-13/SF-14
-  land.
+- Supports PoR streaming and cached PoTR receipt replay today; PDP reuses the
+  same envelope once SF-13 lands.
 - `--governance-evidence-dir` writes the rendered summary, metadata (timestamp,
   CLI version, gateway URL, manifest digest), and a copy of the manifest into
   the supplied directory so governance packets can archive the proof-stream

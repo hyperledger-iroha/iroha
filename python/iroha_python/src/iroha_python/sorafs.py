@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -62,6 +64,17 @@ __all__ = [
     "SorafsReplicationMetadataEntry",
     "SorafsReplicationOrder",
     "decode_replication_order",
+    "SORAFS_ORDERBOOK_PAYLOAD_KINDS",
+    "SORAFS_PDP_PAYLOAD_KINDS",
+    "validate_orderbook_payload",
+    "sign_orderbook_payload",
+    "build_signed_orderbook_order_request",
+    "build_signed_orderbook_order_cancel",
+    "build_signed_orderbook_settlement_receipt",
+    "validate_pdp_payload",
+    "validate_pdp_commitment_challenge",
+    "validate_pdp_challenge_proof",
+    "validate_pdp_bundle",
     "SorafsRangeCapability",
     "SorafsStreamBudget",
     "SorafsTransportHint",
@@ -517,6 +530,437 @@ def decode_replication_order(norito_bytes: bytes | bytearray | memoryview) -> So
         sla=sla,
         metadata=metadata,
     )
+
+
+SORAFS_ORDERBOOK_PAYLOAD_KINDS: Mapping[str, str] = MappingProxyType(
+    {
+        "ORDER_REQUEST": "order-request",
+        "ORDER_CANCEL": "order-cancel",
+        "TRADE_EVENT": "trade-event",
+        "SETTLEMENT_CHANNEL": "settlement-channel",
+        "SETTLEMENT_RECEIPT": "settlement-receipt",
+        "RUNTIME_SNAPSHOT": "runtime-snapshot",
+    }
+)
+SORAFS_PDP_PAYLOAD_KINDS: Mapping[str, str] = MappingProxyType(
+    {
+        "COMMITMENT": "commitment",
+        "CHALLENGE": "challenge",
+        "PROOF": "proof",
+    }
+)
+
+_ORDERBOOK_KIND_ALIASES: Mapping[str, str] = MappingProxyType(
+    {
+        "order": SORAFS_ORDERBOOK_PAYLOAD_KINDS["ORDER_REQUEST"],
+        "order-request": SORAFS_ORDERBOOK_PAYLOAD_KINDS["ORDER_REQUEST"],
+        "orderbook-order-request": SORAFS_ORDERBOOK_PAYLOAD_KINDS["ORDER_REQUEST"],
+        "request": SORAFS_ORDERBOOK_PAYLOAD_KINDS["ORDER_REQUEST"],
+        "cancel": SORAFS_ORDERBOOK_PAYLOAD_KINDS["ORDER_CANCEL"],
+        "order-cancel": SORAFS_ORDERBOOK_PAYLOAD_KINDS["ORDER_CANCEL"],
+        "orderbook-order-cancel": SORAFS_ORDERBOOK_PAYLOAD_KINDS["ORDER_CANCEL"],
+        "trade": SORAFS_ORDERBOOK_PAYLOAD_KINDS["TRADE_EVENT"],
+        "trade-event": SORAFS_ORDERBOOK_PAYLOAD_KINDS["TRADE_EVENT"],
+        "orderbook-trade-event": SORAFS_ORDERBOOK_PAYLOAD_KINDS["TRADE_EVENT"],
+        "channel": SORAFS_ORDERBOOK_PAYLOAD_KINDS["SETTLEMENT_CHANNEL"],
+        "settlement-channel": SORAFS_ORDERBOOK_PAYLOAD_KINDS["SETTLEMENT_CHANNEL"],
+        "receipt": SORAFS_ORDERBOOK_PAYLOAD_KINDS["SETTLEMENT_RECEIPT"],
+        "settlement-receipt": SORAFS_ORDERBOOK_PAYLOAD_KINDS["SETTLEMENT_RECEIPT"],
+        "snapshot": SORAFS_ORDERBOOK_PAYLOAD_KINDS["RUNTIME_SNAPSHOT"],
+        "runtime-snapshot": SORAFS_ORDERBOOK_PAYLOAD_KINDS["RUNTIME_SNAPSHOT"],
+        "orderbook-runtime-snapshot": SORAFS_ORDERBOOK_PAYLOAD_KINDS["RUNTIME_SNAPSHOT"],
+    }
+)
+_PDP_KIND_ALIASES: Mapping[str, str] = MappingProxyType(
+    {
+        "commitment": SORAFS_PDP_PAYLOAD_KINDS["COMMITMENT"],
+        "pdp-commitment": SORAFS_PDP_PAYLOAD_KINDS["COMMITMENT"],
+        "challenge": SORAFS_PDP_PAYLOAD_KINDS["CHALLENGE"],
+        "pdp-challenge": SORAFS_PDP_PAYLOAD_KINDS["CHALLENGE"],
+        "proof": SORAFS_PDP_PAYLOAD_KINDS["PROOF"],
+        "pdp-proof": SORAFS_PDP_PAYLOAD_KINDS["PROOF"],
+    }
+)
+_U64_MAX = (1 << 64) - 1
+_MISSING = object()
+
+
+def _bytes_payload(value: bytes | bytearray | memoryview, field: str) -> bytes:
+    if isinstance(value, memoryview):
+        return value.tobytes()
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value)
+    raise TypeError(f"{field} must be bytes-like")
+
+
+def _required_field(mapping: Mapping[str, Any], field: str, *keys: str) -> Any:
+    for key in keys:
+        if key in mapping:
+            value = mapping[key]
+            if value is None:
+                break
+            return value
+    raise TypeError(f"{field} is required")
+
+
+def _optional_field(mapping: Mapping[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in mapping:
+            value = mapping[key]
+            return _MISSING if value is None else value
+    return _MISSING
+
+
+def _decimal_integer_text(value: Any, field: str, *, positive: bool = False) -> str:
+    if isinstance(value, bool):
+        raise TypeError(f"{field} must be an unsigned decimal integer")
+    if isinstance(value, int):
+        if value < 0 or (positive and value <= 0):
+            qualifier = "greater than zero" if positive else "non-negative"
+            raise ValueError(f"{field} must be {qualifier}")
+        return str(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped.isdecimal():
+            raise ValueError(f"{field} must be an unsigned decimal integer")
+        if positive and int(stripped) <= 0:
+            raise ValueError(f"{field} must be greater than zero")
+        return stripped
+    raise TypeError(f"{field} must be an unsigned decimal integer")
+
+
+def _fixed32_field(mapping: Mapping[str, Any], field: str, *keys: str) -> bytes:
+    payload = _bytes_payload(_required_field(mapping, field, *keys), field)
+    if len(payload) != 32:
+        raise ValueError(f"{field} must be exactly 32 bytes")
+    return payload
+
+
+def _bytes_field(mapping: Mapping[str, Any], field: str, *keys: str) -> bytes:
+    payload = _bytes_payload(_required_field(mapping, field, *keys), field)
+    if not payload:
+        raise ValueError(f"{field} must not be empty")
+    return payload
+
+
+def _orderbook_fee_bps(value: Any, field: str) -> int:
+    text = _decimal_integer_text(value, field)
+    fee = int(text)
+    if fee > 0xFFFF:
+        raise ValueError(f"{field} must fit within a 16-bit unsigned integer")
+    return fee
+
+
+def _normalize_reference_kind(kind: str, aliases: Mapping[str, str], label: str) -> str:
+    if not isinstance(kind, str):
+        raise TypeError("kind must be a string")
+    normalized = kind.strip().lower().replace("_", "-")
+    canonical = aliases.get(normalized)
+    if canonical is None:
+        raise ValueError(f"unsupported SoraFS {label} payload kind: {kind}")
+    return canonical
+
+
+def _normalize_orderbook_payload_kind(kind: str) -> str:
+    return _normalize_reference_kind(kind, _ORDERBOOK_KIND_ALIASES, "orderbook")
+
+
+def _normalize_pdp_payload_kind(kind: str) -> str:
+    return _normalize_reference_kind(kind, _PDP_KIND_ALIASES, "PDP")
+
+
+def _normalize_generated_at_unix(value: Optional[int]) -> int:
+    raw = int(time.time()) if value is None else value
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise TypeError("generated_at_unix must be a non-negative integer")
+    if raw < 0:
+        raise ValueError("generated_at_unix must be a non-negative integer")
+    if raw > _U64_MAX:
+        raise ValueError("generated_at_unix must fit in u64")
+    return raw
+
+
+def _reference_label(value: Optional[str], fallback: str, field: str) -> str:
+    if value is None:
+        return fallback
+    if not isinstance(value, str):
+        raise TypeError(f"{field} must be a string")
+    stripped = value.strip()
+    return stripped if stripped else fallback
+
+
+def _reference_outcome_from_json(payload: Any, capability: str) -> Dict[str, Any]:
+    if not isinstance(payload, str):
+        raise TypeError(f"native {capability} returned a non-string payload")
+    outcome = json.loads(payload)
+    if not isinstance(outcome, dict):
+        raise TypeError(f"native {capability} returned an invalid outcome")
+    return outcome
+
+
+def validate_orderbook_payload(
+    kind: str,
+    norito_bytes: bytes | bytearray | memoryview,
+    *,
+    label: Optional[str] = None,
+    generated_at_unix: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Validate a Norito-encoded orderbook payload with the Rust reference validator."""
+
+    canonical_kind = _normalize_orderbook_payload_kind(kind)
+    payload = _crypto.sorafs_validate_orderbook_payload_json(
+        canonical_kind,
+        _bytes_payload(norito_bytes, "norito_bytes"),
+        _reference_label(label, f"sdk:sorafs.orderbook.{canonical_kind}", "label"),
+        _normalize_generated_at_unix(generated_at_unix),
+    )
+    return _reference_outcome_from_json(payload, "orderbook validation")
+
+
+def sign_orderbook_payload(
+    kind: str,
+    norito_bytes: bytes | bytearray | memoryview,
+    private_key: bytes | bytearray | memoryview,
+) -> bytes:
+    """Sign a Norito-encoded mutable orderbook payload with an Ed25519 private key."""
+
+    canonical_kind = _normalize_orderbook_payload_kind(kind)
+    return bytes(
+        _crypto.sorafs_sign_orderbook_payload(
+            canonical_kind,
+            _bytes_payload(norito_bytes, "norito_bytes"),
+            _bytes_payload(private_key, "private_key"),
+        )
+    )
+
+
+def build_signed_orderbook_order_request(
+    fields: Mapping[str, Any],
+    private_key: bytes | bytearray | memoryview,
+) -> bytes:
+    """Build and sign canonical Norito `OrderRequestV1` bytes from field values."""
+
+    if not isinstance(fields, Mapping):
+        raise TypeError("fields must be a mapping")
+    quantity_gib = _decimal_integer_text(
+        _required_field(fields, "quantity_gib", "quantity_gib", "quantityGib"),
+        "quantity_gib",
+        positive=True,
+    )
+    remaining_gib = _optional_field(fields, "remaining_gib", "remainingGib")
+    return bytes(
+        _crypto.sorafs_build_signed_orderbook_order_request(
+            _fixed32_field(fields, "order_id", "order_id", "orderId"),
+            str(_required_field(fields, "side", "side")),
+            str(_required_field(fields, "tier", "tier")),
+            _decimal_integer_text(
+                _required_field(
+                    fields,
+                    "price_per_gib_micro_xor",
+                    "price_per_gib_micro_xor",
+                    "pricePerGibMicroXor",
+                ),
+                "price_per_gib_micro_xor",
+                positive=True,
+            ),
+            quantity_gib,
+            None
+            if remaining_gib is _MISSING
+            else _decimal_integer_text(remaining_gib, "remaining_gib", positive=True),
+            _bytes_field(fields, "owner_account", "owner_account", "ownerAccount"),
+            _decimal_integer_text(
+                _required_field(fields, "expiry_unix", "expiry_unix", "expiryUnix"),
+                "expiry_unix",
+                positive=True,
+            ),
+            _decimal_integer_text(
+                _required_field(fields, "nonce", "nonce"),
+                "nonce",
+                positive=True,
+            ),
+            _orderbook_fee_bps(
+                _required_field(fields, "maker_fee_bps", "maker_fee_bps", "makerFeeBps"),
+                "maker_fee_bps",
+            ),
+            _orderbook_fee_bps(
+                _required_field(fields, "taker_fee_bps", "taker_fee_bps", "takerFeeBps"),
+                "taker_fee_bps",
+            ),
+            _bytes_payload(private_key, "private_key"),
+        )
+    )
+
+
+def build_signed_orderbook_order_cancel(
+    fields: Mapping[str, Any],
+    private_key: bytes | bytearray | memoryview,
+) -> bytes:
+    """Build and sign canonical Norito `OrderCancelV1` bytes from field values."""
+
+    if not isinstance(fields, Mapping):
+        raise TypeError("fields must be a mapping")
+    return bytes(
+        _crypto.sorafs_build_signed_orderbook_order_cancel(
+            _fixed32_field(fields, "order_id", "order_id", "orderId"),
+            _bytes_field(fields, "owner_account", "owner_account", "ownerAccount"),
+            str(_required_field(fields, "reason", "reason")),
+            _decimal_integer_text(
+                _required_field(fields, "nonce", "nonce"),
+                "nonce",
+                positive=True,
+            ),
+            _bytes_payload(private_key, "private_key"),
+        )
+    )
+
+
+def build_signed_orderbook_settlement_receipt(
+    fields: Mapping[str, Any],
+    private_key: bytes | bytearray | memoryview,
+) -> bytes:
+    """Build and sign canonical Norito `SettlementReceiptV1` bytes from field values."""
+
+    if not isinstance(fields, Mapping):
+        raise TypeError("fields must be a mapping")
+    return bytes(
+        _crypto.sorafs_build_signed_orderbook_settlement_receipt(
+            _fixed32_field(fields, "receipt_id", "receipt_id", "receiptId"),
+            _fixed32_field(fields, "channel_id", "channel_id", "channelId"),
+            _fixed32_field(fields, "trade_id", "trade_id", "tradeId"),
+            _decimal_integer_text(
+                _required_field(fields, "range_start", "range_start", "rangeStart"),
+                "range_start",
+            ),
+            _decimal_integer_text(
+                _required_field(fields, "range_end", "range_end", "rangeEnd"),
+                "range_end",
+                positive=True,
+            ),
+            _fixed32_field(fields, "chunk_hash", "chunk_hash", "chunkHash"),
+            _decimal_integer_text(
+                _required_field(fields, "bytes_delivered", "bytes_delivered", "bytesDelivered"),
+                "bytes_delivered",
+                positive=True,
+            ),
+            _decimal_integer_text(
+                _required_field(
+                    fields,
+                    "xor_debited_micro_xor",
+                    "xor_debited_micro_xor",
+                    "xorDebitedMicroXor",
+                ),
+                "xor_debited_micro_xor",
+                positive=True,
+            ),
+            _decimal_integer_text(
+                _required_field(
+                    fields,
+                    "provider_credit_micro_xor",
+                    "provider_credit_micro_xor",
+                    "providerCreditMicroXor",
+                ),
+                "provider_credit_micro_xor",
+            ),
+            _decimal_integer_text(
+                _required_field(
+                    fields,
+                    "fee_amount_micro_xor",
+                    "fee_amount_micro_xor",
+                    "feeAmountMicroXor",
+                ),
+                "fee_amount_micro_xor",
+            ),
+            _decimal_integer_text(
+                _required_field(fields, "issued_at_unix", "issued_at_unix", "issuedAtUnix"),
+                "issued_at_unix",
+                positive=True,
+            ),
+            _bytes_payload(private_key, "private_key"),
+        )
+    )
+
+
+def validate_pdp_payload(
+    kind: str,
+    norito_bytes: bytes | bytearray | memoryview,
+    *,
+    label: Optional[str] = None,
+    generated_at_unix: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Validate one Norito-encoded PDP payload with the Rust reference validator."""
+
+    canonical_kind = _normalize_pdp_payload_kind(kind)
+    payload = _crypto.sorafs_validate_pdp_payload_json(
+        canonical_kind,
+        _bytes_payload(norito_bytes, "norito_bytes"),
+        _reference_label(label, f"sdk:sorafs.pdp.{canonical_kind}", "label"),
+        _normalize_generated_at_unix(generated_at_unix),
+    )
+    return _reference_outcome_from_json(payload, "PDP validation")
+
+
+def validate_pdp_commitment_challenge(
+    commitment_bytes: bytes | bytearray | memoryview,
+    challenge_bytes: bytes | bytearray | memoryview,
+    *,
+    commitment_label: Optional[str] = None,
+    challenge_label: Optional[str] = None,
+    generated_at_unix: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Validate PDP commitment/challenge binding with the Rust reference validator."""
+
+    payload = _crypto.sorafs_validate_pdp_commitment_challenge_json(
+        _bytes_payload(commitment_bytes, "commitment_bytes"),
+        _reference_label(commitment_label, "sdk:sorafs.pdp.commitment", "commitment_label"),
+        _bytes_payload(challenge_bytes, "challenge_bytes"),
+        _reference_label(challenge_label, "sdk:sorafs.pdp.challenge", "challenge_label"),
+        _normalize_generated_at_unix(generated_at_unix),
+    )
+    return _reference_outcome_from_json(payload, "PDP commitment/challenge validation")
+
+
+def validate_pdp_challenge_proof(
+    challenge_bytes: bytes | bytearray | memoryview,
+    proof_bytes: bytes | bytearray | memoryview,
+    *,
+    challenge_label: Optional[str] = None,
+    proof_label: Optional[str] = None,
+    generated_at_unix: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Validate PDP challenge/proof binding with the Rust reference validator."""
+
+    payload = _crypto.sorafs_validate_pdp_challenge_proof_json(
+        _bytes_payload(challenge_bytes, "challenge_bytes"),
+        _reference_label(challenge_label, "sdk:sorafs.pdp.challenge", "challenge_label"),
+        _bytes_payload(proof_bytes, "proof_bytes"),
+        _reference_label(proof_label, "sdk:sorafs.pdp.proof", "proof_label"),
+        _normalize_generated_at_unix(generated_at_unix),
+    )
+    return _reference_outcome_from_json(payload, "PDP challenge/proof validation")
+
+
+def validate_pdp_bundle(
+    commitment_bytes: bytes | bytearray | memoryview,
+    challenge_bytes: bytes | bytearray | memoryview,
+    proof_bytes: bytes | bytearray | memoryview,
+    *,
+    commitment_label: Optional[str] = None,
+    challenge_label: Optional[str] = None,
+    proof_label: Optional[str] = None,
+    generated_at_unix: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Validate PDP commitment/challenge/proof binding with the Rust reference validator."""
+
+    payload = _crypto.sorafs_validate_pdp_bundle_json(
+        _bytes_payload(commitment_bytes, "commitment_bytes"),
+        _reference_label(commitment_label, "sdk:sorafs.pdp.commitment", "commitment_label"),
+        _bytes_payload(challenge_bytes, "challenge_bytes"),
+        _reference_label(challenge_label, "sdk:sorafs.pdp.challenge", "challenge_label"),
+        _bytes_payload(proof_bytes, "proof_bytes"),
+        _reference_label(proof_label, "sdk:sorafs.pdp.proof", "proof_label"),
+        _normalize_generated_at_unix(generated_at_unix),
+    )
+    return _reference_outcome_from_json(payload, "PDP bundle validation")
 
 
 # -- Multi-source orchestrator bindings ---------------------------------------------------------

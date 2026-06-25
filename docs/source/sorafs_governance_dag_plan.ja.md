@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/sorafs_governance_dag_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 94e2255abbaa444994c28130d2a7fbd8af6b7865f946a115c9dd711fca06ed3c
-source_last_modified: "2026-01-03T18:07:57.749197+00:00"
+source_hash: 972abbd393b861a37c00b29eb3837dba2feacfa086fae5ea32c5b25dd26f863b
+source_last_modified: 2026-06-24T08:48:40.783733Z
 translation_last_reviewed: 2026-01-30
 ---
 
@@ -37,8 +37,10 @@ publisher also appends supported published payloads to a local signed
 `GovernanceDagHeadV1` head bytes, and a
 `sorafs.governance_dag.runtime_signed_index.v1` lookup index. Torii exposes
 read-only runtime index/head/block/node/digest/kind queries over that local
-index. It does not yet ship the full IPFS/IPNS governance DAG pipeline
-described by the roadmap.
+index. Publish-index, CAR queue, and runtime digest/kind lookup responses keep
+full match counts visible while bounding returned `entries`, `segments`, or
+`blocks` arrays through `limit` (default 50, max 500). It does not yet ship the
+full IPFS/IPNS governance DAG pipeline described by the roadmap.
 
 Implemented foundations include:
 - `GovernanceLogNodeV1`, `GovernanceLogPayloadV1`,
@@ -56,22 +58,29 @@ Implemented foundations include:
   remain SDK distribution work.
 - Governance fixtures under `fixtures/sorafs_manifest/governance/` and PoR fixture generation that emits governance nodes.
 - `FilesystemGovernancePublisher` support in `crates/sorafs_node` for local
-  deal settlement, repair, GC, reconciliation, reputation, and moderation
-  ballot lifecycle evidence. Each successful filesystem publish now updates a
-  local
-  `sorafs.governance_dag.local_publish_index.v1` `publish-index.json` with
+  deal settlement, repair, GC, reconciliation, reputation, moderation ballot
+  lifecycle, appeal finance report, appeal finance weekly rollup, appeal
+  finance settlement receipt, and orderbook settlement receipt evidence.
+  Each successful filesystem publish now updates a
+  local `sorafs.governance_dag.local_publish_index.v1` `publish-index.json` with
   artifact paths, BLAKE3 digests, payload-kind counts, digest lookup maps, and
   compact labels for query surfaces, then ensures a local
   `sorafs.governance_dag.local_car_queue.v1` `car-queue.json` entry and
   assembled CARv2 segment under `car-segments/` for that publication. With
   `sorafs.storage.governance_dag_publisher_peer_id` and
   `sorafs.storage.governance_dag_signing_key_path` configured, deal
-  settlements, reputation snapshots, and moderation ballot lifecycle events
-  also append to the local signed runtime DAG; duplicate publishes are
-  idempotent and malformed runtime DAG index state fails closed.
+  settlements, reputation snapshots, moderation ballot lifecycle events, appeal
+  finance reports, weekly rollups, appeal finance settlement receipts, and
+  orderbook settlement receipts also append to the local signed runtime DAG;
+  duplicate publishes are idempotent and malformed runtime DAG index state
+  fails closed.
   The local filesystem sink also updates the Governance DAG backlog gauge from
   CAR queue pending segment counts and refreshes the local signed runtime-head
   age gauge when runtime DAG state is written or de-duplicated.
+- Typed appeal finance transparency rollups: `sorafs_manifest` validates
+  `SoraFsAppealFinanceWeeklyRollupV1` payloads and can aggregate validated
+  finance reports into deterministic weekly dashboard rows for the filesystem
+  publisher and signed runtime DAG.
 - Torii PoR filesystem publishing for challenge/report artifacts rooted at the configured `sorafs_por.governance_dag_dir`.
 - Taikai cache governance bundle generation via `cargo xtask sorafs-taikai-cache-bundle`.
 - Local operator commands:
@@ -143,8 +152,9 @@ Implemented foundations include:
   - `GET /v1/sorafs/governance/dag/publish-index/digests/{encoded_blake3_hex}`
     and `/v1/sorafs/governance/dag/publish-index/kinds/{payload_kind}` query
     that local feed by encoded payload digest or payload kind. The handlers
-    validate lookup keys, support ETag revalidation, and fail closed on missing,
-    malformed, or unsupported publish indexes.
+    validate lookup keys, support ETag revalidation, report total and returned
+    counts, bound the returned `entries` array with `limit` (default 50, max
+    500), and fail closed on missing, malformed, or unsupported publish indexes.
   - `GET /v1/sorafs/governance/dag/car-queue` returns the runtime-local CAR
     segment queue from `car-queue.json`, including assembled/pending counts and
     the full local queue.
@@ -152,9 +162,10 @@ Implemented foundations include:
     `/v1/sorafs/governance/dag/car-queue/kinds/{payload_kind}`, and
     `/v1/sorafs/governance/dag/car-queue/archives/{car_archive_blake3_hex}`
     query assembled local segments by encoded payload digest, payload kind, or
-    CAR archive digest. The handlers validate lookup keys, support ETag
-    revalidation, and fail closed on missing, malformed, or unsupported CAR
-    queues.
+    CAR archive digest. Digest/kind handlers validate lookup keys, support ETag
+    revalidation, report total and returned counts, bound the returned
+    `segments` array with `limit` (default 50, max 500), and fail closed on
+    missing, malformed, or unsupported CAR queues.
   - `GET /v1/sorafs/governance/dag/runtime` summarizes the local signed runtime
     DAG index from `runtime-dag-index.json`, including publisher identity,
     head metadata, block counts, payload-kind counts, and the full local index.
@@ -166,8 +177,9 @@ Implemented foundations include:
   - `GET /v1/sorafs/governance/dag/runtime/digests/{encoded_blake3_hex}` and
     `/v1/sorafs/governance/dag/runtime/kinds/{payload_kind}` query runtime
     block entries by encoded payload digest or payload kind. The handlers
-    validate lookup keys, support ETag revalidation, and fail closed on missing,
-    malformed, or unsupported runtime indexes.
+    validate lookup keys, support ETag revalidation, report total and returned
+    counts, bound the returned `blocks` array with `limit` (default 50, max
+    500), and fail closed on missing, malformed, or unsupported runtime indexes.
 - Local publication telemetry: `sorafs_governance_dag_publish_total`,
   `sorafs_governance_dag_published_bytes_total`,
   `sorafs_governance_dag_last_publish_timestamp_seconds`,
@@ -219,6 +231,10 @@ struct GovernanceLogNodeV1 {
 - `DealSettlement`
 - `ReputationSnapshot`
 - `ModerationBallotEvent`
+- `AppealFinanceReport`
+- `AppealFinanceWeeklyRollup`
+- `AppealFinanceSettlementReceipt`
+- `OrderbookSettlementReceipt`
 
 `GovernanceLogSignatureV1` stores the algorithm, public key, and raw signature.
 Validation rejects unsupported versions, empty node CIDs, empty previous CIDs,
@@ -367,17 +383,20 @@ and fail-closed rejection of malformed CAR queue state. It also verifies
 config-backed signed runtime DAG append for supported payloads, duplicate
 publish idempotency, decoded head/block signature-chain validation with
 `validate_governance_dag_head_against_chain_v1`, and fail-closed rejection of
-malformed runtime DAG index state. Focused Torii coverage verifies
-publish-index reads, digest lookups, payload-kind lookups, ETag revalidation,
-malformed lookup rejection, and missing lookup rejection over a configured local
-publish index. Torii CAR queue coverage verifies local queue reads, digest
-lookups, payload-kind lookups, CAR archive digest lookups, ETag revalidation,
-malformed lookup rejection, and missing lookup rejection over a configured local
-CAR queue. Torii runtime DAG coverage verifies local runtime-index reads,
-runtime head reads, block/node/digest/payload-kind lookups, ETag revalidation,
-malformed lookup rejection, missing lookup rejection, and unsupported runtime
-index schema rejection. Focused `sorafs_node` helper coverage verifies local
-CAR queue backlog counting and signed runtime-head age saturation.
+malformed runtime DAG index state, including orderbook settlement receipt
+publication. Focused Torii coverage verifies publish-index reads, digest
+lookups, payload-kind lookups, `limit`-bounded returned entries, ETag
+revalidation, malformed lookup rejection, and missing lookup rejection over a
+configured local publish index. Torii CAR queue coverage verifies local queue
+reads, digest lookups, payload-kind lookups, `limit`-bounded returned segments,
+CAR archive digest lookups, ETag revalidation, malformed lookup rejection, and
+missing lookup rejection over a configured local CAR queue. Torii runtime DAG
+coverage verifies local runtime-index reads, runtime head reads, block/node/
+digest/payload-kind lookups, `limit`-bounded returned blocks, ETag
+revalidation, malformed lookup rejection, missing lookup rejection, and
+unsupported runtime index schema rejection. Focused `sorafs_node` helper
+coverage verifies local CAR queue backlog counting and signed runtime-head age
+saturation.
 
 Required before rollout:
 - Integration tests with a local IPFS/IPNS-compatible environment.
@@ -437,21 +456,26 @@ tests above require the runtime builder/publisher and IPFS/IPNS stack.
 - Use Torii `GET /v1/sorafs/governance/dag/publish-index`,
   `/publish-index/digests/{encoded_blake3_hex}`, and
   `/publish-index/kinds/{payload_kind}` to query that runtime-local feed through
-  the node API when filesystem governance publication is enabled.
+  the node API when filesystem governance publication is enabled. Digest/kind
+  lookup result arrays are bounded by `limit` while total match counts remain
+  visible.
 - Use Torii `GET /v1/sorafs/governance/dag/car-queue`,
   `/car-queue/digests/{encoded_blake3_hex}`,
   `/car-queue/kinds/{payload_kind}`, and
   `/car-queue/archives/{car_archive_blake3_hex}` to inspect assembled local CAR
-  segment queue state before public IPFS/IPNS publication exists.
+  segment queue state before public IPFS/IPNS publication exists. Digest/kind
+  lookup segment arrays are bounded by `limit` while total match counts remain
+  visible.
 - Use Torii `GET /v1/sorafs/governance/dag/runtime`, `/runtime/head`,
   `/runtime/blocks/{block_cid_hex}`, `/runtime/nodes/{node_cid_hex}`,
   `/runtime/digests/{encoded_blake3_hex}`, and `/runtime/kinds/{payload_kind}`
   to inspect the local signed runtime DAG index before a RocksDB/IPLD mirror or
-  public IPFS/IPNS head exists.
+  public IPFS/IPNS head exists. Digest/kind lookup block arrays are bounded by
+  `limit` while total match counts remain visible.
 - Keep `configs/taikai_cache/` and `cargo xtask sorafs-taikai-cache-bundle` documented as Taikai cache governance bundle tooling, not as the full DAG publisher.
 - Add live-head, public checkpoint recovery, and dashboard runbooks only when
   the IPFS/IPNS pipeline and metrics actually exist.
 
 ## Rollout Status
-- Done: governance log schema, public DAG block/head schemas, deterministic node-CID/block-CID derivation, block/head signature helpers, parent-chain and signed-head validation, payload validation, Ed25519/ML-DSA signature verification, reference validation hooks for nodes/blocks/heads, governance log-node FFI hooks, fixtures, local filesystem publishing hooks with local `publish-index.json`, runtime-local `car-queue.json` and CARv2 segment assembly for filesystem-published artifacts, config-backed local signed runtime block/head assembly for supported filesystem-published payloads, Torii publish-index, CAR queue, and runtime signed-DAG query APIs, PoR report/challenge filesystem publication, Taikai cache bundle generation, local Governance DAG operator inventory/verify/export/build/verify-build/rebuild-head/checkpoint/checkpoint-verify/checkpoint-recover/mirror-build/mirror-query commands, local CARv2 segment emission for signed snapshots, Torii local mirror dashboard/query API, local filesystem backlog/head-age metric emission, and local Governance DAG publication metrics/dashboard/alerts.
+- Done: governance log schema, public DAG block/head schemas, deterministic node-CID/block-CID derivation, block/head signature helpers, parent-chain and signed-head validation, payload validation including appeal finance reports, weekly rollups, and settlement receipts, Ed25519/ML-DSA signature verification, reference validation hooks for nodes/blocks/heads, governance log-node FFI hooks, fixtures, local filesystem publishing hooks with local `publish-index.json` including appeal finance reports, weekly rollups, and settlement receipts, appeal-finance rollup summaries embedded in local SoraFS reconciliation reports, runtime-local `car-queue.json` and CARv2 segment assembly for filesystem-published artifacts, config-backed local signed runtime block/head assembly for supported filesystem-published payloads, Torii publish-index, CAR queue, and runtime signed-DAG query APIs with `limit`-bounded lookup arrays and full total counts, PoR report/challenge filesystem publication, Taikai cache bundle generation, local Governance DAG operator inventory/verify/export/build/verify-build/rebuild-head/checkpoint/checkpoint-verify/checkpoint-recover/mirror-build/mirror-query commands, local CARv2 segment emission for signed snapshots, Torii local mirror dashboard/query API, local filesystem backlog/head-age metric emission, and local Governance DAG publication metrics/dashboard/alerts.
 - Remaining: implement the always-on ingest/publisher services, IPFS/IPNS publication, runtime RocksDB/IPLD mirror datastore and query service, live-head/public-checkpoint publication and recovery operator commands, runtime/IPFS-backed dashboard API, live public IPFS/IPNS head and pin/mirror metric emission, IPFS-backed tests, and staged/live publication evidence.

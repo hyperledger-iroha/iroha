@@ -5,9 +5,10 @@
 use std::fs;
 
 use sorafs_manifest::{
-    ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1, ORDERBOOK_TRADE_EVENT_VERSION_V1,
-    OrderCancelV1, OrderRequestV1, SETTLEMENT_CHANNEL_VERSION_V1, SETTLEMENT_RECEIPT_VERSION_V1,
-    SettlementChannelV1, SettlementReceiptV1, TradeEventV1,
+    ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1, ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
+    ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderCancelV1, OrderRequestV1, OrderbookRuntimeSnapshotV1,
+    SETTLEMENT_CHANNEL_VERSION_V1, SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelV1,
+    SettlementReceiptV1, TradeEventV1,
 };
 
 const FIXTURES_ROOT: &str = concat!(
@@ -123,4 +124,37 @@ fn settlement_receipt_fixture_decodes_and_validates() {
         bytes
     );
     assert_json_hex_matches("settlement_receipt_v1", &bytes);
+}
+
+#[test]
+fn runtime_snapshot_fixture_decodes_and_validates() {
+    let bytes = read_fixture_bytes("runtime_snapshot_v1");
+    let snapshot: OrderbookRuntimeSnapshotV1 =
+        norito::decode_from_bytes(&bytes).expect("runtime snapshot fixture should decode");
+    snapshot
+        .validate()
+        .expect("runtime snapshot fixture must validate");
+    assert_eq!(snapshot.version, ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1);
+    assert_eq!(snapshot.next_sequence, 4);
+    assert_eq!(snapshot.generated_at_unix, 1_700_000_130);
+    assert_eq!(snapshot.open_orders.len(), 1);
+    assert_eq!(snapshot.open_orders[0].order.order_id, [0x73; 32]);
+    assert_eq!(snapshot.open_orders[0].sequence, 3);
+    assert_eq!(snapshot.trades.len(), 1);
+    assert_eq!(snapshot.trades[0].trade_id, [0x83; 32]);
+    assert_eq!(snapshot.settlement_channels.len(), 1);
+    assert_eq!(snapshot.settlement_channels[0].channel_id, [0x82; 32]);
+    assert_eq!(snapshot.settlement_channels[0].remaining_bytes, 1_048_320);
+    assert_eq!(
+        snapshot.settlement_channels[0].updated_at_unix,
+        1_700_000_120
+    );
+    assert_eq!(snapshot.settlement_receipts.len(), 1);
+    assert_eq!(snapshot.settlement_receipts[0].receipt_id, [0x81; 32]);
+    assert_eq!(snapshot.expired_order_ids, vec![[0x74; 32]]);
+    assert_eq!(
+        norito::to_bytes(&snapshot).expect("fixture should re-encode"),
+        bytes
+    );
+    assert_json_hex_matches("runtime_snapshot_v1", &bytes);
 }

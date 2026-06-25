@@ -3,7 +3,7 @@
 `iroha-python` packages the client-side utilities Python developers need to
 interact with Hyperledger Iroha v2 nodes. It bundles Norito codecs, Torii client
 helpers, and crypto primitives aligned with the Rust implementation—more high
-level builders will follow as the SDK matures. See [`DESIGN.md`](DESIGN.md) for a
+level builders are being added as the SDK matures. See [`DESIGN.md`](DESIGN.md) for a
 full architecture overview.
 
 ## Quickstart
@@ -790,6 +790,80 @@ for provider in ingestion.providers:
 
 # `status_bytes`, `weekly_report`, and the export helper all return Norito payloads.
 # Decode them with the `norito` crate or via `norito.decode(...)` when the matching schema is available.
+
+# Inspect the local SoraFS orderbook mirror exposed by Torii.
+orderbook = client.get_sorafs_orderbook()
+trades = client.list_sorafs_orderbook_trades()
+events = client.list_sorafs_orderbook_events(since=0, limit=25, etag='"cached-etag"')
+print(orderbook["open_order_count"], trades["count"], 0 if events is None else events["count"])
+for event in client.stream_sorafs_orderbook_events(since=0, limit=1, with_metadata=True):
+    print(event.event, event.data)
+    break
+# WebSocket helpers require `websocket-client` (`pip install iroha-python[ws]`).
+for event in client.stream_sorafs_orderbook_events_websocket(since=0, limit=1, with_metadata=True):
+    print(event.event, event.data)
+    break
+from iroha_python import ToriiCanonicalRequestAuth
+
+def sign_request_envelope(message: bytes) -> bytes:
+    return request_envelope_keypair.sign(message)
+
+auth = ToriiCanonicalRequestAuth(
+    account_id="<canonical_i105_account_id>",
+    signer=sign_request_envelope,
+)
+from iroha_python import build_signed_orderbook_order_request, sign_orderbook_payload
+
+orderbook_private_key = bytes.fromhex("b7" * 32)
+signed_order_request = sign_orderbook_payload(
+    "order-request",
+    b"...Norito OrderRequestV1 bytes...",
+    orderbook_private_key,
+)
+signed_order_request_from_fields = build_signed_orderbook_order_request(
+    {
+        "orderId": bytes.fromhex("11" * 32),
+        "side": "bid",
+        "tier": "hot",
+        "pricePerGibMicroXor": "1000000",
+        "quantityGib": "12",
+        "ownerAccount": b"merchant@paynet",
+        "expiryUnix": "1700010000",
+        "nonce": "7",
+        "makerFeeBps": "25",
+        "takerFeeBps": "30",
+    },
+    orderbook_private_key,
+)
+order_result = client.submit_sorafs_orderbook_order(
+    signed_order_request_from_fields,
+    canonical_auth=auth,
+)
+print(order_result["status"])
+# Cancel and receipt helpers use the same request-envelope auth. The Norito
+# payload bytes can be signed locally from existing bytes or field values.
+client.submit_sorafs_orderbook_cancel(b"...Norito OrderCancelV1 bytes...", canonical_auth=auth)
+client.submit_sorafs_orderbook_receipt(b"...Norito SettlementReceiptV1 bytes...", canonical_auth=auth)
+
+# Validate SoraFS reference payloads locally
+from iroha_python import (
+    SORAFS_ORDERBOOK_PAYLOAD_KINDS,
+    SORAFS_PDP_PAYLOAD_KINDS,
+    validate_orderbook_payload,
+    validate_pdp_bundle,
+)
+
+order_outcome = validate_orderbook_payload(
+    SORAFS_ORDERBOOK_PAYLOAD_KINDS["ORDER_REQUEST"],
+    b"...Norito OrderRequestV1 bytes...",
+    label="order_request.to",
+)
+pdp_outcome = validate_pdp_bundle(
+    b"...Norito PdpCommitmentV1 bytes...",
+    b"...Norito PdpChallengeV1 bytes...",
+    b"...Norito PdpProofV1 bytes...",
+)
+print(order_outcome["status"], pdp_outcome["code"])
 
 # Account listings
 assets = client.list_account_assets(
