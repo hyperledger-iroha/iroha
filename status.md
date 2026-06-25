@@ -2,6 +2,18 @@
 
 Last updated: 2026-06-25
 
+## 2026-06-25 Torii Recipient Lookup Config Snapshot
+
+- Refreshed `minimal_config_snapshot` so the expected `iroha_config` minimal
+  fixture includes the default `torii.recipient_lookup` settings: a four-second
+  request timeout and no configured lookup routes.
+- Validation passed:
+  - `UPDATE_EXPECT=1 CARGO_INCREMENTAL=0 cargo test -p iroha_config --test fixtures minimal_config_snapshot -- --nocapture`
+  - `cargo fmt --all`
+  - `git diff --check -- crates/iroha_config/tests/fixtures.rs status.md`
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_config --test fixtures minimal_config_snapshot -- --nocapture`
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_config --test fixtures -- --nocapture`
+
 ## 2026-06-25 Kagemusha Zero-Prehash Hash Validation
 
 - Fixed recursive-spend validation paths that tried to reject zero `Hash`
