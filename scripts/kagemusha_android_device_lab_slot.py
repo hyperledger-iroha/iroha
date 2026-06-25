@@ -15,7 +15,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from typing import Any, Sequence
+from typing import Any, Iterable, Sequence
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -79,6 +79,10 @@ DEVICE_FAMILY_MODEL_RULES: tuple[
         ("sm-s921", "sm-s926", "sm-s928"),
     ),
 )
+
+
+def _timeout_arg(timeout_seconds: int) -> int | None:
+    return None if timeout_seconds == 0 else timeout_seconds
 
 
 def _json_dumps(payload: dict[str, Any]) -> str:
@@ -923,8 +927,8 @@ def _run_adb_getprop(
     *,
     timeout_seconds: int,
 ) -> str:
-    if timeout_seconds <= 0:
-        raise ValueError("ADB getprop timeout must be positive")
+    if timeout_seconds < 0:
+        raise ValueError("ADB getprop timeout must be non-negative")
     command = [adb]
     if serial:
         command.extend(["-s", serial])
@@ -939,7 +943,7 @@ def _run_adb_getprop(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout_seconds,
+            timeout=_timeout_arg(timeout_seconds),
         )
     except subprocess.TimeoutExpired as exc:
         raise ValueError(
@@ -1664,21 +1668,17 @@ def parse_d2d_payment_transcript_extra_specs(
     return parsed
 
 
-def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]]:
-    """Assemble the requested slot and optionally sign it."""
+def _device_lab_root_list(root: Path | Iterable[Path]) -> list[Path]:
+    """Normalize one or more Android device-lab roots."""
 
-    errors: list[str] = []
-    if any(character.isspace() for character in args.slot_id):
-        return 1, None, ["slot id must not contain whitespace"]
-    if device_lab._contains_control_character(args.slot_id):
-        return 1, None, ["slot id must not contain control characters"]
-    if args.adb_timeout_seconds <= 0:
-        return 1, None, ["--adb-timeout-seconds must be positive"]
-    slot_id = _single_safe_slot_id(args.slot_id)
-    if slot_id is None:
-        return 1, None, ["slot id must be a single safe directory name"]
+    if isinstance(root, (str, os.PathLike)):
+        return [Path(root)]
+    return [Path(item) for item in root]
 
-    root = args.slot_root
+
+def _device_lab_root_path_error(
+    root: Path,
+) -> tuple[int, Path | None, list[str]] | None:
     root_text = str(root)
     if device_lab.SECRET_RE.search(root_text):
         return 1, None, ["device-lab root path must not contain secret-looking material"]
@@ -1692,9 +1692,45 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
         return 1, None, ["device-lab root path must not contain backslashes"]
     if ".." in root.parts:
         return 1, None, ["device-lab root path must be canonical"]
-    root_exists, root_errors = device_lab.classify_device_lab_root_path(root)
-    if root_errors:
-        return 1, None, root_errors
+    return None
+
+
+def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]]:
+    """Assemble the requested slot and optionally sign it."""
+
+    errors: list[str] = []
+    if any(character.isspace() for character in args.slot_id):
+        return 1, None, ["slot id must not contain whitespace"]
+    if device_lab._contains_control_character(args.slot_id):
+        return 1, None, ["slot id must not contain control characters"]
+    if args.adb_timeout_seconds < 0:
+        return 1, None, ["--adb-timeout-seconds must be non-negative"]
+    slot_id = _single_safe_slot_id(args.slot_id)
+    if slot_id is None:
+        return 1, None, ["slot id must be a single safe directory name"]
+
+    root = args.slot_root
+    roots = _device_lab_root_list(root)
+    if not roots:
+        return 1, None, ["device-lab root path is required"]
+    existing_roots: list[tuple[int, Path]] = []
+    for root_index, candidate_root in enumerate(roots):
+        root_path_error = _device_lab_root_path_error(candidate_root)
+        if root_path_error is not None:
+            return root_path_error
+        root_exists, root_errors = device_lab.classify_device_lab_root_path(candidate_root)
+        if root_errors:
+            return 1, None, root_errors
+        if root_exists:
+            existing_roots.append((root_index, candidate_root))
+    if len(existing_roots) > 1:
+        return 1, None, ["device-lab root path must resolve to exactly one existing root"]
+    if existing_roots:
+        _, root = existing_roots[0]
+        root_exists = True
+    else:
+        root = roots[0]
+        root_exists = False
     if not root_exists:
         root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         root.mkdir(mode=0o700)
@@ -2097,6 +2133,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--adb-timeout-seconds",
         type=int,
         default=DEFAULT_ADB_TIMEOUT_SECONDS,
+        help="ADB subprocess timeout in seconds; 0 disables the timeout.",
     )
     parser.add_argument("--serial")
     parser.add_argument("--device-fingerprint")

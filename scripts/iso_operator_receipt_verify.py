@@ -69,6 +69,10 @@ MAX_AUDIT_EXPORT_JSON_BYTES = 64 * 1024 * 1024
 MAX_PERSISTED_RECORD_JSON_BYTES = 1024 * 1024
 MAX_RAIL_XML_BYTES = 4 * 1024 * 1024
 MAX_RAIL_SIDECAR_JSON_BYTES = 16 * 1024
+MAX_RECEIPT_INPUT_PATHS = 64
+MAX_JSON_LIST_ITEMS = 8192
+MAX_JSON_OBJECT_MEMBERS = 8192
+MAX_JSON_NESTING_DEPTH = 128
 MAX_HTTP_URL_CHARS = 2048
 MAX_LOCAL_PATH_CHARS = 4096
 MAX_CLEAN_STRING_CHARS = 4096
@@ -674,6 +678,10 @@ def _load_json(
         raise ReceiptError(f"{label} is not UTF-8 JSON") from error
     except json.JSONDecodeError as error:
         raise ReceiptError(f"{label} is not valid JSON: {error}") from error
+    except RecursionError as error:
+        raise ReceiptError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        ) from error
     _reject_json_surrogates(value)
     return value
 
@@ -688,6 +696,14 @@ def _require_exact_keys(value: dict[str, Any], required: set[str], label: str) -
     missing = sorted(required - set(value))
     if missing:
         raise ReceiptError(f"{label} is missing required keys: {', '.join(missing)}")
+
+
+def _require_json_array(value: Any, label: str) -> list[Any]:
+    if not isinstance(value, list):
+        raise ReceiptError(f"{label} must be an array")
+    if len(value) > MAX_JSON_LIST_ITEMS:
+        raise ReceiptError(f"{label} must contain at most {MAX_JSON_LIST_ITEMS} items")
+    return value
 
 
 def _is_secret_looking_key(value: Any) -> bool:
@@ -771,6 +787,10 @@ def _reject_non_ascii_identifier(value: str, label: str) -> None:
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    if len(pairs) > MAX_JSON_OBJECT_MEMBERS:
+        raise ReceiptError(
+            f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+        )
     seen: set[str] = set()
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -785,17 +805,29 @@ def _reject_json_constant(value: str) -> None:
     raise ReceiptError("JSON contains non-finite numeric constant")
 
 
-def _reject_json_surrogates(value: Any) -> None:
+def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise ReceiptError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
     if isinstance(value, str):
         if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
             raise ReceiptError("JSON contains invalid Unicode surrogate")
     elif isinstance(value, list):
+        if len(value) > MAX_JSON_LIST_ITEMS:
+            raise ReceiptError(
+                f"JSON array must contain at most {MAX_JSON_LIST_ITEMS} items"
+            )
         for item in value:
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(item, _depth=_depth + 1)
     elif isinstance(value, dict):
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise ReceiptError(
+                f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+            )
         for key, item in value.items():
-            _reject_json_surrogates(key)
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(key, _depth=_depth + 1)
+            _reject_json_surrogates(item, _depth=_depth + 1)
 
 
 def digest_without_field(obj: dict[str, Any], digest_field: str) -> str:
@@ -821,17 +853,38 @@ def require_digest_matches(obj: dict[str, Any], digest_field: str, label: str) -
     return expected
 
 
-def _check_no_secret_material(value: Any, path: Path, *, field_name: str | None = None) -> None:
+def _check_no_secret_material(
+    value: Any,
+    path: Path,
+    *,
+    field_name: str | None = None,
+    _depth: int = 0,
+) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise ReceiptError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
     if isinstance(value, dict):
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise ReceiptError(
+                f"{path} must contain at most {MAX_JSON_OBJECT_MEMBERS} object members"
+            )
         for key, child in value.items():
             if _is_secret_looking_key(key):
                 raise ReceiptError(f"{path} contains forbidden secret-looking field")
             if _is_control_bearing_key(key):
                 raise ReceiptError(f"{path} contains forbidden control-bearing field")
-            _check_no_secret_material(child, path, field_name=str(key))
+            _check_no_secret_material(
+                child,
+                path,
+                field_name=str(key),
+                _depth=_depth + 1,
+            )
     elif isinstance(value, list):
+        if len(value) > MAX_JSON_LIST_ITEMS:
+            raise ReceiptError(f"{path} must contain at most {MAX_JSON_LIST_ITEMS} items")
         for child in value:
-            _check_no_secret_material(child, path)
+            _check_no_secret_material(child, path, _depth=_depth + 1)
     elif isinstance(value, str):
         if _contains_unsafe_json_control(value):
             raise ReceiptError(f"{path} contains unsafe control characters")
@@ -1324,9 +1377,10 @@ def _verify_persisted_record_source(
     if value.get("transaction_hash") != index_record.get("transaction_hash"):
         raise ReceiptError(f"{label}.transaction_hash does not match audit index record")
     _require_bool(value.get("ledger_tx_queued"), f"{label}.ledger_tx_queued")
-    change_reason_codes = value.get("change_reason_codes")
-    if not isinstance(change_reason_codes, list):
-        raise ReceiptError(f"{label}.change_reason_codes must be an array")
+    change_reason_codes = _require_json_array(
+        value.get("change_reason_codes"),
+        f"{label}.change_reason_codes",
+    )
     for offset, code in enumerate(change_reason_codes):
         _require_nonsecret_clean_string(code, f"{label}.change_reason_codes[{offset}]")
     _verify_persisted_context(value.get("context"), f"{label}.context")
@@ -1335,8 +1389,8 @@ def _verify_persisted_record_source(
         f"{label}.metadata",
         index_record,
     )
-    history = value.get("status_history")
-    if not isinstance(history, list) or not history:
+    history = _require_json_array(value.get("status_history"), f"{label}.status_history")
+    if not history:
         raise ReceiptError(f"{label}.status_history must be a non-empty array")
     last_status = None
     last_code = None
@@ -1584,8 +1638,7 @@ def _verify_audit_index_source(value: Any, label: str) -> dict[str, Any]:
     records = value.get("records")
     if isinstance(record_count, bool) or not isinstance(record_count, int) or record_count < 0:
         raise ReceiptError(f"{label} record_count must be a non-negative integer")
-    if not isinstance(records, list):
-        raise ReceiptError(f"{label} records must be an array")
+    records = _require_json_array(records, f"{label} records")
     if len(records) != record_count:
         raise ReceiptError(f"{label} record_count does not match records length")
     for offset, record in enumerate(records):
@@ -1626,9 +1679,7 @@ def _verify_persisted_record_sources(
     *,
     require_source_files: bool,
 ) -> None:
-    records = audit_index.get("records")
-    if not isinstance(records, list):
-        raise ReceiptError(f"{label}.records must be an array")
+    records = _require_json_array(audit_index.get("records"), f"{label}.records")
     if store_dir is None:
         if require_source_files and records:
             raise ReceiptError(f"{label}.store_dir is required to verify audit records")
@@ -2203,6 +2254,10 @@ def _receipt_metadata(path: Path, receipt: dict[str, Any]) -> dict[str, Any]:
     return metadata
 
 
+def _receipt_summary_entry_order_key(entry: dict[str, Any]) -> tuple[str, str, str]:
+    return (entry["receipt_kind"], entry["path"], entry["receipt_sha256"])
+
+
 def _receipt_endpoint_url(receipt: dict[str, Any]) -> str:
     if receipt["receipt_kind"] == "iso-audit-notary":
         return receipt["endpoint"]
@@ -2241,13 +2296,51 @@ def _reject_unused_local_overrides(args: argparse.Namespace, receipts: list[dict
         )
 
 
+def _require_policy_booleans(args: argparse.Namespace) -> None:
+    for attr in (
+        "allow_failed",
+        "allow_insecure_http",
+        "allow_legacy_colr007",
+        "allow_default_profile",
+        "require_source_files",
+    ):
+        flag = f"--{attr.replace('_', '-')}"
+        setattr(args, attr, _require_bool(getattr(args, attr, None), flag))
+
+
+def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+        raise ReceiptError(f"{label} must be a repeatable path list")
+    if len(value) > MAX_RECEIPT_INPUT_PATHS:
+        raise ReceiptError(f"{label} accepts at most {MAX_RECEIPT_INPUT_PATHS} paths")
+    paths: list[Path] = []
+    for offset, entry in enumerate(value):
+        if isinstance(entry, bytes):
+            raise ReceiptError(f"{label}[{offset}] must be a path")
+        try:
+            paths.append(Path(entry))
+        except TypeError as error:
+            raise ReceiptError(f"{label}[{offset}] must be a path") from error
+    return paths
+
+
 def run(args: argparse.Namespace) -> int:
-    for offset, path in enumerate(args.receipt):
+    _require_policy_booleans(args)
+    receipt_paths = _required_cli_path_sequence(getattr(args, "receipt", None), "--receipt")
+    receipt_dir_paths = _required_cli_path_sequence(
+        getattr(args, "receipt_dir", None),
+        "--receipt-dir",
+    )
+    for offset, path in enumerate(receipt_paths):
+        _reject_raw_cli_path_smuggling(str(path), f"receipt[{offset}]")
         _reject_repository_iso_fixture_path(path, f"receipt[{offset}]")
-    for offset, receipt_dir in enumerate(args.receipt_dir):
+    for offset, receipt_dir in enumerate(receipt_dir_paths):
+        _reject_raw_cli_path_smuggling(str(receipt_dir), f"receipt_dir[{offset}]")
         _reject_repository_iso_fixture_path(receipt_dir, f"receipt_dir[{offset}]")
-    paths = list(args.receipt)
-    for offset, receipt_dir in enumerate(args.receipt_dir):
+    paths = list(receipt_paths)
+    for offset, receipt_dir in enumerate(receipt_dir_paths):
         paths.extend(discover_receipts(receipt_dir, display_label=f"receipt_dir[{offset}]"))
     if not paths:
         raise ReceiptError("provide at least one --receipt or --receipt-dir")
@@ -2277,6 +2370,7 @@ def run(args: argparse.Namespace) -> int:
         receipt_entries.append(_receipt_metadata(path, receipt))
 
     _reject_unused_local_overrides(args, verified)
+    receipt_entries.sort(key=_receipt_summary_entry_order_key)
 
     summary = {
         "version": RECEIPT_SUMMARY_VERSION,

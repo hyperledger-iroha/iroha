@@ -66,6 +66,7 @@ use iroha_data_model::{
         Instruction, InstructionBox,
         escrow::{CancelAssetLock, DrawdownAssetLock, OpenAssetLock},
     },
+    role::RoleId,
     soracloud::SoraRouteVisibilityV1,
     sorafs::{
         gar::GarEnforcementReceiptV1,
@@ -121,6 +122,8 @@ use sorafs_node::{
     ModerationBallotEvent, ModerationBallotEventKind, ModerationBallotRecord,
     ModerationBallotRevealOutcome, ModerationBallotRuntimeError, ModerationBallotTally,
     ModerationCorpusRegistryRecord, ModerationModelRegistryError, ModerationModelRegistrySnapshot,
+    ModerationQuarantineObjectError, ModerationQuarantineObjectInput,
+    ModerationQuarantineObjectPayload, ModerationQuarantineObjectRecord,
     ModerationQuarantineRecord, ModerationQuarantineReleaseInput, ModerationQuarantineReviewInput,
     ModerationQuarantineState, ModerationReproRegistryRecord, ModerationScreeningError,
     ModerationScreeningInput, ModerationScreeningOutcome, ModerationScreeningRecord,
@@ -248,11 +251,20 @@ const MODERATION_ROUTE_MODEL_REGISTRY_CORPORA: &str =
     "/v1/sorafs/moderation/model-registry/corpora";
 const MODERATION_ROUTE_SCREENING_RESULTS: &str = "/v1/sorafs/moderation/screening-results";
 const MODERATION_ROUTE_QUARANTINE: &str = "/v1/sorafs/moderation/quarantine";
+const MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX: &str = "object";
+const MODERATION_ROUTE_QUARANTINE_OPERATOR_PANEL_SUFFIX: &str = "operator-panel";
 const MODERATION_ROUTE_QUARANTINE_REVIEW_SUFFIX: &str = "review";
 const MODERATION_ROUTE_QUARANTINE_RELEASE_SUFFIX: &str = "release";
+const MODERATION_ROUTE_QUARANTINE_APPEAL_HANDOFF_SUFFIX: &str = "appeal-handoff";
+const MODERATION_ROUTE_QUARANTINE_APPEAL_BALLOT_SUFFIX: &str = "appeal-ballot";
+const SORAFS_MODERATION_OPERATOR_ROLE: &str = "sorafs_moderation_operator";
+static SORAFS_MODERATION_OPERATOR_ROLE_ID: LazyLock<RoleId> = LazyLock::new(|| {
+    SORAFS_MODERATION_OPERATOR_ROLE
+        .parse()
+        .expect("SoraFS moderation operator role id is valid")
+});
 #[cfg(test)]
 const APPEAL_FINANCE_ROUTE_REPORTS: &str = "/v1/sorafs/appeals/finance/reports";
-#[cfg(test)]
 const TRANSPARENCY_SOURCE_ENTRIES_ROUTE: &str = "/v1/sorafs/transparency/source-entries";
 #[cfg(test)]
 const TRANSPARENCY_PRIVACY_AGGREGATE_SOURCE_EVENTS_ROUTE: &str =
@@ -1762,6 +1774,20 @@ pub struct ModerationQuarantineReleaseRequestDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/moderation/quarantine/{id}/object`.
+pub struct ModerationQuarantineObjectStoreRequestDto {
+    /// Standard base64 quarantined payload bytes to seal locally.
+    pub payload_b64: String,
+    /// Optional Unix timestamp (seconds) when payload capture completed.
+    pub captured_at_unix: Option<u64>,
+    /// Optional content type label for operator review.
+    pub content_type: Option<String>,
+    /// Optional object-store note.
+    pub notes: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 /// One raw metric contribution in a SoraFS privacy aggregate source event.
 pub struct TransparencyPrivacyAggregateSourceMetricDto {
     /// Stable metric key.
@@ -2002,6 +2028,74 @@ pub struct AppealFinanceDepositConfirmRequestDto {
     pub idempotency_key: String,
     /// Optional canonical Iroha hash evidence references attached to the lock.
     pub evidence_hashes_hex: Option<Vec<String>>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/moderation/quarantine/{id}/appeal-handoff`.
+pub struct ModerationQuarantineAppealHandoffRequestDto {
+    /// Optional appeal case identifier; defaults to `quarantine-{quarantine_id_hex}`.
+    pub case_id: Option<String>,
+    /// Optional moderation round identifier.
+    pub round_id: Option<String>,
+    /// Appeal class (`content`, `access`, `fraud`, or `other`).
+    pub class: String,
+    /// Current queue backlog for the selected class.
+    pub backlog: u32,
+    /// Evidence size in MiB used by the pricing formula.
+    pub evidence_size_mb: u32,
+    /// Optional urgency hint (`normal` or `high`); defaults to `normal`.
+    pub urgency: Option<String>,
+    /// Optional panel size; defaults to the active pricing config.
+    pub panel_size: Option<u32>,
+    /// Canonical account that must sign the request and returned deposit instruction.
+    pub payer_account: String,
+    /// Canonical account that receives approved drawdowns from the lock.
+    pub destination_account: String,
+    /// Optional canonical account required to approve drawdowns.
+    pub release_authority_account: Option<String>,
+    /// Canonical asset definition identifier for the XOR deposit asset.
+    pub asset_definition_id: String,
+    /// Optional Unix timestamp in milliseconds after which the lock may expire.
+    pub expires_at_ms: Option<u64>,
+    /// Optional client-supplied idempotency key; defaults to reviewed quarantine metadata.
+    pub idempotency_key: Option<String>,
+    /// Optional extra canonical Iroha hash evidence references attached to the escrow.
+    pub evidence_hashes_hex: Option<Vec<String>>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/moderation/quarantine/{id}/appeal-ballot`.
+pub struct ModerationQuarantineAppealBallotRequestDto {
+    /// Confirmed runtime asset-lock deposit to bind to the ballot announcement.
+    pub deposit_confirmation: AppealFinanceDepositConfirmRequestDto,
+    /// Optional moderation or appeal case identifier; defaults to the confirmed deposit case id.
+    pub case_id: Option<String>,
+    /// Optional moderation round identifier; defaults to the confirmed deposit round id.
+    pub round_id: Option<String>,
+    /// Optional digest of the evidence bundle reviewed by the panel (hex, 32 bytes).
+    pub evidence_bundle_digest_hex: Option<String>,
+    /// Optional appeal pricing/settlement config version; defaults to the active baseline.
+    pub appeal_finance_config_version: Option<String>,
+    /// Optional panel roster hash (hex, 32 bytes); when omitted Torii derives it from jurors+quorum.
+    pub panel_roster_hash_hex: Option<String>,
+    /// Optional moderation policy reference; defaults to the quarantine-scoped SoraFS policy URI.
+    pub policy_reference: Option<String>,
+    /// Optional transparency or governance DAG reference for the evidence bundle.
+    pub evidence_uri: Option<String>,
+    /// Ordered juror identifiers eligible to participate.
+    pub juror_ids: Vec<String>,
+    /// Minimum number of valid reveals required before tally finalization.
+    pub quorum: u16,
+    /// Optional UTC timestamp (milliseconds) when the ballot was announced; defaults to server time.
+    pub announced_at_unix_ms: Option<u64>,
+    /// Last UTC timestamp (milliseconds) at which commits are accepted.
+    pub commit_deadline_unix_ms: u64,
+    /// Last UTC timestamp (milliseconds) for the challenge buffer.
+    pub challenge_deadline_unix_ms: u64,
+    /// Last UTC timestamp (milliseconds) at which reveals are accepted.
+    pub reveal_deadline_unix_ms: u64,
 }
 
 #[cfg(feature = "app_api")]
@@ -3196,6 +3290,293 @@ pub(crate) async fn handle_get_sorafs_transparency_explorer(
     );
     response.insert("proof_token_issuances".into(), Value::Array(token_entries));
     governance_dag_json_response(Value::Object(response), &etag)
+}
+
+pub(crate) async fn handle_get_sorafs_transparency_explorer_ui() -> Response {
+    let html = r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SoraFS Transparency Explorer</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f7f8fa;
+  --ink: #17202a;
+  --muted: #5f6b7a;
+  --line: #d8dde5;
+  --panel: #ffffff;
+  --accent: #075985;
+  --ok: #0f766e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+main {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 28px 20px 42px;
+}
+header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 22px;
+}
+h1 {
+  margin: 0;
+  font-size: 28px;
+  line-height: 1.1;
+  font-weight: 700;
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+label {
+  color: var(--muted);
+  font-weight: 600;
+}
+input {
+  width: 92px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+}
+button {
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  padding: 8px 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.status {
+  color: var(--muted);
+  min-height: 22px;
+  margin-bottom: 14px;
+}
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.metric {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+}
+.metric span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+.metric strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 22px;
+}
+section {
+  margin-top: 18px;
+}
+h2 {
+  margin: 0 0 10px;
+  font-size: 17px;
+}
+.table-wrap {
+  overflow-x: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 760px;
+}
+th, td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+th {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+tr:last-child td { border-bottom: 0; }
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+}
+.pill {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #e6f6f4;
+  color: var(--ok);
+  font-weight: 700;
+}
+@media (max-width: 780px) {
+  header { align-items: flex-start; flex-direction: column; }
+  .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>SoraFS Transparency Explorer</h1>
+    <div class="toolbar">
+      <label for="limit">Limit</label>
+      <input id="limit" type="number" min="1" max="500" value="50">
+      <button id="refresh" type="button">Refresh</button>
+    </div>
+  </header>
+  <div id="status" class="status"></div>
+  <div class="metrics" id="metrics"></div>
+  <section>
+    <h2>Published Cycles</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Cycle</th><th>Entries</th><th>Root</th><th>Published</th><th>Proof</th></tr></thead>
+        <tbody id="cycles"></tbody>
+      </table>
+    </div>
+  </section>
+  <section>
+    <h2>Proof Token Issuance</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Token</th><th>Signer</th><th>Published</th><th>Bound entries</th><th>Action</th></tr></thead>
+        <tbody id="tokens"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<script>
+const endpoint = "/v1/sorafs/transparency/explorer";
+const statusEl = document.getElementById("status");
+const metricsEl = document.getElementById("metrics");
+const cyclesEl = document.getElementById("cycles");
+const tokensEl = document.getElementById("tokens");
+const limitEl = document.getElementById("limit");
+
+function text(value) {
+  if (value === null || value === undefined || value === "") return "-";
+  return String(value);
+}
+
+function cell(value, useCode = false) {
+  const td = document.createElement("td");
+  const node = document.createElement(useCode ? "code" : "span");
+  node.textContent = text(value);
+  td.appendChild(node);
+  return td;
+}
+
+function metric(label, value) {
+  const item = document.createElement("div");
+  item.className = "metric";
+  const labelEl = document.createElement("span");
+  labelEl.textContent = label;
+  const valueEl = document.createElement("strong");
+  valueEl.textContent = text(value);
+  item.append(labelEl, valueEl);
+  return item;
+}
+
+function row(cells) {
+  const tr = document.createElement("tr");
+  for (const current of cells) tr.appendChild(current);
+  return tr;
+}
+
+function linkCell(href, label) {
+  const td = document.createElement("td");
+  const a = document.createElement("a");
+  a.href = href;
+  a.textContent = label;
+  td.appendChild(a);
+  return td;
+}
+
+function render(data) {
+  metricsEl.replaceChildren(
+    metric("Cycles", data.published_cycle_count),
+    metric("Proof Tokens", data.proof_token_issuance_count),
+    metric("Entries", data.entry_count),
+    metric("Limit", data.limit)
+  );
+  cyclesEl.replaceChildren(...(data.cycles || []).map((cycle) => row([
+    cell(cycle.cycle_id_hex, true),
+    cell(cycle.entry_count),
+    cell(cycle.entry_root_hex, true),
+    cell(cycle.published_at_unix),
+    linkCell(`/v1/sorafs/transparency/cycles/${cycle.cycle_id_hex}`, "JSON")
+  ])));
+  tokensEl.replaceChildren(...(data.proof_token_issuances || []).map((entry) => {
+    const labels = entry.labels || {};
+    return row([
+      cell(labels.token_id_hex || entry.token_id_hex, true),
+      cell(labels.signer_key_hex || entry.signer_key_hex, true),
+      cell(entry.published_at_unix),
+      cell(labels.bound_entry_count || entry.bound_entry_count),
+      cell(labels.action_code || entry.action_code)
+    ]);
+  }));
+  statusEl.textContent = `Snapshot ${data.blake3 || "-"} from ${data.source || "local source"}`;
+}
+
+async function refresh() {
+  statusEl.textContent = "Loading";
+  const limit = Math.min(500, Math.max(1, Number(limitEl.value || 50)));
+  limitEl.value = String(limit);
+  const response = await fetch(`${endpoint}?limit=${limit}`, { headers: { "Accept": "application/json" } });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  render(await response.json());
+}
+
+document.getElementById("refresh").addEventListener("click", () => {
+  refresh().catch((error) => { statusEl.textContent = error.message; });
+});
+refresh().catch((error) => { statusEl.textContent = error.message; });
+</script>
+</body>
+</html>"#;
+
+    let mut response = Response::new(Body::from(html));
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static(
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+        ),
+    );
+    response
 }
 
 pub(crate) async fn handle_get_sorafs_transparency_token_issuances(
@@ -7817,6 +8198,69 @@ pub(crate) async fn handle_get_sorafs_moderation_quarantine(
     JsonBody(moderation_quarantine_snapshot_json(&snapshot, limit)).into_response()
 }
 
+pub(crate) async fn handle_get_sorafs_moderation_quarantine_operator_panel(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(quarantine_id_hex): Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled(
+            "sorafs moderation quarantine operator panel API is not enabled on this node",
+        );
+    }
+    let verified = match require_moderation_request_auth(&state, &headers, &method, &uri, &[], None)
+    {
+        Ok(verified) => verified,
+        Err(response) => return response,
+    };
+    if let Err(response) = require_moderation_quarantine_operator_role(&state, &verified) {
+        return response;
+    }
+    let query = match ModerationBallotListQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let quarantine_id = match parse_hex_fixed::<16>(&quarantine_id_hex, "quarantine_id_hex") {
+        Ok(quarantine_id) => quarantine_id,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let quarantine_id_hex = hex::encode(quarantine_id);
+    let snapshot = state.sorafs_node.moderation_screening_snapshot();
+    let Some(record) = snapshot
+        .quarantine_records
+        .iter()
+        .find(|record| record.quarantine_id == quarantine_id)
+        .cloned()
+    else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            format!("SoraFS moderation quarantine record `{quarantine_id_hex}` was not found"),
+        );
+    };
+    let object = state
+        .sorafs_node
+        .moderation_quarantine_object_snapshot()
+        .objects
+        .into_iter()
+        .find(|object| object.quarantine_id == quarantine_id);
+    let ballots = moderation_quarantine_operator_panel_ballots(
+        state.sorafs_node.moderation_ballots(),
+        &quarantine_id_hex,
+    );
+
+    JsonBody(moderation_quarantine_operator_panel_json(
+        &record,
+        object.as_ref(),
+        &ballots,
+        limit,
+    ))
+    .into_response()
+}
+
 pub(crate) async fn handle_post_sorafs_moderation_quarantine_review(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -7828,9 +8272,13 @@ pub(crate) async fn handle_post_sorafs_moderation_quarantine_review(
     if !state.sorafs_node.is_enabled() {
         return feature_disabled("sorafs moderation quarantine API is not enabled on this node");
     }
-    if let Err(response) =
-        require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
-    {
+    let verified =
+        match require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
+        {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    if let Err(response) = require_moderation_quarantine_operator_role(&state, &verified) {
         return response;
     }
     let request = match json::from_slice::<ModerationQuarantineReviewRequestDto>(body.as_ref()) {
@@ -7871,9 +8319,13 @@ pub(crate) async fn handle_post_sorafs_moderation_quarantine_release(
     if !state.sorafs_node.is_enabled() {
         return feature_disabled("sorafs moderation quarantine API is not enabled on this node");
     }
-    if let Err(response) =
-        require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
-    {
+    let verified =
+        match require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
+        {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    if let Err(response) = require_moderation_quarantine_operator_role(&state, &verified) {
         return response;
     }
     let request = match json::from_slice::<ModerationQuarantineReleaseRequestDto>(body.as_ref()) {
@@ -7904,6 +8356,317 @@ pub(crate) async fn handle_post_sorafs_moderation_quarantine_release(
         )
             .into_response(),
         Err(err) => moderation_screening_error_response(err),
+    }
+}
+
+pub(crate) async fn handle_post_sorafs_moderation_quarantine_appeal_handoff(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(quarantine_id_hex): Path<String>,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled(
+            "sorafs moderation quarantine appeal handoff API is not enabled on this node",
+        );
+    }
+    let verified =
+        match require_appeal_finance_request_auth(&state, &headers, &method, &uri, body.as_ref()) {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    let request =
+        match json::from_slice::<ModerationQuarantineAppealHandoffRequestDto>(body.as_ref()) {
+            Ok(request) => request,
+            Err(err) => {
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "failed to decode SoraFS moderation quarantine appeal handoff JSON: {err}"
+                    ),
+                );
+            }
+        };
+    let quarantine_id = match parse_hex_fixed::<16>(&quarantine_id_hex, "quarantine_id_hex") {
+        Ok(quarantine_id) => quarantine_id,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let quarantine_id_hex = hex::encode(quarantine_id);
+    let snapshot = state.sorafs_node.moderation_screening_snapshot();
+    let Some(record) = snapshot
+        .quarantine_records
+        .iter()
+        .find(|record| record.quarantine_id == quarantine_id)
+        .cloned()
+    else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            format!("SoraFS moderation quarantine record `{quarantine_id_hex}` was not found"),
+        );
+    };
+    if record.state != ModerationQuarantineState::Reviewed {
+        return json_error(
+            StatusCode::CONFLICT,
+            "SoraFS moderation quarantine appeal handoff requires a reviewed quarantine record",
+        );
+    }
+    let Some(reviewed_at_unix) = record.reviewed_at_unix else {
+        return json_error(
+            StatusCode::CONFLICT,
+            "SoraFS moderation quarantine appeal handoff requires reviewed_at_unix metadata",
+        );
+    };
+    let config = baseline_appeal_pricing_config();
+    let quote_input = match appeal_quote_input(
+        AppealPricingQuoteRequestDto {
+            class: request.class.clone(),
+            backlog: request.backlog,
+            evidence_size_mb: request.evidence_size_mb,
+            urgency: request.urgency.clone(),
+            panel_size: request.panel_size,
+        },
+        &config,
+    ) {
+        Ok(input) => input,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let quote = match config.quote(quote_input) {
+        Ok(quote) => quote,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err.to_string()),
+    };
+    let deposit_request = moderation_quarantine_appeal_handoff_deposit_request(
+        &record,
+        &quarantine_id_hex,
+        reviewed_at_unix,
+        request,
+        &quote,
+    );
+    let deposit_instruction =
+        match appeal_finance_deposit_instruction(deposit_request.clone(), &verified.account) {
+            Ok(instruction) => instruction,
+            Err(DepositInstructionError::Forbidden(reason)) => {
+                return json_error(StatusCode::FORBIDDEN, reason);
+            }
+            Err(DepositInstructionError::Invalid(reason)) => {
+                return json_error(StatusCode::BAD_REQUEST, reason);
+            }
+        };
+    (
+        StatusCode::OK,
+        JsonBody(moderation_quarantine_appeal_handoff_json(
+            &record,
+            &config,
+            quote_input,
+            &quote,
+            &deposit_request,
+            &deposit_instruction,
+        )),
+    )
+        .into_response()
+}
+
+pub(crate) async fn handle_post_sorafs_moderation_quarantine_appeal_ballot(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(quarantine_id_hex): Path<String>,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled(
+            "sorafs moderation quarantine appeal ballot API is not enabled on this node",
+        );
+    }
+    let verified =
+        match require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
+        {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    let request =
+        match json::from_slice::<ModerationQuarantineAppealBallotRequestDto>(body.as_ref()) {
+            Ok(request) => request,
+            Err(err) => {
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "failed to decode SoraFS moderation quarantine appeal ballot JSON: {err}"
+                    ),
+                );
+            }
+        };
+    let quarantine_id = match parse_hex_fixed::<16>(&quarantine_id_hex, "quarantine_id_hex") {
+        Ok(quarantine_id) => quarantine_id,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let quarantine_id_hex = hex::encode(quarantine_id);
+    let snapshot = state.sorafs_node.moderation_screening_snapshot();
+    let Some(record) = snapshot
+        .quarantine_records
+        .iter()
+        .find(|record| record.quarantine_id == quarantine_id)
+        .cloned()
+    else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            format!("SoraFS moderation quarantine record `{quarantine_id_hex}` was not found"),
+        );
+    };
+    if record.state != ModerationQuarantineState::Reviewed {
+        return json_error(
+            StatusCode::CONFLICT,
+            "SoraFS moderation quarantine appeal ballot requires a reviewed quarantine record",
+        );
+    }
+    let Some(reviewed_at_unix) = record.reviewed_at_unix else {
+        return json_error(
+            StatusCode::CONFLICT,
+            "SoraFS moderation quarantine appeal ballot requires reviewed_at_unix metadata",
+        );
+    };
+    let handoff_evidence_hash = moderation_quarantine_appeal_handoff_evidence_hash(
+        &record,
+        &quarantine_id_hex,
+        reviewed_at_unix,
+    )
+    .to_string();
+    if let Err(response) = ensure_moderation_quarantine_appeal_ballot_deposit_binds_quarantine(
+        &request.deposit_confirmation,
+        &handoff_evidence_hash,
+    ) {
+        return response;
+    }
+    let announcement_request = match moderation_quarantine_appeal_ballot_announcement_request(
+        &quarantine_id_hex,
+        request,
+        &handoff_evidence_hash,
+    ) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let deposit_confirmation = announcement_request
+        .deposit_confirmation
+        .as_ref()
+        .expect("quarantine appeal ballot always carries deposit confirmation");
+    if let Err(response) = ensure_moderation_deposit_confirmation_matches_request(
+        &announcement_request,
+        deposit_confirmation,
+    ) {
+        return response;
+    }
+    let (confirmed_deposit, deposit_record) = match confirm_appeal_finance_deposit_record(
+        &state,
+        deposit_confirmation,
+        &verified.account,
+    ) {
+        Ok(confirmation) => confirmation,
+        Err(response) => return response,
+    };
+    let appeal_deposit =
+        moderation_appeal_deposit_from_confirmation(&confirmed_deposit, &deposit_record);
+    let announcement = match moderation_announcement_from_request(
+        announcement_request,
+        Some(confirmed_deposit.escrow_id.as_hash().to_string()),
+        Some(appeal_deposit),
+    ) {
+        Ok(announcement) => announcement,
+        Err(response) => return response,
+    };
+    match state.sorafs_node.announce_moderation_ballot(announcement) {
+        Ok(ballot) => (
+            StatusCode::ACCEPTED,
+            JsonBody(moderation_quarantine_appeal_ballot_json(
+                &record,
+                &handoff_evidence_hash,
+                &ballot,
+            )),
+        )
+            .into_response(),
+        Err(err) => moderation_ballot_runtime_error_response(err),
+    }
+}
+
+pub(crate) async fn handle_post_sorafs_moderation_quarantine_object(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(quarantine_id_hex): Path<String>,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled(
+            "sorafs moderation quarantine object API is not enabled on this node",
+        );
+    }
+    let verified =
+        match require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
+        {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    if let Err(response) = require_moderation_quarantine_operator_role(&state, &verified) {
+        return response;
+    }
+    let request = match json::from_slice::<ModerationQuarantineObjectStoreRequestDto>(body.as_ref())
+    {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS moderation quarantine object JSON: {err}"),
+            );
+        }
+    };
+    let input = match moderation_quarantine_object_input_from_request(&quarantine_id_hex, request) {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
+    match state.sorafs_node.store_moderation_quarantine_object(input) {
+        Ok(record) => (
+            StatusCode::ACCEPTED,
+            JsonBody(moderation_quarantine_object_store_json(&record)),
+        )
+            .into_response(),
+        Err(err) => moderation_quarantine_object_error_response(err),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_moderation_quarantine_object(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(quarantine_id_hex): Path<String>,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled(
+            "sorafs moderation quarantine object API is not enabled on this node",
+        );
+    }
+    let verified = match require_moderation_request_auth(&state, &headers, &method, &uri, &[], None)
+    {
+        Ok(verified) => verified,
+        Err(response) => return response,
+    };
+    if let Err(response) = require_moderation_quarantine_operator_role(&state, &verified) {
+        return response;
+    }
+    let quarantine_id = match parse_hex_fixed::<16>(&quarantine_id_hex, "quarantine_id_hex") {
+        Ok(quarantine_id) => quarantine_id,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    match state
+        .sorafs_node
+        .read_moderation_quarantine_object(quarantine_id)
+    {
+        Ok(payload) => {
+            JsonBody(moderation_quarantine_object_payload_json(&payload)).into_response()
+        }
+        Err(err) => moderation_quarantine_object_error_response(err),
     }
 }
 
@@ -8278,6 +9041,30 @@ fn require_moderation_request_auth(
                 "invalid SoraFS moderation request authentication",
             ))
         }
+    }
+}
+
+fn sorafs_moderation_operator_role_id() -> &'static RoleId {
+    &SORAFS_MODERATION_OPERATOR_ROLE_ID
+}
+
+fn require_moderation_quarantine_operator_role(
+    state: &SharedAppState,
+    verified: &crate::app_auth::VerifiedCanonicalRequest,
+) -> Result<(), Response> {
+    let world = state.state.world_view();
+    let has_role = world
+        .account_roles_iter(&verified.account)
+        .any(|role| role == sorafs_moderation_operator_role_id());
+    if has_role {
+        Ok(())
+    } else {
+        Err(json_error(
+            StatusCode::FORBIDDEN,
+            format!(
+                "SoraFS moderation quarantine operations require role `{SORAFS_MODERATION_OPERATOR_ROLE}`"
+            ),
+        ))
     }
 }
 
@@ -10562,6 +11349,143 @@ struct AppealFinanceDepositSettlementReconciliation {
     mismatches: Vec<String>,
 }
 
+fn moderation_quarantine_appeal_handoff_deposit_request(
+    record: &ModerationQuarantineRecord,
+    quarantine_id_hex: &str,
+    reviewed_at_unix: u64,
+    req: ModerationQuarantineAppealHandoffRequestDto,
+    quote: &AppealQuote,
+) -> AppealFinanceDepositRequestDto {
+    let case_id = req
+        .case_id
+        .unwrap_or_else(|| format!("quarantine-{quarantine_id_hex}"));
+    let idempotency_key = req
+        .idempotency_key
+        .unwrap_or_else(|| format!("quarantine-appeal-{quarantine_id_hex}-{reviewed_at_unix}"));
+    let handoff_evidence_hash = moderation_quarantine_appeal_handoff_evidence_hash(
+        record,
+        quarantine_id_hex,
+        reviewed_at_unix,
+    )
+    .to_string();
+    let mut evidence_hashes = vec![handoff_evidence_hash];
+    if let Some(extra) = req.evidence_hashes_hex {
+        evidence_hashes.extend(extra);
+    }
+
+    AppealFinanceDepositRequestDto {
+        case_id,
+        round_id: req.round_id,
+        payer_account: req.payer_account,
+        destination_account: req.destination_account,
+        release_authority_account: req.release_authority_account,
+        asset_definition_id: req.asset_definition_id,
+        deposit_xor: quote.deposit_xor.to_string(),
+        expires_at_ms: req.expires_at_ms,
+        idempotency_key,
+        evidence_hashes_hex: Some(evidence_hashes),
+    }
+}
+
+fn moderation_quarantine_appeal_handoff_evidence_hash(
+    record: &ModerationQuarantineRecord,
+    quarantine_id_hex: &str,
+    reviewed_at_unix: u64,
+) -> Hash {
+    Hash::new(format!(
+        "sorafs.moderation.quarantine.appeal_handoff.v1\nquarantine_id={quarantine_id_hex}\nscreening_record_id={}\nsubject_digest={}\nreviewed_at_unix={reviewed_at_unix}\n",
+        hex::encode(record.screening_record_id),
+        hex::encode(record.subject_digest),
+    ))
+}
+
+fn ensure_moderation_quarantine_appeal_ballot_deposit_binds_quarantine(
+    deposit_confirmation: &AppealFinanceDepositConfirmRequestDto,
+    handoff_evidence_hash: &str,
+) -> Result<(), Response> {
+    let includes_handoff_hash = deposit_confirmation
+        .evidence_hashes_hex
+        .as_ref()
+        .is_some_and(|hashes| {
+            hashes
+                .iter()
+                .any(|hash| hash.trim().eq_ignore_ascii_case(handoff_evidence_hash))
+        });
+    if includes_handoff_hash {
+        Ok(())
+    } else {
+        Err(json_error(
+            StatusCode::PRECONDITION_FAILED,
+            "SoraFS moderation quarantine appeal ballot deposit_confirmation.evidence_hashes_hex must include the reviewed quarantine handoff evidence hash",
+        ))
+    }
+}
+
+fn moderation_quarantine_appeal_ballot_announcement_request(
+    quarantine_id_hex: &str,
+    req: ModerationQuarantineAppealBallotRequestDto,
+    handoff_evidence_hash: &str,
+) -> Result<ModerationBallotAnnounceRequestDto, Response> {
+    let case_id = match req.case_id {
+        Some(case_id) => required_appeal_finance_label("case_id", &case_id)
+            .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?,
+        None => required_appeal_finance_label("case_id", &req.deposit_confirmation.case_id)
+            .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?,
+    };
+    let round_id = match req
+        .round_id
+        .or_else(|| req.deposit_confirmation.round_id.clone())
+    {
+        Some(round_id) => required_appeal_finance_label("round_id", &round_id)
+            .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?,
+        None => {
+            return Err(json_error(
+                StatusCode::PRECONDITION_FAILED,
+                "SoraFS moderation quarantine appeal ballot requires round_id or deposit_confirmation.round_id",
+            ));
+        }
+    };
+    let evidence_bundle_digest_hex = req
+        .evidence_bundle_digest_hex
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| handoff_evidence_hash.to_owned());
+    let appeal_finance_config_version = req
+        .appeal_finance_config_version
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| baseline_appeal_pricing_config().version().to_owned());
+    let policy_reference = req
+        .policy_reference
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| format!("policy://sorafs/moderation/quarantine/{quarantine_id_hex}"));
+    let announced_at_unix_ms = req
+        .announced_at_unix_ms
+        .unwrap_or_else(iroha_network_time_now_ms);
+
+    Ok(ModerationBallotAnnounceRequestDto {
+        case_id,
+        deposit_confirmation: Some(req.deposit_confirmation),
+        evidence_bundle_digest_hex,
+        appeal_finance_config_version,
+        panel_roster_hash_hex: req.panel_roster_hash_hex,
+        policy_reference,
+        evidence_uri: req.evidence_uri.or_else(|| {
+            Some(format!(
+                "sorafs://moderation/quarantine/{quarantine_id_hex}"
+            ))
+        }),
+        round_id,
+        juror_ids: req.juror_ids,
+        quorum: req.quorum,
+        announced_at_unix_ms,
+        commit_deadline_unix_ms: req.commit_deadline_unix_ms,
+        challenge_deadline_unix_ms: req.challenge_deadline_unix_ms,
+        reveal_deadline_unix_ms: req.reveal_deadline_unix_ms,
+    })
+}
+
 fn appeal_finance_deposit_expectation(
     req: AppealFinanceDepositRequestDto,
 ) -> Result<AppealFinanceDepositExpectation, String> {
@@ -12632,6 +13556,31 @@ fn moderation_quarantine_release_input_from_request(
     })
 }
 
+fn moderation_quarantine_object_input_from_request(
+    quarantine_id_hex: &str,
+    request: ModerationQuarantineObjectStoreRequestDto,
+) -> Result<ModerationQuarantineObjectInput, Response> {
+    let quarantine_id = parse_hex_fixed::<16>(quarantine_id_hex, "quarantine_id_hex")
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let payload = BASE64_STANDARD
+        .decode(request.payload_b64.trim().as_bytes())
+        .map_err(|err| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                format!("invalid base64 in payload_b64: {err}"),
+            )
+        })?;
+    Ok(ModerationQuarantineObjectInput {
+        quarantine_id,
+        payload,
+        captured_at_unix: request
+            .captured_at_unix
+            .unwrap_or_else(|| iroha_network_time_now_ms() / 1_000),
+        content_type: request.content_type,
+        notes: request.notes,
+    })
+}
+
 fn moderation_screening_error_response(err: ModerationScreeningError) -> Response {
     let status = match err {
         ModerationScreeningError::ConflictingRecord { .. } => StatusCode::CONFLICT,
@@ -12642,6 +13591,26 @@ fn moderation_screening_error_response(err: ModerationScreeningError) -> Respons
         ModerationScreeningError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
     };
     json_error(status, format!("sorafs moderation screening error: {err}"))
+}
+
+fn moderation_quarantine_object_error_response(err: ModerationQuarantineObjectError) -> Response {
+    let status = match err {
+        ModerationQuarantineObjectError::StorageDisabled => StatusCode::SERVICE_UNAVAILABLE,
+        ModerationQuarantineObjectError::UnknownQuarantine { .. }
+        | ModerationQuarantineObjectError::MissingObject { .. } => StatusCode::NOT_FOUND,
+        ModerationQuarantineObjectError::DigestMismatch { .. }
+        | ModerationQuarantineObjectError::ConflictingObject { .. }
+        | ModerationQuarantineObjectError::AuthenticationFailed { .. } => StatusCode::CONFLICT,
+        ModerationQuarantineObjectError::InvalidInput { .. }
+        | ModerationQuarantineObjectError::InvalidSnapshot { .. }
+        | ModerationQuarantineObjectError::Codec { .. } => StatusCode::BAD_REQUEST,
+        ModerationQuarantineObjectError::Io { .. }
+        | ModerationQuarantineObjectError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    json_error(
+        status,
+        format!("sorafs moderation quarantine object error: {err}"),
+    )
 }
 
 fn moderation_screening_outcome_json(outcome: &ModerationScreeningOutcome) -> Value {
@@ -12663,6 +13632,215 @@ fn moderation_screening_outcome_json(outcome: &ModerationScreeningOutcome) -> Va
     ])
 }
 
+fn moderation_quarantine_operator_panel_ballots(
+    ballots: Vec<ModerationBallotRecord>,
+    quarantine_id_hex: &str,
+) -> Vec<ModerationBallotRecord> {
+    let default_case_id = format!("quarantine-{quarantine_id_hex}");
+    let default_evidence_uri = format!("sorafs://moderation/quarantine/{quarantine_id_hex}");
+    ballots
+        .into_iter()
+        .filter(|ballot| {
+            ballot.announcement.context.case_id == default_case_id
+                || ballot.announcement.context.evidence_uri.as_deref()
+                    == Some(default_evidence_uri.as_str())
+        })
+        .collect()
+}
+
+fn moderation_quarantine_operator_panel_json(
+    record: &ModerationQuarantineRecord,
+    object: Option<&ModerationQuarantineObjectRecord>,
+    ballots: &[ModerationBallotRecord],
+    limit: usize,
+) -> Value {
+    let quarantine_id_hex = encode(record.quarantine_id);
+    let returned_ballot_count = ballots.len().min(limit);
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.moderation.quarantine.operator_panel.v1"),
+        ),
+        json_entry("source", Value::from("local")),
+        json_entry("status", Value::from("ready")),
+        json_entry("record", moderation_quarantine_record_json(record)),
+        json_entry(
+            "object_status",
+            Value::from(if object.is_some() {
+                "stored"
+            } else {
+                "missing"
+            }),
+        ),
+        json_entry(
+            "object",
+            object
+                .map(moderation_quarantine_object_record_json)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry("ballot_count", Value::from(ballots.len() as u64)),
+        json_entry(
+            "returned_ballot_count",
+            Value::from(returned_ballot_count as u64),
+        ),
+        json_entry(
+            "truncated_ballots",
+            Value::Bool(ballots.len() > returned_ballot_count),
+        ),
+        json_entry("limit", Value::from(limit as u64)),
+        json_entry(
+            "ballots",
+            Value::Array(
+                ballots
+                    .iter()
+                    .take(limit)
+                    .map(|ballot| moderation_ballot_record_json_with_array_limit(ballot, limit))
+                    .collect(),
+            ),
+        ),
+        json_entry(
+            "operator_routes",
+            moderation_quarantine_operator_panel_routes_json(&quarantine_id_hex),
+        ),
+        json_entry(
+            "next_actions",
+            Value::Array(moderation_quarantine_operator_panel_next_actions_json(
+                record,
+                object,
+                ballots,
+                &quarantine_id_hex,
+            )),
+        ),
+    ])
+}
+
+fn moderation_quarantine_operator_panel_routes_json(quarantine_id_hex: &str) -> Value {
+    let route = |suffix: &str| {
+        Value::from(format!(
+            "{MODERATION_ROUTE_QUARANTINE}/{quarantine_id_hex}/{suffix}"
+        ))
+    };
+    json_object(vec![
+        json_entry("review", route(MODERATION_ROUTE_QUARANTINE_REVIEW_SUFFIX)),
+        json_entry("release", route(MODERATION_ROUTE_QUARANTINE_RELEASE_SUFFIX)),
+        json_entry("object", route(MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX)),
+        json_entry(
+            "appeal_handoff",
+            route(MODERATION_ROUTE_QUARANTINE_APPEAL_HANDOFF_SUFFIX),
+        ),
+        json_entry(
+            "appeal_ballot",
+            route(MODERATION_ROUTE_QUARANTINE_APPEAL_BALLOT_SUFFIX),
+        ),
+    ])
+}
+
+fn moderation_quarantine_operator_panel_next_actions_json(
+    record: &ModerationQuarantineRecord,
+    object: Option<&ModerationQuarantineObjectRecord>,
+    ballots: &[ModerationBallotRecord],
+    quarantine_id_hex: &str,
+) -> Vec<Value> {
+    let route = |suffix: &str| {
+        Value::from(format!(
+            "{MODERATION_ROUTE_QUARANTINE}/{quarantine_id_hex}/{suffix}"
+        ))
+    };
+    let mut actions = Vec::new();
+    if object.is_none() {
+        actions.push(json_object(vec![
+            json_entry("action", Value::from("store_object")),
+            json_entry("route", route(MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX)),
+            json_entry("required", Value::Bool(true)),
+        ]));
+    } else {
+        actions.push(json_object(vec![
+            json_entry("action", Value::from("read_object")),
+            json_entry("route", route(MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX)),
+            json_entry("required", Value::Bool(false)),
+        ]));
+    }
+
+    match record.state {
+        ModerationQuarantineState::PendingReview => {
+            actions.push(json_object(vec![
+                json_entry("action", Value::from("review")),
+                json_entry("route", route(MODERATION_ROUTE_QUARANTINE_REVIEW_SUFFIX)),
+                json_entry("required", Value::Bool(true)),
+            ]));
+        }
+        ModerationQuarantineState::Reviewed => {
+            actions.push(json_object(vec![
+                json_entry("action", Value::from("appeal_handoff")),
+                json_entry(
+                    "route",
+                    route(MODERATION_ROUTE_QUARANTINE_APPEAL_HANDOFF_SUFFIX),
+                ),
+                json_entry("required", Value::Bool(ballots.is_empty())),
+            ]));
+            if ballots.is_empty() {
+                actions.push(json_object(vec![
+                    json_entry("action", Value::from("appeal_ballot")),
+                    json_entry(
+                        "route",
+                        route(MODERATION_ROUTE_QUARANTINE_APPEAL_BALLOT_SUFFIX),
+                    ),
+                    json_entry("required", Value::Bool(true)),
+                ]));
+            } else if ballots.iter().any(|ballot| ballot.tally.is_none()) {
+                actions.push(json_object(vec![
+                    json_entry("action", Value::from("collect_commits_reveals_tally")),
+                    json_entry("route", Value::from(MODERATION_ROUTE_BALLOTS)),
+                    json_entry("required", Value::Bool(true)),
+                ]));
+            } else {
+                actions.push(json_object(vec![
+                    json_entry("action", Value::from("publish_transparency_source_entry")),
+                    json_entry("route", Value::from(TRANSPARENCY_SOURCE_ENTRIES_ROUTE)),
+                    json_entry("required", Value::Bool(false)),
+                ]));
+            }
+        }
+        ModerationQuarantineState::Released => {
+            actions.push(json_object(vec![
+                json_entry("action", Value::from("release_complete")),
+                json_entry("route", route(MODERATION_ROUTE_QUARANTINE_RELEASE_SUFFIX)),
+                json_entry("required", Value::Bool(false)),
+            ]));
+        }
+    }
+    actions
+}
+
+fn moderation_quarantine_object_store_json(record: &ModerationQuarantineObjectRecord) -> Value {
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.moderation.quarantine.object.store.v1"),
+        ),
+        json_entry("status", Value::from("stored")),
+        json_entry("record", moderation_quarantine_object_record_json(record)),
+    ])
+}
+
+fn moderation_quarantine_object_payload_json(payload: &ModerationQuarantineObjectPayload) -> Value {
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.moderation.quarantine.object.payload.v1"),
+        ),
+        json_entry("status", Value::from("read")),
+        json_entry(
+            "record",
+            moderation_quarantine_object_record_json(&payload.record),
+        ),
+        json_entry(
+            "payload_b64",
+            Value::from(BASE64_STANDARD.encode(&payload.payload)),
+        ),
+    ])
+}
+
 fn moderation_quarantine_transition_json(
     schema: &'static str,
     status: &'static str,
@@ -12672,6 +13850,109 @@ fn moderation_quarantine_transition_json(
         json_entry("schema", Value::from(schema)),
         json_entry("status", Value::from(status)),
         json_entry("record", moderation_quarantine_record_json(record)),
+    ])
+}
+
+fn moderation_quarantine_appeal_handoff_json(
+    record: &ModerationQuarantineRecord,
+    config: &AppealPricingConfig,
+    quote_input: AppealQuoteInput,
+    quote: &AppealQuote,
+    deposit_request: &AppealFinanceDepositRequestDto,
+    deposit_instruction: &AppealFinanceDepositInstruction,
+) -> Value {
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.moderation.quarantine.appeal_handoff.v1"),
+        ),
+        json_entry("status", Value::from("ready_for_deposit")),
+        json_entry("record", moderation_quarantine_record_json(record)),
+        json_entry(
+            "pricing_quote",
+            appeal_pricing_quote_json(config, quote_input, quote),
+        ),
+        json_entry(
+            "deposit_request",
+            appeal_finance_deposit_request_json(deposit_request),
+        ),
+        json_entry(
+            "deposit_instruction",
+            appeal_finance_deposit_instruction_json(deposit_instruction),
+        ),
+    ])
+}
+
+fn moderation_quarantine_appeal_ballot_json(
+    record: &ModerationQuarantineRecord,
+    handoff_evidence_hash: &str,
+    ballot: &ModerationBallotRecord,
+) -> Value {
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.moderation.quarantine.appeal_ballot.v1"),
+        ),
+        json_entry("status", Value::from("announced")),
+        json_entry("record", moderation_quarantine_record_json(record)),
+        json_entry(
+            "handoff_evidence_hash_hex",
+            Value::from(handoff_evidence_hash.to_owned()),
+        ),
+        json_entry("ballot", moderation_ballot_record_json(ballot)),
+    ])
+}
+
+fn appeal_finance_deposit_request_json(request: &AppealFinanceDepositRequestDto) -> Value {
+    let evidence_hashes = request
+        .evidence_hashes_hex
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .cloned()
+        .map(Value::from)
+        .collect::<Vec<_>>();
+
+    json_object(vec![
+        json_entry("case_id", Value::from(request.case_id.clone())),
+        json_entry(
+            "round_id",
+            request
+                .round_id
+                .as_deref()
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry("payer_account", Value::from(request.payer_account.clone())),
+        json_entry(
+            "destination_account",
+            Value::from(request.destination_account.clone()),
+        ),
+        json_entry(
+            "release_authority_account",
+            request
+                .release_authority_account
+                .as_deref()
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "asset_definition_id",
+            Value::from(request.asset_definition_id.clone()),
+        ),
+        json_entry("deposit_xor", Value::from(request.deposit_xor.clone())),
+        json_entry(
+            "expires_at_ms",
+            request
+                .expires_at_ms
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "idempotency_key",
+            Value::from(request.idempotency_key.clone()),
+        ),
+        json_entry("evidence_hashes_hex", Value::Array(evidence_hashes)),
     ])
 }
 
@@ -12853,6 +14134,48 @@ fn moderation_quarantine_record_json(record: &ModerationQuarantineRecord) -> Val
                 .map(Value::from)
                 .unwrap_or(Value::Null),
         ),
+    ])
+}
+
+fn moderation_quarantine_object_record_json(record: &ModerationQuarantineObjectRecord) -> Value {
+    json_object(vec![
+        json_entry(
+            "quarantine_id_hex",
+            Value::from(encode(record.quarantine_id)),
+        ),
+        json_entry("object_id_hex", Value::from(encode(record.object_id))),
+        json_entry(
+            "payload_digest_hex",
+            Value::from(encode(record.payload_digest)),
+        ),
+        json_entry(
+            "ciphertext_digest_hex",
+            Value::from(encode(record.ciphertext_digest)),
+        ),
+        json_entry("payload_len", Value::from(record.payload_len)),
+        json_entry("captured_at_unix", Value::from(record.captured_at_unix)),
+        json_entry(
+            "content_type",
+            record
+                .content_type
+                .as_deref()
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "notes",
+            record
+                .notes
+                .as_deref()
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "encryption_algorithm",
+            Value::from(record.encryption_algorithm.clone()),
+        ),
+        json_entry("key_id_hex", Value::from(encode(record.key_id))),
+        json_entry("envelope_path", Value::from(record.envelope_path.clone())),
     ])
 }
 
@@ -25236,6 +26559,34 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    async fn transparency_explorer_ui_serves_static_browser_shell() {
+        let response = handle_get_sorafs_transparency_explorer_ui().await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&HeaderValue::from_static("text/html; charset=utf-8"))
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(HeaderName::from_static("x-content-type-options")),
+            Some(&HeaderValue::from_static("nosniff"))
+        );
+        assert_eq!(
+            response.headers().get(CACHE_CONTROL),
+            Some(&HeaderValue::from_static("no-store"))
+        );
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect transparency explorer UI body");
+        let body = String::from_utf8(body_bytes.to_vec()).expect("HTML body is UTF-8");
+        assert!(body.contains("SoraFS Transparency Explorer"));
+        assert!(body.contains("/v1/sorafs/transparency/explorer"));
+        assert!(body.contains("proof_token_issuances"));
+        assert!(!body.contains("payload_b64"));
+    }
+
+    #[tokio::test]
     async fn transparency_explorer_snapshot_reads_proof_token_publish_index() {
         let (app, _temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
 
@@ -26498,9 +27849,33 @@ mod advert_tests {
         World::with([domain], [provider, buyer], [])
     }
 
+    fn orderbook_world_with_moderation_operator(auth: &OrderbookAuthFixture) -> World {
+        let mut world = orderbook_world(auth);
+        world.grant_role_for_tests(
+            auth.provider.account.clone(),
+            sorafs_moderation_operator_role_id().clone(),
+        );
+        world
+    }
+
     fn sorafs_app_state_with_orderbook_auth() -> (SharedAppState, TempDir, OrderbookAuthFixture) {
         let auth = orderbook_auth_fixture();
         let mut app = mk_app_state_for_tests_with_world(orderbook_world(&auth));
+        let (node, temp_dir) = sorafs_node_with_temp_storage();
+        let app_inner = Arc::get_mut(&mut app).expect("unique app state");
+        app_inner.sorafs_node = node;
+        #[cfg(feature = "telemetry")]
+        {
+            app_inner.telemetry = isolated_test_telemetry();
+        }
+        (app, temp_dir, auth)
+    }
+
+    fn sorafs_app_state_with_moderation_operator_auth()
+    -> (SharedAppState, TempDir, OrderbookAuthFixture) {
+        let auth = orderbook_auth_fixture();
+        let mut app =
+            mk_app_state_for_tests_with_world(orderbook_world_with_moderation_operator(&auth));
         let (node, temp_dir) = sorafs_node_with_temp_storage();
         let app_inner = Arc::get_mut(&mut app).expect("unique app state");
         app_inner.sorafs_node = node;
@@ -26906,6 +28281,26 @@ mod advert_tests {
             auth,
             asset_definition_id,
         ));
+        let (node, temp_dir) = sorafs_node_with_temp_storage();
+        let app_inner = Arc::get_mut(&mut app).expect("unique app state");
+        app_inner.sorafs_node = node;
+        #[cfg(feature = "telemetry")]
+        {
+            app_inner.telemetry = isolated_test_telemetry();
+        }
+        (app, temp_dir)
+    }
+
+    fn sorafs_app_state_with_appeal_finance_asset_lock_world_and_moderation_operator(
+        auth: &OrderbookAuthFixture,
+        asset_definition_id: &AssetDefinitionId,
+    ) -> (SharedAppState, TempDir) {
+        let mut world = appeal_finance_asset_lock_world(auth, asset_definition_id);
+        world.grant_role_for_tests(
+            auth.provider.account.clone(),
+            sorafs_moderation_operator_role_id().clone(),
+        );
+        let mut app = mk_app_state_for_tests_with_world(world);
         let (node, temp_dir) = sorafs_node_with_temp_storage();
         let app_inner = Arc::get_mut(&mut app).expect("unique app state");
         app_inner.sorafs_node = node;
@@ -29497,6 +30892,102 @@ mod advert_tests {
         )
     }
 
+    fn moderation_quarantine_appeal_handoff_body(
+        payer_account: &AccountId,
+        destination_account: &AccountId,
+    ) -> Bytes {
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("xor", "universal").expect("domain id"),
+            "xor".parse().expect("asset definition name"),
+        );
+        Bytes::from(
+            norito::json::to_vec(&ModerationQuarantineAppealHandoffRequestDto {
+                case_id: None,
+                round_id: Some("round-reviewed-1".to_owned()),
+                class: "content".to_owned(),
+                backlog: 3,
+                evidence_size_mb: 8,
+                urgency: Some("high".to_owned()),
+                panel_size: Some(5),
+                payer_account: payer_account.to_string(),
+                destination_account: destination_account.to_string(),
+                release_authority_account: Some(destination_account.to_string()),
+                asset_definition_id: asset_definition_id.to_string(),
+                expires_at_ms: Some(1_800_086_400_000),
+                idempotency_key: None,
+                evidence_hashes_hex: Some(vec![Hash::prehashed([0xD3; Hash::LENGTH]).to_string()]),
+            })
+            .expect("encode quarantine appeal handoff request"),
+        )
+    }
+
+    fn moderation_quarantine_appeal_ballot_body(
+        deposit_confirmation: AppealFinanceDepositConfirmRequestDto,
+        auth: &OrderbookAuthFixture,
+    ) -> Bytes {
+        let now_unix_ms = iroha_network_time_now_ms();
+        Bytes::from(
+            norito::json::to_vec(&ModerationQuarantineAppealBallotRequestDto {
+                deposit_confirmation,
+                case_id: None,
+                round_id: None,
+                evidence_bundle_digest_hex: None,
+                appeal_finance_config_version: None,
+                panel_roster_hash_hex: None,
+                policy_reference: None,
+                evidence_uri: None,
+                juror_ids: vec![
+                    auth.provider.account.to_string(),
+                    auth.buyer.account.to_string(),
+                ],
+                quorum: 2,
+                announced_at_unix_ms: Some(now_unix_ms.saturating_sub(1_000)),
+                commit_deadline_unix_ms: now_unix_ms.saturating_add(2_000),
+                challenge_deadline_unix_ms: now_unix_ms.saturating_add(2_100),
+                reveal_deadline_unix_ms: now_unix_ms.saturating_add(10_000),
+            })
+            .expect("encode quarantine appeal ballot request"),
+        )
+    }
+
+    fn moderation_screening_result_body_with_subject_digest(
+        subject: &str,
+        subject_digest_hex: String,
+        manifest_id_byte: u8,
+        runner_hash_byte: u8,
+        combined_score_bps: u16,
+        verdict: &str,
+        screened_at_unix: u64,
+    ) -> Bytes {
+        Bytes::from(
+            norito::json::to_vec(&ModerationScreeningResultRequestDto {
+                subject: subject.to_owned(),
+                subject_digest_hex,
+                manifest_id_hex: hex::encode([manifest_id_byte; 16]),
+                runner_hash_hex: hex::encode([runner_hash_byte; 32]),
+                combined_score_bps,
+                verdict: verdict.to_owned(),
+                screened_at_unix: Some(screened_at_unix),
+                evidence_digest_hex: Some(hex::encode([0xE4; 32])),
+                policy_digest_hex: Some(hex::encode([0xC7; 32])),
+                notes: Some("local screening API fixture".to_owned()),
+            })
+            .expect("encode screening result request"),
+        )
+    }
+
+    fn moderation_quarantine_object_body(payload: &[u8], captured_at_unix: u64) -> Bytes {
+        Bytes::from(
+            norito::json::to_vec(&ModerationQuarantineObjectStoreRequestDto {
+                payload_b64: BASE64_STANDARD.encode(payload),
+                captured_at_unix: Some(captured_at_unix),
+                content_type: Some("application/octet-stream".to_owned()),
+                notes: Some("object endpoint fixture".to_owned()),
+            })
+            .expect("encode quarantine object request"),
+        )
+    }
+
     fn moderation_commit_body(commit: SoraFsModerationBallotCommitV1, now_unix_ms: u64) -> Bytes {
         let commit_b64 =
             BASE64_STANDARD.encode(norito::to_bytes(&commit).expect("encode moderation commit"));
@@ -29671,6 +31162,159 @@ mod advert_tests {
             body,
         )
         .await
+    }
+
+    async fn post_moderation_quarantine_appeal_handoff(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        quarantine_id_hex: &str,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = moderation_quarantine_action_uri(
+            quarantine_id_hex,
+            MODERATION_ROUTE_QUARANTINE_APPEAL_HANDOFF_SUFFIX,
+        );
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_moderation_quarantine_appeal_handoff(
+            State(app),
+            headers,
+            method,
+            uri,
+            Path(quarantine_id_hex.to_owned()),
+            body,
+        )
+        .await
+    }
+
+    async fn post_moderation_quarantine_appeal_ballot(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        quarantine_id_hex: &str,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = moderation_quarantine_action_uri(
+            quarantine_id_hex,
+            MODERATION_ROUTE_QUARANTINE_APPEAL_BALLOT_SUFFIX,
+        );
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_moderation_quarantine_appeal_ballot(
+            State(app),
+            headers,
+            method,
+            uri,
+            Path(quarantine_id_hex.to_owned()),
+            body,
+        )
+        .await
+    }
+
+    async fn post_moderation_quarantine_object(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        quarantine_id_hex: &str,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = moderation_quarantine_action_uri(
+            quarantine_id_hex,
+            MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX,
+        );
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_moderation_quarantine_object(
+            State(app),
+            headers,
+            method,
+            uri,
+            Path(quarantine_id_hex.to_owned()),
+            body,
+        )
+        .await
+    }
+
+    async fn get_moderation_quarantine_object(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        quarantine_id_hex: &str,
+    ) -> Response {
+        let method = Method::GET;
+        let uri = moderation_quarantine_action_uri(
+            quarantine_id_hex,
+            MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX,
+        );
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &[]);
+        handle_get_sorafs_moderation_quarantine_object(
+            State(app),
+            headers,
+            method,
+            uri,
+            Path(quarantine_id_hex.to_owned()),
+        )
+        .await
+    }
+
+    async fn get_moderation_quarantine_operator_panel(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        quarantine_id_hex: &str,
+        raw_query: Option<&str>,
+    ) -> Response {
+        let method = Method::GET;
+        let path = format!(
+            "{MODERATION_ROUTE_QUARANTINE}/{quarantine_id_hex}/{MODERATION_ROUTE_QUARANTINE_OPERATOR_PANEL_SUFFIX}"
+        );
+        let uri = match raw_query {
+            Some(query) => format!("{path}?{query}"),
+            None => path,
+        }
+        .parse()
+        .expect("moderation quarantine operator panel URI");
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &[]);
+        handle_get_sorafs_moderation_quarantine_operator_panel(
+            State(app),
+            headers,
+            method,
+            uri,
+            Path(quarantine_id_hex.to_owned()),
+            axum::extract::RawQuery(raw_query.map(str::to_owned)),
+        )
+        .await
+    }
+
+    async fn seed_moderation_quarantine_for_payload(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        subject: &str,
+        payload: &[u8],
+        screened_at_unix: u64,
+    ) -> String {
+        let subject_digest_hex = hex::encode(blake3::hash(payload).as_bytes());
+        let response = post_moderation_screening_result(
+            app,
+            signer,
+            moderation_screening_result_body_with_subject_digest(
+                subject,
+                subject_digest_hex,
+                0x57,
+                0x67,
+                7_500,
+                "quarantine",
+                screened_at_unix,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect screening body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode screening body");
+        value
+            .get("quarantine")
+            .and_then(|record| record.get("quarantine_id_hex"))
+            .and_then(Value::as_str)
+            .expect("quarantine id")
+            .to_owned()
     }
 
     #[test]
@@ -30029,7 +31673,7 @@ mod advert_tests {
 
     #[tokio::test]
     async fn moderation_quarantine_review_release_endpoints_advance_state() {
-        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let (app, _dir, auth) = sorafs_app_state_with_moderation_operator_auth();
 
         let response = post_moderation_screening_result(
             app.clone(),
@@ -30169,6 +31813,612 @@ mod advert_tests {
         assert_eq!(
             quarantines[0].get("state").and_then(Value::as_str),
             Some("released")
+        );
+    }
+
+    #[tokio::test]
+    async fn moderation_quarantine_review_release_endpoints_require_operator_role() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let payload = b"moderation quarantine role fixture";
+        let quarantine_id_hex = seed_moderation_quarantine_for_payload(
+            app.clone(),
+            &auth.provider,
+            "bafy-review-release-role",
+            payload,
+            1_800_000_240,
+        )
+        .await;
+
+        let response = post_moderation_quarantine_review(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_quarantine_review_body("operator@moderation", 1_800_000_250),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let response = post_moderation_quarantine_release(
+            app,
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_quarantine_release_body("release-authority@moderation", 1_800_000_260),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn moderation_quarantine_appeal_handoff_requires_reviewed_record_and_builds_deposit() {
+        let (app, _dir, auth) = sorafs_app_state_with_moderation_operator_auth();
+        let payload = b"moderation appeal handoff fixture";
+        let quarantine_id_hex = seed_moderation_quarantine_for_payload(
+            app.clone(),
+            &auth.provider,
+            "bafy-appeal-handoff",
+            payload,
+            1_800_000_270,
+        )
+        .await;
+
+        let response = post_moderation_quarantine_appeal_handoff(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_quarantine_appeal_handoff_body(&auth.provider.account, &auth.buyer.account),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let response = post_moderation_quarantine_review(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_quarantine_review_body("operator@moderation", 1_800_000_280),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let response = post_moderation_quarantine_appeal_handoff(
+            app,
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_quarantine_appeal_handoff_body(&auth.provider.account, &auth.buyer.account),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect appeal handoff body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode appeal handoff body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.quarantine.appeal_handoff.v1")
+        );
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("ready_for_deposit")
+        );
+        assert_eq!(
+            value
+                .get("record")
+                .and_then(|record| record.get("state"))
+                .and_then(Value::as_str),
+            Some("reviewed")
+        );
+        let pricing_quote = value
+            .get("pricing_quote")
+            .and_then(Value::as_object)
+            .expect("pricing quote");
+        assert_eq!(
+            pricing_quote.get("class").and_then(Value::as_str),
+            Some("content")
+        );
+        let deposit_request = value
+            .get("deposit_request")
+            .and_then(Value::as_object)
+            .expect("deposit request");
+        assert_eq!(
+            deposit_request
+                .get("case_id")
+                .and_then(Value::as_str)
+                .map(|case_id| case_id.starts_with("quarantine-")),
+            Some(true)
+        );
+        let payer_account = auth.provider.account.to_string();
+        assert_eq!(
+            deposit_request.get("payer_account").and_then(Value::as_str),
+            Some(payer_account.as_str())
+        );
+        let evidence_hashes = deposit_request
+            .get("evidence_hashes_hex")
+            .and_then(Value::as_array)
+            .expect("evidence hashes");
+        assert_eq!(evidence_hashes.len(), 2);
+        let deposit_instruction = value
+            .get("deposit_instruction")
+            .and_then(Value::as_object)
+            .expect("deposit instruction");
+        assert_eq!(
+            deposit_instruction.get("status").and_then(Value::as_str),
+            Some("ready_for_client_signing")
+        );
+        assert_eq!(
+            deposit_instruction
+                .get("deposit_xor")
+                .and_then(Value::as_str),
+            pricing_quote.get("deposit_xor").and_then(Value::as_str)
+        );
+        assert!(
+            deposit_instruction
+                .get("tx_instructions")
+                .and_then(Value::as_array)
+                .is_some_and(|instructions| !instructions.is_empty())
+        );
+    }
+
+    #[tokio::test]
+    async fn moderation_quarantine_appeal_ballot_requires_handoff_bound_deposit_and_announces() {
+        let auth = orderbook_auth_fixture();
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("xor", "universal").expect("domain id"),
+            "xor".parse().expect("asset definition name"),
+        );
+        let (app, _dir) =
+            sorafs_app_state_with_appeal_finance_asset_lock_world_and_moderation_operator(
+                &auth,
+                &asset_definition_id,
+            );
+        let payload = b"moderation appeal ballot fixture";
+        let quarantine_id_hex = seed_moderation_quarantine_for_payload(
+            app.clone(),
+            &auth.provider,
+            "bafy-appeal-ballot",
+            payload,
+            1_800_000_290,
+        )
+        .await;
+
+        let response = post_moderation_quarantine_review(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_quarantine_review_body("operator@moderation", 1_800_000_300),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let snapshot = app.sorafs_node.moderation_screening_snapshot();
+        let record = snapshot
+            .quarantine_records
+            .iter()
+            .find(|record| hex::encode(record.quarantine_id) == quarantine_id_hex)
+            .expect("reviewed quarantine record");
+        let reviewed_at_unix = record.reviewed_at_unix.expect("review timestamp");
+        let handoff_hash = moderation_quarantine_appeal_handoff_evidence_hash(
+            record,
+            &quarantine_id_hex,
+            reviewed_at_unix,
+        )
+        .to_string();
+
+        let mut deposit_request = appeal_finance_deposit_request(
+            &auth.provider.account,
+            &auth.buyer.account,
+            Some(&auth.provider.account),
+        );
+        deposit_request.case_id = format!("quarantine-{quarantine_id_hex}");
+        deposit_request.round_id = Some("round-reviewed-1".to_owned());
+        deposit_request.asset_definition_id = asset_definition_id.to_string();
+        deposit_request.idempotency_key = "quarantine-ballot-good".to_owned();
+        deposit_request.evidence_hashes_hex = Some(vec![handoff_hash.clone()]);
+        let expected = appeal_finance_deposit_expectation(deposit_request.clone())
+            .expect("valid handoff-bound deposit expectation");
+        let deposit_confirmation = appeal_finance_deposit_confirm_request(
+            &deposit_request,
+            expected.escrow_id.as_hash().to_string(),
+        );
+
+        let mut bad_confirmation = deposit_confirmation.clone();
+        bad_confirmation.evidence_hashes_hex =
+            Some(vec![Hash::prehashed([0xD1; Hash::LENGTH]).to_string()]);
+        let response = post_moderation_quarantine_appeal_ballot(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_quarantine_appeal_ballot_body(bad_confirmation, &auth),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+
+        seed_appeal_finance_asset_lock(&app, &expected);
+        let response = post_moderation_quarantine_appeal_ballot(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_quarantine_appeal_ballot_body(deposit_confirmation.clone(), &auth),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect appeal ballot body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode appeal ballot body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.quarantine.appeal_ballot.v1")
+        );
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("announced")
+        );
+        assert_eq!(
+            value
+                .get("handoff_evidence_hash_hex")
+                .and_then(Value::as_str),
+            Some(handoff_hash.as_str())
+        );
+        let ballot = value
+            .get("ballot")
+            .and_then(Value::as_object)
+            .expect("ballot record");
+        let announcement = ballot
+            .get("announcement")
+            .and_then(Value::as_object)
+            .expect("announcement");
+        assert_eq!(
+            announcement.get("round_id").and_then(Value::as_str),
+            Some("round-reviewed-1")
+        );
+        assert_eq!(
+            announcement
+                .get("appeal_deposit_escrow_id_hex")
+                .and_then(Value::as_str),
+            Some(deposit_confirmation.escrow_id_hex.as_str())
+        );
+        let context = announcement
+            .get("context")
+            .and_then(Value::as_object)
+            .expect("ballot context");
+        assert_eq!(
+            context.get("case_id").and_then(Value::as_str),
+            Some(deposit_request.case_id.as_str())
+        );
+        assert_eq!(
+            context
+                .get("evidence_bundle_digest_hex")
+                .and_then(Value::as_str),
+            Some(handoff_hash.as_str())
+        );
+        assert!(
+            app.sorafs_node
+                .moderation_ballot(&deposit_request.case_id, "round-reviewed-1")
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn moderation_quarantine_operator_panel_requires_role_and_bundles_workflow() {
+        let (app_without_role, _dir, auth_without_role) = sorafs_app_state_with_orderbook_auth();
+        let no_role_payload = b"moderation operator panel role fixture";
+        let no_role_quarantine_id_hex = seed_moderation_quarantine_for_payload(
+            app_without_role.clone(),
+            &auth_without_role.provider,
+            "bafy-operator-panel-role",
+            no_role_payload,
+            1_800_000_305,
+        )
+        .await;
+        let response = get_moderation_quarantine_operator_panel(
+            app_without_role,
+            &auth_without_role.provider,
+            &no_role_quarantine_id_hex,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let (app, _dir, auth) = sorafs_app_state_with_moderation_operator_auth();
+        let payload = b"moderation operator panel fixture";
+        let quarantine_id_hex = seed_moderation_quarantine_for_payload(
+            app.clone(),
+            &auth.provider,
+            "bafy-operator-panel",
+            payload,
+            1_800_000_306,
+        )
+        .await;
+        let response = post_moderation_quarantine_review(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_quarantine_review_body("operator@moderation", 1_800_000_307),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let response = post_moderation_quarantine_object(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_quarantine_object_body(payload, 1_800_000_308),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let response = get_moderation_quarantine_operator_panel(
+            app,
+            &auth.provider,
+            &quarantine_id_hex,
+            Some("limit=2"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect operator panel body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode operator panel body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.quarantine.operator_panel.v1")
+        );
+        assert_eq!(value.get("status").and_then(Value::as_str), Some("ready"));
+        assert_eq!(
+            value.get("object_status").and_then(Value::as_str),
+            Some("stored")
+        );
+        assert!(value.get("payload_b64").is_none());
+        assert!(
+            value
+                .get("object")
+                .and_then(|object| object.get("object_id_hex"))
+                .and_then(Value::as_str)
+                .is_some()
+        );
+        assert_eq!(value.get("ballot_count").and_then(Value::as_u64), Some(0));
+        assert_eq!(
+            value.get("returned_ballot_count").and_then(Value::as_u64),
+            Some(0)
+        );
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(2));
+        let actions = value
+            .get("next_actions")
+            .and_then(Value::as_array)
+            .expect("next actions");
+        let action_names = actions
+            .iter()
+            .filter_map(|action| action.get("action").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert!(action_names.contains(&"read_object"));
+        assert!(action_names.contains(&"appeal_handoff"));
+        assert!(action_names.contains(&"appeal_ballot"));
+        let routes = value
+            .get("operator_routes")
+            .and_then(Value::as_object)
+            .expect("operator routes");
+        assert!(
+            routes
+                .get("object")
+                .and_then(Value::as_str)
+                .is_some_and(|route| route.ends_with("/object"))
+        );
+    }
+
+    #[tokio::test]
+    async fn moderation_quarantine_object_endpoint_stores_and_reads_payload() {
+        let (app, _dir, auth) = sorafs_app_state_with_moderation_operator_auth();
+        let payload = b"moderation object endpoint readback fixture";
+        let expected_digest_hex = hex::encode(blake3::hash(payload).as_bytes());
+        let quarantine_id_hex = seed_moderation_quarantine_for_payload(
+            app.clone(),
+            &auth.provider,
+            "bafy-object-readback",
+            payload,
+            1_800_000_300,
+        )
+        .await;
+
+        let response = post_moderation_quarantine_object(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_quarantine_object_body(payload, 1_800_000_310),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect object store body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode object store body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.quarantine.object.store.v1")
+        );
+        assert_eq!(value.get("status").and_then(Value::as_str), Some("stored"));
+        let record = value
+            .get("record")
+            .and_then(Value::as_object)
+            .expect("object store record");
+        assert_eq!(
+            record.get("quarantine_id_hex").and_then(Value::as_str),
+            Some(quarantine_id_hex.as_str())
+        );
+        assert_eq!(
+            record.get("payload_digest_hex").and_then(Value::as_str),
+            Some(expected_digest_hex.as_str())
+        );
+        assert_eq!(
+            record.get("payload_len").and_then(Value::as_u64),
+            Some(payload.len() as u64)
+        );
+        assert_eq!(
+            record.get("content_type").and_then(Value::as_str),
+            Some("application/octet-stream")
+        );
+        assert_eq!(
+            record.get("notes").and_then(Value::as_str),
+            Some("object endpoint fixture")
+        );
+        assert_eq!(
+            record
+                .get("object_id_hex")
+                .and_then(Value::as_str)
+                .map(str::len),
+            Some(32)
+        );
+        assert_eq!(
+            record
+                .get("ciphertext_digest_hex")
+                .and_then(Value::as_str)
+                .map(str::len),
+            Some(64)
+        );
+        assert!(
+            record
+                .get("envelope_path")
+                .and_then(Value::as_str)
+                .is_some_and(|path| path.contains(&quarantine_id_hex))
+        );
+
+        let response =
+            get_moderation_quarantine_object(app.clone(), &auth.provider, &quarantine_id_hex).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect object read body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode object read body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.quarantine.object.payload.v1")
+        );
+        assert_eq!(value.get("status").and_then(Value::as_str), Some("read"));
+        let payload_b64 = value
+            .get("payload_b64")
+            .and_then(Value::as_str)
+            .expect("payload b64");
+        let decoded = BASE64_STANDARD
+            .decode(payload_b64.as_bytes())
+            .expect("decode payload b64");
+        assert_eq!(decoded, payload);
+        assert_eq!(
+            value
+                .get("record")
+                .and_then(|record| record.get("payload_digest_hex"))
+                .and_then(Value::as_str),
+            Some(expected_digest_hex.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn moderation_quarantine_object_endpoint_requires_canonical_auth() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let payload = b"moderation object auth fixture";
+        let quarantine_id_hex = seed_moderation_quarantine_for_payload(
+            app.clone(),
+            &auth.provider,
+            "bafy-object-auth",
+            payload,
+            1_800_000_320,
+        )
+        .await;
+
+        let method = Method::POST;
+        let uri = moderation_quarantine_action_uri(
+            &quarantine_id_hex,
+            MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX,
+        );
+        let response = handle_post_sorafs_moderation_quarantine_object(
+            State(app.clone()),
+            HeaderMap::new(),
+            method,
+            uri,
+            Path(quarantine_id_hex.clone()),
+            moderation_quarantine_object_body(payload, 1_800_000_321),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let method = Method::GET;
+        let uri = moderation_quarantine_action_uri(
+            &quarantine_id_hex,
+            MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX,
+        );
+        let response = handle_get_sorafs_moderation_quarantine_object(
+            State(app),
+            HeaderMap::new(),
+            method,
+            uri,
+            Path(quarantine_id_hex),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn moderation_quarantine_object_endpoint_requires_operator_role() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let payload = b"moderation object role fixture";
+        let quarantine_id_hex = seed_moderation_quarantine_for_payload(
+            app.clone(),
+            &auth.provider,
+            "bafy-object-role",
+            payload,
+            1_800_000_330,
+        )
+        .await;
+
+        let response = post_moderation_quarantine_object(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_quarantine_object_body(payload, 1_800_000_331),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let response =
+            get_moderation_quarantine_object(app, &auth.provider, &quarantine_id_hex).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn moderation_quarantine_object_endpoint_rejects_digest_mismatch() {
+        let (app, _dir, auth) = sorafs_app_state_with_moderation_operator_auth();
+        let expected_payload = b"moderation object expected digest fixture";
+        let quarantine_id_hex = seed_moderation_quarantine_for_payload(
+            app.clone(),
+            &auth.provider,
+            "bafy-object-digest-mismatch",
+            expected_payload,
+            1_800_000_340,
+        )
+        .await;
+
+        let response = post_moderation_quarantine_object(
+            app,
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_quarantine_object_body(
+                b"moderation object mismatched payload fixture",
+                1_800_000_341,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect object digest mismatch body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode object digest mismatch body");
+        let message = value
+            .get("error")
+            .and_then(Value::as_str)
+            .expect("digest mismatch error");
+        assert!(
+            message.contains("digest mismatch"),
+            "unexpected error message: {message}"
         );
     }
 

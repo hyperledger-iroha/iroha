@@ -52,6 +52,7 @@ test("ToriiBrowserClient account assets use the current asset selector query key
     assert.equal(parsed.searchParams.get("asset"), "asset-alias");
     assert.equal(parsed.searchParams.get("limit"), "10");
     assert.equal(parsed.searchParams.get("offset"), "20");
+    assert.equal(parsed.searchParams.get("count_mode"), "exact");
     return jsonResponse({
       items: [{ asset: "asset-alias", account_id: "test-account", quantity: "7" }],
       total: 1,
@@ -62,6 +63,7 @@ test("ToriiBrowserClient account assets use the current asset selector query key
     asset: "asset-alias",
     limit: 10,
     offset: 20,
+    countMode: " Exact ",
   });
   assert.equal(payload.items[0].asset, "asset-alias");
 });
@@ -81,9 +83,12 @@ test("ToriiBrowserClient queryVisibleTransactions posts a browser-safe envelope"
 
   const payload = await client.queryVisibleTransactions({
     assetId: "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb",
+    select: [" entrypoint_hash ", { authority: true }],
     sort: "newest",
     limit: 25,
+    fetch_size: 50,
     queryName: "VisibleTransactions",
+    countMode: " BOUNDED ",
   });
 
   assert.equal(capturedUrl, "https://torii.example/v1/transactions/visible/query");
@@ -99,7 +104,10 @@ test("ToriiBrowserClient queryVisibleTransactions posts a browser-safe envelope"
       op: "eq",
       args: ["asset_id", "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb"],
     },
+    select: ["entrypoint_hash", { authority: true }],
+    fetch_size: 50,
     query: "VisibleTransactions",
+    count_mode: "bounded",
   });
   assert.deepEqual(payload, { items: [], total: 0 });
 });
@@ -129,6 +137,22 @@ test("ToriiBrowserClient rejects adversarial query options before fetch", async 
   assert.throws(
     () => client.queryVisibleTransactions({ select: "entrypoint_hash" }),
     /select must be an array/,
+  );
+  assert.throws(
+    () => client.queryVisibleTransactions({ select: ["entrypoint_hash", []] }),
+    /select\[1] must be a field-path string or plain object/,
+  );
+  assert.throws(
+    () => client.queryVisibleTransactions({ select: ["entrypoint_hash", " "] }),
+    /select\[1] must be a non-empty field path/,
+  );
+  assert.throws(
+    () => client.queryVisibleTransactions({ count_mode: "full" }),
+    /countMode must be bounded or exact/,
+  );
+  assert.throws(
+    () => client.listAssetDefinitions({ countMode: "full" }),
+    /countMode must be bounded or exact/,
   );
   assert.throws(
     () => client.resolveAlias("  "),

@@ -583,14 +583,14 @@ class KagemushaRecursiveSpendProverTest {
         assertEquals("recursive_compact_v1", KagemushaRecursiveSpendProver.Mode.RECURSIVE_COMPACT_V1.wireName)
         assertEquals("recursive_spend_v1", KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1.wireName)
         assertEquals(
-            KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
+            KagemushaRecursiveSpendProver.Mode.RECURSIVE_COMPACT_V1,
             KagemushaRecursiveSpendProver.preferredMode(
                 recursiveCompactAvailable = true,
                 recursiveSpendAvailable = true,
             ),
         )
         assertEquals(
-            KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1,
+            KagemushaRecursiveSpendProver.Mode.RECURSIVE_COMPACT_V1,
             KagemushaRecursiveSpendProver.preferredMode(
                 recursiveCompactAvailable = true,
                 recursiveSpendAvailable = false,
@@ -799,7 +799,7 @@ class KagemushaRecursiveSpendProverTest {
                 validRecursiveCompactVerifierKeys,
             )
         }
-        assertTrue(emptyCompactToken.message.orEmpty().contains("compactTokenArchive"))
+        assertTrue(emptyCompactToken.message.orEmpty().contains("compactTokenArchive must not be empty"))
         val oversizedCompactToken = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
                 oversizedRecursiveCompactInput,
@@ -1727,6 +1727,10 @@ class KagemushaRecursiveSpendProverTest {
         )
         assertContains(
             archives,
+            "\"sha256_hex\": \"4fbfbe8b05b86c430a3743b0da68b819afca8c666357ef7b2e171b837f97f415\"",
+        )
+        assertContains(
+            archives,
             "\"sha256_hex\": \"31cd92a5a2f8894634c531830621604937d4631f5f08b58cba01a45dc26e9eba\"",
         )
 
@@ -1763,52 +1767,52 @@ class KagemushaRecursiveSpendProverTest {
     fun rejectsEmptyArchivesBeforeNativeDispatch() {
         val validArchive = kagemushaNoritoFrameWithPayload(0x4b)
 
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("requestArchive must not be empty") {
             KagemushaRecursiveSpendProver.initSpend(ByteArray(0))
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("requestArchive must not be empty") {
             KagemushaRecursiveSpendProver.appendSpend(ByteArray(0))
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("requestArchive must not be empty") {
             KagemushaRecursiveSpendProver.transitionProfileInit(ByteArray(0))
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("requestArchive must not be empty") {
             KagemushaRecursiveSpendProver.transitionProfileAppend(ByteArray(0))
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("profileArchive must not be empty") {
             KagemushaRecursiveSpendProver.lineageAppendBoundary(ByteArray(0))
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("requestArchive must not be empty") {
             KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(ByteArray(0), validArchive)
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("bundleArchive must not be empty") {
             KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(validArchive, ByteArray(0))
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("previousWitnessArchive must not be empty") {
             KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
                 ByteArray(0),
                 validArchive,
                 validArchive,
             )
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("requestArchive must not be empty") {
             KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
                 validArchive,
                 ByteArray(0),
                 validArchive,
             )
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("bundleArchive must not be empty") {
             KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
                 validArchive,
                 validArchive,
                 ByteArray(0),
             )
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("requestArchive must not be empty") {
             KagemushaRecursiveSpendProver.verifySpend(ByteArray(0))
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("requestArchive must not be empty") {
             KagemushaRecursiveSpendProver.redeemSpend(ByteArray(0))
         }
     }
@@ -2110,12 +2114,12 @@ class KagemushaRecursiveSpendProverTest {
         val missing = assertFailsWith<IllegalStateException> {
             KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(null, "redeem")
         }
-        assertTrue(missing.message.orEmpty().contains("native redeem returned no output"))
+        assertEquals("native redeem returned no output", missing.message)
 
         val empty = assertFailsWith<IllegalStateException> {
             KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(ByteArray(0), "redeem")
         }
-        assertTrue(empty.message.orEmpty().contains("native redeem returned empty output"))
+        assertEquals("native redeem returned empty output", empty.message)
 
         val oversized = assertFailsWith<IllegalStateException> {
             KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(
@@ -2123,7 +2127,7 @@ class KagemushaRecursiveSpendProverTest {
                 "redeem",
             )
         }
-        assertTrue(oversized.message.orEmpty().contains("native redeem returned oversized output"))
+        assertEquals("native redeem returned oversized output", oversized.message)
 
         val malformed = assertFailsWith<IllegalStateException> {
             KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(
@@ -2131,16 +2135,16 @@ class KagemushaRecursiveSpendProverTest {
                 "redeem",
             )
         }
-        assertTrue(malformed.message.orEmpty().contains("native redeem returned invalid Norito archive"))
+        assertEquals("native redeem returned invalid Norito archive", malformed.message)
         val malformedPallasBuilder = assertFailsWith<IllegalStateException> {
             KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(
                 byteArrayOf(0x01, 0x02),
                 "build Pallas open envelopes",
             )
         }
-        assertTrue(
-            malformedPallasBuilder.message.orEmpty()
-                .contains("native build Pallas open envelopes returned invalid Norito archive"),
+        assertEquals(
+            "native build Pallas open envelopes returned invalid Norito archive",
+            malformedPallasBuilder.message,
         )
         val malformedProjection = assertFailsWith<IllegalStateException> {
             KagemushaCompactPaymentTokenProver.requireNativeOutput(
@@ -2148,9 +2152,9 @@ class KagemushaRecursiveSpendProverTest {
                 "nativeRecursiveSpendCompactPaymentTokenFromBundle",
             )
         }
-        assertTrue(
-            malformedProjection.message.orEmpty()
-                .contains("nativeRecursiveSpendCompactPaymentTokenFromBundle returned invalid Norito archive"),
+        assertEquals(
+            "nativeRecursiveSpendCompactPaymentTokenFromBundle returned invalid Norito archive",
+            malformedProjection.message,
         )
 
         val compressed = kagemushaNoritoFrameWithPayload(0x4b)
@@ -2178,16 +2182,16 @@ class KagemushaRecursiveSpendProverTest {
                 "redeem",
             )
         }
-        assertTrue(emptyPayload.message.orEmpty().contains("native redeem returned empty Norito payload"))
+        assertEquals("native redeem returned empty Norito payload", emptyPayload.message)
         val emptyPreviousProofBuilderPayload = assertFailsWith<IllegalStateException> {
             KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(
                 kagemushaNoritoFrame(0x4c),
                 "build previous proof open envelopes",
             )
         }
-        assertTrue(
-            emptyPreviousProofBuilderPayload.message.orEmpty()
-                .contains("native build previous proof open envelopes returned empty Norito payload"),
+        assertEquals(
+            "native build previous proof open envelopes returned empty Norito payload",
+            emptyPreviousProofBuilderPayload.message,
         )
         val emptyProjectionPayload = assertFailsWith<IllegalStateException> {
             KagemushaCompactPaymentTokenProver.requireNativeOutput(
@@ -2195,9 +2199,9 @@ class KagemushaRecursiveSpendProverTest {
                 "nativeRecursiveSpendCompactPaymentTokenFromBundle",
             )
         }
-        assertTrue(
-            emptyProjectionPayload.message.orEmpty()
-                .contains("nativeRecursiveSpendCompactPaymentTokenFromBundle returned empty Norito payload"),
+        assertEquals(
+            "nativeRecursiveSpendCompactPaymentTokenFromBundle returned empty Norito payload",
+            emptyProjectionPayload.message,
         )
 
         val output = kagemushaNoritoFrameWithPayload(0x4b)
@@ -2210,7 +2214,7 @@ class KagemushaRecursiveSpendProverTest {
         val error = assertFailsWith<IllegalStateException> {
             KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(output, "redeem")
         }
-        assertTrue(error.message.orEmpty().contains("native redeem returned invalid Norito archive"))
+        assertEquals("native redeem returned invalid Norito archive", error.message)
     }
 
     private fun sharedRecursiveSpendManifest(): String {

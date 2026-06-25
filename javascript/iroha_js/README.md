@@ -146,6 +146,12 @@ lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base
 verifier-witness batch, transition-profile, append-opening-preflight,
 append-boundary, scalar-projection, and previous/resulting accumulator digests);
 SDK code must not derive, supply, or patch accumulator state.
+generic proof-state (`proofState`, `ProofState`, `proof_state`),
+recursive/lineage proof-state, aggregation-transcript, fixed-window
+table-schedule/shared-manifest/table-base, verifier-witness batch,
+transition-profile binding, append-opening preflight, recursive verifier
+scalar-projection, and previous/resulting accumulator aliases are native-owned
+material, not JavaScript or TypeScript request fields.
 Production init requests and Reserved-lineage append-output requests must also
 include packaged lineage key artifacts in the raw Norito request:
 `lineage_verifier_key` and `lineage_proving_key_archive`. Missing artifacts are
@@ -3190,7 +3196,7 @@ plain object. Passing primitives, arrays, or class instances throws a
 `TypeError` before any HTTP call, keeping the JS-04 validation guarantees aligned
 with the Rust/Python SDKs.
 
-All pagination knobs (`limit`, `offset`, `pageSize`, `maxItems`, `fetchSize`) accept the
+All pagination knobs (`limit`, `offset`, `pageSize`, `maxItems`, `fetch_size`) accept the
 `NumericLike` inputs used across the transaction builders (`number`, `string`, or `bigint`).
 They are normalised via the same unsigned-integer validators before any request fires
 (integers only, up to `Number.MAX_SAFE_INTEGER`), so passing `"25"` or `10n` behaves
@@ -3218,7 +3224,7 @@ for await (const assetDef of torii.iterateAssetDefinitions({
 const defs = await torii.queryAssetDefinitions({
   filter: { Eq: ["metadata.display_name", "Ticket"] },
   sort: [{ key: "metadata.display_name", order: "desc" }],
-  fetchSize: 100,
+  fetch_size: 100,
 });
 console.log("filtered definitions", defs.items);
 

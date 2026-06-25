@@ -10068,11 +10068,15 @@ export interface PermissionedIterableOptions {
   canonicalAuth?: CanonicalRequestAuth;
 }
 
+export type ToriiCountMode = "bounded" | "exact";
+
 export interface IterableListOptions extends PermissionedIterableOptions {
   limit?: NumericLike;
   offset?: NumericLike;
   filter?: string | Record<string, unknown>;
   sort?: string | ReadonlyArray<{ key: string; order?: "asc" | "desc" }>;
+  countMode?: ToriiCountMode;
+  count_mode?: ToriiCountMode;
   signal?: AbortSignal;
 }
 
@@ -10113,9 +10117,10 @@ export interface AssetHolderListOptions extends IterableListOptions {
 }
 
 export interface IterableQueryOptions extends IterableListOptions {
-  fetchSize?: NumericLike;
+  fetch_size?: NumericLike;
   queryName?: string;
-  select?: ReadonlyArray<Record<string, unknown>>;
+  query_name?: string;
+  select?: ReadonlyArray<string | Record<string, unknown>>;
 }
 
 export interface TransactionQueryOptions extends IterableQueryOptions {
@@ -10308,6 +10313,21 @@ export interface AliasLookupByAccountResponse {
 export interface AliasLookupByAccountOptions extends CanonicalRequestOptions {
   dataspace?: string;
   domain?: string;
+}
+
+export interface RetailRecipientLookupRequest {
+  accountId?: string;
+  account_id?: string;
+  aliasFqn?: string;
+  alias_fqn?: string;
+}
+
+export interface RetailRecipientLookupResponse {
+  resolved: boolean;
+  account_id?: string;
+  alias_fqn?: string;
+  fi_id?: string;
+  full_name?: string;
 }
 
 export interface AliasVoprfEvaluateResponse {
@@ -18004,6 +18024,10 @@ export declare class ToriiClient {
     accountId: string,
     options?: AliasLookupByAccountOptions,
   ): Promise<AliasLookupByAccountResponse | null>;
+  lookupRetailRecipient(
+    request: RetailRecipientLookupRequest,
+    options?: CanonicalRequestOptions,
+  ): Promise<RetailRecipientLookupResponse>;
   listRamLfeProgramPolicies(options?: {
     signal?: AbortSignal;
   }): Promise<{ total: number; items: Array<Record<string, unknown>> }>;
@@ -19515,6 +19539,8 @@ export interface KagemushaRecursiveSpendBundleSummary {
   readonly final_root: Buffer;
   readonly currentNote: KagemushaRecursiveSpendableNoteDescriptor;
   readonly current_note: KagemushaRecursiveSpendableNoteDescriptor;
+  readonly topupAnchorNullifiers: readonly Buffer[];
+  readonly topup_anchor_nullifiers: readonly Buffer[];
 }
 export function buildKagemushaRecursiveSpendableNoteDescriptor(
   input: KagemushaRecursiveSpendableNoteDescriptorInput,

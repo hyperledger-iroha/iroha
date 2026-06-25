@@ -316,6 +316,294 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             self.assertNotIn("does not exist", stderr)
             self.assertFalse((root / "fixtures").exists())
 
+    def test_summary_output_cannot_reuse_config_path_before_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            config = root / "operator-canary.json"
+            config.write_text("{not valid canary json\n", encoding="utf-8")
+            original_text = config.read_text(encoding="utf-8")
+
+            rc, stdout, stderr = run_canary(
+                [
+                    "--config",
+                    str(config),
+                    "--plan-only",
+                    "--summary-out",
+                    str(config),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("summary_out must not reuse --config path", stderr)
+            self.assertNotIn("not valid JSON", stderr)
+            self.assertEqual(config.read_text(encoding="utf-8"), original_text)
+
+    def test_summary_output_cannot_hardlink_config_path_before_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            config = root / "operator-canary.json"
+            config.write_text("{not valid canary json\n", encoding="utf-8")
+            summary_out = root / "canary-summary-alias.json"
+            try:
+                summary_out.hardlink_to(config)
+            except OSError as error:
+                self.skipTest(f"hard link creation unavailable: {error}")
+            original_text = config.read_text(encoding="utf-8")
+
+            rc, stdout, stderr = run_canary(
+                [
+                    "--config",
+                    str(config),
+                    "--plan-only",
+                    "--summary-out",
+                    str(summary_out),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("summary_out must not reuse --config path", stderr)
+            self.assertNotIn("not valid JSON", stderr)
+            self.assertEqual(config.read_text(encoding="utf-8"), original_text)
+            self.assertEqual(summary_out.read_text(encoding="utf-8"), original_text)
+
+    def test_symlinked_summary_output_ancestor_is_rejected_before_config_load(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            config = root / "operator-canary.json"
+            config.write_text("{not valid canary json\n", encoding="utf-8")
+            target_dir = root / "summary-target"
+            target_dir.mkdir()
+            ancestor = root / "summary-ancestor-link"
+            try:
+                ancestor.symlink_to(target_dir, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            summary_out = ancestor / "nested" / "canary-summary.json"
+
+            rc, stdout, stderr = run_canary(
+                [
+                    "--config",
+                    str(config),
+                    "--plan-only",
+                    "--summary-out",
+                    str(summary_out),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("summary_out must not be a symlink", stderr)
+            self.assertNotIn("not valid JSON", stderr)
+            self.assertFalse((target_dir / "nested").exists())
+
+    def test_missing_summary_output_parent_is_not_created_before_config_load(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            config = root / "operator-canary.json"
+            config.write_text("{not valid canary json\n", encoding="utf-8")
+            summary_parent = root / "summary" / "new"
+            summary_out = summary_parent / "canary-summary.json"
+
+            rc, stdout, stderr = run_canary(
+                [
+                    "--config",
+                    str(config),
+                    "--plan-only",
+                    "--summary-out",
+                    str(summary_out),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("not valid JSON", stderr)
+            self.assertFalse(summary_parent.exists())
+
+    def test_summary_output_cannot_reuse_stage_artifact_paths_before_execution(self):
+        cases = (
+            (
+                "rail-message",
+                "rail.message",
+                "payment.xml",
+                lambda path: {
+                    "provider": "local-bank",
+                    "environment": "preprod",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "message": path.name,
+                        "torii_base_url": "https://torii.local-bank.bank",
+                    },
+                },
+            ),
+            (
+                "rail-bearer",
+                "rail.bearer_token_file",
+                "rail.bearer",
+                lambda path: {
+                    "provider": "local-bank",
+                    "environment": "preprod",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.local-bank.bank",
+                        "bearer_token_file": path.name,
+                    },
+                },
+            ),
+            (
+                "notary-bearer",
+                "notary.bearer_token_file",
+                "notary.bearer",
+                lambda path: {
+                    "provider": "local-bank",
+                    "environment": "preprod",
+                    "notary": {
+                        "export_dir": "audit-export",
+                        "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
+                        "bearer_token_file": path.name,
+                    },
+                },
+            ),
+            (
+                "verify-receipt",
+                "verify.receipts[0]",
+                "rail.receipt.json",
+                lambda path: {
+                    "provider": "local-bank",
+                    "environment": "preprod",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.local-bank.bank",
+                        "dry_run": True,
+                    },
+                    "verify": {
+                        "enabled": True,
+                        "include_stage_receipts": False,
+                        "receipt_dirs": [],
+                        "receipts": [path.name],
+                        "require_source_files": False,
+                    },
+                },
+            ),
+        )
+        for name, label, leaf, build_body in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    artifact = root / leaf
+                    artifact.write_text("source artifact\n", encoding="utf-8")
+                    config = write_config(root, build_body(artifact))
+
+                    rc, stdout, stderr = run_canary(
+                        [
+                            "--config",
+                            str(config),
+                            "--plan-only",
+                            "--summary-out",
+                            str(artifact),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(f"summary_out must not reuse {label} path", stderr)
+                    self.assertEqual(
+                        artifact.read_text(encoding="utf-8"),
+                        "source artifact\n",
+                    )
+
+    def test_summary_output_cannot_be_written_under_stage_artifact_dirs(self):
+        cases = (
+            (
+                "rail-inbox",
+                "rail.inbox_dir",
+                "inbox/canary.summary.json",
+                {
+                    "provider": "local-bank",
+                    "environment": "preprod",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.local-bank.bank",
+                        "receipt_dir": "rail-receipts",
+                    },
+                },
+            ),
+            (
+                "rail-receipts",
+                "rail.receipt_dir",
+                "rail-receipts/canary.summary.json",
+                {
+                    "provider": "local-bank",
+                    "environment": "preprod",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.local-bank.bank",
+                        "receipt_dir": "rail-receipts",
+                    },
+                },
+            ),
+            (
+                "notary-export",
+                "notary.export_dir",
+                "audit-export/canary.summary.json",
+                {
+                    "provider": "local-bank",
+                    "environment": "preprod",
+                    "notary": {
+                        "export_dir": "audit-export",
+                        "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
+                        "receipt_dir": "notary-receipts",
+                    },
+                },
+            ),
+            (
+                "verify-receipt-dir",
+                "verify.receipt_dirs[0]",
+                "receipt-archive/canary.summary.json",
+                {
+                    "provider": "local-bank",
+                    "environment": "preprod",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.local-bank.bank",
+                        "dry_run": True,
+                    },
+                    "verify": {
+                        "enabled": True,
+                        "include_stage_receipts": False,
+                        "receipt_dirs": ["receipt-archive"],
+                        "receipts": [],
+                        "require_source_files": False,
+                    },
+                },
+            ),
+        )
+        for name, label, summary_rel, body in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    config = write_config(root, body)
+                    summary_out = root / summary_rel
+
+                    rc, stdout, stderr = run_canary(
+                        [
+                            "--config",
+                            str(config),
+                            "--plan-only",
+                            "--summary-out",
+                            str(summary_out),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(
+                        f"summary_out must not be written under {label}",
+                        stderr,
+                    )
+                    self.assertFalse(summary_out.exists())
+
     def test_local_path_validators_reject_percent_encoded_smuggling(self):
         overlong_path = "out/" + ("a" * (CANARY.MAX_LOCAL_PATH_CHARS + 1))
         cases = (
@@ -677,6 +965,109 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             )
             self.assertNotIn(overlong, stderr)
 
+    def test_config_string_lists_are_count_bounded_before_entry_parsing(self):
+        items = [None] * (CANARY.MAX_JSON_LIST_ITEMS + 1)
+        cases = (
+            ("notary", "endpoints"),
+            ("verify", "receipt_dirs"),
+            ("verify", "receipts"),
+        )
+        for label, key in cases:
+            with self.subTest(label=label, key=key):
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    CANARY._string_list({key: items}, key, label)
+
+                message = str(caught.exception)
+                self.assertIn(
+                    f"{label}.{key} must contain at most {CANARY.MAX_JSON_LIST_ITEMS} items",
+                    message,
+                )
+                self.assertNotIn(str(len(items)), message)
+                self.assertNotIn("[0]", message)
+
+    def test_recursive_json_array_scans_are_count_bounded_without_echo(self):
+        items = [None] * (CANARY.MAX_JSON_LIST_ITEMS + 1)
+
+        with self.assertRaises(CANARY.CanaryError) as caught:
+            CANARY._reject_json_surrogates(items)
+
+        message = str(caught.exception)
+        self.assertIn(
+            f"JSON array must contain at most {CANARY.MAX_JSON_LIST_ITEMS} items",
+            message,
+        )
+        self.assertNotIn(str(len(items)), message)
+        self.assertNotIn("[0]", message)
+
+    def test_recursive_json_object_scans_are_count_bounded_without_echo(self):
+        members = {
+            f"hidden_key_{offset}": None
+            for offset in range(CANARY.MAX_JSON_OBJECT_MEMBERS + 1)
+        }
+        pairs = list(members.items())
+        cases = (
+            (
+                "json hook",
+                lambda: CANARY._reject_duplicate_json_keys(pairs),
+                f"JSON object must contain at most {CANARY.MAX_JSON_OBJECT_MEMBERS} members",
+            ),
+            (
+                "surrogates",
+                lambda: CANARY._reject_json_surrogates(members),
+                f"JSON object must contain at most {CANARY.MAX_JSON_OBJECT_MEMBERS} members",
+            ),
+        )
+        for name, action, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    action()
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(str(len(members)), message)
+                self.assertNotIn("hidden_key_0", message)
+
+    def test_recursive_json_depth_scans_are_bounded_without_echo(self):
+        nested = "hidden_leaf"
+        for _ in range(CANARY.MAX_JSON_NESTING_DEPTH + 1):
+            nested = [nested]
+
+        with self.assertRaises(CANARY.CanaryError) as caught:
+            CANARY._reject_json_surrogates(nested)
+
+        message = str(caught.exception)
+        self.assertIn(
+            f"JSON nesting depth must be at most {CANARY.MAX_JSON_NESTING_DEPTH} levels",
+            message,
+        )
+        self.assertNotIn("hidden_leaf", message)
+        self.assertNotIn("[0]", message)
+
+    def test_json_parse_recursion_error_is_bounded_without_echo(self):
+        hidden = "hidden-canary-recursion"
+        with tempfile.TemporaryDirectory() as raw_root:
+            path = Path(raw_root) / hidden
+            path.write_text("[]\n", encoding="utf-8")
+            original_loads = CANARY.json.loads
+
+            def raising_loads(*_args, **_kwargs):
+                raise RecursionError(hidden)
+
+            CANARY.json.loads = raising_loads
+            try:
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    CANARY._load_json(path, display_label="runbook")
+            finally:
+                CANARY.json.loads = original_loads
+
+        message = str(caught.exception)
+        self.assertIn(
+            f"JSON nesting depth must be at most {CANARY.MAX_JSON_NESTING_DEPTH} levels",
+            message,
+        )
+        self.assertNotIn(hidden, message)
+        self.assertNotIn(str(path), message)
+
     def test_boolean_and_non_integer_file_read_limits_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             path = Path(raw_root) / "canary.json"
@@ -839,6 +1230,92 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     True,
                     1.0,
                 )
+
+    def test_child_stage_startup_failure_is_controlled_without_echo(self):
+        hidden = "token=canary-startup-secret"
+
+        def raising_popen(*_args, **_kwargs):
+            raise OSError(hidden)
+
+        original_popen = CANARY.subprocess.Popen
+        CANARY.subprocess.Popen = raising_popen
+        try:
+            with self.assertRaises(CANARY.CanaryError) as caught:
+                CANARY._run_command_bounded(
+                    [str(Path(tempfile.gettempdir()) / hidden / "child")],
+                    128,
+                    1.0,
+                )
+        finally:
+            CANARY.subprocess.Popen = original_popen
+
+        message = str(caught.exception)
+        self.assertIn("child stage could not be started", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn(tempfile.gettempdir(), message)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_child_stage_output_read_failure_is_controlled_without_echo(self):
+        hidden = "token=canary-pipe-secret"
+
+        def raising_read(*_args, **_kwargs):
+            raise OSError(hidden)
+
+        original_read = CANARY._read_limited_pipe
+        CANARY._read_limited_pipe = raising_read
+        try:
+            with self.assertRaises(CANARY.CanaryError) as caught:
+                CANARY._run_command_bounded(
+                    [sys.executable, "-c", "print('ok')"],
+                    128,
+                    1.0,
+                )
+        finally:
+            CANARY._read_limited_pipe = original_read
+
+        message = str(caught.exception)
+        self.assertIn("child stage output could not be read", message)
+        self.assertNotIn(hidden, message)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_direct_run_numeric_limits_must_exist_before_execution(self):
+        cases = (
+            ("output_limit_bytes", "--output-limit-bytes must be positive"),
+            ("stage_timeout_secs", "--stage-timeout-secs must be a positive finite number"),
+        )
+        for field, expected in cases:
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    inbox = root / "inbox"
+                    inbox.mkdir()
+                    config = write_config(
+                        root,
+                        {
+                            "provider": "local-bank",
+                            "environment": "ci",
+                            "rail": {
+                                "inbox_dir": str(inbox),
+                                "torii_base_url": "https://torii.local-bank.bank",
+                            },
+                        },
+                    )
+                    args = argparse.Namespace(
+                        config=config,
+                        require_explicit_policy=False,
+                        output_limit_bytes=1024,
+                        stage_timeout_secs=1.0,
+                        summary_out=None,
+                        plan_only=True,
+                    )
+                    delattr(args, field)
+
+                    with self.assertRaises(CANARY.CanaryError) as caught:
+                        CANARY.run(args)
+
+                    self.assertIn(expected, str(caught.exception))
 
     def test_redacts_equals_form_bearer_token_arguments(self):
         redacted = CANARY._redacted_command(
@@ -1292,6 +1769,64 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             root = Path(raw_root)
             with self.assertRaisesRegex(CANARY.CanaryError, "provide --config"):
                 CANARY.run(args_for(root, config=None))
+            args = args_for(root)
+            delattr(args, "config")
+            with self.assertRaisesRegex(CANARY.CanaryError, "provide --config"):
+                CANARY.run(args)
+
+    def test_direct_run_scalar_paths_must_be_paths_before_config_loading(self):
+        cases = (
+            ("config", "config", object(), "--config"),
+            ("summary", "summary_out", object(), "summary_out"),
+        )
+        for name, field, value, label in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        config=root / "missing-canary.json",
+                        summary_out=None,
+                        plan_only=True,
+                        require_explicit_policy=False,
+                        output_limit_bytes=1024,
+                        stage_timeout_secs=1.0,
+                    )
+                    setattr(args, field, value)
+
+                    with self.assertRaises(CANARY.CanaryError) as caught:
+                        CANARY.run(args)
+
+                    message = str(caught.exception)
+                    self.assertIn(f"{label} must be a path", message)
+                    self.assertNotIn("does not exist", message)
+                    self.assertNotIn(str(root), message)
+
+    def test_direct_run_policy_flags_must_be_booleans_before_config_loading(self):
+        cases = (
+            ("plan_only", "--plan-only", "true"),
+            ("require_explicit_policy", "--require-explicit-policy", 1),
+        )
+        for attr, label, value in cases:
+            with self.subTest(flag=label):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        config=root / "missing-canary.json",
+                        summary_out=None,
+                        plan_only=True,
+                        require_explicit_policy=False,
+                        output_limit_bytes=1024,
+                        stage_timeout_secs=1.0,
+                    )
+                    setattr(args, attr, value)
+
+                    with self.assertRaises(CANARY.CanaryError) as caught:
+                        CANARY.run(args)
+
+                    message = str(caught.exception)
+                    self.assertIn(f"{label} must be a boolean", message)
+                    self.assertNotIn("does not exist", message)
+                    self.assertNotIn(str(root), message)
 
     def test_summary_output_path_rejects_smuggled_segments(self):
         cases = (
@@ -1945,6 +2480,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 "rail": {
                     "inbox_dir": "inbox",
                     "torii_base_url": "https://torii.local-bank.bank",
+                    "receipt_dir": "rail-receipts",
                     "dry_run": False,
                     "allow_default_profile": False,
                     "allow_insecure_http": False,
@@ -1952,6 +2488,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 "notary": {
                     "export_dir": "audit-export",
                     "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
+                    "receipt_dir": "notary-receipts",
                     "all": False,
                     "dry_run": False,
                     "allow_insecure_http": False,
@@ -2005,6 +2542,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 "rail": {
                     "inbox_dir": "inbox",
                     "torii_base_url": "https://torii.local-bank.bank",
+                    "receipt_dir": "rail-receipts",
                     "dry_run": False,
                     "allow_default_profile": False,
                     "allow_insecure_http": False,
@@ -2012,6 +2550,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 "notary": {
                     "export_dir": "audit-export",
                     "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
+                    "receipt_dir": "notary-receipts",
                     "all": False,
                     "dry_run": False,
                     "allow_insecure_http": False,
@@ -2046,6 +2585,316 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(f"{section}.{key} must be explicitly recorded as an array", stderr)
 
+    def test_require_explicit_policy_requires_stage_receipt_dirs(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            base = {
+                "provider": "local-bank",
+                "environment": "ci",
+                "rail": {
+                    "inbox_dir": "inbox",
+                    "torii_base_url": "https://torii.local-bank.bank",
+                    "receipt_dir": "rail-receipts",
+                    "dry_run": False,
+                    "allow_default_profile": False,
+                    "allow_insecure_http": False,
+                },
+                "notary": {
+                    "export_dir": "audit-export",
+                    "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
+                    "receipt_dir": "notary-receipts",
+                    "all": False,
+                    "dry_run": False,
+                    "allow_insecure_http": False,
+                },
+                "verify": {
+                    "enabled": True,
+                    "include_stage_receipts": True,
+                    "receipt_dirs": [],
+                    "receipts": [],
+                    "skip_on_stage_failure": True,
+                    "allow_failed": False,
+                    "allow_insecure_http": False,
+                    "allow_default_profile": False,
+                    "require_source_files": True,
+                },
+            }
+            cases = (
+                ("rail", "rail.receipt_dir must be explicitly recorded"),
+                ("notary", "notary.receipt_dir must be explicitly recorded"),
+            )
+            for section, message in cases:
+                with self.subTest(section=section):
+                    body = json.loads(json.dumps(base))
+                    body[section].pop("receipt_dir")
+                    config = write_config(root, body)
+
+                    rc, stdout, stderr = run_canary(
+                        ["--config", str(config), "--plan-only", "--require-explicit-policy"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+
+    def test_require_explicit_policy_rejects_stage_receipt_source_overlap(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            base = {
+                "provider": "local-bank",
+                "environment": "ci",
+                "rail": {
+                    "inbox_dir": "inbox",
+                    "torii_base_url": "https://torii.local-bank.bank",
+                    "receipt_dir": "rail-receipts",
+                    "dry_run": False,
+                    "allow_default_profile": False,
+                    "allow_insecure_http": False,
+                },
+                "notary": {
+                    "export_dir": "audit-export",
+                    "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
+                    "receipt_dir": "notary-receipts",
+                    "all": False,
+                    "dry_run": False,
+                    "allow_insecure_http": False,
+                },
+                "verify": {
+                    "enabled": True,
+                    "include_stage_receipts": True,
+                    "receipt_dirs": [],
+                    "receipts": [],
+                    "skip_on_stage_failure": True,
+                    "allow_failed": False,
+                    "allow_insecure_http": False,
+                    "allow_default_profile": False,
+                    "require_source_files": True,
+                },
+            }
+            cases = (
+                (
+                    "rail-same",
+                    lambda body: body["rail"].__setitem__("receipt_dir", "inbox"),
+                    "rail.receipt_dir must not overlap rail.inbox_dir",
+                ),
+                (
+                    "rail-nested",
+                    lambda body: body["rail"].__setitem__("receipt_dir", "inbox/receipts"),
+                    "rail.receipt_dir must not overlap rail.inbox_dir",
+                ),
+                (
+                    "notary-same",
+                    lambda body: body["notary"].__setitem__("receipt_dir", "audit-export"),
+                    "notary.receipt_dir must not overlap notary.export_dir",
+                ),
+                (
+                    "notary-nested",
+                    lambda body: body["notary"].__setitem__(
+                        "receipt_dir", "audit-export/receipts"
+                    ),
+                    "notary.receipt_dir must not overlap notary.export_dir",
+                ),
+            )
+            for name, mutate, message in cases:
+                with self.subTest(name=name):
+                    body = json.loads(json.dumps(base))
+                    mutate(body)
+                    config = write_config(root, body)
+
+                    rc, stdout, stderr = run_canary(
+                        ["--config", str(config), "--plan-only", "--require-explicit-policy"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+
+    def test_require_explicit_policy_rejects_stage_receipt_bearer_token_overlap(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            base = {
+                "provider": "local-bank",
+                "environment": "ci",
+                "rail": {
+                    "inbox_dir": "inbox",
+                    "torii_base_url": "https://torii.local-bank.bank",
+                    "receipt_dir": "rail-receipts",
+                    "dry_run": False,
+                    "allow_default_profile": False,
+                    "allow_insecure_http": False,
+                },
+                "notary": {
+                    "export_dir": "audit-export",
+                    "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
+                    "receipt_dir": "notary-receipts",
+                    "all": False,
+                    "dry_run": False,
+                    "allow_insecure_http": False,
+                },
+                "verify": {
+                    "enabled": True,
+                    "include_stage_receipts": True,
+                    "receipt_dirs": [],
+                    "receipts": [],
+                    "skip_on_stage_failure": True,
+                    "allow_failed": False,
+                    "allow_insecure_http": False,
+                    "allow_default_profile": False,
+                    "require_source_files": True,
+                },
+            }
+            cases = (
+                (
+                    "rail-token-under-receipts",
+                    lambda body: body["rail"].__setitem__(
+                        "bearer_token_file",
+                        "rail-receipts/runtime-rail-proof",
+                    ),
+                    "rail.receipt_dir must not overlap rail.bearer_token_file",
+                    "runtime-rail-proof",
+                ),
+                (
+                    "rail-receipts-under-token-path",
+                    lambda body: (
+                        body["rail"].__setitem__("receipt_dir", "runtime/rail-proof/receipts"),
+                        body["rail"].__setitem__("bearer_token_file", "runtime/rail-proof"),
+                    ),
+                    "rail.receipt_dir must not overlap rail.bearer_token_file",
+                    "runtime/rail-proof",
+                ),
+                (
+                    "notary-token-under-receipts",
+                    lambda body: body["notary"].__setitem__(
+                        "bearer_token_file",
+                        "notary-receipts/runtime-notary-proof",
+                    ),
+                    "notary.receipt_dir must not overlap notary.bearer_token_file",
+                    "runtime-notary-proof",
+                ),
+                (
+                    "notary-receipts-under-token-path",
+                    lambda body: (
+                        body["notary"].__setitem__(
+                            "receipt_dir",
+                            "runtime/notary-proof/receipts",
+                        ),
+                        body["notary"].__setitem__(
+                            "bearer_token_file",
+                            "runtime/notary-proof",
+                        ),
+                    ),
+                    "notary.receipt_dir must not overlap notary.bearer_token_file",
+                    "runtime/notary-proof",
+                ),
+            )
+            for name, mutate, message, hidden_path in cases:
+                with self.subTest(name=name):
+                    body = json.loads(json.dumps(base))
+                    mutate(body)
+                    config = write_config(root, body)
+
+                    rc, stdout, stderr = run_canary(
+                        ["--config", str(config), "--plan-only", "--require-explicit-policy"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden_path, stderr)
+
+    def test_require_explicit_policy_rejects_stage_source_bearer_token_overlap(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            base = {
+                "provider": "local-bank",
+                "environment": "ci",
+                "rail": {
+                    "inbox_dir": "inbox",
+                    "torii_base_url": "https://torii.local-bank.bank",
+                    "receipt_dir": "rail-receipts",
+                    "dry_run": False,
+                    "allow_default_profile": False,
+                    "allow_insecure_http": False,
+                },
+                "notary": {
+                    "export_dir": "audit-export",
+                    "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
+                    "receipt_dir": "notary-receipts",
+                    "all": False,
+                    "dry_run": False,
+                    "allow_insecure_http": False,
+                },
+                "verify": {
+                    "enabled": True,
+                    "include_stage_receipts": True,
+                    "receipt_dirs": [],
+                    "receipts": [],
+                    "skip_on_stage_failure": True,
+                    "allow_failed": False,
+                    "allow_insecure_http": False,
+                    "allow_default_profile": False,
+                    "require_source_files": True,
+                },
+            }
+            cases = (
+                (
+                    "rail-token-under-inbox",
+                    lambda body: body["rail"].__setitem__(
+                        "bearer_token_file",
+                        "inbox/runtime-rail-proof",
+                    ),
+                    "rail.bearer_token_file must not overlap rail.inbox_dir",
+                    "runtime-rail-proof",
+                ),
+                (
+                    "rail-inbox-under-token-path",
+                    lambda body: (
+                        body["rail"].__setitem__("inbox_dir", "runtime/rail-proof/inbox"),
+                        body["rail"].__setitem__("bearer_token_file", "runtime/rail-proof"),
+                    ),
+                    "rail.bearer_token_file must not overlap rail.inbox_dir",
+                    "runtime/rail-proof",
+                ),
+                (
+                    "notary-token-under-export",
+                    lambda body: body["notary"].__setitem__(
+                        "bearer_token_file",
+                        "audit-export/runtime-notary-proof",
+                    ),
+                    "notary.bearer_token_file must not overlap notary.export_dir",
+                    "runtime-notary-proof",
+                ),
+                (
+                    "notary-export-under-token-path",
+                    lambda body: (
+                        body["notary"].__setitem__(
+                            "export_dir",
+                            "runtime/notary-proof/export",
+                        ),
+                        body["notary"].__setitem__(
+                            "bearer_token_file",
+                            "runtime/notary-proof",
+                        ),
+                    ),
+                    "notary.bearer_token_file must not overlap notary.export_dir",
+                    "runtime/notary-proof",
+                ),
+            )
+            for name, mutate, message, hidden_path in cases:
+                with self.subTest(name=name):
+                    body = json.loads(json.dumps(base))
+                    mutate(body)
+                    config = write_config(root, body)
+
+                    rc, stdout, stderr = run_canary(
+                        ["--config", str(config), "--plan-only", "--require-explicit-policy"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden_path, stderr)
+
     def test_verify_policy_must_cover_generated_receipt_overrides(self):
         cases = (
             (
@@ -2079,6 +2928,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                         "rail": {
                             "inbox_dir": "inbox",
                             "torii_base_url": "https://torii.local-bank.bank",
+                            "receipt_dir": "rail-receipts",
                             "dry_run": False,
                             "allow_default_profile": False,
                             "allow_insecure_http": False,
@@ -2086,6 +2936,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                         "notary": {
                             "export_dir": "audit-export",
                             "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
+                            "receipt_dir": "notary-receipts",
                             "all": False,
                             "dry_run": False,
                             "allow_insecure_http": False,
@@ -2370,6 +3221,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "rail": {
                         "inbox_dir": "inbox",
                         "torii_base_url": "https://torii.local-bank.bank",
+                        "receipt_dir": "rail-receipts",
                         "dry_run": False,
                         "allow_default_profile": True,
                         "allow_insecure_http": True,
@@ -2377,6 +3229,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "notary": {
                         "export_dir": "audit-export",
                         "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
+                        "receipt_dir": "notary-receipts",
                         "all": False,
                         "dry_run": False,
                         "allow_insecure_http": True,
@@ -3464,6 +4317,59 @@ class IsoOperatorCanaryTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+
+    def test_repeatable_command_selectors_are_emitted_in_canonical_order(self):
+        def flag_values(command, flag):
+            values = []
+            for offset, item in enumerate(command):
+                if item == flag:
+                    values.append(command[offset + 1])
+                elif item.startswith(flag + "="):
+                    values.append(item.split("=", 1)[1])
+            return values
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            config = write_config(
+                root,
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "audit-export",
+                        "dry_run": True,
+                        "endpoints": [
+                            "https://z-notary.local-bank.bank/iso-anchor",
+                            "https://a-notary.local-bank.bank/iso-anchor",
+                        ],
+                    },
+                    "verify": {
+                        "include_stage_receipts": False,
+                        "receipt_dirs": ["z-receipts", "a-receipts"],
+                        "receipts": [
+                            "manual-z/z.receipt.json",
+                            "manual-a/a.receipt.json",
+                        ],
+                    },
+                },
+            )
+
+            rc, stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+
+            self.assertEqual(rc, 0, stderr)
+            summary = load_summary(stdout)
+            notary_stage = next(
+                stage for stage in summary["planned_stages"] if stage["name"] == "notary"
+            )
+            verify_stage = next(
+                stage for stage in summary["planned_stages"] if stage["name"] == "verify"
+            )
+            endpoint_values = flag_values(notary_stage["command"], "--endpoint")
+            receipt_dir_values = flag_values(verify_stage["command"], "--receipt-dir")
+            receipt_values = flag_values(verify_stage["command"], "--receipt")
+            self.assertEqual(endpoint_values, sorted(endpoint_values))
+            self.assertEqual(receipt_dir_values, sorted(receipt_dir_values))
+            self.assertEqual(receipt_values, sorted(receipt_values))
 
     def test_duplicate_runbook_paths_do_not_echo_raw_segments(self):
         with tempfile.TemporaryDirectory() as raw_root:

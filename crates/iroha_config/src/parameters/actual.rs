@@ -5835,6 +5835,8 @@ pub struct Torii {
     pub ram_lfe: Option<ToriiRamLfe>,
     /// Optional transaction-history visibility/auth configuration.
     pub tx_history: Option<ToriiTxHistory>,
+    /// Retail recipient lookup route configuration.
+    pub recipient_lookup: ToriiRecipientLookup,
     /// App-facing query/backpressure limits.
     pub app_api: AppApi,
     /// Webhook delivery/backpressure configuration.
@@ -5872,6 +5874,37 @@ pub struct ToriiTxHistoryJwt {
     pub issuer: Option<String>,
     /// Optional audience constraint.
     pub audience: Option<String>,
+}
+
+/// Retail recipient lookup route configuration for Torii app API.
+#[derive(Debug, Clone)]
+pub struct ToriiRecipientLookup {
+    /// HTTP request timeout applied to upstream bank Core API calls.
+    pub request_timeout: Duration,
+    /// Configured bank Core API routes keyed by canonical FI id.
+    pub routes: Vec<ToriiRecipientLookupRoute>,
+}
+
+impl Default for ToriiRecipientLookup {
+    fn default() -> Self {
+        Self {
+            request_timeout: Duration::from_millis(
+                defaults::torii::recipient_lookup::REQUEST_TIMEOUT_MS,
+            ),
+            routes: Vec::new(),
+        }
+    }
+}
+
+/// Single bank Core API route used by the retail recipient lookup endpoint.
+#[derive(Debug, Clone)]
+pub struct ToriiRecipientLookupRoute {
+    /// Canonical FI identifier, for example `hbl.sbp` or `ubl.sbp`.
+    pub fi_id: String,
+    /// Bank Core API base URL.
+    pub base_url: Url,
+    /// Service bearer token used only by Torii when calling the bank Core API.
+    pub bearer_token: String,
 }
 
 /// Execution mode for attachment sanitization.

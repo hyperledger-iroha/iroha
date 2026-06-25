@@ -234,12 +234,19 @@ impl LocalnetLifecycleArtifactRecorder {
         )
     }
 
-    fn record_event(&self, artifact: &str, context: &str, non_empty_target: u64) -> Result<()> {
+    fn record_event(
+        &self,
+        artifact: &str,
+        context: &str,
+        event: &str,
+        non_empty_target: u64,
+    ) -> Result<()> {
         self.write_artifact(
             artifact,
             context,
             [
                 ("kind", Value::String("localnet_event".to_owned())),
+                ("event", Value::String(event.to_owned())),
                 ("non_empty_target", Value::from(non_empty_target)),
             ],
         )
@@ -1135,6 +1142,7 @@ fn submit_transaction_expect_replay_rejection(
     context: &str,
 ) -> Result<String> {
     let mut accepted = false;
+    let mut duplicate_rejection = None;
     let mut fatal_last_err = None;
     let mut transient_last_err = None;
 
@@ -1144,13 +1152,15 @@ fn submit_transaction_expect_replay_rejection(
         for submitter in submitters {
             match submitter.submit_transaction(tx) {
                 Ok(_) => accepted = true,
-                Err(err) if is_duplicate_tx_error(&err) => return Ok(err.to_string()),
+                Err(err) if is_duplicate_tx_error(&err) => {
+                    duplicate_rejection.get_or_insert_with(|| err.to_string());
+                }
                 Err(err) if is_transient_client_error(&err) => transient_last_err = Some(err),
                 Err(err) => fatal_last_err = Some(err),
             }
         }
 
-        if fatal_last_err.is_some() {
+        if accepted || duplicate_rejection.is_some() || fatal_last_err.is_some() {
             break;
         }
 
@@ -1159,8 +1169,27 @@ fn submit_transaction_expect_replay_rejection(
         }
     }
 
+    finish_replay_rejection_attempts(
+        accepted,
+        duplicate_rejection,
+        fatal_last_err,
+        transient_last_err,
+        context,
+    )
+}
+
+fn finish_replay_rejection_attempts(
+    accepted: bool,
+    duplicate_rejection: Option<String>,
+    fatal_last_err: Option<Report>,
+    transient_last_err: Option<Report>,
+    context: &str,
+) -> Result<String> {
     if accepted {
         return Err(eyre!("{context}: replayed transaction was accepted"));
+    }
+    if let Some(rejection) = duplicate_rejection {
+        return Ok(rejection);
     }
     Err(fatal_last_err
         .or(transient_last_err)
@@ -2311,6 +2340,7 @@ async fn confidential_dual_restart_stress_mid_flow_localnet() -> Result<()> {
     recorder.record_event(
         "state_recovery_artifact",
         "dual-restart stress first restart",
+        "localnet state recovery observed",
         non_empty_target,
     )?;
     if recorder.is_enabled() {
@@ -4389,6 +4419,37 @@ fn finish_submit_attempts_prefers_fatal_error_when_no_peer_accepts() {
 }
 
 #[test]
+fn finish_replay_rejection_attempts_accepts_duplicate_without_acceptance() {
+    let rejection = finish_replay_rejection_attempts(
+        false,
+        Some("duplicate transaction rejected".to_owned()),
+        Some(eyre!("fatal peer error")),
+        Some(eyre!("transient peer error")),
+        "replay flow",
+    )
+    .expect("duplicate rejection should prove replay was rejected");
+
+    assert_eq!(rejection, "duplicate transaction rejected");
+}
+
+#[test]
+fn finish_replay_rejection_attempts_rejects_acceptance_even_with_duplicate() {
+    let err = finish_replay_rejection_attempts(
+        true,
+        Some("duplicate transaction rejected".to_owned()),
+        None,
+        None,
+        "replay flow",
+    )
+    .expect_err("accepted replay should be fatal");
+
+    assert!(
+        err.to_string()
+            .contains("replay flow: replayed transaction was accepted")
+    );
+}
+
+#[test]
 fn submit_retry_budget_covers_localnet_startup_jitter() {
     assert!(TORII_READY_STABLE_POLLS >= 3);
     assert!(TRANSACTION_SUBMIT_ATTEMPTS >= 30);
@@ -4733,6 +4794,39 @@ fn localnet_lifecycle_recorder_writes_norito_json_source_artifact() {
         assert_eq!(root_mode, 0o700);
         assert_eq!(file_mode, 0o600);
     }
+
+    recorder
+        .record_event(
+            "state_recovery_artifact",
+            "unit restart",
+            "localnet state recovery observed",
+            9,
+        )
+        .expect("write localnet event source artifact");
+
+    let path = root.join("state-recovery-artifact.json");
+    let raw = fs::read_to_string(&path).expect("read localnet event source artifact");
+    let parsed = json::from_json::<Value>(&raw).expect("parse localnet event source artifact JSON");
+    let object = parsed
+        .as_object()
+        .expect("localnet event source artifact object");
+
+    assert_eq!(
+        object.get("artifact").and_then(Value::as_str),
+        Some("state_recovery_artifact"),
+    );
+    assert_eq!(
+        object.get("kind").and_then(Value::as_str),
+        Some("localnet_event"),
+    );
+    assert_eq!(
+        object.get("event").and_then(Value::as_str),
+        Some("localnet state recovery observed"),
+    );
+    assert_eq!(
+        object.get("non_empty_target").and_then(Value::as_u64),
+        Some(9),
+    );
 
     let _ = fs::remove_dir_all(root);
 }

@@ -3,6 +3,15 @@ set -euo pipefail
 
 ROOT_DIR="${KAGEMUSHA_RECURSIVE_SPEND_JS_SDK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 NODE_OVERRIDE="${KAGEMUSHA_RECURSIVE_SPEND_JS_SDK_NODE_BIN:-}"
+TEMP_NATIVE_DIR=""
+
+cleanup_temp_native_dir() {
+  if [[ -n "${TEMP_NATIVE_DIR}" && -d "${TEMP_NATIVE_DIR}" ]]; then
+    rm -rf "${TEMP_NATIVE_DIR}"
+  fi
+}
+
+trap cleanup_temp_native_dir EXIT
 
 node_candidate_path() {
   local candidate="$1"
@@ -62,6 +71,49 @@ case "${NODE_VERSION}" in
     exit 1
     ;;
 esac
+
+native_binding_is_ready() {
+  local quiet="${1:-}"
+  NATIVE_BINDING_PROBE_QUIET="${quiet}" "${NODE_BIN}" --input-type=module <<'NODE'
+import { join } from "node:path";
+import { verifyNativeBinding } from "./src/native.js";
+
+const quiet = process.env.NATIVE_BINDING_PROBE_QUIET === "quiet";
+const nativeDir = process.env.IROHA_JS_NATIVE_DIR ?? join(process.cwd(), "native");
+const bindingPath = join(nativeDir, "iroha_js_host.node");
+const manifestPath = join(nativeDir, "iroha_js_host.checksums.json");
+const verification = verifyNativeBinding(bindingPath, { manifestPath });
+
+if (!verification.ok) {
+  if (!quiet) {
+    console.error(`native binding ${verification.status} at ${bindingPath}`);
+  }
+  if (!quiet && verification.expectedSha256 && verification.sha256) {
+    console.error(`expected ${verification.expectedSha256}; found ${verification.sha256}`);
+  }
+  process.exit(1);
+}
+NODE
+}
+
+prepare_native_binding() {
+  if native_binding_is_ready quiet; then
+    return 0
+  fi
+  if [[ -n "${IROHA_JS_NATIVE_DIR:-}" ]]; then
+    native_binding_is_ready
+    return 1
+  fi
+
+  TEMP_NATIVE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/iroha-js-native-kagemusha.XXXXXX")"
+  printf 'preparing verified JavaScript native binding in %s\n' "${TEMP_NATIVE_DIR}"
+  IROHA_JS_NATIVE_DIR="${TEMP_NATIVE_DIR}" "${NODE_BIN}" ./scripts/build-native.mjs
+  IROHA_JS_NATIVE_DIR="${TEMP_NATIVE_DIR}" "${NODE_BIN}" ./scripts/copy-native.mjs
+  export IROHA_JS_NATIVE_DIR="${TEMP_NATIVE_DIR}"
+  native_binding_is_ready
+}
+
+prepare_native_binding
 
 "${NODE_BIN}" --test --test-name-pattern "Kagemusha recursive spend|Kagemusha record-backed|Kagemusha .* SDK runner|browser crypto exposes native-only helpers as safe stubs|buildKagemusha|privacy native availability probes build and verify with Norito request archives|privacy native wrappers require binary Norito request archives|privacy algorithm JS catalogs reject malformed internal review evidence|fromAccount rejects control and Unicode-confusable curve algorithm aliases|offline cash configuration snapshot requires cached issuer key and ABI|canonical request signing: rejects padded auth fields|streamEvents rejects unsupported production backend event filters before fetch|streamEvents rejects malformed verifying key event names before fetch|streamEvents rejects malformed proof event hashes before fetch|ZK-ACE verifier-key references reject padded selector metadata|privacy proof envelopes preserve pending production backend tags|verifyIdentifierResolutionReceipt rejects adversarial receipt mutations|encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags|encodeIdentifierResolutionReceiptAttestation rejects padded proof backend|verifyIdentifierResolutionReceipt matches shared receipt vectors|NexusAppClient rejects non-Ed25519 wallet signatures|NexusAppClient accepts exact numeric and string Ed25519 signature algorithm tags|ToriiClient attaches canonical signing headers for app endpoints|ToriiClient canonical auth uses raw Node transport for UTF-8 account headers|ToriiClient canonical auth rejects UTF-8 account headers when no supported transport is available|ToriiClient canonical auth rejects non-byte private key arrays|subscription plan and create endpoints send normalized payloads|subscription action endpoints send normalized payloads|getSubscription returns null on 404|buildConnectWebSocketUrl rejects token query parameters|buildConnectWebSocketUrl rejects endpoint host overrides|buildConnectWebSocketUrl rejects endpoint protocol mismatches|openConnectWebSocket injects Sec-WebSocket-Protocol when headers are unavailable|openConnectWebSocket emits telemetry when allowInsecure is used|resolveAliasByIndex enforces non-negative indices before issuing requests|resolveAlias attaches canonical auth when provided|lookupAliasesByAccount validates options before issuing requests|generateConnectSid|createConnectSessionPreview|connectErrorFrom returns existing ConnectError|connect queue overflow maps to queueOverflow category|connect queue expiration maps to timeout category|http status errors derive authorization category|network socket failures map to transport category|tls failures map to authorization category|timeout detection handles timeouts codes and names|syntax errors surface codec category|http timeout status maps to timeout category|http rate limit status maps to retryable transport category|http 4xx client errors no longer map to authorization by default|connect retry|memory journal|indexeddb journal|connect journal|connect queue diagnostics|connect queue root resolves config before env and gates env usage|Connect session vector fixture matches browser crypto helpers|Connect browser wallet signature encoder validates algorithm labels before byte encoding|buildConnectWebSocketUrl switches schemes for secure and insecure Torii urls|registerConnectSession posts sid and node directly to Torii|deleteConnectSession tolerates missing sessions and uses DELETE|resolveConnectLaunchUri prefers canonical session deeplinks|rewriteConnectUriProtocol swaps the scheme without changing the session payload|resolveConnectLaunchUriForProtocol rewrites the selected launch URI|openConnectWebSocket sends the connect token as the first subprotocol|createConnectAppSession|bootstrapConnectPreviewSession|ConnectJournalRecord|fromCiphertext applies retention automatically|decode accepts array-like payloads|decode rejects|decode accepts header padding" \
   test/address.test.js \

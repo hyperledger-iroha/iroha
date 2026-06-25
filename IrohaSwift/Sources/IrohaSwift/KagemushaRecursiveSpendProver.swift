@@ -124,7 +124,9 @@ public enum KagemushaRecursiveSpendProver {
         recursiveCompactAvailable: Bool,
         recursiveSpendAvailable: Bool
     ) -> KagemushaOfflineSpendMode {
-        _ = recursiveCompactAvailable
+        if recursiveCompactAvailable {
+            return .recursiveCompactV1
+        }
         return recursiveSpendAvailable ? .recursiveSpendV1 : .checkedPrefoldV1
     }
 

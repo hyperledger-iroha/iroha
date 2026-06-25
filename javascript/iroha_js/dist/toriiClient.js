@@ -134,6 +134,12 @@ const ALIAS_BY_ACCOUNT_OPTION_KEYS = new Set([
   "canonicalAuth",
 ]);
 
+const RETAIL_RECIPIENT_LOOKUP_REQUEST_KEYS = new Set([
+  "accountId",
+  "account_id",
+  "aliasFqn",
+  "alias_fqn",
+]);
 const ISO_NON_TERMINAL_STATUS_VALUES = new Set(["pending", "accepted"]);
 const ISO_STATUS_VALUES = new Map([
   ["pending", "Pending"],
@@ -987,6 +993,8 @@ function sortJsonForErrorMessage(value) {
  * @property {number} [offset]
  * @property {string | Record<string, unknown>} [filter]
  * @property {string | ReadonlyArray<{key: string, order?: "asc" | "desc"}>} [sort]
+ * @property {"bounded" | "exact"} [countMode]
+ * @property {"bounded" | "exact"} [count_mode]
  * @property {AbortSignal} [signal]
  * @property {string} [assetId]
  * @property {number} [certificateExpiresBeforeMs]
@@ -999,8 +1007,10 @@ function sortJsonForErrorMessage(value) {
  *
  * @typedef {IterableListOptions & {
  *   fetchSize?: number;
+ *   fetch_size?: number;
  *   queryName?: string;
- *   select?: ReadonlyArray<Record<string, unknown>>;
+ *   query_name?: string;
+ *   select?: ReadonlyArray<string | Record<string, unknown>>;
  * }} IterableQueryOptions
  *
  * @typedef {IterableListOptions & {
@@ -2449,6 +2459,57 @@ export class ToriiClient {
       throw new Error("alias by-account endpoint returned no payload");
     }
     return normalizeAliasLookupByAccountResponse(body, "alias by-account response");
+  }
+
+  /**
+   * Lookup a retail recipient name through Torii (`POST /v1/retail/recipients/lookup`).
+   * @param {{accountId?: string, account_id?: string, aliasFqn?: string, alias_fqn?: string}} request
+   * @param {{signal?: AbortSignal, canonicalAuth?: CanonicalRequestAuth}} [options]
+   * @returns {Promise<{resolved: boolean, account_id?: string, alias_fqn?: string, fi_id?: string, full_name?: string}>}
+   */
+  async lookupRetailRecipient(request, options = {}) {
+    const requestRecord = ensureRecord(request, "lookupRetailRecipient request");
+    assertSupportedOptionKeys(
+      requestRecord,
+      RETAIL_RECIPIENT_LOOKUP_REQUEST_KEYS,
+      "lookupRetailRecipient request",
+    );
+    const accountId = ToriiClient._requireAccountId(
+      requestRecord.accountId ?? requestRecord.account_id,
+      "lookupRetailRecipient.accountId",
+    );
+    const aliasFqn = requireNonEmptyString(
+      requestRecord.aliasFqn ?? requestRecord.alias_fqn,
+      "lookupRetailRecipient.aliasFqn",
+    );
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "lookupRetailRecipient",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      ALIAS_CANONICAL_AUTH_OPTION_KEYS,
+      "lookupRetailRecipient options",
+    );
+    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(rest.canonicalAuth);
+    const response = await this._request("POST", "/v1/retail/recipients/lookup", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        account_id: accountId,
+        alias_fqn: aliasFqn,
+      }),
+      signal,
+      canonicalAuth,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("retail recipient lookup endpoint returned no payload");
+    }
+    return normalizeRetailRecipientLookupResponse(body, "retail recipient lookup response");
   }
 
   /**
@@ -11441,16 +11502,37 @@ export class ToriiClient {
       if (!Array.isArray(options.select)) {
         throw createValidationError(
           ValidationErrorCode.INVALID_OBJECT,
-          "select must be an array of projection objects",
+          "select must be an array of projection field paths or objects",
           "select",
         );
       }
-      envelope.select = options.select.map((entry, index) => {
-        const plain = ToriiClient._requirePlainObject(entry, `select[${index}]`);
-        return plain;
-      });
+      envelope.select = options.select.map((entry, index) =>
+        ToriiClient._normalizeSelectEntry(entry, `select[${index}]`),
+      );
     }
     return envelope;
+  }
+
+  static _normalizeSelectEntry(entry, context) {
+    if (typeof entry === "string") {
+      const fieldPath = entry.trim();
+      if (!fieldPath) {
+        throw createValidationError(
+          ValidationErrorCode.INVALID_STRING,
+          `${context} must be a non-empty field path`,
+          context,
+        );
+      }
+      return fieldPath;
+    }
+    if (isPlainObject(entry)) {
+      return entry;
+    }
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} must be a field-path string or plain object`,
+      context,
+    );
   }
 
   static _normalizeCountModeOption(value, context = "countMode") {
@@ -21932,6 +22014,33 @@ function normalizeAliasLookupByAccountResponse(
   };
 }
 
+function normalizeRetailRecipientLookupResponse(
+  payload,
+  context = "retail recipient lookup response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  if (typeof record.resolved !== "boolean") {
+    throw new TypeError(`${context}.resolved must be a boolean`);
+  }
+  const result = { resolved: record.resolved };
+  if (record.account_id !== undefined && record.account_id !== null) {
+    result.account_id = ToriiClient._requireAccountId(
+      record.account_id,
+      `${context}.account_id`,
+    );
+  }
+  if (record.alias_fqn !== undefined && record.alias_fqn !== null) {
+    result.alias_fqn = requireNonEmptyString(record.alias_fqn, `${context}.alias_fqn`);
+  }
+  if (record.fi_id !== undefined && record.fi_id !== null) {
+    result.fi_id = requireNonEmptyString(record.fi_id, `${context}.fi_id`);
+  }
+  if (record.full_name !== undefined && record.full_name !== null) {
+    result.full_name = requireNonEmptyString(record.full_name, `${context}.full_name`);
+  }
+  return result;
+}
+
 function buildIdentifierResolveRequest(options, context) {
   const record = ensureRecord(options, `${context} options`);
   assertSupportedOptionKeys(
@@ -30600,7 +30709,7 @@ function buildSorafsOrderbookEventsWebSocketUrlInternal(baseUrl, options, contex
       limit: params.limit,
     },
     context,
-  );
+  ) ?? {};
   for (const [key, value] of Object.entries(query)) {
     endpoint.searchParams.set(key, String(value));
   }

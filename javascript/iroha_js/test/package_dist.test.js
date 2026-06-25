@@ -448,6 +448,13 @@ import { compileKotodamaProgram as compileSrcKotodamaProgram } from "../src/koto
 const UNSUPPORTED_RECURSIVE_SPEND_PROOF_CIRCUIT_ID =
   "kagemusha-recursive-spend-lineage-badhop-v1";
 
+function kagemushaRequestCodecError(kind, field, messagePattern) {
+  return (error) =>
+    error?.kind === kind &&
+    error.field === field &&
+    (messagePattern == null || messagePattern.test(error.message));
+}
+
 function privacyNoritoFrame(schemaByte) {
   const frame = Buffer.alloc(40);
   frame.write("NRT0", 0, "ascii");
@@ -619,6 +626,21 @@ function kagemushaNumericPayload(mantissa, scale = 0) {
   ]);
 }
 
+function kagemushaNumericPayloadWithMantissaPayload(mantissaPayload) {
+  return Buffer.concat([
+    kagemushaNoritoField(mantissaPayload),
+    kagemushaNoritoField(kagemushaU32Payload(0)),
+  ]);
+}
+
+function kagemushaNumericPayloadWithScalePayload(scalePayload) {
+  const mantissaPayload = Buffer.from([1, 0, 0, 0, 1]);
+  return Buffer.concat([
+    kagemushaNoritoField(mantissaPayload),
+    kagemushaNoritoField(scalePayload),
+  ]);
+}
+
 function kagemushaNumericPayloadWithTrailingField() {
   return Buffer.concat([
     kagemushaNumericPayload(Buffer.from([1])),
@@ -634,6 +656,12 @@ function kagemushaFixedArrayPayload(value, count) {
   return Buffer.concat(
     Array.from({ length: count }, () => kagemushaNoritoField(Buffer.from([value]))),
   );
+}
+
+function kagemushaCountPrefixedFixedArrayPayload(value, count) {
+  const length = Buffer.alloc(8);
+  length.writeBigUInt64LE(BigInt(count));
+  return Buffer.concat([length, kagemushaFixedArrayPayload(value, count)]);
 }
 
 function kagemushaNoritoString(value, flags = TEST_NORITO_COMPACT_LEN_FLAG) {
@@ -717,22 +745,35 @@ function syntheticPallasOpenEnvelopePayload(options = {}) {
     kagemushaNoritoField(syntheticFixed32(0x60)),
     kagemushaNoritoField(syntheticFixed32(0x61)),
   ]);
+  const vkCommitmentOptionPayload =
+    options.vkCommitmentOptionPayload ??
+    optionRaw(
+      options.includeVkCommitment === false
+        ? null
+        : options.vkCommitmentPayload ?? syntheticFixed32(0x70),
+    );
+  const publicInputsSchemaHashOptionPayload =
+    options.publicInputsSchemaHashOptionPayload ??
+    optionRaw(
+      options.includePublicInputsSchemaHash === false
+        ? null
+        : options.publicInputsSchemaHashPayload ?? syntheticFixed32(0x71),
+    );
+  const domainTagOptionPayload =
+    options.domainTagOptionPayload ??
+    optionRaw(
+      options.includeDomainTag === false
+        ? null
+        : options.domainTagPayload ?? syntheticFixed32(0x72),
+    );
   return Buffer.concat([
     kagemushaNoritoField(params),
     kagemushaNoritoField(publicValue),
     kagemushaNoritoField(proof),
     kagemushaNoritoField(kagemushaNoritoString(options.transcriptLabel ?? "pallas-open")),
-    kagemushaNoritoField(
-      optionRaw(options.includeVkCommitment === false ? null : syntheticFixed32(0x70)),
-    ),
-    kagemushaNoritoField(
-      optionRaw(
-        options.includePublicInputsSchemaHash === false ? null : syntheticFixed32(0x71),
-      ),
-    ),
-    kagemushaNoritoField(
-      optionRaw(options.includeDomainTag === false ? null : syntheticFixed32(0x72)),
-    ),
+    kagemushaNoritoField(vkCommitmentOptionPayload),
+    kagemushaNoritoField(publicInputsSchemaHashOptionPayload),
+    kagemushaNoritoField(domainTagOptionPayload),
   ]);
 }
 
@@ -768,6 +809,22 @@ function optionRaw(payload) {
   return Buffer.concat([
     Buffer.from([1]),
     kagemushaNoritoLength(payload.length, TEST_NORITO_COMPACT_LEN_FLAG),
+    Buffer.from(payload),
+  ]);
+}
+
+function optionRawWithTrailingByte(payload) {
+  return Buffer.concat([optionRaw(payload), Buffer.from([0x7f])]);
+}
+
+function optionRawWithUnknownTag() {
+  return Buffer.from([0x02]);
+}
+
+function optionRawWithDeclaredLengthTooLong(payload) {
+  return Buffer.concat([
+    Buffer.from([1]),
+    kagemushaNoritoLength(payload.length + 1, TEST_NORITO_COMPACT_LEN_FLAG),
     Buffer.from(payload),
   ]);
 }
@@ -1041,15 +1098,7 @@ function kagemushaArchivePayload(archive) {
 }
 
 function recursiveSpendBundleWithAccumulatorDomain(domain) {
-  const archive = Buffer.from(sharedRecursiveSpendAbi6Archive("init_bundle"));
-  const expected = Buffer.from(KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN, "utf8");
-  const replacement = Buffer.from(domain, "utf8");
-  assert.equal(replacement.length, expected.length);
-  const offset = archive.indexOf(expected);
-  assert.notEqual(offset, -1);
-  replacement.copy(archive, offset);
-  archive.writeBigUInt64LE(testCrc64(archive.subarray(40)), 31);
-  return archive;
+  return recursiveSpendBundleWithAccumulatorField(0, kagemushaNoritoString(domain));
 }
 
 function recursiveSpendBundleWithAccumulatorField(fieldIndex, replacement) {
@@ -1065,6 +1114,13 @@ function recursiveSpendBundleWithAccumulatorField(fieldIndex, replacement) {
     kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
     Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
     TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithTopupAnchorNullifiers(nullifiers) {
+  return recursiveSpendBundleWithAccumulatorField(
+    5,
+    kagemushaEncodeSequenceFields(nullifiers.map((nullifier) => Buffer.from(nullifier))),
   );
 }
 
@@ -1149,6 +1205,95 @@ function recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField() {
   verifierKeyIdFields.push(kagemushaNoritoString("ignored-extra-previous-verifier-key-field"));
   previousProofFields[0] = Buffer.concat(
     verifierKeyIdFields.map((field) => kagemushaNoritoField(field)),
+  );
+  previousProofs[0] = Buffer.concat(
+    previousProofFields.map((field) => kagemushaNoritoField(field)),
+  );
+  fields[3] = kagemushaEncodeSequenceFields(previousProofs);
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME),
+    Buffer.concat(fields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendLineageWitnessWithPreviousProofField(fieldIndex, replacement) {
+  const fields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("lineage_witness_append_result")),
+  );
+  const previousProofs = kagemushaReadSequenceFields(fields[3]);
+  assert.ok(previousProofs.length > 0);
+  const previousProofFields = kagemushaReadNoritoFields(previousProofs[0]);
+  previousProofFields[fieldIndex] = Buffer.from(replacement);
+  previousProofs[0] = Buffer.concat(
+    previousProofFields.map((field) => kagemushaNoritoField(field)),
+  );
+  fields[3] = kagemushaEncodeSequenceFields(previousProofs);
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME),
+    Buffer.concat(fields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendLineageWitnessWithPreviousProofBoxBackend(proofBackend) {
+  const fields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("lineage_witness_append_result")),
+  );
+  const previousProofs = kagemushaReadSequenceFields(fields[3]);
+  assert.ok(previousProofs.length > 0);
+  const previousProofFields = kagemushaReadNoritoFields(previousProofs[0]);
+  const proofBoxFields = kagemushaReadNoritoFields(previousProofFields[3]);
+  proofBoxFields[0] = kagemushaNoritoString(proofBackend);
+  previousProofFields[3] = Buffer.concat(
+    proofBoxFields.map((field) => kagemushaNoritoField(field)),
+  );
+  previousProofs[0] = Buffer.concat(
+    previousProofFields.map((field) => kagemushaNoritoField(field)),
+  );
+  fields[3] = kagemushaEncodeSequenceFields(previousProofs);
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME),
+    Buffer.concat(fields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendLineageWitnessWithPreviousProofBoxBackendAndEmptyProofBytes(proofBackend) {
+  const fields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("lineage_witness_append_result")),
+  );
+  const previousProofs = kagemushaReadSequenceFields(fields[3]);
+  assert.ok(previousProofs.length > 0);
+  const previousProofFields = kagemushaReadNoritoFields(previousProofs[0]);
+  const proofBoxFields = kagemushaReadNoritoFields(previousProofFields[3]);
+  proofBoxFields[0] = kagemushaNoritoString(proofBackend);
+  proofBoxFields[1] = kagemushaNoritoByteVec(Buffer.alloc(0));
+  previousProofFields[3] = Buffer.concat(
+    proofBoxFields.map((field) => kagemushaNoritoField(field)),
+  );
+  previousProofs[0] = Buffer.concat(
+    previousProofFields.map((field) => kagemushaNoritoField(field)),
+  );
+  fields[3] = kagemushaEncodeSequenceFields(previousProofs);
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME),
+    Buffer.concat(fields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendLineageWitnessWithEmptyPreviousProofBytes() {
+  const fields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("lineage_witness_append_result")),
+  );
+  const previousProofs = kagemushaReadSequenceFields(fields[3]);
+  assert.ok(previousProofs.length > 0);
+  const previousProofFields = kagemushaReadNoritoFields(previousProofs[0]);
+  const proofBoxFields = kagemushaReadNoritoFields(previousProofFields[3]);
+  proofBoxFields[1] = u64LE(0);
+  previousProofFields[3] = Buffer.concat(
+    proofBoxFields.map((field) => kagemushaNoritoField(field)),
   );
   previousProofs[0] = Buffer.concat(
     previousProofFields.map((field) => kagemushaNoritoField(field)),
@@ -1291,6 +1436,25 @@ function recursiveSpendBundleWithProofBoxBackend(proofBackend) {
   const proofFields = kagemushaReadNoritoFields(bundleFields[1]);
   const proofBoxFields = kagemushaReadNoritoFields(proofFields[3]);
   proofBoxFields[0] = kagemushaNoritoString(proofBackend);
+  proofFields[3] = Buffer.concat(
+    proofBoxFields.map((field) => kagemushaNoritoField(field)),
+  );
+  bundleFields[1] = Buffer.concat(proofFields.map((field) => kagemushaNoritoField(field)));
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithProofBoxBackendAndEmptyProofBytes(proofBackend) {
+  const bundleFields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("init_bundle")),
+  );
+  const proofFields = kagemushaReadNoritoFields(bundleFields[1]);
+  const proofBoxFields = kagemushaReadNoritoFields(proofFields[3]);
+  proofBoxFields[0] = kagemushaNoritoString(proofBackend);
+  proofBoxFields[1] = kagemushaNoritoByteVec(Buffer.alloc(0));
   proofFields[3] = Buffer.concat(
     proofBoxFields.map((field) => kagemushaNoritoField(field)),
   );
@@ -3217,7 +3381,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   }
   assert.equal(
     preferredKagemushaOfflineSpendModeForCapabilities(true, true),
-    KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
+    KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
   );
   assert.equal(
     preferredKagemushaOfflineSpendModeForCapabilities(false, true),
@@ -3677,6 +3841,8 @@ test("package dist Kagemusha record-backed and Pallas builders fail closed on in
     [Buffer.alloc(0), "must not be empty"],
     [Buffer.from([0x01]), "must be a valid Norito archive"],
     [privacyNoritoFrame(0x98), "must contain a non-empty Norito payload"],
+    [Buffer.alloc(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f), "must not exceed"],
+    [undefined, "must be a Buffer, string, or ArrayBuffer view"],
   ];
   const completeBinding = (overrides = {}) => ({
     connectNoritoBridgeAbiVersion() {
@@ -4011,7 +4177,7 @@ test("package dist Kagemusha recursive spend typed requests bind lineage key art
         currentNote,
         lineageKeyArtifacts: appendArtifacts,
       }),
-    /lineageKeyArtifacts/,
+    kagemushaRequestCodecError("field", "lineageKeyArtifacts", null),
   );
   assert.throws(
     () =>
@@ -4022,9 +4188,26 @@ test("package dist Kagemusha recursive spend typed requests bind lineage key art
         lineageKeyArtifacts: initArtifacts,
         lineageVerifierKey: Buffer.from("vk"),
       }),
-    /lineageKeyArtifacts must not be combined with raw key fields/,
+    kagemushaRequestCodecError(
+      "field",
+      "lineageKeyArtifacts",
+      /must not be combined with raw key fields/,
+    ),
   );
   const previousLineageVerifierRecord = recursiveSpendVerifierRecord();
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendAppendRequest({
+        previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        outputProofCircuitId: "kagemusha-recursive-spend-invalid-output-v1",
+        previousLineageVerifierRecord,
+        lineageKeyArtifacts: appendArtifacts,
+      }),
+    kagemushaRequestCodecError("field", "outputProofCircuitId", null),
+  );
   assert.throws(
     () =>
       encodeKagemushaRecursiveSpendAppendRequest({
@@ -4035,7 +4218,11 @@ test("package dist Kagemusha recursive spend typed requests bind lineage key art
         previousLineageVerifierRecord,
         previousProofOpenEnvelopes: syntheticPallasOpenEnvelopesArchive(),
       }),
-    /previousProofOpenEnvelopes are only valid for lineage append output/,
+    kagemushaRequestCodecError(
+      "field",
+      "previousProofOpenEnvelopes",
+      /only valid for lineage append output/,
+    ),
   );
   assert.throws(
     () =>
@@ -4046,7 +4233,11 @@ test("package dist Kagemusha recursive spend typed requests bind lineage key art
         currentNote,
         previousLineageVerifierRecord,
       }),
-    /previousLineageVerifierRecord is only valid for lineage previous bundles/,
+    kagemushaRequestCodecError(
+      "field",
+      "previousLineageVerifierRecord",
+      /only valid for lineage previous bundles/,
+    ),
   );
   assert.throws(
     () =>
@@ -4060,7 +4251,11 @@ test("package dist Kagemusha recursive spend typed requests bind lineage key art
           recordBytes: Buffer.from([0]),
         },
       }),
-    /previousLineageVerifierRecord is only valid for lineage previous bundles/,
+    kagemushaRequestCodecError(
+      "field",
+      "previousLineageVerifierRecord",
+      /only valid for lineage previous bundles/,
+    ),
   );
   assert.throws(
     () =>
@@ -4072,7 +4267,11 @@ test("package dist Kagemusha recursive spend typed requests bind lineage key art
         previousLineageVerifierRecord,
         lineageKeyArtifacts: appendArtifacts,
       }),
-    /lineageKeyArtifacts are only valid for lineage append output/,
+    kagemushaRequestCodecError(
+      "field",
+      "lineageKeyArtifacts",
+      /only valid for lineage append output/,
+    ),
   );
   assert.throws(
     () =>
@@ -4086,7 +4285,7 @@ test("package dist Kagemusha recursive spend typed requests bind lineage key art
         previousProofOpenEnvelopes: syntheticPallasOpenEnvelopesArchive(),
         lineageKeyArtifacts: initArtifacts,
       }),
-    /lineageKeyArtifacts/,
+    kagemushaRequestCodecError("field", "lineageKeyArtifacts", null),
   );
 });
 
@@ -4152,7 +4351,7 @@ test("package dist Kagemusha recursive spend typed requests reject malformed raw
         currentNote,
         lineageProvingKeyArchive: initProvingKey,
       }),
-    /lineageVerifierKey/,
+    kagemushaRequestCodecError("field", "lineageVerifierKey", null),
     "package dist accepted init raw lineage proving key without verifier key",
   );
   assert.throws(
@@ -4163,7 +4362,7 @@ test("package dist Kagemusha recursive spend typed requests reject malformed raw
         currentNote,
         lineageVerifierKey: initVerifierKey,
       }),
-    /lineageProvingKeyArchive/,
+    kagemushaRequestCodecError("archive", "lineageProvingKeyArchive", null),
     "package dist accepted init raw lineage verifier key without proving key",
   );
   assert.throws(
@@ -4175,7 +4374,7 @@ test("package dist Kagemusha recursive spend typed requests reject malformed raw
         lineageVerifierKey: initVerifierKey,
         lineageProvingKeyArchive: appendProvingKey,
       }),
-    /lineageKeyArtifacts/,
+    kagemushaRequestCodecError("field", "lineageKeyArtifacts", /lineageKeyArtifacts:/),
     "package dist accepted init raw lineage key profile mismatch",
   );
   assert.throws(
@@ -4190,7 +4389,7 @@ test("package dist Kagemusha recursive spend typed requests reject malformed raw
         lineageVerifierKey: appendVerifierKey,
         lineageProvingKeyArchive: appendProvingKey,
       }),
-    /previousProofOpenEnvelopes/,
+    kagemushaRequestCodecError("field", "previousProofOpenEnvelopes", null),
     "package dist accepted append raw lineage keys without previous proof openings",
   );
   assert.throws(
@@ -4205,7 +4404,7 @@ test("package dist Kagemusha recursive spend typed requests reject malformed raw
         previousProofOpenEnvelopes,
         lineageProvingKeyArchive: appendProvingKey,
       }),
-    /lineageVerifierKey/,
+    kagemushaRequestCodecError("field", "lineageVerifierKey", null),
     "package dist accepted append raw lineage proving key without verifier key",
   );
   assert.throws(
@@ -4220,7 +4419,7 @@ test("package dist Kagemusha recursive spend typed requests reject malformed raw
         previousProofOpenEnvelopes,
         lineageVerifierKey: appendVerifierKey,
       }),
-    /lineageProvingKeyArchive/,
+    kagemushaRequestCodecError("archive", "lineageProvingKeyArchive", null),
     "package dist accepted append raw lineage verifier key without proving key",
   );
   assert.throws(
@@ -4236,7 +4435,7 @@ test("package dist Kagemusha recursive spend typed requests reject malformed raw
         lineageVerifierKey: appendVerifierKey,
         lineageProvingKeyArchive: initProvingKey,
       }),
-    /lineageKeyArtifacts/,
+    kagemushaRequestCodecError("field", "lineageKeyArtifacts", /lineageKeyArtifacts:/),
     "package dist accepted append raw lineage key profile mismatch",
   );
 });
@@ -4263,7 +4462,11 @@ test("package dist Kagemusha recursive spend typed requests parse previous linea
         },
         previousProofOpenEnvelopes: syntheticPallasOpenEnvelopesArchive(2),
       }),
-    /previousLineageVerifierRecord/,
+    kagemushaRequestCodecError(
+      "archive",
+      "previousLineageVerifierRecord",
+      /valid Norito archive/,
+    ),
     "package dist checked previous-proof openings before parsing previous lineage record",
   );
 });
@@ -4296,13 +4499,135 @@ test("package dist Kagemusha recursive spend typed requests reject malformed Pal
     0x98,
   );
   const previousLineageVerifierRecord = recursiveSpendVerifierRecord();
-  const malformedPallasOpenEnvelopes = [
-    Buffer.from([1, 2, 3]),
-    syntheticKagemushaArchive("test::PallasOpenEnvelopes", 0x72),
-    syntheticPallasOpenEnvelopesArchive(2),
-    syntheticPallasOpenEnvelopesArchive(1, { includeDomainTag: false }),
+  const malformedPallasMetadataArchives = [
+    [
+      "vk_commitment",
+      syntheticPallasOpenEnvelopesArchive(1, {
+        vkCommitmentPayload: kagemushaFixedArrayPayload(0x70, 32),
+      }),
+    ],
+    [
+      "vk_commitment",
+      syntheticPallasOpenEnvelopesArchive(1, {
+        vkCommitmentOptionPayload: optionRawWithTrailingByte(syntheticFixed32(0x70)),
+      }),
+    ],
+    [
+      "vk_commitment",
+      syntheticPallasOpenEnvelopesArchive(1, {
+        vkCommitmentOptionPayload: optionRawWithUnknownTag(),
+      }),
+      /option tag must be 0 or 1/,
+    ],
+    [
+      "vk_commitment",
+      syntheticPallasOpenEnvelopesArchive(1, {
+        vkCommitmentOptionPayload: optionRawWithDeclaredLengthTooLong(syntheticFixed32(0x70)),
+      }),
+      /payload length mismatch/,
+    ],
+    [
+      "public_inputs_schema_hash",
+      syntheticPallasOpenEnvelopesArchive(1, {
+        publicInputsSchemaHashPayload: kagemushaFixedArrayPayload(0x71, 32),
+      }),
+    ],
+    [
+      "public_inputs_schema_hash",
+      syntheticPallasOpenEnvelopesArchive(1, {
+        publicInputsSchemaHashOptionPayload: optionRawWithTrailingByte(syntheticFixed32(0x71)),
+      }),
+    ],
+    [
+      "public_inputs_schema_hash",
+      syntheticPallasOpenEnvelopesArchive(1, {
+        publicInputsSchemaHashOptionPayload: optionRawWithUnknownTag(),
+      }),
+      /option tag must be 0 or 1/,
+    ],
+    [
+      "public_inputs_schema_hash",
+      syntheticPallasOpenEnvelopesArchive(1, {
+        publicInputsSchemaHashOptionPayload: optionRawWithDeclaredLengthTooLong(syntheticFixed32(0x71)),
+      }),
+      /payload length mismatch/,
+    ],
+    [
+      "domain_tag",
+      syntheticPallasOpenEnvelopesArchive(1, {
+        domainTagPayload: kagemushaFixedArrayPayload(0x72, 32),
+      }),
+    ],
+    [
+      "domain_tag",
+      syntheticPallasOpenEnvelopesArchive(1, {
+        domainTagOptionPayload: optionRawWithTrailingByte(syntheticFixed32(0x72)),
+      }),
+    ],
+    [
+      "domain_tag",
+      syntheticPallasOpenEnvelopesArchive(1, {
+        domainTagOptionPayload: optionRawWithUnknownTag(),
+      }),
+      /option tag must be 0 or 1/,
+    ],
+    [
+      "domain_tag",
+      syntheticPallasOpenEnvelopesArchive(1, {
+        domainTagOptionPayload: optionRawWithDeclaredLengthTooLong(syntheticFixed32(0x72)),
+      }),
+      /payload length mismatch/,
+    ],
   ];
-  for (const malformedPallasOpenEnvelopesArchive of malformedPallasOpenEnvelopes) {
+  const malformedPallasOpenEnvelopes = [
+    {
+      archive: Buffer.from([1, 2, 3]),
+      pallasField: "pallasOpenEnvelopes",
+      previousField: "previousProofOpenEnvelopes",
+      message: /valid Norito archive/,
+    },
+    {
+      archive: syntheticKagemushaArchive("test::PallasOpenEnvelopes", 0x72),
+      pallasField: "pallasOpenEnvelopes",
+      previousField: "previousProofOpenEnvelopes",
+      message: /valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope>/,
+    },
+    {
+      archive: syntheticPallasOpenEnvelopesArchive(2),
+      pallasField: "pallasOpenEnvelopes",
+      previousField: "previousProofOpenEnvelopes",
+      message: /requires exactly 1 envelope\(s\)/,
+    },
+    {
+      archive: syntheticPallasOpenEnvelopesArchive(1, { includeDomainTag: false }),
+      pallasField: "pallasOpenEnvelopes[0].domain_tag",
+      previousField: "previousProofOpenEnvelopes[0].domain_tag",
+      message: /is required/,
+    },
+    {
+      archive: syntheticPallasOpenEnvelopesArchive(1, { transcriptLabel: "" }),
+      pallasField: "pallasOpenEnvelopes[0]",
+      previousField: "previousProofOpenEnvelopes[0]",
+      message: /transcript_label is invalid/,
+    },
+    {
+      archive: syntheticPallasOpenEnvelopesArchive(1, { transcriptLabel: "\u00e9".repeat(65) }),
+      pallasField: "pallasOpenEnvelopes[0]",
+      previousField: "previousProofOpenEnvelopes[0]",
+      message: /transcript_label is invalid/,
+    },
+    ...malformedPallasMetadataArchives.map(([metadataField, archive, metadataMessage]) => ({
+      archive,
+      pallasField: `pallasOpenEnvelopes[0].${metadataField}`,
+      previousField: `previousProofOpenEnvelopes[0].${metadataField}`,
+      message: metadataMessage ?? null,
+    })),
+  ];
+  for (const {
+    archive: malformedPallasOpenEnvelopesArchive,
+    pallasField,
+    message,
+  } of malformedPallasOpenEnvelopes) {
     assert.throws(
       () =>
         encodeKagemushaRecursiveSpendInitRequest({
@@ -4312,11 +4637,15 @@ test("package dist Kagemusha recursive spend typed requests reject malformed Pal
           lineageVerifierKey: initVerifierKey,
           lineageProvingKeyArchive: initProvingKey,
         }),
-      /pallasOpenEnvelopes/,
+      kagemushaRequestCodecError("archive", pallasField, message),
       "package dist accepted malformed init Pallas open-envelope archive",
     );
   }
-  for (const malformedPallasOpenEnvelopesArchive of malformedPallasOpenEnvelopes) {
+  for (const {
+    archive: malformedPallasOpenEnvelopesArchive,
+    pallasField,
+    message,
+  } of malformedPallasOpenEnvelopes) {
     assert.throws(
       () =>
         encodeKagemushaRecursiveSpendAppendRequest({
@@ -4330,11 +4659,15 @@ test("package dist Kagemusha recursive spend typed requests reject malformed Pal
           lineageVerifierKey: appendVerifierKey,
           lineageProvingKeyArchive: appendProvingKey,
         }),
-      /pallasOpenEnvelopes/,
+      kagemushaRequestCodecError("archive", pallasField, message),
       "package dist accepted malformed append Pallas open-envelope archive",
     );
   }
-  for (const malformedPreviousProofOpenEnvelopes of malformedPallasOpenEnvelopes) {
+  for (const {
+    archive: malformedPreviousProofOpenEnvelopes,
+    previousField,
+    message,
+  } of malformedPallasOpenEnvelopes) {
     assert.throws(
       () =>
         encodeKagemushaRecursiveSpendAppendRequest({
@@ -4348,8 +4681,48 @@ test("package dist Kagemusha recursive spend typed requests reject malformed Pal
           lineageVerifierKey: appendVerifierKey,
           lineageProvingKeyArchive: appendProvingKey,
         }),
-      /previousProofOpenEnvelopes/,
+      kagemushaRequestCodecError("archive", previousField, message),
       "package dist accepted malformed previous-proof Pallas open-envelope archive",
+    );
+  }
+  for (const [
+    metadataField,
+    malformedPallasOpenEnvelopesArchive,
+    expectedMessage,
+  ] of malformedPallasMetadataArchives) {
+    assert.throws(
+      () =>
+        encodeKagemushaRecursiveSpendInitRequest({
+          recordBundle,
+          pallasOpenEnvelopes: malformedPallasOpenEnvelopesArchive,
+          currentNote,
+          lineageVerifierKey: initVerifierKey,
+          lineageProvingKeyArchive: initProvingKey,
+        }),
+      (error) =>
+        error?.kind === "archive" &&
+        error.field === `pallasOpenEnvelopes[0].${metadataField}` &&
+        (expectedMessage == null || expectedMessage.test(error.message)),
+      `package dist accepted stale fixed-array Pallas metadata payload for ${metadataField}`,
+    );
+    assert.throws(
+      () =>
+        encodeKagemushaRecursiveSpendAppendRequest({
+          previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+          recordBundle,
+          pallasOpenEnvelopes,
+          currentNote,
+          outputProofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+          previousLineageVerifierRecord,
+          previousProofOpenEnvelopes: malformedPallasOpenEnvelopesArchive,
+          lineageVerifierKey: appendVerifierKey,
+          lineageProvingKeyArchive: appendProvingKey,
+        }),
+      (error) =>
+        error?.kind === "archive" &&
+        error.field === `previousProofOpenEnvelopes[0].${metadataField}` &&
+        (expectedMessage == null || expectedMessage.test(error.message)),
+      `package dist accepted stale fixed-array previous-proof Pallas metadata payload for ${metadataField}`,
     );
   }
 });
@@ -4367,7 +4740,10 @@ test("package dist Kagemusha recursive spend typed requests reject malformed amo
     "1e3",
     "7 ",
     " 7",
+    "\t7",
+    "7\n",
     String(1n << 128n),
+    "9".repeat(40),
   ];
   for (const amount of packageDistInvalidPositiveU128Amounts) {
     assert.throws(
@@ -4377,7 +4753,7 @@ test("package dist Kagemusha recursive spend typed requests reject malformed amo
           spendNullifier: Buffer.alloc(32, 0x22),
           amount,
         }),
-      /amount|u128|positive decimal/,
+      kagemushaRequestCodecError("field", "amount", null),
       `package dist accepted malformed note amount ${JSON.stringify(amount)}`,
     );
   }
@@ -4395,7 +4771,10 @@ test("package dist Kagemusha recursive spend typed requests reject malformed amo
     "1e3",
     "7 ",
     " 7",
+    "\t7",
+    "7\n",
     String(1n << 128n),
+    "9".repeat(40),
   ];
   for (const publicAmount of packageDistInvalidPublicAmounts) {
     assert.throws(
@@ -4406,7 +4785,7 @@ test("package dist Kagemusha recursive spend typed requests reject malformed amo
           publicAmount,
           redeemProof,
         }),
-      /publicAmount|u128|positive decimal/,
+      kagemushaRequestCodecError("field", "publicAmount", null),
       `package dist accepted malformed publicAmount ${JSON.stringify(publicAmount)}`,
     );
   }
@@ -4418,7 +4797,7 @@ test("package dist Kagemusha recursive spend typed requests reject malformed amo
         public_amount: "0007",
         redeemProof,
       }),
-    /publicAmount|positive decimal/,
+    kagemushaRequestCodecError("field", "publicAmount", /canonical decimal u128/),
   );
 });
 
@@ -4453,7 +4832,11 @@ test("package dist Kagemusha recursive spend typed requests reject malformed blo
       encodeKagemushaRecursiveSpendVerifyRequest({
         bundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
       }),
-    /lineageVerifierRecord is required for reserved-lineage bundles/,
+    kagemushaRequestCodecError(
+      "field",
+      "lineageVerifierRecord",
+      /required for reserved-lineage bundles/,
+    ),
   );
   assert.throws(
     () =>
@@ -4461,7 +4844,11 @@ test("package dist Kagemusha recursive spend typed requests reject malformed blo
         bundle: sharedRecursiveSpendAbi7Archive("append_bundle"),
         lineageVerifierRecord: previousLineageVerifierRecord,
       }),
-    /lineageVerifierRecord is only valid for reserved-lineage bundles/,
+    kagemushaRequestCodecError(
+      "field",
+      "lineageVerifierRecord",
+      /only valid for reserved-lineage bundles/,
+    ),
   );
   assert.throws(
     () =>
@@ -4472,7 +4859,11 @@ test("package dist Kagemusha recursive spend typed requests reject malformed blo
           recordBytes: Buffer.from([0]),
         },
       }),
-    /lineageVerifierRecord is only valid for reserved-lineage bundles/,
+    kagemushaRequestCodecError(
+      "field",
+      "lineageVerifierRecord",
+      /only valid for reserved-lineage bundles/,
+    ),
   );
   assert.throws(
     () =>
@@ -4483,7 +4874,11 @@ test("package dist Kagemusha recursive spend typed requests reject malformed blo
         redeemProof,
         lineageVerifierRecord: previousLineageVerifierRecord,
       }),
-    /lineageVerifierRecord is only valid for reserved-lineage bundles or lineage witnesses/,
+    kagemushaRequestCodecError(
+      "field",
+      "lineageVerifierRecord",
+      /only valid for reserved-lineage bundles or lineage witnesses/,
+    ),
   );
   assert.throws(
     () =>
@@ -4497,7 +4892,11 @@ test("package dist Kagemusha recursive spend typed requests reject malformed blo
           recordBytes: Buffer.from([0]),
         },
       }),
-    /lineageVerifierRecord is only valid for reserved-lineage bundles or lineage witnesses/,
+    kagemushaRequestCodecError(
+      "field",
+      "lineageVerifierRecord",
+      /only valid for reserved-lineage bundles or lineage witnesses/,
+    ),
   );
   assert.throws(
     () =>
@@ -4508,7 +4907,11 @@ test("package dist Kagemusha recursive spend typed requests reject malformed blo
         redeemProof,
         lineageWitness: sharedRecursiveSpendAbi6Archive("lineage_witness_append_result"),
       }),
-    /lineageVerifierRecord is required for lineage witnesses with reserved-lineage previous proofs/,
+    kagemushaRequestCodecError(
+      "field",
+      "lineageVerifierRecord",
+      /required for lineage witnesses with reserved-lineage previous proofs/,
+    ),
   );
   assert.throws(
     () =>
@@ -4520,7 +4923,11 @@ test("package dist Kagemusha recursive spend typed requests reject malformed blo
         lineageWitness: sharedRecursiveSpendAbi6Archive("lineage_witness_from_init_result"),
         lineageVerifierRecord: previousLineageVerifierRecord,
       }),
-    /lineageVerifierRecord is only valid for reserved-lineage bundles or lineage witnesses/,
+    kagemushaRequestCodecError(
+      "field",
+      "lineageVerifierRecord",
+      /only valid for reserved-lineage bundles or lineage witnesses/,
+    ),
   );
   assert.throws(
     () =>
@@ -4535,27 +4942,61 @@ test("package dist Kagemusha recursive spend typed requests reject malformed blo
         ),
         lineageVerifierRecord: previousLineageVerifierRecord,
       }),
-    /lineageWitness/,
+    kagemushaRequestCodecError("archive", "lineageWitness", /truncated/),
   );
   const malformedLineageWitnesses = [
     [
       recursiveSpendLineageWitnessWithTrailingField(),
+      "lineageWitness",
       /lineageWitness has trailing bytes/,
     ],
     [
       recursiveSpendLineageWitnessWithTrailingPreviousProofsField(),
+      "lineageWitness.previousRecursiveProofs",
       /lineageWitness\.previousRecursiveProofs/,
     ],
     [
       recursiveSpendLineageWitnessWithTrailingPreviousProofField(),
+      "lineageWitness.previousRecursiveProofs",
       /lineageWitness\.previousRecursiveProofs/,
     ],
     [
       recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),
+      "lineageWitness.previousRecursiveProofs.verifierKeyId",
       /lineageWitness\.previousRecursiveProofs\.verifierKeyId/,
     ],
+    [
+      recursiveSpendLineageWitnessWithPreviousProofField(1, Buffer.alloc(0)),
+      "lineageWitness.previousRecursiveProofs.proof_public_inputs",
+      /lineageWitness\.previousRecursiveProofs\.proof_public_inputs/,
+    ],
+    [
+      recursiveSpendLineageWitnessWithPreviousProofField(2, Buffer.alloc(32)),
+      "lineageWitness.previousRecursiveProofs.proof_public_inputs_hash",
+      /lineageWitness\.previousRecursiveProofs\.proof_public_inputs_hash/,
+    ],
+    [
+      recursiveSpendLineageWitnessWithPreviousProofField(2, Buffer.alloc(32, 0x44)),
+      "lineageWitness.previousRecursiveProofs.proof_public_inputs_hash",
+      /lineageWitness\.previousRecursiveProofs\.proof_public_inputs_hash/,
+    ],
+    [
+      recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg"),
+      "lineageWitness.previousRecursiveProofs.proof_backend",
+      /lineageWitness\.previousRecursiveProofs\.proof_backend/,
+    ],
+    [
+      recursiveSpendLineageWitnessWithPreviousProofBoxBackendAndEmptyProofBytes("halo2/kzg"),
+      "lineageWitness.previousRecursiveProofs.proof_backend",
+      /lineageWitness\.previousRecursiveProofs\.proof_backend/,
+    ],
+    [
+      recursiveSpendLineageWitnessWithEmptyPreviousProofBytes(),
+      "lineageWitness.previousRecursiveProofs.proof_bytes",
+      /lineageWitness\.previousRecursiveProofs\.proof_bytes/,
+    ],
   ];
-  for (const [lineageWitnessArchive, expectedError] of malformedLineageWitnesses) {
+  for (const [lineageWitnessArchive, expectedField, expectedError] of malformedLineageWitnesses) {
     assert.throws(
       () =>
         encodeKagemushaRecursiveSpendRedeemRequest({
@@ -4566,7 +5007,7 @@ test("package dist Kagemusha recursive spend typed requests reject malformed blo
           lineageWitness: lineageWitnessArchive,
           lineageVerifierRecord: previousLineageVerifierRecord,
         }),
-      expectedError,
+      kagemushaRequestCodecError("archive", expectedField, expectedError),
     );
   }
   const blockHeightEncoders = [
@@ -4625,6 +5066,7 @@ test("package dist Kagemusha recursive spend typed requests reject malformed blo
     "7 ",
     " 7",
     "18446744073709551616",
+    "9".repeat(21),
     -0,
   ];
   assert.equal(Object.is(packageDistInvalidBlockHeights.at(-1), -0), true);
@@ -4632,7 +5074,7 @@ test("package dist Kagemusha recursive spend typed requests reject malformed blo
     for (const blockHeight of packageDistInvalidBlockHeights) {
       assert.throws(
         () => encode(blockHeight),
-        /blockHeight/,
+        kagemushaRequestCodecError("field", "blockHeight", null),
         `${name} accepted non-canonical package-dist blockHeight ${JSON.stringify(blockHeight)}`,
       );
     }
@@ -4648,7 +5090,7 @@ test("package dist Kagemusha recursive spend typed requests reject malformed blo
         lineageVerifierRecord: previousLineageVerifierRecord,
         block_height: "0007",
       }),
-    /blockHeight/,
+    kagemushaRequestCodecError("field", "blockHeight", null),
   );
 });
 
@@ -4662,7 +5104,7 @@ test("package dist Kagemusha recursive spend redeem rejects missing lineage mate
         publicAmount: "7",
         redeemProof,
       }),
-    /lineageWitness/,
+    kagemushaRequestCodecError("field", "lineageWitness", /required for this bundle/),
   );
   assert.throws(
     () =>
@@ -4672,7 +5114,11 @@ test("package dist Kagemusha recursive spend redeem rejects missing lineage mate
         publicAmount: "7",
         redeemProof,
       }),
-    /lineageVerifierRecord/,
+    kagemushaRequestCodecError(
+      "field",
+      "lineageVerifierRecord",
+      /required for reserved-lineage bundles/,
+    ),
   );
 });
 
@@ -4698,7 +5144,28 @@ test("package dist Kagemusha recursive spend redeem rejects invalid change-outpu
           changeOutput,
           lineageVerifierRecord: verifierRecord,
         }),
-      errorPattern,
+      kagemushaRequestCodecError("field", "changeOutput", errorPattern),
+    );
+  }
+  const partialBundle = sharedRecursiveSpendAbi7Archive("append_bundle");
+  const partialSummary = decodeKagemushaRecursiveSpendBundle(partialBundle);
+  assert.ok(partialSummary.topupAnchorNullifiers.length > 0);
+  assert.ok(partialSummary.topup_anchor_nullifiers.length > 0);
+  for (const changeOutput of [
+    partialSummary.currentNote.noteCommitment,
+    partialSummary.currentNote.spendNullifier,
+    partialSummary.topupAnchorNullifiers[0],
+  ]) {
+    assert.throws(
+      () =>
+        encodeKagemushaRecursiveSpendRedeemRequest({
+          bundle: partialBundle,
+          recipient: "dist-recipient",
+          publicAmount: "6",
+          redeemProof,
+          changeOutput,
+        }),
+      kagemushaRequestCodecError("field", "changeOutput", /must not reuse/),
     );
   }
   assert.throws(
@@ -4711,7 +5178,7 @@ test("package dist Kagemusha recursive spend redeem rejects invalid change-outpu
         lineageWitness,
         lineageVerifierRecord: verifierRecord,
       }),
-    /changeOutput is required/,
+    kagemushaRequestCodecError("field", "changeOutput", /changeOutput is required/),
   );
   assert.throws(
     () =>
@@ -4723,7 +5190,7 @@ test("package dist Kagemusha recursive spend redeem rejects invalid change-outpu
         lineageWitness,
         lineageVerifierRecord: verifierRecord,
       }),
-    /publicAmount must not exceed/,
+    kagemushaRequestCodecError("field", "publicAmount", /publicAmount must not exceed/),
   );
   assert.throws(
     () =>
@@ -4736,20 +5203,65 @@ test("package dist Kagemusha recursive spend redeem rejects invalid change-outpu
         changeOutput: Buffer.alloc(32, 0x42),
         lineageVerifierRecord: verifierRecord,
       }),
-    /publicAmount must be less/,
+    kagemushaRequestCodecError("field", "publicAmount", /publicAmount must be less/),
   );
 });
 
 test("package dist Kagemusha recursive spend bundle rejects wrong accumulator domain before native dispatch", () => {
-  assert.throws(
-    () =>
-      decodeKagemushaRecursiveSpendBundle(
-        recursiveSpendBundleWithAccumulatorDomain(
-          "iroha:kagemusha:v1:recursive-spend-accumulatoR",
+  for (const domain of [
+    "iroha:kagemusha:v1:recursive-spend-accumulatoR",
+    " iroha:kagemusha:v1:recursive-spend-accumulator",
+    "iroha:Kagemusha:v1:recursive-spend-accumulator",
+  ]) {
+    assert.throws(
+      () =>
+        decodeKagemushaRecursiveSpendBundle(
+          recursiveSpendBundleWithAccumulatorDomain(domain),
         ),
-      ),
-    /bundle\.accumulator\.domain/,
+      kagemushaRequestCodecError("archive", "bundle.accumulator.domain", null),
+    );
+  }
+});
+
+test("package dist Kagemusha recursive spend bundle decodes canonical accumulator assets", () => {
+  const initBundle = decodeKagemushaRecursiveSpendBundle(
+    sharedRecursiveSpendAbi6Archive("init_bundle"),
   );
+  assert.equal(initBundle.asset, "686w6ABhTWPaCrWNjjXs7X1SW6w9");
+  const fallbackAssetBundle = decodeKagemushaRecursiveSpendBundle(
+    recursiveSpendBundleWithAccumulatorField(
+      2,
+      kagemushaFixedArrayPayload(0x01, 16),
+    ),
+  );
+  assert.equal(
+    fallbackAssetBundle.asset,
+    "hex:01010101010101010101010101010101",
+  );
+  assert.ok(initBundle.topupAnchorNullifiers.length >= 2);
+  for (const nullifiers of [
+    [],
+    [Buffer.alloc(32)],
+    [
+      initBundle.topupAnchorNullifiers[0],
+      initBundle.topupAnchorNullifiers[1],
+      Buffer.alloc(32, 0x34),
+    ],
+    [initBundle.topupAnchorNullifiers[0], initBundle.topupAnchorNullifiers[0]],
+    [initBundle.topupAnchorNullifiers[1], initBundle.topupAnchorNullifiers[0]],
+    [initBundle.currentNote.noteCommitment],
+    [initBundle.currentNote.spendNullifier],
+  ]) {
+    assert.throws(
+      () => decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithTopupAnchorNullifiers(nullifiers)),
+      kagemushaRequestCodecError("archive", "bundle.accumulator.topup_anchor_nullifiers", null),
+    );
+  }
+
+  const appendBundle = decodeKagemushaRecursiveSpendBundle(
+    sharedRecursiveSpendAbi7Archive("append_bundle"),
+  );
+  assert.equal(appendBundle.asset, "7Y5nGzchCJcxcv98NUoBfwBR1nTk");
 });
 
 test("package dist Kagemusha recursive spend bundle rejects raw accumulator chain ids before native dispatch", () => {
@@ -4761,15 +5273,185 @@ test("package dist Kagemusha recursive spend bundle rejects raw accumulator chai
           kagemushaNoritoString("kagemusha-recursive-spend-abi-chain"),
         ),
       ),
-    /bundle\.accumulator\.chain_id/,
+    kagemushaRequestCodecError("archive", "bundle.accumulator.chain_id", null),
   );
+});
+
+test("package dist Kagemusha recursive spend bundle rejects empty or padded accumulator chain ids before native dispatch", () => {
+  for (const chainId of [
+    "",
+    " kagemusha-recursive-spend-abi-chain",
+    "kagemusha-recursive-spend-abi-chain ",
+  ]) {
+    assert.throws(
+      () =>
+        decodeKagemushaRecursiveSpendBundle(
+          recursiveSpendBundleWithAccumulatorField(
+            1,
+            kagemushaNoritoField(kagemushaNoritoString(chainId)),
+          ),
+        ),
+      kagemushaRequestCodecError(
+        "field",
+        "bundle.accumulator.chain_id",
+        /non-empty unpadded string/,
+      ),
+    );
+  }
+});
+
+test("package dist Kagemusha recursive spend bundle rejects nonportable accumulator chain ids before native dispatch", () => {
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(
+        recursiveSpendBundleWithAccumulatorField(
+          1,
+          kagemushaNoritoField(kagemushaNoritoString("kagemusha recursive-spend-abi-chain")),
+        ),
+      ),
+    kagemushaRequestCodecError(
+      "field",
+      "bundle.accumulator.chain_id",
+      /portable registry syntax/,
+    ),
+  );
+});
+
+test("package dist Kagemusha recursive spend bundle rejects invalid accumulator field lengths before native dispatch", () => {
+  const initBundle = decodeKagemushaRecursiveSpendBundle(
+    sharedRecursiveSpendAbi6Archive("init_bundle"),
+  );
+  const invalidAccumulatorFields = [
+    [3, Buffer.alloc(32), "bundle.accumulator.initial_root", null],
+    [4, Buffer.alloc(32), "bundle.accumulator.final_root", null],
+    [4, initBundle.initialRoot, "bundle.accumulator.final_root", null],
+    [2, kagemushaFixedArrayPayload(0x01, 15), "asset", null],
+    [2, kagemushaFixedArrayPayload(0x01, 17), "asset", null],
+    [2, kagemushaCountPrefixedFixedArrayPayload(0x01, 16), "asset", null],
+    [3, kagemushaFixedArrayPayload(0x02, 31), "initialRoot", null],
+    [3, kagemushaFixedArrayPayload(0x02, 33), "initialRoot", null],
+    [3, kagemushaCountPrefixedFixedArrayPayload(0x02, 32), "initialRoot", null],
+    [4, kagemushaFixedArrayPayload(0x03, 31), "finalRoot", null],
+    [4, kagemushaFixedArrayPayload(0x03, 33), "finalRoot", null],
+    [4, kagemushaCountPrefixedFixedArrayPayload(0x03, 32), "finalRoot", null],
+    [7, Buffer.alloc(32), "bundle.accumulator.lineage_digest", null],
+    [7, kagemushaFixedArrayPayload(0x07, 31), "bundle.accumulator.lineage_digest", null],
+    [7, kagemushaFixedArrayPayload(0x07, 33), "bundle.accumulator.lineage_digest", null],
+    [
+      7,
+      kagemushaCountPrefixedFixedArrayPayload(0x07, 32),
+      "bundle.accumulator.lineage_digest",
+      null,
+    ],
+    [
+      8,
+      Buffer.alloc(32, 0x7d),
+      "bundle.accumulator.aggregation_transcript_digest",
+      null,
+    ],
+    [
+      8,
+      Buffer.alloc(32),
+      "bundle.accumulator.aggregation_transcript_digest",
+      null,
+    ],
+    [9, Buffer.alloc(32), "bundle.accumulator.nullifier_digest", null],
+    [10, Buffer.alloc(32), "bundle.accumulator.output_commitment_digest", null],
+    [11, Buffer.alloc(32), "bundle.accumulator.fold_digest", null],
+    [12, Buffer.alloc(32), "bundle.accumulator.recursive_proof_chain_digest", null],
+    [13, Buffer.alloc(32), "bundle.accumulator.transition_profile_binding_digest", null],
+    [
+      14,
+      Buffer.alloc(32, 0x7e),
+      "bundle.accumulator.append_opening_preflight_digest",
+      null,
+    ],
+    [
+      14,
+      kagemushaFixedArrayPayload(0x0e, 31),
+      "bundle.accumulator.append_opening_preflight_digest",
+      null,
+    ],
+    [
+      14,
+      kagemushaFixedArrayPayload(0x0e, 33),
+      "bundle.accumulator.append_opening_preflight_digest",
+      null,
+    ],
+    [
+      14,
+      kagemushaCountPrefixedFixedArrayPayload(0x0e, 32),
+      "bundle.accumulator.append_opening_preflight_digest",
+      null,
+    ],
+    [
+      15,
+      Buffer.alloc(32, 0x7f),
+      "bundle.accumulator.append_boundary_digest",
+      null,
+    ],
+    [16, Buffer.alloc(32), "bundle.accumulator.verifier_params_fingerprint", null],
+    [
+      17,
+      Buffer.alloc(32),
+      "bundle.accumulator.fixed_window_table_schedule_digest",
+      null,
+    ],
+    [
+      18,
+      Buffer.alloc(32),
+      "bundle.accumulator.fixed_window_shared_table_manifest_digest",
+      null,
+    ],
+    [19, Buffer.alloc(32), "bundle.accumulator.fixed_window_table_base_digest", null],
+    [20, Buffer.alloc(32), "bundle.accumulator.verifier_witness_batch_digest", null],
+    [
+      20,
+      kagemushaFixedArrayPayload(0x14, 31),
+      "bundle.accumulator.verifier_witness_batch_digest",
+      null,
+    ],
+    [
+      20,
+      kagemushaFixedArrayPayload(0x14, 33),
+      "bundle.accumulator.verifier_witness_batch_digest",
+      null,
+    ],
+    [
+      20,
+      kagemushaCountPrefixedFixedArrayPayload(0x14, 32),
+      "bundle.accumulator.verifier_witness_batch_digest",
+      null,
+    ],
+    [21, kagemushaU32Payload(3), "bundle.accumulator.verifier_opening_len", null],
+    [
+      21,
+      kagemushaCountPrefixedFixedArrayPayload(0x15, 4),
+      "bundle.accumulator.verifier_opening_len",
+      null,
+    ],
+  ];
+  for (const [
+    fieldIndex,
+    replacement,
+    expectedField,
+    expectedMessage,
+  ] of invalidAccumulatorFields) {
+    assert.throws(
+      () =>
+        decodeKagemushaRecursiveSpendBundle(
+          recursiveSpendBundleWithAccumulatorField(fieldIndex, replacement),
+        ),
+      kagemushaRequestCodecError("archive", expectedField, expectedMessage),
+    );
+  }
 });
 
 test("package dist Kagemusha recursive spend bundle rejects invalid accumulator hop counts before native dispatch", () => {
   assert.throws(
     () =>
       decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithTrailingBundleField()),
-    /bundle has trailing bytes/,
+    kagemushaRequestCodecError("archive", "bundle", /bundle has trailing bytes/),
   );
   for (const hopCount of [
     0,
@@ -4780,13 +5462,23 @@ test("package dist Kagemusha recursive spend bundle rejects invalid accumulator 
         decodeKagemushaRecursiveSpendBundle(
           recursiveSpendBundleWithAccumulatorField(6, kagemushaU32Payload(hopCount)),
         ),
-      /bundle\.accumulator\.hop_count/,
+      kagemushaRequestCodecError("archive", "bundle.accumulator.hop_count", null),
     );
   }
   assert.throws(
     () =>
+      decodeKagemushaRecursiveSpendBundle(
+        recursiveSpendBundleWithAccumulatorField(
+          6,
+          kagemushaCountPrefixedFixedArrayPayload(0x06, 4),
+        ),
+      ),
+    kagemushaRequestCodecError("archive", "bundle.accumulator.hop_count", null),
+  );
+  assert.throws(
+    () =>
       decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithTrailingAccumulatorField()),
-    /accumulator has trailing bytes/,
+    kagemushaRequestCodecError("archive", "bundle", /accumulator has trailing bytes/),
   );
 });
 
@@ -4798,7 +5490,7 @@ test("package dist Kagemusha recursive spend bundle rejects unsupported proof ci
           UNSUPPORTED_RECURSIVE_SPEND_PROOF_CIRCUIT_ID,
         ),
       ),
-    /bundle\.proof_circuit_id/,
+    kagemushaRequestCodecError("archive", "bundle.proof_circuit_id", null),
   );
 });
 
@@ -4808,35 +5500,42 @@ test("package dist Kagemusha recursive spend bundle rejects unsupported proof ba
       decodeKagemushaRecursiveSpendBundle(
         recursiveSpendBundleWithProofBackend("halo2/kzg"),
       ),
-    /bundle\.proof_backend/,
+    kagemushaRequestCodecError("archive", "bundle.proof_backend", null),
   );
   assert.throws(
     () =>
       decodeKagemushaRecursiveSpendBundle(
         recursiveSpendBundleWithProofBoxBackend("halo2/kzg"),
       ),
-    /bundle\.proof_backend/,
+    kagemushaRequestCodecError("archive", "bundle.proof_backend", null),
+  );
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(
+        recursiveSpendBundleWithProofBoxBackendAndEmptyProofBytes("halo2/kzg"),
+      ),
+    kagemushaRequestCodecError("archive", "bundle.proof_backend", null),
   );
   assert.throws(
     () =>
       decodeKagemushaRecursiveSpendBundle(
         recursiveSpendBundleWithTrailingVerifierKeyIdField(),
       ),
-    /verifierKeyId has trailing bytes/,
+    kagemushaRequestCodecError("archive", "bundle", /verifierKeyId has trailing bytes/),
   );
   assert.throws(
     () =>
       decodeKagemushaRecursiveSpendBundle(
         recursiveSpendBundleWithTrailingRecursiveProofField(),
       ),
-    /recursiveProof has trailing bytes/,
+    kagemushaRequestCodecError("archive", "bundle", /recursiveProof has trailing bytes/),
   );
   assert.throws(
     () =>
       decodeKagemushaRecursiveSpendBundle(
         recursiveSpendBundleWithTrailingProofBoxField(),
       ),
-    /proof has trailing bytes/,
+    kagemushaRequestCodecError("archive", "bundle", /proof has trailing bytes/),
   );
 });
 
@@ -4844,7 +5543,7 @@ test("package dist Kagemusha recursive spend bundle rejects empty proof bytes be
   assert.throws(
     () =>
       decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithEmptyProofBytes()),
-    /bundle\.proof_bytes/,
+    kagemushaRequestCodecError("archive", "bundle.proof_bytes", null),
   );
 });
 
@@ -4852,17 +5551,17 @@ test("package dist Kagemusha recursive spend bundle rejects malformed proof publ
   assert.throws(
     () =>
       decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithEmptyProofPublicInputs()),
-    /bundle\.proof_public_inputs/,
+    kagemushaRequestCodecError("archive", "bundle.proof_public_inputs", null),
   );
   assert.throws(
     () =>
       decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithZeroProofPublicInputsHash()),
-    /bundle\.proof_public_inputs_hash/,
+    kagemushaRequestCodecError("archive", "bundle.proof_public_inputs_hash", null),
   );
   assert.throws(
     () =>
       decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithMismatchedProofPublicInputsHash()),
-    /bundle\.proof_public_inputs_hash/,
+    kagemushaRequestCodecError("archive", "bundle.proof_public_inputs_hash", null),
   );
 });
 
@@ -4872,51 +5571,94 @@ test("package dist Kagemusha recursive spend bundle rejects malformed current no
       decodeKagemushaRecursiveSpendBundle(
         recursiveSpendBundleWithCurrentNoteField(0, Buffer.alloc(32)),
       ),
-    /noteCommitment/,
+    kagemushaRequestCodecError("field", "noteCommitment", null),
   );
   assert.throws(
     () =>
       decodeKagemushaRecursiveSpendBundle(
         recursiveSpendBundleWithCurrentNoteField(1, Buffer.alloc(32)),
       ),
-    /spendNullifier/,
+    kagemushaRequestCodecError("field", "spendNullifier", null),
   );
   assert.throws(
     () =>
       decodeKagemushaRecursiveSpendBundle(
         recursiveSpendBundleWithEqualCurrentNoteNullifier(),
       ),
-    /spendNullifier/,
+    kagemushaRequestCodecError("field", "spendNullifier", null),
   );
   assert.throws(
     () =>
       decodeKagemushaRecursiveSpendBundle(
         recursiveSpendBundleWithCurrentNoteField(2, kagemushaZeroNumericPayload()),
       ),
-    /amount/,
+    kagemushaRequestCodecError("field", "amount", null),
   );
   const malformedCurrentNoteFieldLengths = [
-    [0, kagemushaFixedArrayPayload(0x04, 31), /noteCommitment/],
-    [0, kagemushaFixedArrayPayload(0x04, 33), /noteCommitment/],
-    [1, kagemushaFixedArrayPayload(0x05, 31), /spendNullifier/],
-    [1, kagemushaFixedArrayPayload(0x05, 33), /spendNullifier/],
-    [2, kagemushaNumericPayload(Buffer.from([1]), 1), /numeric scale/],
-    [2, kagemushaNumericPayload(Buffer.concat([Buffer.alloc(16), Buffer.from([1])])), /amount/],
-    [2, kagemushaNumericPayloadWithTrailingField(), /amount/],
+    [0, kagemushaFixedArrayPayload(0x04, 31), "archive", "noteCommitment", null],
+    [0, kagemushaFixedArrayPayload(0x04, 33), "archive", "noteCommitment", null],
+    [
+      0,
+      kagemushaCountPrefixedFixedArrayPayload(0x04, 32),
+      "archive",
+      "noteCommitment",
+      null,
+    ],
+    [1, kagemushaFixedArrayPayload(0x05, 31), "archive", "spendNullifier", null],
+    [1, kagemushaFixedArrayPayload(0x05, 33), "archive", "spendNullifier", null],
+    [
+      1,
+      kagemushaCountPrefixedFixedArrayPayload(0x05, 32),
+      "archive",
+      "spendNullifier",
+      null,
+    ],
+    [2, kagemushaNumericPayload(Buffer.from([1]), 1), "field", "amount", /numeric scale/],
+    [
+      2,
+      kagemushaNumericPayloadWithScalePayload(
+        kagemushaCountPrefixedFixedArrayPayload(0x16, 4),
+      ),
+      "field",
+      "amount",
+      /numeric scale/,
+    ],
+    [
+      2,
+      kagemushaNumericPayloadWithMantissaPayload(Buffer.from([2, 0, 0, 0, 1])),
+      "archive",
+      "amount",
+      null,
+    ],
+    [2, kagemushaNumericPayload(Buffer.from([0xff])), "field", "amount", /fit in u128/],
+    [
+      2,
+      kagemushaNumericPayload(Buffer.concat([Buffer.alloc(16), Buffer.from([1])])),
+      "field",
+      "amount",
+      /fit in u128/,
+    ],
+    [2, kagemushaNumericPayloadWithTrailingField(), "archive", "amount", null],
   ];
-  for (const [fieldIndex, replacement, expectedField] of malformedCurrentNoteFieldLengths) {
+  for (const [
+    fieldIndex,
+    replacement,
+    expectedKind,
+    expectedField,
+    expectedMessage,
+  ] of malformedCurrentNoteFieldLengths) {
     assert.throws(
       () =>
         decodeKagemushaRecursiveSpendBundle(
           recursiveSpendBundleWithCurrentNoteField(fieldIndex, replacement),
         ),
-      expectedField,
+      kagemushaRequestCodecError(expectedKind, expectedField, expectedMessage),
     );
   }
   assert.throws(
     () =>
       decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithTrailingCurrentNoteField()),
-    /currentNote has trailing bytes/,
+    kagemushaRequestCodecError("archive", "bundle", /currentNote has trailing bytes/),
   );
 });
 
@@ -5141,10 +5883,15 @@ test("package dist Kagemusha recursive spend compact projection helpers dispatch
     const callsBeforeInvalidHeights = calls.length;
     for (const [badHeight, errorPattern] of [
       [true, /blockHeight must be a number or bigint/],
+      [false, /blockHeight must be a number or bigint/],
       ["1", /blockHeight must be a number or bigint/],
+      [{ value: 1 }, /blockHeight must be a number or bigint/],
       [1.5, /blockHeight must be an integer/],
       [Number.NaN, /blockHeight must be an integer/],
+      [Infinity, /blockHeight must be an integer/],
+      [-1, /blockHeight must be non-negative/],
       [-0, /blockHeight must be non-negative/],
+      [-1n, /blockHeight must be non-negative/],
       [Number.MAX_SAFE_INTEGER + 1, /blockHeight number must be a safe integer/],
       [0x1_0000_0000_0000_0000n, /blockHeight must fit in u64/],
     ]) {
@@ -5188,8 +5935,10 @@ test("package dist Kagemusha recursive spend compact projection helpers fail clo
   const validArchive = privacyNoritoFrameWithPayload(0x85);
   const invalidArchives = [
     [Buffer.alloc(0), "must not be empty"],
+    [Buffer.alloc(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f), "must not exceed"],
     [Buffer.from([0x01]), "must be a valid Norito archive"],
     [privacyNoritoFrame(0x85), "must contain a non-empty Norito payload"],
+    [undefined, "must be a Buffer, string, or ArrayBuffer view"],
   ];
 
   try {
@@ -5227,12 +5976,38 @@ test("package dist Kagemusha recursive spend compact projection helpers fail clo
       assert.throws(
         () =>
           kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+            invalidArchive,
+            validArchive,
+            9,
+          ),
+        new RegExp(`compactTokenArchive ${expectedMessage}`),
+      );
+      assert.throws(
+        () =>
+          kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
             validArchive,
             invalidArchive,
+            9,
           ),
         new RegExp(`verifierRecordArchive ${expectedMessage}`),
       );
+      assert.throws(
+        () =>
+          kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+            validArchive,
+            invalidArchive,
+          ),
+          new RegExp(`verifierRecordArchive ${expectedMessage}`),
+      );
     }
+    assert.throws(
+      () =>
+        kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+          validArchive,
+          Buffer.from([0x01]),
+        ),
+      /verifierRecordArchive must be a valid Norito archive/,
+    );
     assert.equal(nativeDispatches, 0);
 
     globalThis.__IROHA_NATIVE_BINDING__ = {
@@ -5656,6 +6431,7 @@ test("package dist Kagemusha recursive spend helpers reject invalid request arch
     ],
     [Buffer.from([0x01]), "must be a valid Norito archive"],
     [privacyNoritoFrame(0x35), "must contain a non-empty Norito payload"],
+    [undefined, "must be a Buffer, string, or ArrayBuffer view"],
   ];
   const helperCases = [
     [
@@ -8165,6 +8941,30 @@ test("package declarations expose recursive compact key-package signatures", () 
     /recursiveCompact(?:KeyArtifactsArchive|VerifierKeysArchive)\?:\s*BinaryLike/u,
     "recursive compact key packages must not be optional",
   );
+});
+
+test("package declarations expose Torii iterable string select projections", () => {
+  const options = declarationInterface("IterableQueryOptions");
+  assert.match(
+    options,
+    /\n  select\?: ReadonlyArray<string \| Record<string, unknown>>;\n/u,
+  );
+  assert.doesNotMatch(
+    options,
+    /\n  select\?: ReadonlyArray<Record<string, unknown>>;\n/u,
+  );
+});
+
+test("package declarations expose Torii iterable count mode aliases", () => {
+  const listOptions = declarationInterface("IterableListOptions");
+  assert.match(listOptions, /\n  countMode\?: ToriiCountMode;\n/u);
+  assert.match(listOptions, /\n  count_mode\?: ToriiCountMode;\n/u);
+
+  const queryOptions = declarationInterface("IterableQueryOptions");
+  assert.doesNotMatch(queryOptions, /\n  fetchSize\?: NumericLike;\n/u);
+  assert.match(queryOptions, /\n  fetch_size\?: NumericLike;\n/u);
+  assert.match(queryOptions, /\n  queryName\?: string;\n/u);
+  assert.match(queryOptions, /\n  query_name\?: string;\n/u);
 });
 
 test("package declarations keep accumulator digests native-owned", () => {

@@ -51,6 +51,10 @@ MAX_BEARER_TOKEN_BYTES = 8192
 MAX_HTTP_URL_CHARS = 2048
 MAX_LOCAL_PATH_CHARS = 4096
 MAX_CLEAN_STRING_CHARS = 4096
+MAX_ENDPOINT_INPUTS = 64
+MAX_JSON_LIST_ITEMS = 8192
+MAX_JSON_OBJECT_MEMBERS = 8192
+MAX_JSON_NESTING_DEPTH = 128
 MAX_AUDIT_EXPORT_JSON_BYTES = 64 * 1024 * 1024
 MAX_PERSISTED_RECORD_JSON_BYTES = 1024 * 1024
 LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
@@ -71,6 +75,7 @@ REPOSITORY_XML_FIXTURE_PARTS = (
 NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
 IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
 DEFAULT_RESPONSE_LIMIT_BYTES = 64 * 1024
+MAX_RESPONSE_LIMIT_BYTES = 4 * 1024 * 1024
 INDEX_DIGEST_FIELD = "index_sha256"
 INDEX_FILE = "messages.index.json"
 INDEX_VERSION = 1
@@ -222,6 +227,7 @@ SECRET_VALUE_PATTERNS = [
 ]
 REDACTED_RESPONSE_PREVIEW = "[redacted: sensitive response body]"
 REDACTED_ERROR = "[redacted: sensitive error]"
+MAX_RECEIPT_ERROR_CHARS = 4096
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -365,6 +371,16 @@ def _require_positive_cli_int(value: int, label: str) -> int:
     return value
 
 
+def _require_response_limit_bytes(value: int) -> int:
+    parsed = _require_positive_cli_int(value, "--response-limit-bytes")
+    if parsed > MAX_RESPONSE_LIMIT_BYTES:
+        raise AdapterError(
+            "--response-limit-bytes must be no more than "
+            f"{MAX_RESPONSE_LIMIT_BYTES}"
+        )
+    return parsed
+
+
 def _require_positive_finite_cli_number(value: float, label: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise AdapterError(f"{label} must be a positive finite number")
@@ -372,6 +388,48 @@ def _require_positive_finite_cli_number(value: float, label: str) -> float:
     if not math.isfinite(parsed) or parsed <= 0:
         raise AdapterError(f"{label} must be a positive finite number")
     return parsed
+
+
+def _required_cli_bool(value: Any, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise AdapterError(f"{label} must be a boolean")
+    return value
+
+
+def _optional_cli_path(value: Any, label: str) -> Path | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        raise AdapterError(f"{label} must be a path")
+    try:
+        return Path(value)
+    except TypeError as error:
+        raise AdapterError(f"{label} must be a path") from error
+
+
+def _require_policy_booleans(args: argparse.Namespace) -> None:
+    for attr, label in (
+        ("dry_run", "--dry-run"),
+        ("all", "--all"),
+        ("allow_insecure_http", "--allow-insecure-http"),
+        ("allow_missing_record_sources", "--allow-missing-record-sources"),
+    ):
+        setattr(args, attr, _required_cli_bool(getattr(args, attr, None), label))
+
+
+def _required_cli_string_sequence(value: Any, label: str) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+        raise AdapterError(f"{label} must be a repeatable string list")
+    if len(value) > MAX_ENDPOINT_INPUTS:
+        raise AdapterError(f"{label} accepts at most {MAX_ENDPOINT_INPUTS} values")
+    values: list[str] = []
+    for offset, entry in enumerate(value):
+        if not isinstance(entry, str):
+            raise AdapterError(f"{label}[{offset}] must be a string")
+        values.append(entry)
+    return values
 
 
 @dataclass(frozen=True)
@@ -754,19 +812,32 @@ def _preflight_numeric_cli_values(
             index += 1
 
 
-def _ensure_output_directory(path: Path, label: str) -> None:
+def _ensure_output_directory(
+    path: Path,
+    label: str,
+    *,
+    create: bool = True,
+    check_leaf: bool = True,
+) -> None:
     _reject_output_path_smuggling(path, label)
     if _path_is_repository_iso_fixture(str(path)):
         raise AdapterError(
             f"{label} must not point to checked-in ISO fixture artifacts"
         )
-    _reject_symlinked_existing_ancestors(path, display_label=label)
+    try:
+        _reject_symlinked_existing_ancestors(path, display_label=label)
+    except NotADirectoryError as error:
+        raise AdapterError(f"{label} must be a directory") from error
     if path.exists() or path.is_symlink():
         mode = path.lstat().st_mode
         if stat.S_ISLNK(mode):
             raise AdapterError(f"{label} must not be a symlink")
         if not stat.S_ISDIR(mode):
+            if not check_leaf:
+                return
             raise AdapterError(f"{label} must be a directory")
+        return
+    if not create:
         return
     path.mkdir(parents=True, exist_ok=True)
     mode = path.lstat().st_mode
@@ -861,6 +932,69 @@ def _absolute_path_without_resolving_leaf(path: Path) -> Path:
     return path if path.is_absolute() else Path.cwd() / path
 
 
+def _same_existing_path(left: Path, right: Path) -> bool:
+    try:
+        left_stat = left.stat()
+        right_stat = right.stat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+    return os.path.samestat(left_stat, right_stat)
+
+
+def _reject_receipt_dir_input_alias(
+    receipt_dir: Path,
+    input_dir: Path,
+    input_label: str,
+) -> None:
+    if str(receipt_dir) == str(input_dir) or _same_existing_path(receipt_dir, input_dir):
+        raise AdapterError(f"receipt_dir must not reuse {input_label} path")
+
+
+def _reject_receipt_dir_source_overlap(
+    receipt_dir: Path,
+    source_path: Path,
+    source_label: str,
+) -> None:
+    receipt_root = receipt_dir.resolve()
+    source_root = source_path.resolve()
+    if (
+        receipt_root == source_root
+        or source_root in receipt_root.parents
+        or receipt_root in source_root.parents
+    ):
+        raise AdapterError(f"receipt_dir must not overlap {source_label}")
+
+
+def _reject_path_overlap(
+    left: Path,
+    left_label: str,
+    right: Path,
+    right_label: str,
+) -> None:
+    left_root = left.resolve()
+    right_root = right.resolve()
+    if (
+        left_root == right_root
+        or right_root in left_root.parents
+        or left_root in right_root.parents
+    ):
+        raise AdapterError(f"{left_label} must not overlap {right_label} path")
+
+
+def _reject_receipt_dir_notary_source_overlap(
+    receipt_dir: Path,
+    export_dir: Path,
+) -> None:
+    for source_label, source_path in (
+        ("export_dir.latest_anchor", export_dir / LATEST_ANCHOR_FILE),
+        ("export_dir.anchors", export_dir / ANCHOR_DIR),
+        ("export_dir.index", export_dir / INDEX_FILE),
+    ):
+        _reject_receipt_dir_source_overlap(receipt_dir, source_path, source_label)
+
+
 def _load_json(
     path: Path,
     *,
@@ -886,11 +1020,19 @@ def _load_json(
         raise AdapterError(f"{label} is not UTF-8 JSON") from error
     except json.JSONDecodeError as error:
         raise AdapterError(f"{label} is not valid JSON: {error}") from error
+    except RecursionError as error:
+        raise AdapterError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        ) from error
     _reject_json_surrogates(value)
     return value
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    if len(pairs) > MAX_JSON_OBJECT_MEMBERS:
+        raise AdapterError(
+            f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+        )
     seen: set[str] = set()
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -905,17 +1047,29 @@ def _reject_json_constant(value: str) -> None:
     raise AdapterError("JSON contains non-finite numeric constant")
 
 
-def _reject_json_surrogates(value: Any) -> None:
+def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise AdapterError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
     if isinstance(value, str):
         if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
             raise AdapterError("JSON contains invalid Unicode surrogate")
     elif isinstance(value, list):
+        if len(value) > MAX_JSON_LIST_ITEMS:
+            raise AdapterError(
+                f"JSON array must contain at most {MAX_JSON_LIST_ITEMS} items"
+            )
         for item in value:
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(item, _depth=_depth + 1)
     elif isinstance(value, dict):
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise AdapterError(
+                f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+            )
         for key, item in value.items():
-            _reject_json_surrogates(key)
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(key, _depth=_depth + 1)
+            _reject_json_surrogates(item, _depth=_depth + 1)
 
 
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
@@ -928,6 +1082,14 @@ def _require_exact_keys(value: dict[str, Any], required: set[str], label: str) -
     missing = sorted(required - set(value))
     if missing:
         raise AdapterError(f"{label} is missing required keys: {', '.join(missing)}")
+
+
+def _require_json_array(value: Any, label: str) -> list[Any]:
+    if not isinstance(value, list):
+        raise AdapterError(f"{label} must be an array")
+    if len(value) > MAX_JSON_LIST_ITEMS:
+        raise AdapterError(f"{label} must contain at most {MAX_JSON_LIST_ITEMS} items")
+    return value
 
 
 def _is_secret_looking_key(value: Any) -> bool:
@@ -1017,6 +1179,10 @@ def _load_json_bytes(
         raise AdapterError(f"{label} is not UTF-8 JSON") from error
     except json.JSONDecodeError as error:
         raise AdapterError(f"{label} is not valid JSON: {error}") from error
+    except RecursionError as error:
+        raise AdapterError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        ) from error
     _reject_json_surrogates(value)
     return value, raw
 
@@ -1330,9 +1496,10 @@ def _verify_persisted_record_source(
     if value.get("transaction_hash") != index_record.get("transaction_hash"):
         raise AdapterError(f"{label}.transaction_hash does not match audit index record")
     _require_bool(value.get("ledger_tx_queued"), f"{label}.ledger_tx_queued")
-    change_reason_codes = value.get("change_reason_codes")
-    if not isinstance(change_reason_codes, list):
-        raise AdapterError(f"{label}.change_reason_codes must be an array")
+    change_reason_codes = _require_json_array(
+        value.get("change_reason_codes"),
+        f"{label}.change_reason_codes",
+    )
     for offset, code in enumerate(change_reason_codes):
         _require_nonsecret_clean_string(code, f"{label}.change_reason_codes[{offset}]")
     _verify_persisted_context(value.get("context"), f"{label}.context")
@@ -1341,8 +1508,8 @@ def _verify_persisted_record_source(
         f"{label}.metadata",
         index_record,
     )
-    history = value.get("status_history")
-    if not isinstance(history, list) or not history:
+    history = _require_json_array(value.get("status_history"), f"{label}.status_history")
+    if not history:
         raise AdapterError(f"{label}.status_history must be a non-empty array")
     last_status = None
     last_code = None
@@ -1384,9 +1551,7 @@ def _verify_persisted_record_sources(
     *,
     allow_missing_record_sources: bool,
 ) -> bool:
-    records = audit_index.get("records")
-    if not isinstance(records, list):
-        raise AdapterError(f"{label}.records must be an array")
+    records = _require_json_array(audit_index.get("records"), f"{label}.records")
     if store_dir is None:
         if not allow_missing_record_sources and records:
             raise AdapterError(f"{label}.store_dir is required to verify audit records")
@@ -1503,8 +1668,7 @@ def verify_audit_index(index: Any) -> dict[str, Any]:
         raise AdapterError("audit index record_count must be a non-negative integer")
     if record_count == 0:
         raise AdapterError("audit index record_count must be positive before notary publication")
-    if not isinstance(records, list):
-        raise AdapterError("audit index records must be an array")
+    records = _require_json_array(records, "audit index records")
     if len(records) != record_count:
         raise AdapterError(
             f"audit index record_count {record_count} does not match records length {len(records)}"
@@ -1989,11 +2153,28 @@ def publish_anchor(
         headers["Authorization"] = f"Bearer {bearer_token}"
     request = urllib.request.Request(endpoint, data=anchor.raw, headers=headers, method="POST")
     try:
-        with NO_REDIRECT_OPENER.open(request, timeout=timeout_secs) as response:
-            status_code = int(response.status)
-            if not _is_http_status_code(status_code):
+        try:
+            response = NO_REDIRECT_OPENER.open(request, timeout=timeout_secs)
+        except (urllib.error.HTTPError, urllib.error.URLError):
+            raise
+        except Exception:
+            return _transport_open_failure_result(endpoint)
+        try:
+            status_code = _response_status_code(response)
+            if status_code is None or not _is_http_status_code(status_code):
                 return _invalid_http_status_result(endpoint, status_code)
-            body = response.read(response_limit_bytes + 1)
+            try:
+                body = response.read(response_limit_bytes + 1)
+            except Exception:
+                return _transport_read_failure_result(
+                    endpoint,
+                    "endpoint response could not be read",
+                )
+            if not isinstance(body, bytes):
+                return _transport_read_failure_result(
+                    endpoint,
+                    "endpoint response body was not bytes",
+                )
             if len(body) > response_limit_bytes:
                 raise AdapterError(
                     f"endpoint response exceeded {response_limit_bytes} byte limit"
@@ -2002,15 +2183,28 @@ def publish_anchor(
                 raise AdapterError("endpoint response body contains secret-looking material")
             if 200 <= status_code <= 299 and _response_body_has_unsafe_control(body):
                 raise AdapterError("endpoint response body contains unsafe control characters")
+        finally:
+            _close_response(response)
     except urllib.error.HTTPError as error:
-        status_code = int(error.code)
-        if not _is_http_status_code(status_code):
-            error.close()
+        status_code = _error_status_code(error)
+        if status_code is None or not _is_http_status_code(status_code):
+            _close_http_error(error)
             return _invalid_http_status_result(endpoint, status_code)
         try:
-            body = error.read(response_limit_bytes + 1)
+            try:
+                body = error.read(response_limit_bytes + 1)
+            except Exception:
+                return _transport_read_failure_result(
+                    endpoint,
+                    "endpoint error response could not be read",
+                )
         finally:
-            error.close()
+            _close_http_error(error)
+        if not isinstance(body, bytes):
+            return _transport_read_failure_result(
+                endpoint,
+                "endpoint error response body was not bytes",
+            )
         if len(body) > response_limit_bytes:
             raise AdapterError(
                 f"endpoint error response exceeded {response_limit_bytes} byte limit"
@@ -2030,8 +2224,10 @@ def publish_anchor(
             ok=False,
             response_body_sha256=None,
             response_body_preview=None,
-            error=_receipt_error(str(error.reason)),
+            error=_url_error_receipt_error(error),
         )
+    except OSError:
+        return _transport_open_failure_result(endpoint)
 
     ok = 200 <= status_code <= 299
     return PublishResult(
@@ -2048,15 +2244,81 @@ def _is_http_status_code(status_code: int) -> bool:
     return 100 <= status_code <= 599
 
 
-def _invalid_http_status_result(endpoint: str, status_code: int) -> PublishResult:
+def _response_status_code(response: Any) -> int | None:
+    try:
+        return _parse_http_status_code(response.status)
+    except Exception:
+        return None
+
+
+def _error_status_code(error: urllib.error.HTTPError) -> int | None:
+    try:
+        return _parse_http_status_code(error.code)
+    except Exception:
+        return None
+
+
+def _parse_http_status_code(value: Any) -> int | None:
+    try:
+        status_code = int(value)
+    except Exception:
+        return None
+    if 0 <= status_code <= 999:
+        return status_code
+    return None
+
+
+def _invalid_http_status_result(endpoint: str, status_code: int | None) -> PublishResult:
+    error = "invalid HTTP status"
+    if status_code is not None:
+        error = f"{error} {status_code}"
     return PublishResult(
         endpoint=endpoint,
         status_code=None,
         ok=False,
         response_body_sha256=None,
         response_body_preview=None,
-        error=f"invalid HTTP status {status_code}",
+        error=error,
     )
+
+
+def _transport_read_failure_result(endpoint: str, error: str) -> PublishResult:
+    return PublishResult(
+        endpoint=endpoint,
+        status_code=None,
+        ok=False,
+        response_body_sha256=None,
+        response_body_preview=None,
+        error=error,
+    )
+
+
+def _transport_open_failure_result(endpoint: str) -> PublishResult:
+    return PublishResult(
+        endpoint=endpoint,
+        status_code=None,
+        ok=False,
+        response_body_sha256=None,
+        response_body_preview=None,
+        error="endpoint transport could not be opened",
+    )
+
+
+def _close_http_error(error: urllib.error.HTTPError) -> None:
+    _close_response(error)
+
+
+def _close_response(response: Any) -> None:
+    try:
+        close = getattr(response, "close", None)
+    except Exception:
+        return
+    if close is None:
+        return
+    try:
+        close()
+    except Exception:
+        return
 
 
 def _response_preview(body: bytes) -> str:
@@ -2083,9 +2345,20 @@ def _response_preview_looks_secret(preview: str) -> bool:
     )
 
 
+def _url_error_receipt_error(error: urllib.error.URLError) -> str:
+    try:
+        message = str(error.reason)
+    except Exception:
+        return REDACTED_ERROR
+    return _receipt_error(message)
+
+
 def _receipt_error(message: str) -> str:
-    if _response_preview_looks_secret(message) or _contains_unsafe_preview_control(
-        message
+    if (
+        len(message) > MAX_RECEIPT_ERROR_CHARS
+        or not message.isascii()
+        or _response_preview_looks_secret(message)
+        or _contains_unsafe_preview_control(message)
     ):
         return REDACTED_ERROR
     return message
@@ -2146,8 +2419,14 @@ def receipt_output_path(receipt_dir: Path, anchor: VerifiedAnchor, endpoint: str
 
 
 def run(args: argparse.Namespace) -> int:
-    if args.export_dir is None:
+    if getattr(args, "export_dir", None) is None:
         raise AdapterError("provide --export-dir")
+    args.export_dir = _optional_cli_path(args.export_dir, "export_dir")
+    args.receipt_dir = _optional_cli_path(getattr(args, "receipt_dir", None), "receipt_dir")
+    args.bearer_token_file = _optional_cli_path(
+        getattr(args, "bearer_token_file", None),
+        "bearer_token_file",
+    )
     _reject_output_path_smuggling(args.export_dir, "export_dir")
     if args.bearer_token_file is not None:
         _reject_output_path_smuggling(args.bearer_token_file, "bearer_token_file")
@@ -2164,16 +2443,40 @@ def run(args: argparse.Namespace) -> int:
         raise AdapterError(
             "export_dir must not point to checked-in ISO fixture artifacts"
         )
-    timeout_secs = _require_positive_finite_cli_number(args.timeout_secs, "--timeout-secs")
-    response_limit_bytes = _require_positive_cli_int(
-        args.response_limit_bytes, "--response-limit-bytes"
+    _reject_receipt_dir_input_alias(receipt_dir, args.export_dir, "export_dir")
+    if args.bearer_token_file is not None:
+        _reject_receipt_dir_source_overlap(
+            receipt_dir,
+            args.bearer_token_file,
+            "bearer_token_file path",
+        )
+        _reject_path_overlap(
+            args.bearer_token_file,
+            "bearer_token_file",
+            args.export_dir,
+            "export_dir",
+        )
+    _reject_receipt_dir_notary_source_overlap(receipt_dir, args.export_dir)
+    _require_policy_booleans(args)
+    timeout_secs = _require_positive_finite_cli_number(
+        getattr(args, "timeout_secs", None), "--timeout-secs"
     )
-    _ensure_input_directory(args.export_dir, "export_dir", display_path=False)
-    export_dir = args.export_dir
-    endpoints = list(args.endpoint)
+    response_limit_bytes = _require_response_limit_bytes(
+        getattr(args, "response_limit_bytes", None)
+    )
+    endpoints = _required_cli_string_sequence(getattr(args, "endpoint", None), "--endpoint")
     for endpoint in endpoints:
         _validate_endpoint(endpoint, args.allow_insecure_http)
     _reject_duplicate_endpoints(endpoints)
+    if not args.dry_run:
+        if not endpoints:
+            raise AdapterError("at least one --endpoint is required unless --dry-run is set")
+        if args.receipt_dir is not None:
+            _ensure_output_directory(
+                receipt_dir, "receipt_dir", create=False, check_leaf=False
+            )
+    _ensure_input_directory(args.export_dir, "export_dir", display_path=False)
+    export_dir = args.export_dir
     _reject_unused_local_overrides(args, endpoints=endpoints)
     bearer_token = _load_bearer_token(args.bearer_token_file)
 
@@ -2197,8 +2500,6 @@ def run(args: argparse.Namespace) -> int:
         }
         print(json.dumps(summary, indent=2, sort_keys=True))
         return 0
-    if not endpoints:
-        raise AdapterError("at least one --endpoint is required unless --dry-run is set")
     _ensure_output_directory(receipt_dir, "receipt_dir")
     receipt_offset = 0
     for anchor in anchors:
@@ -2295,7 +2596,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--response-limit-bytes",
         type=int,
         default=DEFAULT_RESPONSE_LIMIT_BYTES,
-        help="Maximum response body bytes retained in a receipt.",
+        help=(
+            "Maximum response body bytes retained in a receipt "
+            f"(max {MAX_RESPONSE_LIMIT_BYTES})."
+        ),
     )
     return parser
 

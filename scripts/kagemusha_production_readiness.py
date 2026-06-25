@@ -45,6 +45,7 @@ DEFAULT_LOCALNET_LIFECYCLE_EVIDENCE_PATH = (
     f"artifacts/kagemusha/{LOCALNET_LIFECYCLE_EVIDENCE_FILENAME}"
 )
 COMPACT_KEY_GENERATOR_LOG_FILENAME = "recursive-compact-key-artifacts.log"
+DEFAULT_ANDROID_DEVICE_LAB_ROOT_PATH = "artifacts/android/device_lab"
 DEFAULT_MIN_SIGNED_AT_UTC = "2026-06-06T00:00:00Z"
 DEFAULT_MAX_SIGNED_AT_FUTURE_SKEW_SECONDS = 300
 ANDROID_DEVICE_LAB_ROOT_SUMMARY_LABEL = "<local-device-lab-root>"
@@ -896,17 +897,23 @@ def validate_repo_root_path(root: Path) -> list[dict[str, Any]]:
     ]
 
 
+def _device_lab_root_arg_values(args: argparse.Namespace) -> list[str]:
+    """Return CLI device-lab root values, preserving the legacy default."""
+
+    raw = getattr(args, "device_lab_root", None)
+    if raw is None:
+        return [DEFAULT_ANDROID_DEVICE_LAB_ROOT_PATH]
+    if isinstance(raw, str):
+        return [raw]
+    return list(raw)
+
+
 def validate_cli_path_arguments(args: argparse.Namespace) -> list[dict[str, Any]]:
     """Reject unsafe local path arguments before summaries are built."""
 
     blockers: list[dict[str, Any]] = []
     for value, label, code in (
         (args.repo_root, "--repo-root", "kagemusha_repo_root_path_invalid"),
-        (
-            args.device_lab_root,
-            "--device-lab-root",
-            "android_device_lab_root_path_invalid",
-        ),
         (args.summary_out, "--summary-out", SUMMARY_OUT_PATH_INVALID_CODE),
         (
             args.lineage_proof_evidence,
@@ -935,6 +942,28 @@ def validate_cli_path_arguments(args: argparse.Namespace) -> list[dict[str, Any]
     if not any(item["code"] == "kagemusha_repo_root_path_invalid" for item in blockers):
         repo_root_errors = validate_repo_root_path(Path(args.repo_root))
         blockers.extend(repo_root_errors)
+    root_values = _device_lab_root_arg_values(args)
+    for index, value in enumerate(root_values):
+        label = (
+            "--device-lab-root"
+            if len(root_values) == 1
+            else f"--device-lab-root[{index}]"
+        )
+        item = _secret_looking_path_blocker(
+            value,
+            label=label,
+            code="android_device_lab_root_path_invalid",
+        )
+        if item is not None:
+            blockers.append(item)
+            continue
+        item = _cli_path_shape_blocker(
+            value,
+            label=label,
+            code="android_device_lab_root_path_invalid",
+        )
+        if item is not None:
+            blockers.append(item)
     for index, value in enumerate(args.trusted_signer_public_keys or []):
         item = _secret_looking_path_blocker(
             value,
@@ -5654,8 +5683,16 @@ def _safe_trusted_signer_public_key_sha256(
     )
 
 
+def _device_lab_root_list(root: Path | Iterable[Path]) -> list[Path]:
+    """Normalize one or more Android device-lab roots."""
+
+    if isinstance(root, (str, os.PathLike)):
+        return [Path(root)]
+    return [Path(item) for item in root]
+
+
 def check_android_device_lab(
-    root: Path,
+    root: Path | Iterable[Path],
     trusted_signer_public_keys: dict[str, Path],
     *,
     slot_ids: Iterable[str] | None = None,
@@ -5665,9 +5702,41 @@ def check_android_device_lab(
     """Check strict Android signed evidence and standard family coverage."""
 
     blockers: list[dict[str, Any]] = []
+    roots = _device_lab_root_list(root)
     trusted_signer_public_key_sha256 = _safe_trusted_signer_public_key_sha256(
         trusted_signer_public_keys
     )
+
+    def empty_summary(summary_blockers: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "root": ANDROID_DEVICE_LAB_ROOT_SUMMARY_LABEL,
+            "slots": [],
+            "covered_device_families": [],
+            "missing_device_families": list(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
+            "covered_d2d_payment_transports": [],
+            "missing_d2d_payment_transports": list(ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
+            "covered_d2d_payment_transports_by_family": {
+                family: []
+                for family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+            },
+            "missing_d2d_payment_transport_pairs": _missing_android_d2d_payment_transport_pairs({}),
+            "duplicate_bindings": {},
+            "signed_evidence": {},
+            "min_signed_at_utc": (
+                min_signed_at.isoformat().replace("+00:00", "Z")
+                if min_signed_at is not None
+                else None
+            ),
+            "max_signed_at_utc": (
+                max_signed_at.isoformat().replace("+00:00", "Z")
+                if max_signed_at is not None
+                else None
+            ),
+            "trusted_signer_public_key_sha256": trusted_signer_public_key_sha256,
+            "blockers": summary_blockers,
+        }
+
     signer_map_blockers = [
         blocker("android_trusted_signer_invalid", error)
         for error in device_lab.validate_trusted_signer_public_key_map(
@@ -5679,103 +5748,34 @@ def check_android_device_lab(
         blocker("android_device_lab_slot_id_invalid", error) for error in slot_id_errors
     ]
     if signer_map_blockers or slot_id_blockers:
-        return {
-            "ok": False,
-            "root": ANDROID_DEVICE_LAB_ROOT_SUMMARY_LABEL,
-            "slots": [],
-            "covered_device_families": [],
-            "missing_device_families": list(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
-            "covered_d2d_payment_transports": [],
-            "missing_d2d_payment_transports": list(ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
-            "covered_d2d_payment_transports_by_family": {
-                family: []
-                for family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
-            },
-            "missing_d2d_payment_transport_pairs": _missing_android_d2d_payment_transport_pairs({}),
-            "duplicate_bindings": {},
-            "signed_evidence": {},
-            "min_signed_at_utc": (
-                min_signed_at.isoformat().replace("+00:00", "Z")
-                if min_signed_at is not None
-                else None
-            ),
-            "max_signed_at_utc": (
-                max_signed_at.isoformat().replace("+00:00", "Z")
-                if max_signed_at is not None
-                else None
-            ),
-            "trusted_signer_public_key_sha256": trusted_signer_public_key_sha256,
-            "blockers": [*signer_map_blockers, *slot_id_blockers],
-        }
+        return empty_summary([*signer_map_blockers, *slot_id_blockers])
     blockers.extend(slot_id_blockers)
-    root_exists, root_errors = device_lab.classify_device_lab_root_path(root)
-    if root_errors:
-        root_blockers = [
-            blocker("android_device_lab_root_invalid", error) for error in root_errors
-        ]
-        return {
-            "ok": False,
-            "root": ANDROID_DEVICE_LAB_ROOT_SUMMARY_LABEL,
-            "slots": [],
-            "covered_device_families": [],
-            "missing_device_families": list(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
-            "covered_d2d_payment_transports": [],
-            "missing_d2d_payment_transports": list(ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
-            "covered_d2d_payment_transports_by_family": {
-                family: []
-                for family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
-            },
-            "missing_d2d_payment_transport_pairs": _missing_android_d2d_payment_transport_pairs({}),
-            "duplicate_bindings": {},
-            "signed_evidence": {},
-            "min_signed_at_utc": (
-                min_signed_at.isoformat().replace("+00:00", "Z")
-                if min_signed_at is not None
-                else None
-            ),
-            "max_signed_at_utc": (
-                max_signed_at.isoformat().replace("+00:00", "Z")
-                if max_signed_at is not None
-                else None
-            ),
-            "trusted_signer_public_key_sha256": trusted_signer_public_key_sha256,
-            "blockers": [*root_blockers, *slot_id_blockers],
-        }
-    if not root_exists:
-        return {
-            "ok": False,
-            "root": ANDROID_DEVICE_LAB_ROOT_SUMMARY_LABEL,
-            "slots": [],
-            "covered_device_families": [],
-            "missing_device_families": list(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
-            "covered_d2d_payment_transports": [],
-            "missing_d2d_payment_transports": list(ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
-            "covered_d2d_payment_transports_by_family": {
-                family: []
-                for family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
-            },
-            "missing_d2d_payment_transport_pairs": _missing_android_d2d_payment_transport_pairs({}),
-            "duplicate_bindings": {},
-            "signed_evidence": {},
-            "min_signed_at_utc": (
-                min_signed_at.isoformat().replace("+00:00", "Z")
-                if min_signed_at is not None
-                else None
-            ),
-            "max_signed_at_utc": (
-                max_signed_at.isoformat().replace("+00:00", "Z")
-                if max_signed_at is not None
-                else None
-            ),
-            "trusted_signer_public_key_sha256": trusted_signer_public_key_sha256,
-            "blockers": [
-                blocker(
-                    "android_device_lab_root_missing",
-                    "Android device-lab root is missing",
-                ),
-                *slot_id_blockers,
-            ],
-        }
+    existing_roots: list[tuple[int, Path]] = []
+    root_blockers: list[dict[str, Any]] = []
+    for root_index, candidate_root in enumerate(roots):
+        root_exists, root_errors = device_lab.classify_device_lab_root_path(
+            candidate_root
+        )
+        if root_errors:
+            for error in root_errors:
+                item = blocker("android_device_lab_root_invalid", error)
+                if len(roots) > 1:
+                    item["root_index"] = root_index
+                root_blockers.append(item)
+            continue
+        if not root_exists:
+            item = blocker(
+                "android_device_lab_root_missing",
+                "Android device-lab root is missing",
+            )
+            if len(roots) > 1:
+                item["root_index"] = root_index
+            root_blockers.append(item)
+            continue
+        existing_roots.append((root_index, candidate_root))
+    if not existing_roots:
+        return empty_summary([*root_blockers, *slot_id_blockers])
+    blockers.extend(root_blockers)
     if not trusted_signer_public_keys:
         blockers.append(
             blocker(
@@ -5834,11 +5834,22 @@ def check_android_device_lab(
             "blockers": blockers,
         }
 
-    raw_reports, discovery_blockers = _slot_reports(
-        root, trusted_signer_public_keys, validated_slot_ids
+    android_raw_reports: list[dict[str, Any]] = []
+    for root_index, candidate_root in existing_roots:
+        raw_reports, discovery_blockers = _slot_reports(
+            candidate_root, trusted_signer_public_keys, validated_slot_ids
+        )
+        if len(roots) > 1:
+            for item in discovery_blockers:
+                item["root_index"] = root_index
+        blockers.extend(discovery_blockers)
+        android_raw_reports.extend(raw_reports)
+    reports, report_secret_blockers = _sanitize_android_reports(android_raw_reports)
+    reports.sort(
+        key=lambda report: (
+            report.get("slot") if isinstance(report.get("slot"), str) else ""
+        )
     )
-    blockers.extend(discovery_blockers)
-    reports, report_secret_blockers = _sanitize_android_reports(raw_reports)
     blockers.extend(report_secret_blockers)
     if not reports:
         blockers.append(
@@ -5963,7 +5974,7 @@ def check_android_device_lab(
 def build_summary(
     *,
     repo_root: Path,
-    device_lab_root: Path,
+    device_lab_root: Path | Iterable[Path],
     lineage_proof_evidence_path: Path,
     trusted_signer_public_keys: dict[str, Path],
     compact_key_evidence_path: Path | None = None,
@@ -6581,8 +6592,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--device-lab-root",
-        default="artifacts/android/device_lab",
-        help="Android device-lab root containing production slots.",
+        action="append",
+        default=None,
+        help=(
+            "Android device-lab root containing production slots. Repeat to "
+            "aggregate separately captured device-family roots."
+        ),
     )
     parser.add_argument(
         "--lineage-proof-evidence",
@@ -6712,9 +6727,12 @@ def main(argv: list[str] | None = None) -> int:
         }
     else:
         assert repo_root is not None
-        device_lab_root = Path(args.device_lab_root)
-        if not device_lab_root.is_absolute():
-            device_lab_root = repo_root / device_lab_root
+        device_lab_roots: list[Path] = []
+        for raw_device_lab_root in _device_lab_root_arg_values(args):
+            device_lab_root = Path(raw_device_lab_root)
+            if not device_lab_root.is_absolute():
+                device_lab_root = repo_root / device_lab_root
+            device_lab_roots.append(device_lab_root)
         lineage_proof_evidence_path = Path(args.lineage_proof_evidence)
         if not lineage_proof_evidence_path.is_absolute():
             lineage_proof_evidence_path = repo_root / lineage_proof_evidence_path
@@ -6878,7 +6896,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             summary = build_summary(
                 repo_root=repo_root,
-                device_lab_root=device_lab_root,
+                device_lab_root=device_lab_roots,
                 lineage_proof_evidence_path=lineage_proof_evidence_path,
                 trusted_signer_public_keys=trusted,
                 compact_key_evidence_path=compact_key_evidence_path,

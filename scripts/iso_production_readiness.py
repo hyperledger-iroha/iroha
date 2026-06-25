@@ -43,7 +43,7 @@ EVIDENCE_VERSION = 1
 CANARY_SUMMARY_VERSION = 1
 RECEIPT_SUMMARY_VERSION = 2
 TRUST_SUMMARY_VERSION = 1
-XSD_SUMMARY_VERSION = 2
+XSD_SUMMARY_VERSION = 3
 SUMMARY_DIGEST_FIELD = "summary_sha256"
 MAX_TRUST_DER_BLOBS = 8
 MAX_TRUST_DER_BYTES = 1024 * 1024
@@ -52,6 +52,10 @@ MAX_PROFILE_ID_CHARS = 128
 MAX_TRUST_POLICY_CHARS = 128
 MAX_TRUST_SOURCE_TEXT_CHARS = 256
 MAX_SUMMARY_JSON_BYTES = 4 * 1024 * 1024
+MAX_SUMMARY_INPUT_PATHS = 64
+MAX_JSON_LIST_ITEMS = 8192
+MAX_JSON_OBJECT_MEMBERS = 8192
+MAX_JSON_NESTING_DEPTH = 128
 MAX_TIMESTAMP_CHARS = 128
 MAX_SOURCE_URL_CHARS = 2048
 MAX_LOCAL_PATH_CHARS = 4096
@@ -60,7 +64,15 @@ MAX_XML_IDENTIFIER_CHARS = 256
 MAX_SOURCE_REPOSITORY_CHARS = 2048
 MAX_SOURCE_PATH_CHARS = 2048
 MAX_REVIEWED_GAP_REASON_CHARS = 1024
+MAX_PENDING_SCHEMA_ORGANISATION_CHARS = 256
 MESSAGE_DEF_ID_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}\.[0-9]{3}\.[0-9]{2}$")
+ISO_SCHEMA_DOWNLOAD_PATH_RE = re.compile(r"^/message/[1-9][0-9]*/download$")
+ISO_SCHEMA_ARCHIVE_QUERY_RE = re.compile(r"^page=[1-9][0-9]*$")
+ISO_MESSAGE_NAME_RE = re.compile(r"^[A-Z][A-Za-z0-9]*V[0-9]{2}$")
+ISO_MESSAGE_NAME_VERSION_RE = re.compile(r"V([0-9]{2})$")
+ISO_SUBMITTING_ORGANISATION_PART_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9&'().-]*(?:(?: |/)[A-Za-z0-9][A-Za-z0-9&'().-]*)*$"
+)
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}$")
 RAIL_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:@+-]*[A-Za-z0-9])?$")
@@ -117,6 +129,39 @@ SUPPORTED_RAIL_MESSAGE_TYPES = {
     "sese.025",
     "colr.007",
     "colr.012",
+}
+RAIL_MESSAGE_TYPES = {
+    "generic-iso20022": SUPPORTED_RAIL_MESSAGE_TYPES - LEGACY_RAIL_MESSAGE_TYPES,
+    "swift-cbpr-plus": {
+        "pacs.008",
+        "pacs.009",
+        "pacs.002",
+        "pacs.004",
+        "camt.056",
+    },
+    "fedwire-funds": {
+        "pacs.008",
+        "pacs.009",
+        "pacs.002",
+        "pacs.004",
+        "camt.056",
+    },
+    "sepa-sct-inst": {
+        "pacs.008",
+        "pacs.002",
+        "pacs.004",
+        "camt.056",
+    },
+    "securities-csd": {
+        "pacs.009",
+        "pacs.002",
+        "pacs.004",
+        "camt.056",
+        "sese.023",
+        "sese.024",
+        "sese.025",
+        "colr.012",
+    },
 }
 ALLOWED_SCHEMA_SOURCE_LICENSES = {"Apache-2.0"}
 SCHEMA_SOURCE_KEYS = {"repository", "commit", "path", "license", "sha256"}
@@ -245,6 +290,76 @@ RAIL_RECEIPT_METADATA_KEYS = {
     "rail_message_id",
     "source_path",
 }
+RECEIPT_MATERIAL_DIGEST_FIELDS = (
+    "response_body_sha256",
+    "payload_sha256",
+    "anchor_sha256",
+    "index_sha256",
+)
+RECEIPT_SOURCE_MATERIAL_FIELDS_BY_KIND = {
+    "iso-rail-gateway": ("source_path", "payload_sha256", "rail_message_id"),
+}
+CANARY_RECEIPT_SOURCE_MATERIAL_REUSE_CODES = (
+    ("source_path", "evidence.canary_receipt_source_path_reused"),
+    ("payload_sha256", "evidence.canary_receipt_payload_digest_reused"),
+    ("rail_message_id", "evidence.canary_receipt_rail_message_id_reused"),
+    ("anchor_path", "evidence.canary_receipt_anchor_path_reused"),
+    ("anchor_sha256", "evidence.canary_receipt_anchor_digest_reused"),
+    ("index_path", "evidence.canary_receipt_index_path_reused"),
+    ("index_sha256", "evidence.canary_receipt_index_digest_reused"),
+)
+ARCHIVE_RECEIPT_SOURCE_MATERIAL_REUSE_CODES = (
+    ("source_path", "evidence.archive_receipt_source_path_reused"),
+    ("payload_sha256", "evidence.archive_receipt_payload_digest_reused"),
+    ("rail_message_id", "evidence.archive_receipt_rail_message_id_reused"),
+    ("anchor_path", "evidence.archive_receipt_anchor_path_reused"),
+    ("anchor_sha256", "evidence.archive_receipt_anchor_digest_reused"),
+    ("index_path", "evidence.archive_receipt_index_path_reused"),
+    ("index_sha256", "evidence.archive_receipt_index_digest_reused"),
+)
+TRUST_DER_PROOF_FIELDS = (
+    "x509_trust_anchor_der",
+    "revoked_certificate_der",
+    "x509_crl_der",
+    "x509_ocsp_response_der",
+)
+CANARY_SUMMARY_RECEIPT_ROLE_CODES = {
+    "receipt_summary": "evidence.canary_summary_digest_matches_receipt_summary",
+    "receipt": "evidence.canary_summary_digest_matches_receipt",
+    "receipt_material": "evidence.canary_summary_digest_matches_receipt_material",
+}
+CANARY_SUMMARY_TRUST_ROLE_CODES = {
+    "profile_json": "evidence.canary_summary_digest_matches_trust_profile_json",
+    "bundle": "evidence.canary_summary_digest_matches_trust_bundle",
+    "der_proof": "evidence.canary_summary_digest_matches_trust_der_proof",
+}
+TRUST_SUMMARY_RECEIPT_ROLE_CODES = {
+    "receipt_summary": "trust.summary_digest_matches_receipt_summary",
+    "receipt": "trust.summary_digest_matches_receipt",
+    "receipt_material": "trust.summary_digest_matches_receipt_material",
+}
+TRUST_SUMMARY_TRUST_ROLE_CODES = {
+    "profile_json": "trust.summary_digest_matches_profile_json",
+    "bundle": "trust.summary_digest_matches_bundle",
+    "der_proof": "trust.summary_digest_matches_der_proof",
+}
+XSD_DIGEST_EVIDENCE_ROLE_CODES = {
+    "summary": "xsd.summary_digest_matches_evidence_material",
+    "manifest": "xsd.manifest_digest_matches_evidence_material",
+    "schema": "xsd.schema_digest_matches_evidence_material",
+    "fixture": "xsd.fixture_digest_matches_evidence_material",
+    "blocked_source": "xsd.blocked_source_digest_matches_evidence_material",
+    "profile_catalog": "xsd.profile_catalog_digest_matches_evidence_material",
+    "profile_catalog_json": "xsd.profile_catalog_json_digest_matches_evidence_material",
+}
+XSD_PATH_EVIDENCE_ROLE_CODES = {
+    "summary": "xsd.summary_path_matches_evidence_material",
+    "manifest": "xsd.manifest_path_matches_evidence_material",
+    "schema": "xsd.schema_path_matches_evidence_material",
+    "fixture": "xsd.fixture_path_matches_evidence_material",
+    "blocked_source": "xsd.blocked_source_path_matches_evidence_material",
+    "profile_catalog": "xsd.profile_catalog_path_matches_evidence_material",
+}
 TRUST_SUMMARY_KEYS = {
     "version",
     "path",
@@ -296,8 +411,12 @@ XSD_SUMMARY_KEYS = {
     "schema_only_entries",
     "missing_profile_schema_versions",
     "missing_profile_schema_message_ids",
+    "unreviewed_profile_schema_message_id_count",
+    "unreviewed_profile_schema_message_ids",
     "blocked_schema_source_count",
     "blocked_schema_sources",
+    "pending_schema_source_count",
+    "pending_schema_sources",
     "schemas",
     "fixtures",
     "profile_catalog",
@@ -332,6 +451,81 @@ XSD_BLOCKED_SCHEMA_SOURCE_KEYS = {
     "restriction_markers",
 }
 XSD_BLOCKED_SCHEMA_SOURCE_PROVENANCE_KEYS = {"repository", "commit", "path", "sha256"}
+XSD_PENDING_SCHEMA_SOURCE_KEYS = {
+    "message_def_id",
+    "source",
+    "reason",
+}
+XSD_PENDING_SCHEMA_SOURCE_PROVENANCE_KEYS = {
+    "catalogue_url",
+    "download_url",
+    "download_type",
+    "message_name",
+    "submitting_organisation",
+}
+XSD_PENDING_SCHEMA_DOWNLOAD_TYPES = {"XSD"}
+KNOWN_PENDING_SCHEMA_SOURCE_METADATA = {
+    "colr.012.001.05": {
+        "catalogue_url": "https://www.iso20022.org/iso-20022-message-definitions",
+        "download_url": "https://www.iso20022.org/message/22504/download",
+        "download_type": "XSD",
+        "message_name": "CollateralSubstitutionConfirmationV05",
+        "submitting_organisation": "SWIFT, FPL, ISDA/FpML, ISITC",
+    },
+    "sese.023.001.09": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17196/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionInstructionV09",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.023.001.11": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/22545/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionInstructionV11",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.024.001.09": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17236/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionStatusAdviceV09",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.024.001.10": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17241/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionStatusAdviceV10",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.025.001.08": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17286/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionConfirmationV08",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.025.001.10": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/21776/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionConfirmationV10",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.025.001.11": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/22547/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionConfirmationV11",
+        "submitting_organisation": "SWIFT",
+    },
+}
+XSD_ISO_SCHEMA_CATALOGUE_PATHS = {
+    "/iso-20022-message-definitions",
+    "/catalogue-messages/iso-20022-messages-archive",
+}
 XSD_BLOCKED_SCHEMA_RESTRICTION_MARKERS = {
     "swift-copyright-header",
     "licensed-product-redistribution-agreement",
@@ -397,6 +591,11 @@ XSD_PROFILE_MISSING_MESSAGE_KEYS = {
     "reviewed_missing_schema_fixture",
     "reviewed_schema_only",
     "blocked_source",
+    "pending_source",
+}
+XSD_PROFILE_UNREVIEWED_MESSAGE_KEYS = {
+    "message_def_id",
+    "profile_version_count",
 }
 XSD_PROFILE_SKIPPED_VERSION_KEYS = {
     "profile_id",
@@ -624,17 +823,29 @@ def _contains_control_character(value: str) -> bool:
     )
 
 
-def _check_no_secret_material(value: Any, label: str = "$") -> None:
+def _check_no_secret_material(value: Any, label: str = "$", *, _depth: int = 0) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise ReadinessError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
     if isinstance(value, dict):
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise ReadinessError(
+                f"{label} must contain at most {MAX_JSON_OBJECT_MEMBERS} object members"
+            )
         for key, child in value.items():
             if _is_secret_looking_key(key):
                 raise ReadinessError(f"{label} contains forbidden secret-looking field")
             if _is_control_bearing_key(key):
                 raise ReadinessError(f"{label} contains forbidden control-bearing field")
-            _check_no_secret_material(child, f"{label}.{key}")
+            _check_no_secret_material(child, f"{label}.{key}", _depth=_depth + 1)
     elif isinstance(value, list):
+        if len(value) > MAX_JSON_LIST_ITEMS:
+            raise ReadinessError(
+                f"{label} must contain at most {MAX_JSON_LIST_ITEMS} items"
+            )
         for offset, child in enumerate(value):
-            _check_no_secret_material(child, f"{label}[{offset}]")
+            _check_no_secret_material(child, f"{label}[{offset}]", _depth=_depth + 1)
     elif isinstance(value, str):
         if _contains_unsafe_json_control(value):
             raise ReadinessError(f"{label} contains unsafe control characters")
@@ -958,20 +1169,52 @@ def _reject_repository_output_path(path: Path, label: str) -> None:
         )
 
 
-def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+def _same_existing_file(left: Path, right: Path) -> bool:
+    try:
+        left_stat = left.stat()
+        right_stat = right.stat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+    return os.path.samestat(left_stat, right_stat)
+
+
+def _reject_summary_output_input_alias(
+    summary_out: Path | None,
+    inputs: tuple[tuple[str, Path], ...],
+) -> None:
+    if summary_out is None:
+        return
+    for label, path in inputs:
+        if str(summary_out) == str(path) or _same_existing_file(summary_out, path):
+            raise ReadinessError(f"summary_out must not reuse {label} path")
+
+
+def _ensure_text_output_target(
+    path: Path,
+    *,
+    display_label: str | None = None,
+    create_parent: bool = True,
+) -> None:
     label = display_label if display_label is not None else "output path"
     _reject_output_path_smuggling(path, label)
     _reject_repository_output_path(path, label)
-    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-    except FileExistsError as error:
+        _reject_symlinked_existing_ancestors(path.parent, display_label=label)
+    except NotADirectoryError as error:
         raise ReadinessError(f"{label} must be a directory") from error
-    parent_mode = path.parent.lstat().st_mode
-    if stat.S_ISLNK(parent_mode):
-        raise ReadinessError(f"{label} must not be a symlink")
-    if not stat.S_ISDIR(parent_mode):
-        raise ReadinessError(f"{label} must be a directory")
+    if create_parent:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except FileExistsError as error:
+            raise ReadinessError(f"{label} must be a directory") from error
+    if path.parent.exists() or path.parent.is_symlink():
+        parent_mode = path.parent.lstat().st_mode
+        if stat.S_ISLNK(parent_mode):
+            raise ReadinessError(f"{label} must not be a symlink")
+        if not stat.S_ISDIR(parent_mode):
+            raise ReadinessError(f"{label} must be a directory")
     if path.exists() or path.is_symlink():
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode):
@@ -980,6 +1223,11 @@ def _write_text_output(path: Path, text: str, *, display_label: str | None = Non
             raise ReadinessError(f"{label} must be a regular file")
         if metadata.st_nlink > 1:
             raise ReadinessError(f"{label} must not be hard-linked")
+
+
+def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else "output path"
+    _ensure_text_output_target(path, display_label=label)
     parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -1070,11 +1318,19 @@ def _load_json(path: Path, *, display_label: str | None = None) -> Any:
         )
     except json.JSONDecodeError as error:
         raise ReadinessError(f"{label} is not valid JSON: {error}") from error
+    except RecursionError as error:
+        raise ReadinessError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        ) from error
     _reject_json_surrogates(value)
     return value
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    if len(pairs) > MAX_JSON_OBJECT_MEMBERS:
+        raise ReadinessError(
+            f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+        )
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
@@ -1087,17 +1343,29 @@ def _reject_json_constant(value: str) -> None:
     raise ReadinessError("JSON contains non-finite numeric constant")
 
 
-def _reject_json_surrogates(value: Any) -> None:
+def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise ReadinessError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
     if isinstance(value, str):
         if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
             raise ReadinessError("JSON contains invalid Unicode surrogate")
     elif isinstance(value, list):
+        if len(value) > MAX_JSON_LIST_ITEMS:
+            raise ReadinessError(
+                f"JSON array must contain at most {MAX_JSON_LIST_ITEMS} items"
+            )
         for item in value:
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(item, _depth=_depth + 1)
     elif isinstance(value, dict):
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise ReadinessError(
+                f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+            )
         for key, item in value.items():
-            _reject_json_surrogates(key)
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(key, _depth=_depth + 1)
+            _reject_json_surrogates(item, _depth=_depth + 1)
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
@@ -1178,6 +1446,8 @@ def _reject_non_ascii_context(value: str, label: str) -> None:
 def _require_list(value: Any, label: str) -> list[Any]:
     if not isinstance(value, list):
         raise ReadinessError(f"{label} must be a JSON array")
+    if len(value) > MAX_JSON_LIST_ITEMS:
+        raise ReadinessError(f"{label} must contain at most {MAX_JSON_LIST_ITEMS} items")
     return value
 
 
@@ -1202,7 +1472,11 @@ def _require_context_string(value: dict[str, Any], key: str, label: str) -> str:
 
 
 def _require_cli_string(value: str | None, label: str) -> str:
-    if value is None or not value.strip():
+    if value is None:
+        raise ReadinessError(f"provide {label}")
+    if not isinstance(value, str):
+        raise ReadinessError(f"{label} must be a string")
+    if not value.strip():
         raise ReadinessError(f"provide {label}")
     if len(value) > MAX_CLEAN_STRING_CHARS:
         raise ReadinessError(f"{label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
@@ -1259,6 +1533,23 @@ def _require_bool(value: dict[str, Any], key: str, label: str) -> bool:
     if not isinstance(raw, bool):
         raise ReadinessError(f"{label}.{key} must be a boolean")
     return raw
+
+
+def _require_cli_bool(value: Any, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise ReadinessError(f"{label} must be a boolean")
+    return value
+
+
+def _optional_cli_path(value: Any, label: str) -> Path | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        raise ReadinessError(f"{label} must be a path")
+    try:
+        return Path(value)
+    except TypeError as error:
+        raise ReadinessError(f"{label} must be a path") from error
 
 
 def _require_positive_int(value: dict[str, Any], key: str, label: str) -> int:
@@ -1334,6 +1625,15 @@ def _require_compact_der_entries(
             )
         result.append({"sha256": digest, "byte_len": byte_len})
     return result
+
+
+def _compact_der_order_keys(
+    entries: list[dict[str, int | str]],
+) -> list[tuple[str, int]]:
+    return [
+        (str(entry["sha256"]), int(entry["byte_len"]))
+        for entry in entries
+    ]
 
 
 def _block_compact_der_role_reuse(
@@ -2013,6 +2313,10 @@ def _receipt_entry_content_metadata(receipt: dict[str, Any]) -> tuple[tuple[str,
     return tuple((key, receipt.get(key)) for key in (*generic_keys, *keys))
 
 
+def _receipt_summary_entry_order_key(entry: dict[str, Any]) -> tuple[str, str, str]:
+    return (entry["receipt_kind"], entry["path"], entry["receipt_sha256"])
+
+
 def _require_profile_direction(value: dict[str, Any], key: str, label: str) -> str:
     raw = _require_string(value, key, label)
     if raw not in PROFILE_DIRECTIONS:
@@ -2351,6 +2655,232 @@ def _verify_blocked_schema_source_summary(
     }
 
 
+def _validate_iso_catalogue_url(raw: str, label: str) -> str:
+    if len(raw) > MAX_SOURCE_URL_CHARS:
+        raise ReadinessError(f"{label} must be no longer than {MAX_SOURCE_URL_CHARS} characters")
+    if _contains_control_character(raw):
+        raise ReadinessError(f"{label} must not contain control characters")
+    if raw != raw.strip():
+        raise ReadinessError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise ReadinessError(f"{label} must not contain whitespace")
+    _reject_non_ascii_context(raw, label)
+    _reject_url_percent_encoding_smuggling(raw, label)
+    _reject_secret_looking_identifier(raw, label)
+    if "%" in raw:
+        raise ReadinessError(f"{label} must not contain percent escapes")
+    parsed = urllib.parse.urlparse(raw)
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "www.iso20022.org"
+        or parsed.path not in XSD_ISO_SCHEMA_CATALOGUE_PATHS
+        or parsed.params
+        or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ReadinessError(f"{label} must be an official ISO 20022 catalogue URL")
+    query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    if parsed.path == "/iso-20022-message-definitions":
+        if query or "?" in raw:
+            raise ReadinessError(f"{label} must not include query parameters")
+    else:
+        if (
+            ISO_SCHEMA_ARCHIVE_QUERY_RE.fullmatch(parsed.query) is None
+            or len(query) != 1
+            or query[0][0] != "page"
+            or not query[0][1].isdigit()
+        ):
+            raise ReadinessError(f"{label} archive URL must set one numeric page")
+    return raw
+
+
+def _validate_iso_download_url(raw: str, label: str) -> str:
+    if len(raw) > MAX_SOURCE_URL_CHARS:
+        raise ReadinessError(f"{label} must be no longer than {MAX_SOURCE_URL_CHARS} characters")
+    if _contains_control_character(raw):
+        raise ReadinessError(f"{label} must not contain control characters")
+    if raw != raw.strip():
+        raise ReadinessError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise ReadinessError(f"{label} must not contain whitespace")
+    _reject_non_ascii_context(raw, label)
+    _reject_url_percent_encoding_smuggling(raw, label)
+    _reject_secret_looking_identifier(raw, label)
+    if "%" in raw:
+        raise ReadinessError(f"{label} must not contain percent escapes")
+    parsed = urllib.parse.urlparse(raw)
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "www.iso20022.org"
+        or not ISO_SCHEMA_DOWNLOAD_PATH_RE.fullmatch(parsed.path)
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ReadinessError(f"{label} must be an official ISO 20022 XSD download URL")
+    return raw
+
+
+def _validate_iso_message_name_version(
+    message_name: str,
+    message_def_id: str,
+    label: str,
+) -> None:
+    if ISO_MESSAGE_NAME_RE.fullmatch(message_name) is None:
+        raise ReadinessError(
+            f"{label} must be a canonical ISO message name ending in VNN"
+        )
+    match = ISO_MESSAGE_NAME_VERSION_RE.search(message_name)
+    expected_version = message_def_id.rsplit(".", 1)[-1]
+    if match is None or match.group(1) != expected_version:
+        raise ReadinessError(
+            f"{label} version suffix must match message_def_id version"
+        )
+
+
+def _pending_schema_organisation_is_placeholder(raw: str) -> bool:
+    lowered = raw.casefold()
+    tokens = tuple(token for token in re.split(r"[^a-z0-9]+", lowered) if token)
+    joined_windows = {
+        "".join(tokens[start:end])
+        for start in range(len(tokens))
+        for end in range(start + 1, len(tokens) + 1)
+    }
+    if lowered in PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS:
+        return True
+    if any(token in PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS for token in tokens):
+        return True
+    for marker in PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS:
+        marker_tokens = tuple(
+            token for token in re.split(r"[^a-z0-9]+", marker.casefold()) if token
+        )
+        if marker_tokens and "".join(marker_tokens) in joined_windows:
+            return True
+    return False
+
+
+def _validate_iso_submitting_organisation(raw: Any, label: str) -> str:
+    value = _validate_reviewed_gap_reason(raw, label)
+    if value is None:
+        raise ReadinessError(f"{label} must be recorded")
+    if len(value) > MAX_PENDING_SCHEMA_ORGANISATION_CHARS:
+        raise ReadinessError(
+            f"{label} must be no longer than "
+            f"{MAX_PENDING_SCHEMA_ORGANISATION_CHARS} characters"
+        )
+    if any(ch.isspace() and ch != " " for ch in value):
+        raise ReadinessError(f"{label} must use printable ASCII spaces")
+    if "  " in value:
+        raise ReadinessError(f"{label} must use single spaces")
+    if "%" in value:
+        raise ReadinessError(f"{label} must not contain percent escapes")
+    if ";" in value:
+        raise ReadinessError(f"{label} must not contain semicolon path parameters")
+    if ":" in value or "\\" in value or "@" in value:
+        raise ReadinessError(f"{label} must not contain URI or contact delimiters")
+    if "//" in value or "/ " in value or " /" in value:
+        raise ReadinessError(f"{label} must use slash only inside organization tokens")
+    parts = value.split(", ")
+    if any(not part or "," in part for part in parts):
+        raise ReadinessError(
+            f"{label} must be a comma-space separated list of organization names"
+        )
+    for part in parts:
+        if ISO_SUBMITTING_ORGANISATION_PART_RE.fullmatch(part) is None:
+            raise ReadinessError(
+                f"{label} must be a canonical ISO submitting organisation label"
+            )
+        if _pending_schema_organisation_is_placeholder(part):
+            raise ReadinessError(
+                f"{label} must not use placeholder organization metadata"
+            )
+    return value
+
+
+def _validate_known_pending_schema_source_metadata(
+    message_def_id: str,
+    source: dict[str, str],
+    label: str,
+) -> None:
+    expected = KNOWN_PENDING_SCHEMA_SOURCE_METADATA.get(message_def_id)
+    if expected is None:
+        return
+    for key, expected_value in expected.items():
+        if source[key] != expected_value:
+            raise ReadinessError(
+                f"{label}.source.{key} must match known official ISO pending-source metadata"
+            )
+
+
+def _verify_pending_schema_source_summary(
+    entry_raw: Any,
+    label: str,
+) -> dict[str, Any]:
+    entry = _require_object(entry_raw, label)
+    _reject_unknown_keys(entry, XSD_PENDING_SCHEMA_SOURCE_KEYS, label)
+    message_def_id = _require_message_def_id(entry, "message_def_id", label)
+    reason = _validate_reviewed_gap_reason(entry.get("reason"), f"{label}.reason")
+    if reason is None:
+        raise ReadinessError(f"{label}.reason must be recorded")
+    if "source" not in entry:
+        raise ReadinessError(f"{label}.source must be recorded")
+    source = _require_object(entry["source"], f"{label}.source")
+    _reject_unknown_keys(
+        source,
+        XSD_PENDING_SCHEMA_SOURCE_PROVENANCE_KEYS,
+        f"{label}.source",
+    )
+    catalogue_url = _validate_iso_catalogue_url(
+        _require_string(source, "catalogue_url", f"{label}.source"),
+        f"{label}.source.catalogue_url",
+    )
+    download_url = _validate_iso_download_url(
+        _require_string(source, "download_url", f"{label}.source"),
+        f"{label}.source.download_url",
+    )
+    download_type = _require_string(source, "download_type", f"{label}.source")
+    if download_type not in XSD_PENDING_SCHEMA_DOWNLOAD_TYPES:
+        raise ReadinessError(
+            f"{label}.source.download_type must be one of "
+            + ", ".join(sorted(XSD_PENDING_SCHEMA_DOWNLOAD_TYPES))
+        )
+    message_name = _validate_reviewed_gap_reason(
+        source.get("message_name"),
+        f"{label}.source.message_name",
+    )
+    if message_name is None:
+        raise ReadinessError(f"{label}.source.message_name must be recorded")
+    _validate_iso_message_name_version(
+        message_name,
+        message_def_id,
+        f"{label}.source.message_name",
+    )
+    submitting_organisation = _validate_iso_submitting_organisation(
+        source.get("submitting_organisation"),
+        f"{label}.source.submitting_organisation",
+    )
+    normalized_source = {
+        "catalogue_url": catalogue_url,
+        "download_url": download_url,
+        "download_type": download_type,
+        "message_name": message_name,
+        "submitting_organisation": submitting_organisation,
+    }
+    _validate_known_pending_schema_source_metadata(
+        message_def_id,
+        normalized_source,
+        label,
+    )
+    return {
+        "message_def_id": message_def_id,
+        "source": normalized_source,
+        "reason": reason,
+    }
+
+
 def _parse_timestamp(raw: str, label: str) -> dt.datetime:
     if len(raw) > MAX_TIMESTAMP_CHARS:
         raise ReadinessError(
@@ -2650,6 +3180,41 @@ def _blocker(blockers: list[dict[str, Any]], code: str, message: str, path: Path
     blockers.append({"code": code, "message": message, "path": str(path)})
 
 
+def _diagnostic_order_key(diagnostic: dict[str, Any]) -> tuple[str, str, str, str]:
+    def key_value(field: str) -> str:
+        value = diagnostic.get(field)
+        if isinstance(value, str):
+            return value
+        return _canonical_json_bytes(value).decode("utf-8")
+
+    return (
+        key_value("code"),
+        key_value("path"),
+        key_value("message"),
+        _canonical_json_bytes(diagnostic).decode("utf-8"),
+    )
+
+
+def _canonical_diagnostic_entry_key(entry: Any) -> str:
+    return _canonical_json_bytes(entry).decode("utf-8")
+
+
+def _canonical_diagnostic(diagnostic: dict[str, Any]) -> dict[str, Any]:
+    result = dict(diagnostic)
+    entries = result.get("entries")
+    if isinstance(entries, list):
+        result["entries"] = sorted(entries, key=_canonical_diagnostic_entry_key)
+    return result
+
+
+def _canonical_diagnostics(diagnostics: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        (_canonical_diagnostic(diagnostic) for diagnostic in diagnostics),
+        key=_diagnostic_order_key,
+    )
+
+
+
 def _block_if_stale(
     timestamp: dt.datetime,
     *,
@@ -2762,6 +3327,8 @@ def _verify_xsd_summary_entries(
     schema_only_entries: list[Any],
     blocked_schema_source_count: int,
     blocked_schema_sources: list[Any],
+    pending_schema_source_count: int,
+    pending_schema_sources: list[Any],
     blockers: list[dict[str, Any]],
 ) -> None:
     schemas_raw = _require_list(summary.get("schemas"), f"{path}.schemas")
@@ -2790,6 +3357,7 @@ def _verify_xsd_summary_entries(
     schema_sources: list[dict[str, str]] = []
     schema_ids_by_path: dict[str, str] = {}
     schema_payload_roots_by_path: dict[str, str] = {}
+    schema_order_keys: list[tuple[str, str]] = []
     for offset, schema_raw in enumerate(schemas_raw):
         label = f"{path}.schemas[{offset}]"
         schema = _require_object(schema_raw, label)
@@ -2800,6 +3368,7 @@ def _verify_xsd_summary_entries(
             f"{label}.path",
         )
         schema_paths.append(schema_path)
+        schema_order_keys.append((message_def_id, schema_path))
         if Path(schema_path).name != f"{message_def_id}.xsd":
             _blocker(
                 blockers,
@@ -2861,6 +3430,13 @@ def _verify_xsd_summary_entries(
             f"{source['repository']}@{source['commit']}:{source['path']}"
         )
         schema_sources.append(source)
+    if schema_order_keys != sorted(schema_order_keys):
+        _blocker(
+            blockers,
+            "xsd.schemas_not_canonical_order",
+            f"{path}.schemas must be sorted by message_def_id and path",
+            path,
+        )
     _block_duplicate_strings(
         schema_paths,
         label=f"{path}.schemas.path",
@@ -2905,6 +3481,7 @@ def _verify_xsd_summary_entries(
     blocked_source_digests: list[str] = []
     blocked_source_messages: list[str] = []
     blocked_sources: list[dict[str, Any]] = []
+    blocked_source_order_keys: list[tuple[str, str, str, str]] = []
     for offset, blocked_raw in enumerate(blocked_schema_sources):
         label = f"{path}.blocked_schema_sources[{offset}]"
         blocked = _verify_blocked_schema_source_summary(
@@ -2920,6 +3497,24 @@ def _verify_xsd_summary_entries(
         )
         blocked_source_digests.append(blocked["source"]["sha256"])
         blocked_sources.append(blocked)
+        blocked_source_order_keys.append(
+            (
+                blocked["message_def_id"],
+                blocked["source"]["repository"],
+                blocked["source"]["commit"],
+                blocked["source"]["path"],
+            )
+        )
+    if blocked_source_order_keys != sorted(blocked_source_order_keys):
+        _blocker(
+            blockers,
+            "xsd.blocked_sources_not_canonical_order",
+            (
+                f"{path}.blocked_schema_sources must be sorted by "
+                "message_def_id and source provenance"
+            ),
+            path,
+        )
     checked_schema_ids = set(schema_ids)
     for message_def_id in sorted(set(blocked_source_messages) & checked_schema_ids):
         _blocker(
@@ -2928,6 +3523,14 @@ def _verify_xsd_summary_entries(
             "XSD summary records blocked candidate for a checked-in schema",
             path,
         )
+    _block_duplicate_strings(
+        blocked_source_messages,
+        label=f"{path}.blocked_schema_sources.message_def_id",
+        code="xsd.blocked_source_message_id_duplicate",
+        message="XSD summary repeats a blocked schema source message_def_id",
+        path=path,
+        blockers=blockers,
+    )
     _block_duplicate_strings(
         blocked_source_refs,
         label=f"{path}.blocked_schema_sources.source",
@@ -2953,7 +3556,102 @@ def _verify_xsd_summary_entries(
             path,
         )
 
+    if len(pending_schema_sources) != pending_schema_source_count:
+        _blocker(
+            blockers,
+            "xsd.pending_schema_source_count_mismatch",
+            "XSD summary pending_schema_source_count does not match pending_schema_sources[] length",
+            path,
+        )
+    pending_source_refs: list[str] = []
+    pending_source_download_urls: list[str] = []
+    pending_source_messages: list[str] = []
+    pending_source_message_names: list[str] = []
+    pending_sources: list[dict[str, Any]] = []
+    pending_source_order_keys: list[tuple[str, str, str, str, str, str]] = []
+    for offset, pending_raw in enumerate(pending_schema_sources):
+        label = f"{path}.pending_schema_sources[{offset}]"
+        pending = _verify_pending_schema_source_summary(pending_raw, label)
+        pending_source_messages.append(pending["message_def_id"])
+        pending_source_message_names.append(pending["source"]["message_name"])
+        pending_source_download_urls.append(pending["source"]["download_url"])
+        pending_source_refs.append(
+            f"{pending['source']['catalogue_url']}#"
+            f"{pending['source']['download_url']}#"
+            f"{pending['source']['download_type']}:"
+            f"{pending['source']['message_name']}:"
+            f"{pending['source']['submitting_organisation']}"
+        )
+        pending_sources.append(pending)
+        pending_source_order_keys.append(
+            (
+                pending["message_def_id"],
+                pending["source"]["catalogue_url"],
+                pending["source"]["download_url"],
+                pending["source"]["download_type"],
+                pending["source"]["message_name"],
+                pending["source"]["submitting_organisation"],
+            )
+        )
+    if pending_source_order_keys != sorted(pending_source_order_keys):
+        _blocker(
+            blockers,
+            "xsd.pending_sources_not_canonical_order",
+            (
+                f"{path}.pending_schema_sources must be sorted by "
+                "message_def_id and source provenance"
+            ),
+            path,
+        )
+    for message_def_id in sorted(set(pending_source_messages) & checked_schema_ids):
+        _blocker(
+            blockers,
+            "xsd.pending_source_already_checked_in",
+            "XSD summary records pending source for a checked-in schema",
+            path,
+        )
+    for message_def_id in sorted(set(pending_source_messages) & set(blocked_source_messages)):
+        _blocker(
+            blockers,
+            "xsd.pending_source_already_blocked",
+            "XSD summary records both pending and blocked source evidence for one schema",
+            path,
+        )
+    _block_duplicate_strings(
+        pending_source_messages,
+        label=f"{path}.pending_schema_sources.message_def_id",
+        code="xsd.pending_source_message_id_duplicate",
+        message="XSD summary repeats a pending schema source message_def_id",
+        path=path,
+        blockers=blockers,
+    )
+    _block_duplicate_strings(
+        pending_source_message_names,
+        label=f"{path}.pending_schema_sources.source.message_name",
+        code="xsd.pending_source_message_name_duplicate",
+        message="XSD summary repeats a pending schema source message_name",
+        path=path,
+        blockers=blockers,
+    )
+    _block_duplicate_strings(
+        pending_source_refs,
+        label=f"{path}.pending_schema_sources.source",
+        code="xsd.pending_source_duplicate",
+        message="XSD summary repeats a pending schema source reference",
+        path=path,
+        blockers=blockers,
+    )
+    _block_duplicate_strings(
+        pending_source_download_urls,
+        label=f"{path}.pending_schema_sources.source.download_url",
+        code="xsd.pending_source_download_url_duplicate",
+        message="XSD summary repeats a pending schema source download URL",
+        path=path,
+        blockers=blockers,
+    )
+
     fixture_paths: list[str] = []
+    fixture_message_ids: list[str] = []
     fixture_digests: list[str] = []
     backed_schema_paths: set[str] = set()
     schema_backed_message_ids: set[str] = set()
@@ -2962,6 +3660,7 @@ def _verify_xsd_summary_entries(
     computed_schema_validated = 0
     computed_missing_schema = 0
     schema_path_set = set(schema_paths)
+    fixture_order_keys: list[tuple[str, str]] = []
     for offset, fixture_raw in enumerate(fixtures_raw):
         label = f"{path}.fixtures[{offset}]"
         fixture = _require_object(fixture_raw, label)
@@ -2972,6 +3671,8 @@ def _verify_xsd_summary_entries(
         )
         fixture_paths.append(fixture_path)
         fixture_message_def_id = _require_message_def_id(fixture, "message_def_id", label)
+        fixture_message_ids.append(fixture_message_def_id)
+        fixture_order_keys.append((fixture_message_def_id, fixture_path))
         fixture_payload_root = _require_xsd_identifier(fixture, "payload_root", label)
         fixture_digests.append(_require_nonzero_sha256(fixture, "sha256", label))
         schema_backed = _require_bool(fixture, "schema_backed", label)
@@ -3051,14 +3752,39 @@ def _verify_xsd_summary_entries(
                     path,
                 )
             else:
+                if fixture_message_def_id in checked_schema_ids:
+                    _blocker(
+                        blockers,
+                        "xsd.fixture_missing_schema_matches_checked_schema",
+                        (
+                            f"{label} records a missing-schema fixture for an "
+                            "already checked-in schema"
+                        ),
+                        path,
+                    )
                 computed_missing_schema_entries.append(
                     (fixture_path, fixture_message_def_id, missing_reason)
                 )
+    if fixture_order_keys != sorted(fixture_order_keys):
+        _blocker(
+            blockers,
+            "xsd.fixtures_not_canonical_order",
+            f"{path}.fixtures must be sorted by message_def_id and path",
+            path,
+        )
     _block_duplicate_strings(
         fixture_paths,
         label=f"{path}.fixtures.path",
         code="xsd.fixture_path_duplicate",
         message="XSD summary repeats a fixture path",
+        path=path,
+        blockers=blockers,
+    )
+    _block_duplicate_strings(
+        fixture_message_ids,
+        label=f"{path}.fixtures.message_def_id",
+        code="xsd.fixture_message_id_duplicate",
+        message="XSD summary repeats a fixture message_def_id",
         path=path,
         blockers=blockers,
     )
@@ -3128,6 +3854,13 @@ def _verify_xsd_summary_entries(
             "XSD summary missing_schema_fixtures does not match fixtures[] entries",
             path,
         )
+    elif actual_missing_schema_entries != computed_missing_schema_entries:
+        _blocker(
+            blockers,
+            "xsd.missing_schema_fixture_entries_order",
+            "XSD summary missing_schema_fixtures must follow fixtures[] order",
+            path,
+        )
     computed_schema_only_paths = schema_path_set - backed_schema_paths
     if set(declared_schema_only_paths) != computed_schema_only_paths:
         _blocker(
@@ -3159,13 +3892,32 @@ def _verify_xsd_summary_entries(
             "XSD summary schema_only_entries does not match schemas[] entries",
             path,
         )
+    elif actual_schema_only_entries != declared_schema_only_entries:
+        _blocker(
+            blockers,
+            "xsd.schema_only_entries_order",
+            "XSD summary schema_only_entries must follow schemas[] order",
+            path,
+        )
     summary["_validated_schema_sources"] = schema_sources
+    summary["_validated_schema_ids"] = schema_ids
     summary["_validated_schema_paths"] = schema_paths
     summary["_validated_schema_digests"] = schema_digests
     summary["_validated_schema_source_refs"] = schema_source_refs
     summary["_validated_blocked_schema_sources"] = blocked_sources
+    summary["_validated_blocked_schema_source_message_ids"] = blocked_source_messages
     summary["_validated_blocked_schema_source_refs"] = blocked_source_refs
     summary["_validated_blocked_schema_source_digests"] = blocked_source_digests
+    summary["_validated_pending_schema_sources"] = pending_sources
+    summary["_validated_pending_schema_source_message_ids"] = pending_source_messages
+    summary["_validated_pending_schema_source_message_names"] = (
+        pending_source_message_names
+    )
+    summary["_validated_pending_schema_source_refs"] = pending_source_refs
+    summary["_validated_pending_schema_source_download_urls"] = (
+        pending_source_download_urls
+    )
+    summary["_validated_fixture_message_ids"] = fixture_message_ids
     summary["_validated_fixture_paths"] = fixture_paths
     summary["_validated_fixture_digests"] = fixture_digests
     summary["_validated_schema_backed_message_ids"] = schema_backed_message_ids
@@ -3317,6 +4069,7 @@ def _verify_xsd_profile_catalog_entries(
     )
     represented_profile_ids: set[str] = set()
     seen_skipped: dict[tuple[str, str, str, str], int] = {}
+    skipped_order_keys: list[tuple[str, str, str, str]] = []
     for offset, raw_skipped in enumerate(skipped_raw):
         label = f"{path}.profile_catalog.skipped_family_versions[{offset}]"
         skipped = _require_object(raw_skipped, label)
@@ -3327,6 +4080,7 @@ def _verify_xsd_profile_catalog_entries(
             _require_profile_direction(skipped, "direction", label),
             _require_profile_catalog_version(skipped, "version", label),
         )
+        skipped_order_keys.append(key)
         represented_profile_ids.add(key[0])
         if MESSAGE_DEF_ID_RE.fullmatch(key[3]) is not None:
             _blocker(
@@ -3354,6 +4108,16 @@ def _verify_xsd_profile_catalog_entries(
             )
         else:
             seen_skipped[key] = offset
+    if skipped_order_keys != sorted(skipped_order_keys):
+        _blocker(
+            blockers,
+            "xsd.profile_catalog_skipped_not_canonical_order",
+            (
+                f"{path}.profile_catalog.skipped_family_versions must be sorted "
+                "by profile_id, message_type, direction, and version"
+            ),
+            path,
+        )
     versions_raw = _require_list(
         profile_catalog.get("versions"),
         f"{path}.profile_catalog.versions",
@@ -3368,11 +4132,13 @@ def _verify_xsd_profile_catalog_entries(
     computed_schema_backed = 0
     computed_missing: list[tuple[str, str, str, str]] = []
     seen_versions: dict[tuple[str, str, str, str], int] = {}
+    version_order_keys: list[tuple[str, str, str, str]] = []
     for offset, raw_version in enumerate(versions_raw):
         label = f"{path}.profile_catalog.versions[{offset}]"
         version = _require_object(raw_version, label)
         _reject_unknown_keys(version, XSD_PROFILE_VERSION_KEYS, label)
         key = _profile_version_key(version, label)
+        version_order_keys.append(key)
         represented_profile_ids.add(key[0])
         if key in seen_versions:
             _blocker(
@@ -3399,6 +4165,16 @@ def _verify_xsd_profile_catalog_entries(
             computed_schema_backed += 1
         else:
             computed_missing.append(key)
+    if version_order_keys != sorted(version_order_keys):
+        _blocker(
+            blockers,
+            "xsd.profile_catalog_versions_not_canonical_order",
+            (
+                f"{path}.profile_catalog.versions must be sorted by "
+                "profile_id, message_type, direction, and message_def_id"
+            ),
+            path,
+        )
     if computed_schema_backed != profile_schema_backed_versions:
         _blocker(
             blockers,
@@ -3431,6 +4207,13 @@ def _verify_xsd_profile_catalog_entries(
             "XSD summary profile_catalog.missing_schema_versions does not match profile catalog",
             path,
         )
+    elif catalog_missing != computed_missing:
+        _blocker(
+            blockers,
+            "xsd.profile_catalog_missing_schema_versions_order",
+            "XSD summary profile_catalog.missing_schema_versions must follow profile catalog version order",
+            path,
+        )
 
     actual_missing: list[tuple[str, str, str, str]] = []
     for offset, raw_missing in enumerate(missing_profile_schema_versions):
@@ -3443,6 +4226,13 @@ def _verify_xsd_profile_catalog_entries(
             blockers,
             "xsd.missing_profile_schema_versions_mismatch",
             "XSD summary missing_profile_schema_versions does not match profile catalog",
+            path,
+        )
+    elif actual_missing != computed_missing:
+        _blocker(
+            blockers,
+            "xsd.missing_profile_schema_versions_order",
+            "XSD summary missing_profile_schema_versions must follow profile catalog version order",
             path,
         )
     return {
@@ -3461,6 +4251,7 @@ def _verify_missing_profile_schema_message_ids(
     missing_schema_message_ids: set[str],
     schema_only_message_ids: set[str],
     blocked_schema_message_ids: set[str],
+    pending_schema_message_ids: set[str],
     blockers: list[dict[str, Any]],
 ) -> None:
     """Verify the unique missing-message aggregate against raw profile gaps."""
@@ -3483,10 +4274,11 @@ def _verify_missing_profile_schema_message_ids(
             message_def_id in missing_schema_message_ids,
             message_def_id in schema_only_message_ids,
             message_def_id in blocked_schema_message_ids,
+            message_def_id in pending_schema_message_ids,
         )
         for message_def_id, count in counts.items()
     )
-    actual: list[tuple[str, int, bool, bool, bool]] = []
+    actual: list[tuple[str, int, bool, bool, bool, bool]] = []
     seen: dict[str, int] = {}
     for offset, raw_entry in enumerate(raw_entries):
         label = f"{path}.missing_profile_schema_message_ids[{offset}]"
@@ -3513,6 +4305,7 @@ def _verify_missing_profile_schema_message_ids(
                 _require_bool(entry, "reviewed_missing_schema_fixture", label),
                 _require_bool(entry, "reviewed_schema_only", label),
                 _require_bool(entry, "blocked_source", label),
+                _require_bool(entry, "pending_source", label),
             )
         )
     if sorted(actual) != expected:
@@ -3520,6 +4313,118 @@ def _verify_missing_profile_schema_message_ids(
             blockers,
             "xsd.missing_profile_schema_message_ids_mismatch",
             "XSD summary missing_profile_schema_message_ids does not match profile gaps",
+            path,
+        )
+    elif actual != expected:
+        _blocker(
+            blockers,
+            "xsd.missing_profile_schema_message_ids_order",
+            "XSD summary missing_profile_schema_message_ids must follow canonical message_def_id order",
+            path,
+        )
+
+
+def _unreviewed_missing_profile_schema_message_ids(
+    path: Path,
+    *,
+    missing_profile_schema_versions: list[Any],
+    reviewed_xsd_gap_message_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Return unique missing profile message ids without reviewed gap evidence."""
+
+    counts: dict[str, int] = {}
+    for offset, raw_missing in enumerate(missing_profile_schema_versions):
+        label = f"{path}.missing_profile_schema_versions[{offset}]"
+        missing = _require_object(raw_missing, label)
+        message_def_id = _require_message_def_id(missing, "message_def_id", label)
+        if message_def_id not in reviewed_xsd_gap_message_ids:
+            counts[message_def_id] = counts.get(message_def_id, 0) + 1
+    return [
+        {
+            "message_def_id": message_def_id,
+            "profile_version_count": counts[message_def_id],
+        }
+        for message_def_id in sorted(counts)
+    ]
+
+
+def _verify_unreviewed_profile_schema_message_ids(
+    summary: dict[str, Any],
+    path: Path,
+    *,
+    expected_entries: list[dict[str, Any]],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Verify the declared unique unreviewed missing-message aggregate."""
+
+    declared_count = _require_nonnegative_int(
+        summary,
+        "unreviewed_profile_schema_message_id_count",
+        str(path),
+    )
+    raw_entries = _require_list(
+        summary.get("unreviewed_profile_schema_message_ids"),
+        f"{path}.unreviewed_profile_schema_message_ids",
+    )
+    actual: list[tuple[str, int]] = []
+    seen: dict[str, int] = {}
+    for offset, raw_entry in enumerate(raw_entries):
+        label = f"{path}.unreviewed_profile_schema_message_ids[{offset}]"
+        entry = _require_object(raw_entry, label)
+        _reject_unknown_keys(entry, XSD_PROFILE_UNREVIEWED_MESSAGE_KEYS, label)
+        message_def_id = _require_message_def_id(entry, "message_def_id", label)
+        if message_def_id in seen:
+            _blocker(
+                blockers,
+                "xsd.unreviewed_profile_schema_message_id_duplicate",
+                (
+                    f"{label}.message_def_id duplicates "
+                    f"{path}.unreviewed_profile_schema_message_ids"
+                    f"[{seen[message_def_id]}].message_def_id"
+                ),
+                path,
+            )
+        else:
+            seen[message_def_id] = offset
+        actual.append(
+            (
+                message_def_id,
+                _require_positive_int(entry, "profile_version_count", label),
+            )
+        )
+
+    expected = [
+        (entry["message_def_id"], entry["profile_version_count"])
+        for entry in expected_entries
+    ]
+    if declared_count != len(raw_entries):
+        _blocker(
+            blockers,
+            "xsd.unreviewed_profile_schema_message_id_count_mismatch",
+            (
+                "XSD summary unreviewed_profile_schema_message_id_count does not "
+                "match unreviewed_profile_schema_message_ids length"
+            ),
+            path,
+        )
+    if sorted(actual) != sorted(expected):
+        _blocker(
+            blockers,
+            "xsd.unreviewed_profile_schema_message_ids_mismatch",
+            (
+                "XSD summary unreviewed_profile_schema_message_ids does not match "
+                "raw profile gaps"
+            ),
+            path,
+        )
+    elif actual != expected:
+        _blocker(
+            blockers,
+            "xsd.unreviewed_profile_schema_message_ids_order",
+            (
+                "XSD summary unreviewed_profile_schema_message_ids must follow "
+                "canonical message_def_id order"
+            ),
             path,
         )
 
@@ -3583,6 +4488,52 @@ def _block_xsd_profile_catalog_digest_role_confusion(
             _blocker(blockers, code, message, path)
 
 
+def _block_xsd_manifest_digest_role_confusion(
+    manifest_sha256: str,
+    profile_catalog: dict[str, str] | None,
+    summary: dict[str, Any],
+    path: Path,
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Reject manifest digests reused as schema, fixture, or catalog material."""
+
+    checks: list[tuple[list[str], str, str]] = [
+        (
+            summary["_validated_schema_digests"],
+            "xsd.manifest_digest_matches_schema",
+            "XSD manifest digest already identifies a checked-in schema",
+        ),
+        (
+            summary["_validated_fixture_digests"],
+            "xsd.manifest_digest_matches_fixture",
+            "XSD manifest digest already identifies a checked-in fixture",
+        ),
+        (
+            summary["_validated_blocked_schema_source_digests"],
+            "xsd.manifest_digest_matches_blocked_source",
+            "XSD manifest digest already identifies a blocked schema candidate",
+        ),
+    ]
+    if profile_catalog is not None:
+        checks.extend(
+            [
+                (
+                    [profile_catalog["sha256"]],
+                    "xsd.manifest_digest_matches_profile_catalog",
+                    "XSD manifest digest already identifies the profile catalog source",
+                ),
+                (
+                    [profile_catalog["catalog_json_sha256"]],
+                    "xsd.manifest_digest_matches_profile_catalog_json",
+                    "XSD manifest digest already identifies the profile catalog JSON",
+                ),
+            ]
+        )
+    for role_digests, code, message in checks:
+        if manifest_sha256 in set(role_digests):
+            _blocker(blockers, code, message, path)
+
+
 def _verify_receipt_summary(
     receipt_obj: dict[str, Any],
     label: str,
@@ -3605,6 +4556,8 @@ def _verify_receipt_summary(
     metadata_code: str,
     digest_role_reuse_code: str,
     kind_entry_mismatch_code: str,
+    receipt_entry_order_code: str,
+    source_material_reuse_codes: tuple[tuple[str, str], ...],
 ) -> dict[str, Any]:
     digest = _require_summary_digest(receipt_obj, label)
     _reject_unknown_keys(receipt_obj, RECEIPT_SUMMARY_KEYS, label)
@@ -3679,6 +4632,13 @@ def _verify_receipt_summary(
             "receipt verification contains unsupported receipt kinds",
             path,
         )
+    if receipt_kind_raw != sorted(receipt_kind_set):
+        _blocker(
+            blockers,
+            kind_entry_mismatch_code,
+            f"{label}.receipt_kind must be sorted in canonical order",
+            path,
+        )
     allow_failed = _require_bool(receipt_obj, "allow_failed", label)
     allow_insecure_http = _require_bool(receipt_obj, "allow_insecure_http", label)
     allow_legacy_colr007 = _require_bool(receipt_obj, "allow_legacy_colr007", label)
@@ -3704,6 +4664,10 @@ def _verify_receipt_summary(
     receipt_entry_kinds: set[str] = set()
     seen_receipt_paths: dict[str, int] = {}
     seen_receipt_digests: dict[str, int] = {}
+    receipt_order_keys: list[tuple[str, str, str]] = []
+    source_material_code_by_field = dict(source_material_reuse_codes)
+    seen_source_material_signatures: dict[tuple[str, tuple[tuple[str, str], ...]], int] = {}
+    seen_source_material_fields: dict[tuple[str, str], dict[str, int]] = {}
     has_failed_receipt = False
     has_insecure_receipt_endpoint = False
     has_legacy_colr007_receipt = False
@@ -3763,6 +4727,15 @@ def _verify_receipt_summary(
             )
         else:
             seen_receipt_digests[receipt_sha256] = offset
+            receipt_order_keys.append(
+                _receipt_summary_entry_order_key(
+                    {
+                        "receipt_kind": receipt_kind,
+                        "path": receipt_path,
+                        "receipt_sha256": receipt_sha256,
+                    }
+                )
+            )
         ok = receipt.get("ok")
         status_code = receipt.get("status_code")
         status_code_valid = True
@@ -3874,6 +4847,58 @@ def _verify_receipt_summary(
             receipt_kind=receipt_kind,
             digest_role_reuse_code=digest_role_reuse_code,
         )
+        source_material_fields = RECEIPT_SOURCE_MATERIAL_FIELDS_BY_KIND.get(
+            receipt_kind,
+            (),
+        )
+        source_material_values = tuple(
+            (field, receipt.get(field)) for field in source_material_fields
+        )
+        string_source_material_values = tuple(
+            (field, value)
+            for field, value in source_material_values
+            if isinstance(value, str)
+        )
+        if string_source_material_values:
+            source_material_signature = (receipt_kind, string_source_material_values)
+            if source_material_signature in seen_source_material_signatures:
+                first_offset = seen_source_material_signatures[source_material_signature]
+                for field, _value in string_source_material_values:
+                    code = source_material_code_by_field.get(field)
+                    if code is None:
+                        continue
+                    _blocker(
+                        blockers,
+                        code,
+                        (
+                            f"{entry_label}.{field} duplicates "
+                            f"{label}.receipts[{first_offset}].{field}"
+                        ),
+                        path,
+                    )
+            else:
+                seen_source_material_signatures[source_material_signature] = offset
+            for field, value in string_source_material_values:
+                seen_for_field = seen_source_material_fields.setdefault(
+                    (receipt_kind, field),
+                    {},
+                )
+                first_offset = seen_for_field.get(value)
+                if first_offset is None:
+                    seen_for_field[value] = offset
+                    continue
+                code = source_material_code_by_field.get(field)
+                if code is None:
+                    continue
+                _blocker(
+                    blockers,
+                    code,
+                    (
+                        f"{entry_label}.{field} duplicates "
+                        f"{label}.receipts[{first_offset}].{field}"
+                    ),
+                    path,
+                )
         if receipt_kind == "iso-rail-gateway":
             message_type = receipt.get("message_type")
             if isinstance(message_type, str) and message_type in LEGACY_RAIL_MESSAGE_TYPES:
@@ -3882,6 +4907,13 @@ def _verify_receipt_summary(
                 has_default_profile_receipt = True
         receipts.append(dict(receipt))
         receipt_entry_kinds.add(receipt_kind)
+    if receipt_order_keys != sorted(receipt_order_keys):
+        _blocker(
+            blockers,
+            receipt_entry_order_code,
+            f"{label}.receipts must be sorted by receipt_kind, path, and receipt_sha256",
+            path,
+        )
     if receipt_kind_set != receipt_entry_kinds:
         _blocker(
             blockers,
@@ -4005,6 +5037,11 @@ def verify_xsd_summary(
         "blocked_schema_source_count",
         str(path),
     )
+    pending_schema_source_count = _require_nonnegative_int(
+        summary,
+        "pending_schema_source_count",
+        str(path),
+    )
     missing_schema_fixtures = _require_list(
         summary.get("missing_schema_fixtures"),
         f"{path}.missing_schema_fixtures",
@@ -4020,6 +5057,10 @@ def verify_xsd_summary(
     blocked_schema_sources = _require_list(
         summary.get("blocked_schema_sources"),
         f"{path}.blocked_schema_sources",
+    )
+    pending_schema_sources = _require_list(
+        summary.get("pending_schema_sources"),
+        f"{path}.pending_schema_sources",
     )
     strict = _require_object(summary.get("strict"), f"{path}.strict")
     _reject_unknown_keys(strict, XSD_STRICT_KEYS, f"{path}.strict")
@@ -4064,6 +5105,8 @@ def verify_xsd_summary(
         schema_only_entries=schema_only_entries,
         blocked_schema_source_count=blocked_schema_source_count,
         blocked_schema_sources=blocked_schema_sources,
+        pending_schema_source_count=pending_schema_source_count,
+        pending_schema_sources=pending_schema_sources,
         blockers=blockers,
     )
     profile_catalog_summary = _verify_xsd_profile_catalog_entries(
@@ -4082,6 +5125,13 @@ def verify_xsd_summary(
             path,
             blockers,
         )
+    _block_xsd_manifest_digest_role_confusion(
+        manifest_sha256,
+        profile_catalog_summary,
+        summary,
+        path,
+        blockers,
+    )
     missing_schema_message_ids = {
         _require_message_def_id(entry, "message_def_id", f"{path}.missing_schema_fixtures")
         for entry in missing_schema_fixtures
@@ -4097,7 +5147,15 @@ def verify_xsd_summary(
         blocked["message_def_id"]
         for blocked in summary["_validated_blocked_schema_sources"]
     }
-    reviewed_xsd_gap_message_ids = current_xsd_gap_message_ids | blocked_schema_message_ids
+    pending_schema_message_ids = {
+        pending["message_def_id"]
+        for pending in summary["_validated_pending_schema_sources"]
+    }
+    reviewed_xsd_gap_message_ids = (
+        current_xsd_gap_message_ids
+        | blocked_schema_message_ids
+        | pending_schema_message_ids
+    )
     _verify_missing_profile_schema_message_ids(
         summary,
         path,
@@ -4105,6 +5163,20 @@ def verify_xsd_summary(
         missing_schema_message_ids=missing_schema_message_ids,
         schema_only_message_ids=schema_only_message_ids,
         blocked_schema_message_ids=blocked_schema_message_ids,
+        pending_schema_message_ids=pending_schema_message_ids,
+        blockers=blockers,
+    )
+    unreviewed_missing_profile_message_ids = (
+        _unreviewed_missing_profile_schema_message_ids(
+            path,
+            missing_profile_schema_versions=missing_profile_schema_versions,
+            reviewed_xsd_gap_message_ids=reviewed_xsd_gap_message_ids,
+        )
+    )
+    _verify_unreviewed_profile_schema_message_ids(
+        summary,
+        path,
+        expected_entries=unreviewed_missing_profile_message_ids,
         blockers=blockers,
     )
     blocked_gap_message_ids = missing_schema_message_ids | {
@@ -4125,11 +5197,21 @@ def verify_xsd_summary(
                 "XSD summary records blocked candidate without a current missing schema/profile gap",
                 path,
             )
+    for pending in summary["_validated_pending_schema_sources"]:
+        message_def_id = pending["message_def_id"]
+        if message_def_id not in blocked_gap_message_ids:
+            _blocker(
+                blockers,
+                "xsd.pending_source_without_gap",
+                "XSD summary records pending source without a current missing schema/profile gap",
+                path,
+            )
 
     has_reviewed_xsd_gap = (
         bool(missing_schema_fixtures)
         or bool(schema_only_entries)
         or bool(blocked_schema_sources)
+        or bool(pending_schema_sources)
     )
 
     def reviewed_gap_target() -> list[dict[str, Any]]:
@@ -4207,6 +5289,20 @@ def verify_xsd_summary(
             "XSD summary did not verify any profile catalog message versions",
             path,
         )
+    if unreviewed_missing_profile_message_ids:
+        blockers.append(
+            {
+                "code": "xsd.unreviewed_profile_schema_message_ids",
+                "message": (
+                    f"{len(unreviewed_missing_profile_message_ids)} unique profile "
+                    "message definitions are not schema-backed and have no reviewed "
+                    "missing-schema, schema-only, blocked-source, or pending-source "
+                    "evidence"
+                ),
+                "path": str(path),
+                "entries": unreviewed_missing_profile_message_ids,
+            }
+        )
     if missing_profile_schema_versions:
         reviewed_profile_versions: list[Any] = []
         unreviewed_profile_versions: list[Any] = []
@@ -4251,9 +5347,15 @@ def verify_xsd_summary(
         "schema_sources": summary["_validated_schema_sources"],
         "blocked_schema_source_count": blocked_schema_source_count,
         "blocked_schema_sources": summary["_validated_blocked_schema_sources"],
+        "pending_schema_source_count": pending_schema_source_count,
+        "pending_schema_sources": summary["_validated_pending_schema_sources"],
         "missing_schema_fixture_count": len(missing_schema_fixtures),
         "schema_only_count": len(schema_only_entries),
         "missing_profile_schema_version_count": len(missing_profile_schema_versions),
+        "unreviewed_profile_schema_message_id_count": len(
+            unreviewed_missing_profile_message_ids
+        ),
+        "unreviewed_profile_schema_message_ids": unreviewed_missing_profile_message_ids,
         "profile_catalog": profile_catalog_summary,
         "strict": {
             "require_schema_backed_fixtures": require_schema_backed,
@@ -4261,15 +5363,32 @@ def verify_xsd_summary(
             "require_profile_schema_backed_versions": require_profile_schema_backed,
             "validate_xml_schema": validate_xml_schema,
         },
+        "_schema_ids": summary["_validated_schema_ids"],
         "_schema_paths": summary["_validated_schema_paths"],
         "_schema_digests": summary["_validated_schema_digests"],
         "_schema_source_refs": summary["_validated_schema_source_refs"],
+        "_validated_blocked_schema_source_message_ids": summary[
+            "_validated_blocked_schema_source_message_ids"
+        ],
         "_validated_blocked_schema_source_refs": summary[
             "_validated_blocked_schema_source_refs"
         ],
         "_validated_blocked_schema_source_digests": summary[
             "_validated_blocked_schema_source_digests"
         ],
+        "_validated_pending_schema_source_message_ids": summary[
+            "_validated_pending_schema_source_message_ids"
+        ],
+        "_validated_pending_schema_source_message_names": summary[
+            "_validated_pending_schema_source_message_names"
+        ],
+        "_validated_pending_schema_source_refs": summary[
+            "_validated_pending_schema_source_refs"
+        ],
+        "_validated_pending_schema_source_download_urls": summary[
+            "_validated_pending_schema_source_download_urls"
+        ],
+        "_fixture_message_ids": summary["_validated_fixture_message_ids"],
         "_fixture_paths": summary["_validated_fixture_paths"],
         "_fixture_digests": summary["_validated_fixture_digests"],
         "summary_sha256": digest,
@@ -4562,6 +5681,8 @@ def _verify_canary(
             metadata_code="evidence.receipt_metadata_invalid",
             digest_role_reuse_code="evidence.receipt_digest_role_reuse",
             kind_entry_mismatch_code="evidence.receipt_kind_entry_mismatch",
+            receipt_entry_order_code="evidence.receipt_entries_not_canonical_order",
+            source_material_reuse_codes=CANARY_RECEIPT_SOURCE_MATERIAL_REUSE_CODES,
         )
         expected_receipt_kinds = {
             STAGE_RECEIPT_KINDS[stage_name]
@@ -4704,6 +5825,20 @@ def _verify_trust_profile(
         path,
         blockers,
     )
+    for role, entries in (
+        ("x509_trust_anchor_der", trust_anchor_der),
+        ("revoked_certificate_der", revoked_der),
+        ("x509_crl_der", x509_crl_der),
+        ("x509_ocsp_response_der", x509_ocsp_response_der),
+    ):
+        order_keys = _compact_der_order_keys(entries)
+        if order_keys != sorted(order_keys):
+            _blocker(
+                blockers,
+                "trust.der_proof_not_canonical_order",
+                f"{label}.{role} must be sorted by sha256 and byte_len",
+                path,
+            )
     if "source" not in profile:
         raise ReadinessError(f"{label}.source must be a JSON object")
     source_raw = profile["source"]
@@ -4895,6 +6030,8 @@ def _verify_archive_receipts(
         metadata_code="evidence.archive_receipt_metadata_invalid",
         digest_role_reuse_code="evidence.archive_receipt_digest_role_reuse",
         kind_entry_mismatch_code="evidence.archive_receipt_kind_entry_mismatch",
+        receipt_entry_order_code="evidence.archive_receipt_entries_not_canonical_order",
+        source_material_reuse_codes=ARCHIVE_RECEIPT_SOURCE_MATERIAL_REUSE_CODES,
     )
 
 
@@ -5016,6 +6153,7 @@ def _block_cross_canary_receipt_reuse(
     source_material_checks: tuple[tuple[str, str], ...] = (
         ("source_path", "evidence.canary_receipt_source_path_reused"),
         ("payload_sha256", "evidence.canary_receipt_payload_digest_reused"),
+        ("rail_message_id", "evidence.canary_receipt_rail_message_id_reused"),
         ("anchor_path", "evidence.canary_receipt_anchor_path_reused"),
         ("anchor_sha256", "evidence.canary_receipt_anchor_digest_reused"),
         ("store_dir", "evidence.canary_receipt_store_dir_reused"),
@@ -5098,6 +6236,7 @@ def _block_cross_trust_profile_reuse(
 
     seen_profile_json_digests: dict[str, int] = {}
     seen_profile_ids: dict[str, tuple[int, int]] = {}
+    seen_bundle_paths: dict[str, tuple[int, int]] = {}
     seen_bundle_digests: dict[str, tuple[int, int]] = {}
     for trust_offset, trust in enumerate(trusts):
         profile_json_sha256 = trust.get("profile_json_sha256")
@@ -5132,6 +6271,21 @@ def _block_cross_trust_profile_reuse(
                 )
             else:
                 seen_profile_ids[profile_id] = (trust_offset, profile_offset)
+            bundle_path = profile["path"]
+            if bundle_path in seen_bundle_paths:
+                first_trust, first_profile = seen_bundle_paths[bundle_path]
+                _blocker(
+                    blockers,
+                    "trust.bundle_path_reused",
+                    (
+                        f"trust_summaries[{trust_offset}].profiles[{profile_offset}]"
+                        f".path duplicates trust_summaries[{first_trust}]"
+                        f".profiles[{first_profile}].path"
+                    ),
+                    path,
+                )
+            else:
+                seen_bundle_paths[bundle_path] = (trust_offset, profile_offset)
             bundle_sha256 = profile["bundle_sha256"]
             if bundle_sha256 in seen_bundle_digests:
                 first_trust, first_profile = seen_bundle_digests[bundle_sha256]
@@ -5149,6 +6303,233 @@ def _block_cross_trust_profile_reuse(
                 seen_bundle_digests[bundle_sha256] = (trust_offset, profile_offset)
 
 
+def _block_compact_json_artifact_path_role_reuse(
+    canaries: list[dict[str, Any]],
+    trusts: list[dict[str, Any]],
+    path: Path,
+    blockers: list[dict[str, Any]],
+    archive_receipts: dict[str, Any] | None = None,
+) -> None:
+    """Block compact summary paths replayed as config, receipt, or bundle paths."""
+
+    material_paths: dict[str, str] = {}
+    for canary_offset, canary in enumerate(canaries):
+        material_paths.setdefault(
+            canary["config_path"],
+            f"canary_summaries[{canary_offset}].config_path",
+        )
+        receipt_summary = canary.get("receipt_summary")
+        if isinstance(receipt_summary, dict):
+            for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
+                receipt_path = receipt.get("path")
+                if isinstance(receipt_path, str):
+                    material_paths.setdefault(
+                        receipt_path,
+                        (
+                            f"canary_summaries[{canary_offset}].receipt_summary"
+                            f".receipts[{receipt_offset}].path"
+                        ),
+                    )
+    for trust_offset, trust in enumerate(trusts):
+        for profile_offset, profile in enumerate(trust["profiles"]):
+            material_paths.setdefault(
+                profile["path"],
+                f"trust_summaries[{trust_offset}].profiles[{profile_offset}].path",
+            )
+    if isinstance(archive_receipts, dict):
+        for receipt_offset, receipt in enumerate(archive_receipts["receipts"]):
+            receipt_path = receipt.get("path")
+            if isinstance(receipt_path, str):
+                material_paths.setdefault(
+                    receipt_path,
+                    f"receipt_verification.receipts[{receipt_offset}].path",
+                )
+
+    for canary_offset, canary in enumerate(canaries):
+        material_label = material_paths.get(canary["path"])
+        if material_label is not None:
+            _blocker(
+                blockers,
+                "evidence.compact_json_artifact_path_role_reused",
+                f"canary_summaries[{canary_offset}].path duplicates {material_label}",
+                path,
+            )
+    for trust_offset, trust in enumerate(trusts):
+        material_label = material_paths.get(trust["path"])
+        if material_label is not None:
+            _blocker(
+                blockers,
+                "evidence.compact_json_artifact_path_role_reused",
+                f"trust_summaries[{trust_offset}].path duplicates {material_label}",
+                path,
+            )
+
+
+def _block_canary_trust_summary_identity_reuse(
+    canaries: list[dict[str, Any]],
+    trusts: list[dict[str, Any]],
+    path: Path,
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Block compact canary summary identities replayed as trust summaries."""
+
+    seen_canary_paths: dict[str, int] = {}
+    seen_canary_digests: dict[str, int] = {}
+    for canary_offset, canary in enumerate(canaries):
+        seen_canary_paths[canary["path"]] = canary_offset
+        seen_canary_digests[canary["summary_sha256"]] = canary_offset
+    for trust_offset, trust in enumerate(trusts):
+        trust_path = trust["path"]
+        if trust_path in seen_canary_paths:
+            canary_offset = seen_canary_paths[trust_path]
+            _blocker(
+                blockers,
+                "evidence.canary_trust_summary_path_reused",
+                (
+                    f"trust_summaries[{trust_offset}].path duplicates "
+                    f"canary_summaries[{canary_offset}].path"
+                ),
+                path,
+            )
+        digest = trust["summary_sha256"]
+        if digest not in seen_canary_digests:
+            continue
+        canary_offset = seen_canary_digests[digest]
+        _blocker(
+            blockers,
+            "evidence.canary_trust_summary_digest_reused",
+            (
+                f"trust_summaries[{trust_offset}].summary_sha256 duplicates "
+                f"canary_summaries[{canary_offset}].summary_sha256"
+            ),
+            path,
+        )
+
+
+def _block_compact_summary_digest_role_confusion(
+    canaries: list[dict[str, Any]],
+    trusts: list[dict[str, Any]],
+    path: Path,
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Block compact source-summary digests reused as nested material digests."""
+
+    canary_summary_digests = [
+        (
+            canary["summary_sha256"],
+            f"canary_summaries[{canary_offset}].summary_sha256",
+        )
+        for canary_offset, canary in enumerate(canaries)
+    ]
+    receipt_digest_roles: list[tuple[str, str, str]] = []
+    for canary_offset, canary in enumerate(canaries):
+        receipt_summary = canary.get("receipt_summary")
+        if not isinstance(receipt_summary, dict):
+            continue
+        receipt_digest_roles.append(
+            (
+                receipt_summary["summary_sha256"],
+                "receipt_summary",
+                f"canary_summaries[{canary_offset}].receipt_summary.summary_sha256",
+            )
+        )
+        for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
+            receipt_digest = receipt.get("receipt_sha256")
+            if isinstance(receipt_digest, str):
+                receipt_digest_roles.append(
+                    (
+                        receipt_digest,
+                        "receipt",
+                        f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                        f"[{receipt_offset}].receipt_sha256",
+                    )
+                )
+            for field in RECEIPT_MATERIAL_DIGEST_FIELDS:
+                material_digest = receipt.get(field)
+                if isinstance(material_digest, str):
+                    receipt_digest_roles.append(
+                        (
+                            material_digest,
+                            "receipt_material",
+                            f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                            f"[{receipt_offset}].{field}",
+                        )
+                    )
+    for canary_digest, canary_path in canary_summary_digests:
+        for material_digest, role, material_path in receipt_digest_roles:
+            if canary_digest == material_digest:
+                _blocker(
+                    blockers,
+                    CANARY_SUMMARY_RECEIPT_ROLE_CODES[role],
+                    f"{canary_path} reuses {material_path}",
+                    path,
+                )
+
+    trust_summary_digests = [
+        (
+            trust["summary_sha256"],
+            f"trust_summaries[{trust_offset}].summary_sha256",
+        )
+        for trust_offset, trust in enumerate(trusts)
+    ]
+    trust_material_roles: list[tuple[str, str, str]] = []
+    for trust_offset, trust in enumerate(trusts):
+        profile_json_sha256 = trust.get("profile_json_sha256")
+        if isinstance(profile_json_sha256, str):
+            trust_material_roles.append(
+                (
+                    profile_json_sha256,
+                    "profile_json",
+                    f"trust_summaries[{trust_offset}].profile_json_sha256",
+                )
+            )
+        for profile_offset, profile in enumerate(trust["profiles"]):
+            trust_material_roles.append(
+                (
+                    profile["bundle_sha256"],
+                    "bundle",
+                    f"trust_summaries[{trust_offset}].profiles"
+                    f"[{profile_offset}].bundle_sha256",
+                )
+            )
+            for role in TRUST_DER_PROOF_FIELDS:
+                for der_offset, entry in enumerate(profile[role]):
+                    trust_material_roles.append(
+                        (
+                            entry["sha256"],
+                            "der_proof",
+                            f"trust_summaries[{trust_offset}].profiles"
+                            f"[{profile_offset}].{role}[{der_offset}].sha256",
+                        )
+                    )
+    for canary_digest, canary_path in canary_summary_digests:
+        for material_digest, role, material_path in trust_material_roles:
+            if canary_digest == material_digest:
+                _blocker(
+                    blockers,
+                    CANARY_SUMMARY_TRUST_ROLE_CODES[role],
+                    f"{canary_path} reuses {material_path}",
+                    path,
+                )
+    for trust_digest, trust_path in trust_summary_digests:
+        for material_digest, role, material_path in trust_material_roles:
+            if trust_digest == material_digest:
+                _blocker(
+                    blockers,
+                    TRUST_SUMMARY_TRUST_ROLE_CODES[role],
+                    f"{trust_path} reuses {material_path}",
+                    path,
+                )
+        for material_digest, role, material_path in receipt_digest_roles:
+            if trust_digest == material_digest:
+                _blocker(
+                    blockers,
+                    TRUST_SUMMARY_RECEIPT_ROLE_CODES[role],
+                    f"{trust_path} reuses {material_path}",
+                    path,
+                )
+
+
 def _block_canary_rail_receipts_without_trust(
     canaries: list[dict[str, Any]],
     trusts: list[dict[str, Any]],
@@ -5158,16 +6539,13 @@ def _block_canary_rail_receipts_without_trust(
 ) -> None:
     """Require every canary rail receipt to have matching trust material."""
 
-    trusted_profiles_by_environment = {
-        (profile["profile_id"], profile["environment"])
-        for trust in trusts
-        for profile in trust["profiles"]
-    }
-    trusted_builtin_profiles_by_rail_environment = {
-        (profile["profile_id"], profile["rail"], profile["environment"])
-        for trust in trusts
-        for profile in trust["profiles"]
-    }
+    trusted_profile_rails_by_environment: dict[tuple[str, str], set[str]] = {}
+    for trust in trusts:
+        for profile in trust["profiles"]:
+            key = (profile["profile_id"], profile["environment"])
+            trusted_profile_rails_by_environment.setdefault(key, set()).add(
+                profile["rail"]
+            )
     for canary_offset, canary in enumerate(canaries):
         canary_environment = canary["environment"]
         receipt_summary = canary.get("receipt_summary")
@@ -5175,6 +6553,8 @@ def _block_canary_rail_receipts_without_trust(
             continue
         for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
             if receipt.get("receipt_kind") != "iso-rail-gateway":
+                continue
+            if receipt.get("message_type") in LEGACY_RAIL_MESSAGE_TYPES:
                 continue
             profile_id = receipt.get("profile")
             if profile_id is None:
@@ -5193,18 +6573,15 @@ def _block_canary_rail_receipts_without_trust(
                     continue
             if not isinstance(profile_id, str) or PROFILE_ID_RE.fullmatch(profile_id) is None:
                 continue
+            candidate_rails = trusted_profile_rails_by_environment.get(
+                (profile_id, canary_environment),
+                set(),
+            )
             if profile_id in KNOWN_RAILS:
-                covered = (
-                    profile_id,
-                    profile_id,
-                    canary_environment,
-                ) in trusted_builtin_profiles_by_rail_environment
+                matching_rails = candidate_rails & {profile_id}
             else:
-                covered = (
-                    profile_id,
-                    canary_environment,
-                ) in trusted_profiles_by_environment
-            if not covered:
+                matching_rails = candidate_rails
+            if not matching_rails:
                 _blocker(
                     blockers,
                     "trust.canary_rail_without_profile",
@@ -5215,18 +6592,100 @@ def _block_canary_rail_receipts_without_trust(
                     ),
                     path,
                 )
+                continue
+            message_type = receipt.get("message_type")
+            if (
+                isinstance(message_type, str)
+                and MESSAGE_TYPE_RE.fullmatch(message_type) is not None
+                and not any(
+                    message_type in RAIL_MESSAGE_TYPES.get(rail, set())
+                    for rail in matching_rails
+                )
+            ):
+                _blocker(
+                    blockers,
+                    "trust.canary_rail_message_type_without_profile",
+                    (
+                        f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                        f"[{receipt_offset}].message_type has no matching trust "
+                        "profile rail coverage"
+                    ),
+                    path,
+                )
 
 
 def _block_cross_xsd_summary_reuse(
     xsd_summaries: list[dict[str, Any]],
     blockers: list[dict[str, Any]],
 ) -> None:
-    """Block schema and fixture material replayed across distinct XSD summaries."""
+    """Block XSD package material replayed across distinct XSD summaries."""
+
+    scalar_checks = (
+        ("manifest", "manifest", "xsd.manifest_path_reused"),
+        ("manifest_sha256", "manifest_sha256", "xsd.manifest_digest_reused"),
+    )
+    for field, label, code in scalar_checks:
+        seen: dict[str, int] = {}
+        for summary_offset, summary in enumerate(xsd_summaries):
+            value = summary.get(field)
+            if value is None:
+                continue
+            if value in seen:
+                first_summary = seen[value]
+                _blocker(
+                    blockers,
+                    code,
+                    (
+                        f"xsd_summaries[{summary_offset}].{label} duplicates "
+                        f"xsd_summaries[{first_summary}].{label}"
+                    ),
+                    Path(summary["path"]),
+                )
+            else:
+                seen[value] = summary_offset
+
+    profile_catalog_checks = (
+        ("path", "profile_catalog.path", "xsd.profile_catalog_path_reused"),
+        ("sha256", "profile_catalog.sha256", "xsd.profile_catalog_digest_reused"),
+        (
+            "catalog_json_sha256",
+            "profile_catalog.catalog_json_sha256",
+            "xsd.profile_catalog_json_digest_reused",
+        ),
+    )
+    for field, label, code in profile_catalog_checks:
+        seen: dict[str, int] = {}
+        for summary_offset, summary in enumerate(xsd_summaries):
+            profile_catalog = summary.get("profile_catalog")
+            if not isinstance(profile_catalog, dict):
+                continue
+            value = profile_catalog.get(field)
+            if value is None:
+                continue
+            if value in seen:
+                first_summary = seen[value]
+                _blocker(
+                    blockers,
+                    code,
+                    (
+                        f"xsd_summaries[{summary_offset}].{label} duplicates "
+                        f"xsd_summaries[{first_summary}].{label}"
+                    ),
+                    Path(summary["path"]),
+                )
+            else:
+                seen[value] = summary_offset
 
     checks = (
+        ("_schema_ids", "schemas.message_def_id", "xsd.schema_id_reused"),
         ("_schema_paths", "schemas.path", "xsd.schema_path_reused"),
         ("_schema_digests", "schemas.sha256", "xsd.schema_digest_reused"),
         ("_schema_source_refs", "schemas.source", "xsd.schema_source_reused"),
+        (
+            "_validated_blocked_schema_source_message_ids",
+            "blocked_schema_sources.message_def_id",
+            "xsd.blocked_source_message_id_reused",
+        ),
         (
             "_validated_blocked_schema_source_refs",
             "blocked_schema_sources.source",
@@ -5236,6 +6695,31 @@ def _block_cross_xsd_summary_reuse(
             "_validated_blocked_schema_source_digests",
             "blocked_schema_sources.sha256",
             "xsd.blocked_source_digest_reused",
+        ),
+        (
+            "_validated_pending_schema_source_message_ids",
+            "pending_schema_sources.message_def_id",
+            "xsd.pending_source_message_id_reused",
+        ),
+        (
+            "_validated_pending_schema_source_message_names",
+            "pending_schema_sources.source.message_name",
+            "xsd.pending_source_message_name_reused",
+        ),
+        (
+            "_validated_pending_schema_source_refs",
+            "pending_schema_sources.source",
+            "xsd.pending_source_reused",
+        ),
+        (
+            "_validated_pending_schema_source_download_urls",
+            "pending_schema_sources.source.download_url",
+            "xsd.pending_source_download_url_reused",
+        ),
+        (
+            "_fixture_message_ids",
+            "fixtures.message_def_id",
+            "xsd.fixture_message_id_reused",
         ),
         ("_fixture_paths", "fixtures.path", "xsd.fixture_path_reused"),
         ("_fixture_digests", "fixtures.sha256", "xsd.fixture_digest_reused"),
@@ -5258,6 +6742,95 @@ def _block_cross_xsd_summary_reuse(
                     )
                 else:
                     seen[value] = (summary_offset, item_offset)
+
+
+def _xsd_material_path_roles(
+    xsd_summaries: list[dict[str, Any]],
+) -> list[tuple[str, str, str, int]]:
+    """Return XSD material path roles with diagnostic labels."""
+    path_roles: list[tuple[str, str, str, int]] = []
+    for summary_offset, summary in enumerate(xsd_summaries):
+        path_roles.append(
+            (
+                summary["path"],
+                "summary",
+                f"xsd_summaries[{summary_offset}].path",
+                summary_offset,
+            )
+        )
+        path_roles.append(
+            (
+                summary["manifest"],
+                "manifest",
+                f"xsd_summaries[{summary_offset}].manifest",
+                summary_offset,
+            )
+        )
+        for schema_offset, schema_path in enumerate(summary["_schema_paths"]):
+            path_roles.append(
+                (
+                    schema_path,
+                    "schema",
+                    f"xsd_summaries[{summary_offset}].schemas[{schema_offset}].path",
+                    summary_offset,
+                )
+            )
+        for fixture_offset, fixture_path in enumerate(summary["_fixture_paths"]):
+            path_roles.append(
+                (
+                    fixture_path,
+                    "fixture",
+                    f"xsd_summaries[{summary_offset}].fixtures[{fixture_offset}].path",
+                    summary_offset,
+                )
+            )
+        for blocked_offset, blocked in enumerate(summary["blocked_schema_sources"]):
+            path_roles.append(
+                (
+                    blocked["source"]["path"],
+                    "blocked_source",
+                    (
+                        f"xsd_summaries[{summary_offset}].blocked_schema_sources"
+                        f"[{blocked_offset}].source.path"
+                    ),
+                    summary_offset,
+                )
+            )
+        profile_catalog = summary.get("profile_catalog")
+        if isinstance(profile_catalog, dict):
+            path_roles.append(
+                (
+                    profile_catalog["path"],
+                    "profile_catalog",
+                    f"xsd_summaries[{summary_offset}].profile_catalog.path",
+                    summary_offset,
+                )
+            )
+    return path_roles
+
+
+def _block_xsd_path_role_confusion(
+    xsd_summaries: list[dict[str, Any]],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Block XSD artifact paths replayed under a different material role."""
+
+    path_roles = _xsd_material_path_roles(xsd_summaries)
+    seen: dict[str, tuple[str, str, int]] = {}
+    for value, role, label, summary_offset in path_roles:
+        previous = seen.get(value)
+        if previous is None:
+            seen[value] = (role, label, summary_offset)
+            continue
+        previous_role, previous_label, _previous_summary = previous
+        if previous_role == role:
+            continue
+        _blocker(
+            blockers,
+            "xsd.material_path_role_reused",
+            f"{label} duplicates {previous_label}",
+            Path(xsd_summaries[summary_offset]["path"]),
+        )
 
 
 def _evidence_receipt_entries(
@@ -5304,6 +6877,148 @@ def _evidence_receipt_field_path(
     raise AssertionError(f"unsupported evidence receipt source {source!r}")
 
 
+def _block_cross_compact_summary_digest_role_confusion(
+    evidence_summaries: list[dict[str, Any]],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Block compact-summary digest roles replayed across evidence summaries."""
+
+    canary_summary_digests: list[tuple[str, int, str]] = []
+    canary_material_digests: list[tuple[str, int, str, str]] = []
+    trust_summary_digests: list[tuple[str, int, str]] = []
+    trust_material_digests: list[tuple[str, int, str, str]] = []
+
+    for summary_offset, summary in enumerate(evidence_summaries):
+        for canary_offset, canary in enumerate(summary["canary_summaries"]):
+            canary_summary_digests.append(
+                (
+                    canary["summary_sha256"],
+                    summary_offset,
+                    f"evidence_summaries[{summary_offset}].canary_summaries"
+                    f"[{canary_offset}].summary_sha256",
+                )
+            )
+            receipt_summary = canary.get("receipt_summary")
+            if not isinstance(receipt_summary, dict):
+                continue
+            canary_material_digests.append(
+                (
+                    receipt_summary["summary_sha256"],
+                    summary_offset,
+                    f"evidence_summaries[{summary_offset}].canary_summaries"
+                    f"[{canary_offset}].receipt_summary.summary_sha256",
+                    "receipt_summary",
+                )
+            )
+            for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
+                receipt_digest = receipt.get("receipt_sha256")
+                if isinstance(receipt_digest, str):
+                    canary_material_digests.append(
+                        (
+                            receipt_digest,
+                            summary_offset,
+                            f"evidence_summaries[{summary_offset}].canary_summaries"
+                            f"[{canary_offset}].receipt_summary.receipts"
+                            f"[{receipt_offset}].receipt_sha256",
+                            "receipt",
+                        )
+                    )
+                for field in RECEIPT_MATERIAL_DIGEST_FIELDS:
+                    material_digest = receipt.get(field)
+                    if isinstance(material_digest, str):
+                        canary_material_digests.append(
+                            (
+                                material_digest,
+                                summary_offset,
+                                f"evidence_summaries[{summary_offset}].canary_summaries"
+                                f"[{canary_offset}].receipt_summary.receipts"
+                                f"[{receipt_offset}].{field}",
+                                "receipt_material",
+                            )
+                        )
+
+        for trust_offset, trust in enumerate(summary["trust_summaries"]):
+            trust_summary_digests.append(
+                (
+                    trust["summary_sha256"],
+                    summary_offset,
+                    f"evidence_summaries[{summary_offset}].trust_summaries"
+                    f"[{trust_offset}].summary_sha256",
+                )
+            )
+            profile_json_sha256 = trust.get("profile_json_sha256")
+            if isinstance(profile_json_sha256, str):
+                trust_material_digests.append(
+                    (
+                        profile_json_sha256,
+                        summary_offset,
+                        f"evidence_summaries[{summary_offset}].trust_summaries"
+                        f"[{trust_offset}].profile_json_sha256",
+                        "profile_json",
+                    )
+                )
+            for profile_offset, profile in enumerate(trust["profiles"]):
+                trust_material_digests.append(
+                    (
+                        profile["bundle_sha256"],
+                        summary_offset,
+                        f"evidence_summaries[{summary_offset}].trust_summaries"
+                        f"[{trust_offset}].profiles[{profile_offset}].bundle_sha256",
+                        "bundle",
+                    )
+                )
+                for role in TRUST_DER_PROOF_FIELDS:
+                    for der_offset, entry in enumerate(profile[role]):
+                        trust_material_digests.append(
+                            (
+                                entry["sha256"],
+                                summary_offset,
+                                f"evidence_summaries[{summary_offset}].trust_summaries"
+                                f"[{trust_offset}].profiles[{profile_offset}].{role}"
+                                f"[{der_offset}].sha256",
+                                "der_proof",
+                            )
+                        )
+
+    cross_checks = (
+        (
+            canary_summary_digests,
+            canary_material_digests,
+            CANARY_SUMMARY_RECEIPT_ROLE_CODES,
+        ),
+        (
+            canary_summary_digests,
+            trust_material_digests,
+            CANARY_SUMMARY_TRUST_ROLE_CODES,
+        ),
+        (
+            trust_summary_digests,
+            trust_material_digests,
+            TRUST_SUMMARY_TRUST_ROLE_CODES,
+        ),
+        (
+            trust_summary_digests,
+            canary_material_digests,
+            TRUST_SUMMARY_RECEIPT_ROLE_CODES,
+        ),
+    )
+    for summary_digests, material_digests, code_by_role in cross_checks:
+        for digest, digest_summary_offset, digest_path in summary_digests:
+            for material_digest, material_summary_offset, material_path, role in (
+                material_digests
+            ):
+                if digest_summary_offset == material_summary_offset:
+                    continue
+                if digest != material_digest:
+                    continue
+                _blocker(
+                    blockers,
+                    code_by_role[role],
+                    f"{digest_path} reuses {material_path}",
+                    Path(evidence_summaries[digest_summary_offset]["path"]),
+                )
+
+
 def _block_cross_evidence_summary_reuse(
     evidence_summaries: list[dict[str, Any]],
     blockers: list[dict[str, Any]],
@@ -5344,6 +7059,143 @@ def _block_cross_evidence_summary_reuse(
                     )
                 else:
                     seen[value] = (summary_offset, item_offset)
+
+    summary_paths: list[tuple[str, int, str]] = []
+    json_material_paths: list[tuple[str, int, str]] = []
+    for summary_offset, summary in enumerate(evidence_summaries):
+        for canary_offset, canary in enumerate(summary["canary_summaries"]):
+            summary_paths.append(
+                (
+                    canary["path"],
+                    summary_offset,
+                    (
+                        f"evidence_summaries[{summary_offset}].canary_summaries"
+                        f"[{canary_offset}].path"
+                    ),
+                )
+            )
+            json_material_paths.append(
+                (
+                    canary["config_path"],
+                    summary_offset,
+                    (
+                        f"evidence_summaries[{summary_offset}].canary_summaries"
+                        f"[{canary_offset}].config_path"
+                    ),
+                )
+            )
+            receipt_summary = canary.get("receipt_summary")
+            if isinstance(receipt_summary, dict):
+                for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
+                    receipt_path = receipt.get("path")
+                    if isinstance(receipt_path, str):
+                        json_material_paths.append(
+                            (
+                                receipt_path,
+                                summary_offset,
+                                (
+                                    f"evidence_summaries[{summary_offset}]"
+                                    f".canary_summaries[{canary_offset}]"
+                                    f".receipt_summary.receipts[{receipt_offset}].path"
+                                ),
+                            )
+                        )
+        for trust_offset, trust in enumerate(summary["trust_summaries"]):
+            summary_paths.append(
+                (
+                    trust["path"],
+                    summary_offset,
+                    (
+                        f"evidence_summaries[{summary_offset}].trust_summaries"
+                        f"[{trust_offset}].path"
+                    ),
+                )
+            )
+            for profile_offset, profile in enumerate(trust["profiles"]):
+                json_material_paths.append(
+                    (
+                        profile["path"],
+                        summary_offset,
+                        (
+                            f"evidence_summaries[{summary_offset}].trust_summaries"
+                            f"[{trust_offset}].profiles[{profile_offset}].path"
+                        ),
+                    )
+                )
+        archive_receipts = summary.get("receipt_verification")
+        if isinstance(archive_receipts, dict):
+            for receipt_offset, receipt in enumerate(archive_receipts["receipts"]):
+                receipt_path = receipt.get("path")
+                if isinstance(receipt_path, str):
+                    json_material_paths.append(
+                        (
+                            receipt_path,
+                            summary_offset,
+                            (
+                                f"evidence_summaries[{summary_offset}]"
+                                f".receipt_verification.receipts[{receipt_offset}].path"
+                            ),
+                        )
+                    )
+    for summary_path, summary_offset, summary_label in summary_paths:
+        for material_path, material_summary_offset, material_label in json_material_paths:
+            if summary_offset == material_summary_offset:
+                continue
+            if summary_path != material_path:
+                continue
+            _blocker(
+                blockers,
+                "evidence.compact_json_artifact_path_role_reused",
+                f"{summary_label} duplicates {material_label}",
+                Path(evidence_summaries[summary_offset]["path"]),
+            )
+
+    seen_canary_summary_paths: dict[str, tuple[int, int]] = {}
+    seen_canary_summary_digests: dict[str, tuple[int, int]] = {}
+    for summary_offset, summary in enumerate(evidence_summaries):
+        for canary_offset, canary in enumerate(summary["canary_summaries"]):
+            seen_canary_summary_paths[canary["path"]] = (
+                summary_offset,
+                canary_offset,
+            )
+            seen_canary_summary_digests[canary["summary_sha256"]] = (
+                summary_offset,
+                canary_offset,
+            )
+    for summary_offset, summary in enumerate(evidence_summaries):
+        for trust_offset, trust in enumerate(summary["trust_summaries"]):
+            trust_path = trust["path"]
+            if trust_path in seen_canary_summary_paths:
+                first_summary, first_canary = seen_canary_summary_paths[trust_path]
+                if first_summary != summary_offset:
+                    _blocker(
+                        blockers,
+                        "evidence.canary_trust_summary_path_reused",
+                        (
+                            f"evidence_summaries[{summary_offset}].trust_summaries"
+                            f"[{trust_offset}].path duplicates "
+                            f"evidence_summaries[{first_summary}].canary_summaries"
+                            f"[{first_canary}].path"
+                        ),
+                        Path(summary["path"]),
+                    )
+            digest = trust["summary_sha256"]
+            if digest not in seen_canary_summary_digests:
+                continue
+            first_summary, first_canary = seen_canary_summary_digests[digest]
+            if first_summary == summary_offset:
+                continue
+            _blocker(
+                blockers,
+                "evidence.canary_trust_summary_digest_reused",
+                (
+                    f"evidence_summaries[{summary_offset}].trust_summaries"
+                    f"[{trust_offset}].summary_sha256 duplicates "
+                    f"evidence_summaries[{first_summary}].canary_summaries"
+                    f"[{first_canary}].summary_sha256"
+                ),
+                Path(summary["path"]),
+            )
 
     receipt_checks: tuple[tuple[str, str, str, str], ...] = (
         (
@@ -5421,6 +7273,12 @@ def _block_cross_evidence_summary_reuse(
         ),
         (
             "canary",
+            "rail_message_id",
+            "canary_summaries",
+            "evidence.canary_receipt_rail_message_id_reused",
+        ),
+        (
+            "canary",
             "anchor_path",
             "canary_summaries",
             "evidence.canary_receipt_anchor_path_reused",
@@ -5460,6 +7318,12 @@ def _block_cross_evidence_summary_reuse(
             "payload_sha256",
             "receipt_verification",
             "evidence.archive_receipt_payload_digest_reused",
+        ),
+        (
+            "archive",
+            "rail_message_id",
+            "receipt_verification",
+            "evidence.archive_receipt_rail_message_id_reused",
         ),
         (
             "archive",
@@ -5533,6 +7397,7 @@ def _block_cross_evidence_summary_reuse(
 
     seen_profile_json_digests: dict[str, tuple[int, int]] = {}
     seen_profile_ids: dict[str, tuple[int, int, int]] = {}
+    seen_bundle_paths: dict[str, tuple[int, int, int]] = {}
     seen_bundle_digests: dict[str, tuple[int, int, int]] = {}
     for summary_offset, summary in enumerate(evidence_summaries):
         for trust_offset, trust in enumerate(summary["trust_summaries"]):
@@ -5581,6 +7446,30 @@ def _block_cross_evidence_summary_reuse(
                         profile_offset,
                     )
                 bundle_sha256 = profile["bundle_sha256"]
+                bundle_path = profile["path"]
+                if bundle_path in seen_bundle_paths:
+                    first_summary, first_trust, first_profile = seen_bundle_paths[
+                        bundle_path
+                    ]
+                    if first_summary != summary_offset:
+                        _blocker(
+                            blockers,
+                            "trust.bundle_path_reused",
+                            (
+                                f"evidence_summaries[{summary_offset}].trust_summaries"
+                                f"[{trust_offset}].profiles[{profile_offset}].path "
+                                f"duplicates evidence_summaries[{first_summary}]"
+                                f".trust_summaries[{first_trust}].profiles"
+                                f"[{first_profile}].path"
+                            ),
+                            Path(summary["path"]),
+                        )
+                else:
+                    seen_bundle_paths[bundle_path] = (
+                        summary_offset,
+                        trust_offset,
+                        profile_offset,
+                    )
                 if bundle_sha256 in seen_bundle_digests:
                     first_summary, first_trust, first_profile = seen_bundle_digests[
                         bundle_sha256
@@ -5603,6 +7492,338 @@ def _block_cross_evidence_summary_reuse(
                         trust_offset,
                         profile_offset,
                     )
+
+    _block_cross_compact_summary_digest_role_confusion(evidence_summaries, blockers)
+
+
+def _xsd_material_digest_roles(
+    xsd_summaries: list[dict[str, Any]],
+) -> list[tuple[str, str, str, int]]:
+    roles: list[tuple[str, str, str, int]] = []
+    for summary_offset, summary in enumerate(xsd_summaries):
+        roles.append(
+            (
+                summary["summary_sha256"],
+                "summary",
+                f"xsd_summaries[{summary_offset}].summary_sha256",
+                summary_offset,
+            )
+        )
+        roles.append(
+            (
+                summary["manifest_sha256"],
+                "manifest",
+                f"xsd_summaries[{summary_offset}].manifest_sha256",
+                summary_offset,
+            )
+        )
+        for digest_offset, digest in enumerate(summary["_schema_digests"]):
+            roles.append(
+                (
+                    digest,
+                    "schema",
+                    f"xsd_summaries[{summary_offset}].schemas[{digest_offset}].sha256",
+                    summary_offset,
+                )
+            )
+        for digest_offset, digest in enumerate(summary["_fixture_digests"]):
+            roles.append(
+                (
+                    digest,
+                    "fixture",
+                    f"xsd_summaries[{summary_offset}].fixtures[{digest_offset}].sha256",
+                    summary_offset,
+                )
+            )
+        for digest_offset, digest in enumerate(
+            summary["_validated_blocked_schema_source_digests"]
+        ):
+            roles.append(
+                (
+                    digest,
+                    "blocked_source",
+                    (
+                        f"xsd_summaries[{summary_offset}].blocked_schema_sources"
+                        f"[{digest_offset}].source.sha256"
+                    ),
+                    summary_offset,
+                )
+            )
+        profile_catalog = summary.get("profile_catalog")
+        if isinstance(profile_catalog, dict):
+            roles.append(
+                (
+                    profile_catalog["sha256"],
+                    "profile_catalog",
+                    f"xsd_summaries[{summary_offset}].profile_catalog.sha256",
+                    summary_offset,
+                )
+            )
+            roles.append(
+                (
+                    profile_catalog["catalog_json_sha256"],
+                    "profile_catalog_json",
+                    (
+                        f"xsd_summaries[{summary_offset}]"
+                        ".profile_catalog.catalog_json_sha256"
+                    ),
+                    summary_offset,
+                )
+            )
+    return roles
+
+
+def _evidence_material_digest_roles(
+    evidence_summaries: list[dict[str, Any]],
+) -> list[tuple[str, str]]:
+    roles: list[tuple[str, str]] = []
+    for summary_offset, summary in enumerate(evidence_summaries):
+        roles.append(
+            (
+                summary["summary_sha256"],
+                f"evidence_summaries[{summary_offset}].summary_sha256",
+            )
+        )
+        archive = summary["receipt_verification"]
+        if isinstance(archive, dict):
+            roles.append(
+                (
+                    archive["summary_sha256"],
+                    f"evidence_summaries[{summary_offset}].receipt_verification.summary_sha256",
+                )
+            )
+            for receipt_offset, receipt in enumerate(archive["receipts"]):
+                receipt_digest = receipt.get("receipt_sha256")
+                if isinstance(receipt_digest, str):
+                    roles.append(
+                        (
+                            receipt_digest,
+                            (
+                                f"evidence_summaries[{summary_offset}]"
+                                f".receipt_verification.receipts"
+                                f"[{receipt_offset}].receipt_sha256"
+                            ),
+                        )
+                    )
+                for field in RECEIPT_MATERIAL_DIGEST_FIELDS:
+                    digest = receipt.get(field)
+                    if isinstance(digest, str):
+                        roles.append(
+                            (
+                                digest,
+                                (
+                                    f"evidence_summaries[{summary_offset}]"
+                                    f".receipt_verification.receipts"
+                                    f"[{receipt_offset}].{field}"
+                                ),
+                            )
+                        )
+        for canary_offset, canary in enumerate(summary["canary_summaries"]):
+            roles.append(
+                (
+                    canary["summary_sha256"],
+                    (
+                        f"evidence_summaries[{summary_offset}].canary_summaries"
+                        f"[{canary_offset}].summary_sha256"
+                    ),
+                )
+            )
+            receipt_summary = canary.get("receipt_summary")
+            if not isinstance(receipt_summary, dict):
+                continue
+            roles.append(
+                (
+                    receipt_summary["summary_sha256"],
+                    (
+                        f"evidence_summaries[{summary_offset}].canary_summaries"
+                        f"[{canary_offset}].receipt_summary.summary_sha256"
+                    ),
+                )
+            )
+            for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
+                receipt_digest = receipt.get("receipt_sha256")
+                if isinstance(receipt_digest, str):
+                    roles.append(
+                        (
+                            receipt_digest,
+                            (
+                                f"evidence_summaries[{summary_offset}]"
+                                f".canary_summaries[{canary_offset}]"
+                                f".receipt_summary.receipts"
+                                f"[{receipt_offset}].receipt_sha256"
+                            ),
+                        )
+                    )
+                for field in RECEIPT_MATERIAL_DIGEST_FIELDS:
+                    digest = receipt.get(field)
+                    if isinstance(digest, str):
+                        roles.append(
+                            (
+                                digest,
+                                (
+                                    f"evidence_summaries[{summary_offset}]"
+                                    f".canary_summaries[{canary_offset}]"
+                                    f".receipt_summary.receipts"
+                                    f"[{receipt_offset}].{field}"
+                                ),
+                            )
+                        )
+        for trust_offset, trust in enumerate(summary["trust_summaries"]):
+            roles.append(
+                (
+                    trust["summary_sha256"],
+                    (
+                        f"evidence_summaries[{summary_offset}].trust_summaries"
+                        f"[{trust_offset}].summary_sha256"
+                    ),
+                )
+            )
+            profile_json_sha256 = trust.get("profile_json_sha256")
+            if isinstance(profile_json_sha256, str):
+                roles.append(
+                    (
+                        profile_json_sha256,
+                        (
+                            f"evidence_summaries[{summary_offset}]"
+                            f".trust_summaries[{trust_offset}].profile_json_sha256"
+                        ),
+                    )
+                )
+            for profile_offset, profile in enumerate(trust["profiles"]):
+                roles.append(
+                    (
+                        profile["bundle_sha256"],
+                        (
+                            f"evidence_summaries[{summary_offset}]"
+                            f".trust_summaries[{trust_offset}].profiles"
+                            f"[{profile_offset}].bundle_sha256"
+                        ),
+                    )
+                )
+                for role in TRUST_DER_PROOF_FIELDS:
+                    for der_offset, entry in enumerate(profile[role]):
+                        roles.append(
+                            (
+                                entry["sha256"],
+                                (
+                                    f"evidence_summaries[{summary_offset}]"
+                                    f".trust_summaries[{trust_offset}].profiles"
+                                    f"[{profile_offset}].{role}"
+                                    f"[{der_offset}].sha256"
+                                ),
+                            )
+                        )
+    return roles
+
+
+def _receipt_path_material_roles(
+    receipts: list[dict[str, Any]],
+    label_prefix: str,
+) -> list[tuple[str, str]]:
+    roles: list[tuple[str, str]] = []
+    path_fields = ("path", "source_path", "anchor_path", "store_dir", "index_path")
+    for receipt_offset, receipt in enumerate(receipts):
+        for field in path_fields:
+            value = receipt.get(field)
+            if isinstance(value, str):
+                roles.append(
+                    (
+                        value,
+                        f"{label_prefix}.receipts[{receipt_offset}].{field}",
+                    )
+                )
+    return roles
+
+
+def _evidence_material_path_roles(
+    evidence_summaries: list[dict[str, Any]],
+) -> list[tuple[str, str]]:
+    """Return evidence material path roles with diagnostic labels."""
+
+    roles: list[tuple[str, str]] = []
+    for summary_offset, summary in enumerate(evidence_summaries):
+        roles.append((summary["path"], f"evidence_summaries[{summary_offset}].path"))
+        archive = summary["receipt_verification"]
+        if isinstance(archive, dict):
+            roles.extend(
+                _receipt_path_material_roles(
+                    archive["receipts"],
+                    f"evidence_summaries[{summary_offset}].receipt_verification",
+                )
+            )
+        for canary_offset, canary in enumerate(summary["canary_summaries"]):
+            canary_label = (
+                f"evidence_summaries[{summary_offset}].canary_summaries"
+                f"[{canary_offset}]"
+            )
+            roles.append((canary["path"], f"{canary_label}.path"))
+            roles.append((canary["config_path"], f"{canary_label}.config_path"))
+            receipt_summary = canary.get("receipt_summary")
+            if isinstance(receipt_summary, dict):
+                roles.extend(
+                    _receipt_path_material_roles(
+                        receipt_summary["receipts"],
+                        f"{canary_label}.receipt_summary",
+                    )
+                )
+        for trust_offset, trust in enumerate(summary["trust_summaries"]):
+            trust_label = (
+                f"evidence_summaries[{summary_offset}].trust_summaries"
+                f"[{trust_offset}]"
+            )
+            roles.append((trust["path"], f"{trust_label}.path"))
+            for profile_offset, profile in enumerate(trust["profiles"]):
+                roles.append(
+                    (
+                        profile["path"],
+                        f"{trust_label}.profiles[{profile_offset}].path",
+                    )
+                )
+    return roles
+
+
+def _block_cross_xsd_evidence_digest_role_confusion(
+    xsd_summaries: list[dict[str, Any]],
+    evidence_summaries: list[dict[str, Any]],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Reject XSD material digests reused as evidence material digests."""
+
+    evidence_roles = _evidence_material_digest_roles(evidence_summaries)
+    for xsd_digest, role, xsd_path, summary_offset in _xsd_material_digest_roles(
+        xsd_summaries
+    ):
+        for evidence_digest, evidence_path in evidence_roles:
+            if xsd_digest != evidence_digest:
+                continue
+            _blocker(
+                blockers,
+                XSD_DIGEST_EVIDENCE_ROLE_CODES[role],
+                f"{xsd_path} reuses {evidence_path}",
+                Path(xsd_summaries[summary_offset]["path"]),
+            )
+
+
+def _block_cross_xsd_evidence_path_role_confusion(
+    xsd_summaries: list[dict[str, Any]],
+    evidence_summaries: list[dict[str, Any]],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Reject XSD artifact paths reused as evidence material paths."""
+
+    evidence_roles = _evidence_material_path_roles(evidence_summaries)
+    for xsd_path, role, xsd_label, summary_offset in _xsd_material_path_roles(
+        xsd_summaries
+    ):
+        for evidence_path, evidence_label in evidence_roles:
+            if xsd_path != evidence_path:
+                continue
+            _blocker(
+                blockers,
+                XSD_PATH_EVIDENCE_ROLE_CODES[role],
+                f"{xsd_label} reuses {evidence_label}",
+                Path(xsd_summaries[summary_offset]["path"]),
+            )
 
 
 def _public_xsd_summary(summary: dict[str, Any]) -> dict[str, Any]:
@@ -5695,6 +7916,14 @@ def verify_evidence_summary(
         )
         for offset, canary in enumerate(canary_summaries)
     ]
+    canary_order_keys = [_compact_summary_order_key(canary) for canary in canaries]
+    if canary_order_keys != sorted(canary_order_keys):
+        _blocker(
+            blockers,
+            "evidence.canary_summaries_not_canonical_order",
+            f"{path}.canary_summaries must be sorted by path and summary_sha256",
+            path,
+        )
     _block_if_archive_receipts_do_not_cover_canaries(
         canaries,
         archive_receipts,
@@ -5874,7 +8103,16 @@ def verify_evidence_summary(
                 "trust summary emitted profile JSON even though profile emission policy is not consistently emittable",
                 path,
             )
+        profile_ids = [profile["profile_id"] for profile in profiles]
+        if profile_ids != sorted(profile_ids):
+            _blocker(
+                blockers,
+                "trust.profiles_not_canonical_order",
+                f"{label}.profiles must be sorted by profile_id in canonical order",
+                path,
+            )
         seen_profile_ids: dict[str, int] = {}
+        seen_bundle_paths: dict[str, int] = {}
         seen_bundle_digests: dict[str, int] = {}
         for profile_offset, profile in enumerate(profiles):
             profile_id = profile["profile_id"]
@@ -5890,6 +8128,19 @@ def verify_evidence_summary(
                 )
             else:
                 seen_profile_ids[profile_id] = profile_offset
+            bundle_path = profile["path"]
+            if bundle_path in seen_bundle_paths:
+                _blocker(
+                    blockers,
+                    "trust.bundle_path_duplicate",
+                    (
+                        f"{label}.profiles[{profile_offset}].path duplicates "
+                        f"{label}.profiles[{seen_bundle_paths[bundle_path]}].path"
+                    ),
+                    path,
+                )
+            else:
+                seen_bundle_paths[bundle_path] = profile_offset
             bundle_sha256 = profile["bundle_sha256"]
             if bundle_sha256 in seen_bundle_digests:
                 _blocker(
@@ -5927,9 +8178,31 @@ def verify_evidence_summary(
                 "summary_sha256": summary_sha256,
             }
         )
+    trust_order_keys = [_compact_summary_order_key(trust) for trust in trust_outputs]
+    if trust_order_keys != sorted(trust_order_keys):
+        _blocker(
+            blockers,
+            "evidence.trust_summaries_not_canonical_order",
+            f"{path}.trust_summaries must be sorted by path and summary_sha256",
+            path,
+        )
     _reject_duplicate_compact_summaries(canaries, f"{path}.canary_summaries")
     _reject_duplicate_compact_summaries(trust_outputs, f"{path}.trust_summaries")
+    _block_canary_trust_summary_identity_reuse(canaries, trust_outputs, path, blockers)
+    _block_compact_json_artifact_path_role_reuse(
+        canaries,
+        trust_outputs,
+        path,
+        blockers,
+        archive_receipts,
+    )
     _block_cross_trust_profile_reuse(trust_outputs, path, blockers)
+    _block_compact_summary_digest_role_confusion(
+        canaries,
+        trust_outputs,
+        path,
+        blockers,
+    )
     _block_canary_rail_receipts_without_trust(
         canaries,
         trust_outputs,
@@ -5959,9 +8232,47 @@ def _public_evidence_summary(summary: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in summary.items() if not key.startswith("_")}
 
 
+def _compact_summary_order_key(summary: dict[str, Any]) -> tuple[str, str]:
+    return (summary["path"], summary["summary_sha256"])
+
+
+def _require_policy_booleans(args: argparse.Namespace) -> None:
+    for attr in (
+        "allow_reviewed_xsd_gaps",
+        "allow_canary_stage_receipts_only",
+    ):
+        flag = f"--{attr.replace('_', '-')}"
+        setattr(args, attr, _require_cli_bool(getattr(args, attr, None), flag))
+
+
+def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+        raise ReadinessError(f"{label} must be a repeatable path list")
+    if len(value) > MAX_SUMMARY_INPUT_PATHS:
+        raise ReadinessError(f"{label} accepts at most {MAX_SUMMARY_INPUT_PATHS} paths")
+    paths: list[Path] = []
+    for offset, entry in enumerate(value):
+        if isinstance(entry, bytes):
+            raise ReadinessError(f"{label}[{offset}] must be a path")
+        try:
+            paths.append(Path(entry))
+        except TypeError as error:
+            raise ReadinessError(f"{label}[{offset}] must be a path") from error
+    return paths
+
+
 def run(args: argparse.Namespace) -> int:
-    xsd_summary_paths = list(args.xsd_summary or [])
-    evidence_summary_paths = list(args.evidence_summary or [])
+    args.summary_out = _optional_cli_path(getattr(args, "summary_out", None), "summary_out")
+    xsd_summary_paths = _required_cli_path_sequence(
+        getattr(args, "xsd_summary", None),
+        "--xsd-summary",
+    )
+    evidence_summary_paths = _required_cli_path_sequence(
+        getattr(args, "evidence_summary", None),
+        "--evidence-summary",
+    )
     if args.summary_out is not None:
         _reject_output_path_smuggling(args.summary_out, "summary_out")
         _reject_repository_output_path(args.summary_out, "summary_out")
@@ -5969,30 +8280,51 @@ def run(args: argparse.Namespace) -> int:
         _reject_output_path_smuggling(path, f"--xsd-summary[{offset}]")
     for offset, path in enumerate(evidence_summary_paths):
         _reject_output_path_smuggling(path, f"--evidence-summary[{offset}]")
+    _require_policy_booleans(args)
     if not xsd_summary_paths:
         raise ReadinessError("provide at least one --xsd-summary")
     if not evidence_summary_paths:
         raise ReadinessError("provide at least one --evidence-summary")
-    args.provider = _require_cli_string(args.provider, "--provider")
-    args.environment = _require_cli_string(args.environment, "--environment")
+    _reject_summary_output_input_alias(
+        args.summary_out,
+        tuple(
+            (f"--xsd-summary[{offset}]", path)
+            for offset, path in enumerate(xsd_summary_paths)
+        )
+        + tuple(
+            (f"--evidence-summary[{offset}]", path)
+            for offset, path in enumerate(evidence_summary_paths)
+        ),
+    )
+    if args.summary_out is not None:
+        _ensure_text_output_target(
+            args.summary_out,
+            display_label="summary_out",
+            create_parent=False,
+        )
+    args.provider = _require_cli_string(getattr(args, "provider", None), "--provider")
+    args.environment = _require_cli_string(
+        getattr(args, "environment", None),
+        "--environment",
+    )
     args.max_xsd_age_days = _require_positive_cli_int(
-        args.max_xsd_age_days,
+        getattr(args, "max_xsd_age_days", None),
         "--max-xsd-age-days",
     )
     args.max_evidence_age_days = _require_positive_cli_int(
-        args.max_evidence_age_days,
+        getattr(args, "max_evidence_age_days", None),
         "--max-evidence-age-days",
     )
     args.max_canary_age_days = _require_positive_cli_int(
-        args.max_canary_age_days,
+        getattr(args, "max_canary_age_days", None),
         "--max-canary-age-days",
     )
     args.max_trust_age_days = _require_positive_cli_int(
-        args.max_trust_age_days,
+        getattr(args, "max_trust_age_days", None),
         "--max-trust-age-days",
     )
     args.max_trust_source_age_days = _require_positive_cli_int(
-        args.max_trust_source_age_days,
+        getattr(args, "max_trust_source_age_days", None),
         "--max-trust-source-age-days",
     )
 
@@ -6038,16 +8370,36 @@ def run(args: argparse.Namespace) -> int:
     _reject_duplicate_compact_summaries(xsd_summaries, "xsd_summaries")
     _reject_duplicate_compact_summaries(evidence_summaries, "evidence_summaries")
     _block_cross_xsd_summary_reuse(xsd_summaries, blockers)
+    _block_xsd_path_role_confusion(xsd_summaries, blockers)
     _block_cross_evidence_summary_reuse(evidence_summaries, blockers)
+    _block_cross_xsd_evidence_digest_role_confusion(
+        xsd_summaries,
+        evidence_summaries,
+        blockers,
+    )
+    _block_cross_xsd_evidence_path_role_confusion(
+        xsd_summaries,
+        evidence_summaries,
+        blockers,
+    )
+    canonical_blockers = _canonical_diagnostics(blockers)
+    canonical_warnings = _canonical_diagnostics(warnings)
+    canonical_xsd_summaries = sorted(xsd_summaries, key=_compact_summary_order_key)
+    canonical_evidence_summaries = sorted(
+        evidence_summaries,
+        key=_compact_summary_order_key,
+    )
     output: dict[str, Any] = {
         "version": READINESS_VERSION,
         "checked_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
-        "ok": not blockers,
-        "blockers": blockers,
-        "warnings": warnings,
-        "xsd_summaries": [_public_xsd_summary(summary) for summary in xsd_summaries],
+        "ok": not canonical_blockers,
+        "blockers": canonical_blockers,
+        "warnings": canonical_warnings,
+        "xsd_summaries": [
+            _public_xsd_summary(summary) for summary in canonical_xsd_summaries
+        ],
         "evidence_summaries": [
-            _public_evidence_summary(summary) for summary in evidence_summaries
+            _public_evidence_summary(summary) for summary in canonical_evidence_summaries
         ],
         "policy": {
             "provider": args.provider,

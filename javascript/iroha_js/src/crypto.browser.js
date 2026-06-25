@@ -450,7 +450,9 @@ export function preferredKagemushaOfflineSpendModeForCapabilities(
   recursiveCompactAvailable,
   recursiveSpendAvailable,
 ) {
-  void recursiveCompactAvailable;
+  if (recursiveCompactAvailable) {
+    return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1;
+  }
   if (recursiveSpendAvailable) {
     return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1;
   }
