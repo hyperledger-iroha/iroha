@@ -139,6 +139,8 @@ import {
   bscValidatorSetTransitionMessageHash,
   canonicalSccpMessageProofBundleBytes,
   canonicalSccpPayloadEnvelopeBytes,
+  buildUpsertSccpRouteManifestInstruction,
+  buildRemoveSccpRouteManifestInstruction,
   buildEvmSccpProofRequest,
   buildEvmSccpSubmission,
   EthereumMainnetBeaconRestConsensusProvider,
@@ -8139,8 +8141,15 @@ test("package declarations expose recursive compact key-package signatures", () 
   assert.equal(packageJson.types, "./index.d.ts");
   assert.equal(packageJson.exports["."].types, "./index.d.ts");
   assert.equal(packageJson.exports["./crypto"].types, "./index.d.ts");
+  assert.equal(packageJson.exports["./nexus-app"].browser, "./dist/nexusApp.js");
+  assert.equal(packageJson.exports["./nexus-app"].import, "./dist/nexusApp.js");
+  assert.equal(packageJson.exports["./nexus-app"].types, "./nexus-app.d.ts");
   assert.deepEqual(packageJson.typesVersions["*"].crypto, ["./index.d.ts"]);
   assert.equal(packageJson.files.includes("index.d.ts"), true);
+  const nexusAppDeclarations = PACKAGE_DECLARATION_TEXTS.get("nexus-app.d.ts");
+  assert.match(nexusAppDeclarations, /export interface NexusTransactionCodec/);
+  assert.match(nexusAppDeclarations, /finalizeSignedTransaction\(/);
+  assert.match(nexusAppDeclarations, /export class NexusAppClient/);
   assert.match(
     DECLARATIONS_TEXT,
     /export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes\(\s*recordBundleArchive: BinaryLike,\s*pallasOpenEnvelopesArchive: BinaryLike,\s*recursiveCompactKeyArtifactsArchive: BinaryLike,\s*\): Buffer;/u,
@@ -9017,6 +9026,43 @@ test("package dist entrypoint exports SCCP portal constants", () => {
   assert.match(
     DECLARATIONS_TEXT,
     /export const SCCP_TON_MAINNET_MASTERCHAIN_CONFIG_VERIFIER_ID_V1: string;/,
+  );
+});
+
+test("package dist entrypoint exports SCCP route-manifest ISI helpers", () => {
+  const manifest = {
+    route_id: "taira_bsc_xor",
+    asset_key: "xor",
+    chain_id_hex: "0x61",
+    counterparty_domain: SCCP_DOMAIN_BSC,
+  };
+
+  assert.deepEqual(buildUpsertSccpRouteManifestInstruction({ manifest }), {
+    UpsertSccpRouteManifest: { manifest },
+  });
+  assert.deepEqual(
+    buildRemoveSccpRouteManifestInstruction({
+      route_id: "taira_bsc_xor",
+      asset_key: "xor",
+      counterparty_domain: "2",
+      chain_id_hex: "0x61",
+    }),
+    {
+      RemoveSccpRouteManifest: {
+        route_id: "taira_bsc_xor",
+        asset_key: "xor",
+        counterparty_domain: SCCP_DOMAIN_BSC,
+        chain_id_hex: "0x61",
+      },
+    },
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function buildUpsertSccpRouteManifestTransaction/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function buildRemoveSccpRouteManifestInstruction/u,
   );
 });
 

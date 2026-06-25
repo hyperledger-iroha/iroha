@@ -70,6 +70,7 @@
       "types": "./connect.browser.d.ts"
     },
     "./nexus-app": {
+      "browser": "./dist/nexusApp.js",
       "import": "./dist/nexusApp.js",
       "types": "./nexus-app.d.ts"
     },

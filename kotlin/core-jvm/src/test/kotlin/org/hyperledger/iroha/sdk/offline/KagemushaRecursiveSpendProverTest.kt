@@ -1723,11 +1723,11 @@ class KagemushaRecursiveSpendProverTest {
         assertContains(archives, "\"semantics\": \"verifier_record_activation_height\"")
         assertContains(
             archives,
-            "\"sha256_hex\": \"5894cfa6edae0de07129dcf14a686bfe8a19486e33d6e8fa6d834076a4359515\"",
+            "\"sha256_hex\": \"c5402b3ea6aeb35ce12607344304b858273f8589e2b3887708a86cb19665ce68\"",
         )
         assertContains(
             archives,
-            "\"sha256_hex\": \"e49686ef68b8db1f6dbd507235eb72224fb99f424fc78638c2ecb171ef0441c0\"",
+            "\"sha256_hex\": \"31cd92a5a2f8894634c531830621604937d4631f5f08b58cba01a45dc26e9eba\"",
         )
 
         assertEquals(

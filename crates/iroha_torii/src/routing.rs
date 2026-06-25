@@ -6809,6 +6809,10 @@ pub struct SccpRouteManifestDestinationRolloutDto {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub proving_key_hash: Option<String>,
+    /// Optional hex-encoded native EVM prover bundle digest.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub native_evm_prover_bundle_hash: Option<String>,
     /// Canonical destination binding hash.
     pub destination_binding_hash: String,
     /// Canonical destination binding key.
@@ -6909,6 +6913,34 @@ pub struct SccpRouteManifestPostDeployEvidenceDto {
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
+/// Route-bound browser prover manifest reference advertised in route manifests.
+pub struct SccpRouteBrowserProverManifestRefDto {
+    /// Browser-safe prover module URL.
+    pub module_url: String,
+    /// Optional package/module specifier for reproducible builds.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub module_specifier: Option<String>,
+    /// Hex-encoded SHA-256 digest of the browser module bytes.
+    pub module_hash: String,
+    /// Hex-encoded SHA-256 digest of the public browser prover manifest.
+    pub manifest_hash: String,
+    /// Expected exported symbols in the browser module.
+    pub expected_exports: Vec<String>,
+    /// Hex-encoded route/deployment hash this prover manifest is bound to.
+    pub bound_route_hash: String,
+    /// Hex-encoded proof/material hash this prover manifest is bound to.
+    pub bound_proof_hash: String,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)]
 /// Concrete SCCP route manifest advertised to wallet clients.
 pub struct SccpRouteManifestDto {
     /// Material format version.
@@ -6999,6 +7031,18 @@ pub struct SccpRouteManifestDto {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub post_deploy_live_evidence: Option<SccpRouteManifestPostDeployEvidenceDto>,
+    /// Optional hex-encoded native EVM prover bundle digest.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub native_evm_prover_bundle_hash: Option<String>,
+    /// Optional route-bound TAIRA-to-counterparty browser prover manifest reference.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub destination_browser_prover: Option<SccpRouteBrowserProverManifestRefDto>,
+    /// Optional route-bound counterparty-to-TAIRA browser prover manifest reference.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub source_browser_prover: Option<SccpRouteBrowserProverManifestRefDto>,
 }
 
 #[derive(
@@ -7163,6 +7207,20 @@ fn sccp_route_manifest_verifier_backend(
     )
 }
 
+fn sccp_route_browser_prover_manifest_ref_dto(
+    reference: &iroha_config::parameters::actual::SccpRouteBrowserProverManifestRef,
+) -> SccpRouteBrowserProverManifestRefDto {
+    SccpRouteBrowserProverManifestRefDto {
+        module_url: reference.module_url.clone(),
+        module_specifier: reference.module_specifier.clone(),
+        module_hash: reference.module_hash.clone(),
+        manifest_hash: reference.manifest_hash.clone(),
+        expected_exports: reference.expected_exports.clone(),
+        bound_route_hash: reference.bound_route_hash.clone(),
+        bound_proof_hash: reference.bound_proof_hash.clone(),
+    }
+}
+
 fn sccp_route_manifest_dto(
     manifest: &iroha_config::parameters::actual::SccpRouteManifest,
 ) -> SccpRouteManifestDto {
@@ -7207,9 +7265,10 @@ fn sccp_route_manifest_dto(
             verifier_code_hash: manifest.verifier_code_hash.clone(),
             verifier_key_hash: manifest.verifier_key_hash.clone(),
             proof_artifact_hash: manifest.proof_artifact_hash.clone(),
-            prover_artifact_hash: manifest.proof_artifact_hash.clone(),
-            circuit_artifact_hash: manifest.proof_artifact_hash.clone(),
+            prover_artifact_hash: None,
+            circuit_artifact_hash: None,
             proving_key_hash: manifest.proving_key_hash.clone(),
+            native_evm_prover_bundle_hash: manifest.native_evm_prover_bundle_hash.clone(),
             destination_binding_hash: manifest.destination_binding_hash.clone(),
             destination_binding_key: manifest.destination_binding_key.clone(),
         },
@@ -7243,6 +7302,15 @@ fn sccp_route_manifest_dto(
             contract_alias: manifest.settlement_contract_alias.clone(),
         },
         post_deploy_live_evidence: sccp_route_manifest_post_deploy_evidence(manifest),
+        native_evm_prover_bundle_hash: manifest.native_evm_prover_bundle_hash.clone(),
+        destination_browser_prover: manifest
+            .destination_browser_prover
+            .as_ref()
+            .map(sccp_route_browser_prover_manifest_ref_dto),
+        source_browser_prover: manifest
+            .source_browser_prover
+            .as_ref()
+            .map(sccp_route_browser_prover_manifest_ref_dto),
     }
 }
 
@@ -12530,6 +12598,9 @@ mod sccp_message_backend_tests {
             verifier_key_hash: format!("0x{}", "46".repeat(32)),
             proof_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
             proving_key_hash: Some(format!("0x{}", "4d".repeat(32))),
+            native_evm_prover_bundle_hash: None,
+            destination_browser_prover: None,
+            source_browser_prover: None,
             deployment_evidence_sha256: Some(format!("0x{}", "4f".repeat(32))),
             destination_binding_key: "evm:0:2:test-binding".to_owned(),
             destination_binding_hash: format!("0x{}", "47".repeat(32)),
@@ -12612,11 +12683,11 @@ mod sccp_message_backend_tests {
         );
         assert_eq!(
             dto.destination_rollout.prover_artifact_hash.as_deref(),
-            Some(proof_artifact_hash.as_str())
+            None
         );
         assert_eq!(
             dto.destination_rollout.circuit_artifact_hash.as_deref(),
-            Some(proof_artifact_hash.as_str())
+            None
         );
         assert_eq!(
             dto.destination_rollout.proving_key_hash.as_deref(),

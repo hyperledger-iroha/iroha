@@ -4361,6 +4361,134 @@ impl SccpRouteAllowlist {
     }
 }
 
+/// User-level route-bound browser prover manifest reference.
+#[derive(Debug, ReadConfig, Clone, norito::derive::JsonDeserialize)]
+pub struct SccpRouteBrowserProverManifestRef {
+    /// Browser-safe prover module URL.
+    pub module_url: String,
+    /// Optional package/module specifier for reproducible builds.
+    pub module_specifier: Option<String>,
+    /// Hex-encoded SHA-256 digest of the browser module bytes.
+    pub module_hash: String,
+    /// Hex-encoded SHA-256 digest of the public browser prover manifest.
+    pub manifest_hash: String,
+    /// Expected exported symbols in the browser module.
+    pub expected_exports: Vec<String>,
+    /// Hex-encoded route/deployment hash this prover manifest is bound to.
+    pub bound_route_hash: String,
+    /// Hex-encoded proof/material hash this prover manifest is bound to.
+    pub bound_proof_hash: String,
+}
+
+impl SccpRouteBrowserProverManifestRef {
+    fn parse_module_url(role: &str, value: &str) -> String {
+        let module_url = value.trim();
+        assert!(
+            !module_url.is_empty(),
+            "SCCP route manifest {role} browser prover module_url must not be empty"
+        );
+        assert!(
+            module_url == value,
+            "SCCP route manifest {role} browser prover module_url must not contain surrounding whitespace"
+        );
+        assert!(
+            !module_url.contains('?') && !module_url.contains('#'),
+            "SCCP route manifest {role} browser prover module_url must not contain query strings or fragments"
+        );
+        assert!(
+            !module_url.contains('\\')
+                && !module_url
+                    .bytes()
+                    .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control()),
+            "SCCP route manifest {role} browser prover module_url must be a deterministic module URL"
+        );
+
+        if let Ok(parsed) = Url::parse(module_url) {
+            assert!(
+                parsed.username().is_empty() && parsed.password().is_none(),
+                "SCCP route manifest {role} browser prover module_url must not contain credentials"
+            );
+            assert!(
+                parsed.query().is_none() && parsed.fragment().is_none(),
+                "SCCP route manifest {role} browser prover module_url must not contain query strings or fragments"
+            );
+            match parsed.scheme() {
+                "https" => {}
+                "http" => {
+                    let is_loopback = parsed.host().is_some_and(|host| match host {
+                        url::Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+                        url::Host::Ipv4(address) => address.is_loopback(),
+                        url::Host::Ipv6(address) => address.is_loopback(),
+                    });
+                    assert!(
+                        is_loopback,
+                        "SCCP route manifest {role} browser prover module_url may only use http for loopback hosts"
+                    );
+                }
+                _ => panic!(
+                    "SCCP route manifest {role} browser prover module_url must be HTTPS, loopback HTTP, or package-relative"
+                ),
+            }
+            return module_url.to_owned();
+        }
+
+        assert!(
+            (module_url.starts_with('/') || module_url.starts_with("./"))
+                && !module_url.starts_with("//")
+                && !module_url.split('/').any(|segment| segment == ".."),
+            "SCCP route manifest {role} browser prover module_url must be HTTPS, loopback HTTP, or package-relative"
+        );
+        module_url.to_owned()
+    }
+
+    fn parse(self, role: &str, strict_hashes: bool) -> actual::SccpRouteBrowserProverManifestRef {
+        let module_url = Self::parse_module_url(role, &self.module_url);
+        let module_specifier = self
+            .module_specifier
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let expected_exports = self
+            .expected_exports
+            .into_iter()
+            .map(|value| value.trim().to_owned())
+            .inspect(|value| {
+                assert!(
+                    !value.is_empty(),
+                    "SCCP route manifest {role} browser prover expected_exports must not contain empty values"
+                );
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !expected_exports.is_empty(),
+            "SCCP route manifest {role} browser prover expected_exports must not be empty"
+        );
+        let normalize_hash = |field: &str, value: &str| {
+            if strict_hashes {
+                SccpRouteManifest::normalize_hex32(field, value)
+            } else {
+                value.trim().to_owned()
+            }
+        };
+        actual::SccpRouteBrowserProverManifestRef {
+            module_url,
+            module_specifier,
+            module_hash: normalize_hash(&format!("{role}.module_hash"), &self.module_hash),
+            manifest_hash: normalize_hash(&format!("{role}.manifest_hash"), &self.manifest_hash),
+            expected_exports,
+            bound_route_hash: normalize_hash(
+                &format!("{role}.bound_route_hash"),
+                &self.bound_route_hash,
+            ),
+            bound_proof_hash: normalize_hash(
+                &format!("{role}.bound_proof_hash"),
+                &self.bound_proof_hash,
+            ),
+        }
+    }
+}
+
 /// User-level SCCP route manifest material advertised to wallet clients.
 #[derive(Debug, ReadConfig, Clone, norito::derive::JsonDeserialize)]
 pub struct SccpRouteManifest {
@@ -4424,6 +4552,12 @@ pub struct SccpRouteManifest {
     pub circuit_artifact_hash: Option<String>,
     /// Optional hex-encoded proving key digest.
     pub proving_key_hash: Option<String>,
+    /// Optional hex-encoded native EVM prover bundle digest.
+    pub native_evm_prover_bundle_hash: Option<String>,
+    /// Optional route-bound TAIRA-to-counterparty browser prover manifest reference.
+    pub destination_browser_prover: Option<SccpRouteBrowserProverManifestRef>,
+    /// Optional route-bound counterparty-to-TAIRA browser prover manifest reference.
+    pub source_browser_prover: Option<SccpRouteBrowserProverManifestRef>,
     /// Optional hash of the normalized deployment evidence used to build this route.
     pub deployment_evidence_sha256: Option<String>,
     /// Canonical destination binding key.
@@ -5087,7 +5221,8 @@ impl SccpRouteManifest {
         resolved.map(|(_, value)| value)
     }
 
-    fn parse(self) -> actual::SccpRouteManifest {
+    /// Parse and validate a user-level SCCP route manifest into the runtime form.
+    pub fn parse(self) -> actual::SccpRouteManifest {
         let is_bsc_route = self.counterparty_domain == Self::BSC_COUNTERPARTY_DOMAIN;
         let is_tron_route = self.counterparty_domain == Self::TRON_COUNTERPARTY_DOMAIN;
         let strict_route_hashes = is_bsc_route || is_tron_route;
@@ -5170,6 +5305,26 @@ impl SccpRouteManifest {
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned)
         };
+        let native_evm_prover_bundle_hash = if strict_route_hashes {
+            Self::normalize_optional_hex32(
+                "native_evm_prover_bundle_hash",
+                self.native_evm_prover_bundle_hash.as_deref(),
+            )
+        } else {
+            self.native_evm_prover_bundle_hash
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        };
+        let destination_browser_prover = self
+            .destination_browser_prover
+            .clone()
+            .map(|value| value.parse("destination_browser_prover", strict_route_hashes));
+        let source_browser_prover = self
+            .source_browser_prover
+            .clone()
+            .map(|value| value.parse("source_browser_prover", strict_route_hashes));
         let deployment_evidence_sha256 = if strict_route_hashes {
             Self::normalize_optional_hex32(
                 "deployment_evidence_sha256",
@@ -5274,6 +5429,33 @@ impl SccpRouteManifest {
                 );
             }
         }
+        if let Some(native_hash) = native_evm_prover_bundle_hash.as_deref() {
+            for (label, value) in [
+                ("verifier_code_hash", verifier_code_hash.as_str()),
+                ("verifier_key_hash", verifier_key_hash.as_str()),
+                (
+                    "destination_binding_hash",
+                    destination_binding_hash.as_str(),
+                ),
+                (
+                    "proof_artifact_hash",
+                    proof_artifact_hash.as_deref().unwrap_or_default(),
+                ),
+                (
+                    "proving_key_hash",
+                    proving_key_hash.as_deref().unwrap_or_default(),
+                ),
+                (
+                    "deployment_evidence_sha256",
+                    deployment_evidence_sha256.as_deref().unwrap_or_default(),
+                ),
+            ] {
+                assert!(
+                    !native_hash.trim().eq_ignore_ascii_case(value.trim()),
+                    "SCCP route manifest native_evm_prover_bundle_hash must not equal {label}"
+                );
+            }
+        }
         assert!(
             !(self.production_ready && uses_diagnostic_verifier_key_hash),
             "SCCP BSC route manifest production_ready cannot be true with diagnostic verifier material"
@@ -5288,6 +5470,39 @@ impl SccpRouteManifest {
                 && (proof_artifact_hash.is_none() || proving_key_hash.is_none())),
             "SCCP BSC route manifest production_ready requires proof_artifact_hash and proving_key_hash"
         );
+        assert!(
+            !(self.production_ready && is_bsc_route && native_evm_prover_bundle_hash.is_none()),
+            "SCCP BSC route manifest production_ready requires native_evm_prover_bundle_hash"
+        );
+        assert!(
+            !(self.production_ready
+                && is_bsc_route
+                && (destination_browser_prover.is_none() || source_browser_prover.is_none())),
+            "SCCP BSC route manifest production_ready requires destination_browser_prover and source_browser_prover"
+        );
+        if self.production_ready && is_bsc_route {
+            let expected_proof_hash = proof_artifact_hash
+                .as_deref()
+                .expect("production BSC proof_artifact_hash was required above");
+            for (label, reference) in [
+                (
+                    "destination_browser_prover",
+                    destination_browser_prover.as_ref(),
+                ),
+                ("source_browser_prover", source_browser_prover.as_ref()),
+            ] {
+                let reference =
+                    reference.expect("production BSC browser prover was required above");
+                assert!(
+                    reference.bound_route_hash == destination_binding_hash,
+                    "SCCP BSC route manifest {label}.bound_route_hash must match destination_binding_hash"
+                );
+                assert!(
+                    reference.bound_proof_hash == expected_proof_hash,
+                    "SCCP BSC route manifest {label}.bound_proof_hash must match proof_artifact_hash"
+                );
+            }
+        }
         assert!(
             !(self.production_ready && is_bsc_route && deployment_evidence_sha256.is_none()),
             "SCCP BSC route manifest production_ready requires deployment_evidence_sha256"
@@ -5441,6 +5656,9 @@ impl SccpRouteManifest {
             verifier_key_hash,
             proof_artifact_hash,
             proving_key_hash,
+            native_evm_prover_bundle_hash,
+            destination_browser_prover,
+            source_browser_prover,
             deployment_evidence_sha256,
             destination_binding_key: self.destination_binding_key,
             destination_binding_hash,
@@ -5468,10 +5686,27 @@ impl SccpRouteManifest {
 
 #[cfg(test)]
 mod sccp_route_manifest_user_config_tests {
-    use super::SccpRouteManifest;
+    use super::{SccpRouteBrowserProverManifestRef, SccpRouteManifest};
 
     const SOURCE_BRIDGE: &str = "0x3333333333333333333333333333333333333333";
     const VERIFIER: &str = "0x4444444444444444444444444444444444444444";
+
+    fn browser_prover_ref(role: &str, seed: &str) -> SccpRouteBrowserProverManifestRef {
+        let (manifest_seed, route_seed, proof_seed) = match seed {
+            "60" => ("61", "62", "63"),
+            "70" => ("71", "72", "73"),
+            _ => ("81", "82", "83"),
+        };
+        SccpRouteBrowserProverManifestRef {
+            module_url: format!("/sccp-bsc/{role}-prover.js"),
+            module_specifier: Some(format!("@sora/sccp-bsc-{role}-prover")),
+            module_hash: format!("0x{}", seed.repeat(32)),
+            manifest_hash: format!("0x{}", manifest_seed.repeat(32)),
+            expected_exports: vec!["bscSccpProve".to_owned(), "bscSccpSelfTest".to_owned()],
+            bound_route_hash: format!("0x{}", route_seed.repeat(32)),
+            bound_proof_hash: format!("0x{}", proof_seed.repeat(32)),
+        }
+    }
 
     fn route_manifest() -> SccpRouteManifest {
         SccpRouteManifest {
@@ -5504,6 +5739,9 @@ mod sccp_route_manifest_user_config_tests {
             prover_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
             circuit_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
             proving_key_hash: Some(format!("0x{}", "4d".repeat(32))),
+            native_evm_prover_bundle_hash: Some(format!("0x{}", "50".repeat(32))),
+            destination_browser_prover: Some(browser_prover_ref("destination", "60")),
+            source_browser_prover: Some(browser_prover_ref("source", "70")),
             deployment_evidence_sha256: Some(format!("0x{}", "4f".repeat(32))),
             destination_binding_key: "evm:0:2:test-binding".to_owned(),
             destination_binding_hash: format!("0x{}", "47".repeat(32)),
@@ -5534,12 +5772,29 @@ mod sccp_route_manifest_user_config_tests {
         }
     }
 
+    fn bind_bsc_browser_provers_to_route(manifest: &mut SccpRouteManifest) {
+        let route_hash = manifest.destination_binding_hash.clone();
+        let proof_hash = manifest
+            .proof_artifact_hash
+            .clone()
+            .expect("route manifest fixture has proof hash");
+        if let Some(reference) = manifest.destination_browser_prover.as_mut() {
+            reference.bound_route_hash = route_hash.clone();
+            reference.bound_proof_hash = proof_hash.clone();
+        }
+        if let Some(reference) = manifest.source_browser_prover.as_mut() {
+            reference.bound_route_hash = route_hash;
+            reference.bound_proof_hash = proof_hash;
+        }
+    }
+
     fn production_ready_route_manifest() -> SccpRouteManifest {
         let mut manifest = route_manifest();
         manifest.production_ready = true;
         manifest.disabled_reason = None;
         manifest.post_deploy_full_toml_ready = Some(true);
         manifest.post_deploy_offline_full_toml_sha256 = Some(format!("0x{}", "4e".repeat(32)));
+        bind_bsc_browser_provers_to_route(&mut manifest);
         manifest
     }
 
@@ -5590,6 +5845,9 @@ mod sccp_route_manifest_user_config_tests {
             prover_artifact_hash: None,
             circuit_artifact_hash: None,
             proving_key_hash: None,
+            native_evm_prover_bundle_hash: None,
+            destination_browser_prover: None,
+            source_browser_prover: None,
             deployment_evidence_sha256: None,
             destination_binding_key,
             destination_binding_hash,
@@ -5718,6 +5976,117 @@ mod sccp_route_manifest_user_config_tests {
     fn bsc_route_rejects_empty_chain_id_hex() {
         let mut manifest = route_manifest();
         manifest.chain_id_hex = "   ".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "module_url must not contain credentials")]
+    fn bsc_browser_prover_rejects_credentialed_module_url() {
+        let mut manifest = route_manifest();
+        manifest
+            .destination_browser_prover
+            .as_mut()
+            .expect("destination prover fixture")
+            .module_url = "https://operator:secret@provers.sora.org/bsc.js".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "module_url must not contain query strings or fragments")]
+    fn bsc_browser_prover_rejects_mutable_module_url() {
+        let mut manifest = route_manifest();
+        manifest
+            .destination_browser_prover
+            .as_mut()
+            .expect("destination prover fixture")
+            .module_url = "https://provers.sora.org/bsc.js?version=latest".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "module_url may only use http for loopback hosts")]
+    fn bsc_browser_prover_rejects_plain_http_non_loopback_module_url() {
+        let mut manifest = route_manifest();
+        manifest
+            .destination_browser_prover
+            .as_mut()
+            .expect("destination prover fixture")
+            .module_url = "http://provers.sora.org/bsc.js".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "module_url must be HTTPS, loopback HTTP, or package-relative")]
+    fn bsc_browser_prover_rejects_traversing_relative_module_url() {
+        let mut manifest = route_manifest();
+        manifest
+            .destination_browser_prover
+            .as_mut()
+            .expect("destination prover fixture")
+            .module_url = "../sccp-bsc/prover.js".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    fn bsc_browser_prover_accepts_loopback_http_module_url() {
+        let mut manifest = route_manifest();
+        manifest
+            .destination_browser_prover
+            .as_mut()
+            .expect("destination prover fixture")
+            .module_url = "http://127.0.0.1:5173/sccp-bsc/prover.js".to_owned();
+
+        let actual = manifest.parse();
+
+        assert_eq!(
+            actual
+                .destination_browser_prover
+                .expect("destination prover")
+                .module_url,
+            "http://127.0.0.1:5173/sccp-bsc/prover.js"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "expected_exports must not be empty")]
+    fn bsc_browser_prover_rejects_empty_export_list() {
+        let mut manifest = route_manifest();
+        manifest
+            .destination_browser_prover
+            .as_mut()
+            .expect("destination prover fixture")
+            .expected_exports = Vec::new();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "bound_route_hash must match destination_binding_hash")]
+    fn production_ready_bsc_browser_prover_must_bind_route_hash() {
+        let mut manifest = production_ready_route_manifest();
+        manifest
+            .destination_browser_prover
+            .as_mut()
+            .expect("destination prover fixture")
+            .bound_route_hash = format!("0x{}", "99".repeat(32));
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "bound_proof_hash must match proof_artifact_hash")]
+    fn production_ready_bsc_browser_prover_must_bind_proof_hash() {
+        let mut manifest = production_ready_route_manifest();
+        manifest
+            .source_browser_prover
+            .as_mut()
+            .expect("source prover fixture")
+            .bound_proof_hash = format!("0x{}", "98".repeat(32));
 
         let _ = manifest.parse();
     }
@@ -5892,6 +6261,7 @@ mod sccp_route_manifest_user_config_tests {
         manifest.prover_artifact_hash = Some(format!("0x{}", "D4".repeat(32)));
         manifest.circuit_artifact_hash = Some(format!("0x{}", "D4".repeat(32)));
         manifest.proving_key_hash = Some(format!("0x{}", "E5".repeat(32)));
+        bind_bsc_browser_provers_to_route(&mut manifest);
 
         let actual = manifest.parse();
 
