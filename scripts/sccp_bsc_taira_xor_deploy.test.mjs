@@ -853,11 +853,12 @@ const tairaCapabilitiesResponse = () =>
     },
   );
 
-async function withRouteManifestPublishHarness(callback) {
+async function withRouteManifestPublishHarness(callback, options = {}) {
   const previousBinding = globalThis.__IROHA_NATIVE_BINDING__;
   const previousFetch = globalThis.fetch;
   const envName = "SCCP_TAIRA_ROUTE_MANIFEST_TEST_PRIVATE_KEY";
   const previousPrivateKey = process.env[envName];
+  const statusResponses = [...(options.statusResponses ?? [])];
   const calls = {
     buildTransaction: [],
     fetch: [],
@@ -903,6 +904,7 @@ async function withRouteManifestPublishHarness(callback) {
     calls.fetch.push({
       url: String(url),
       method: init.method ?? "GET",
+      headers: init.headers ?? null,
       body: init.body ? Buffer.from(init.body) : null,
     });
     if (String(url) === "https://taira.sora.org/v1/node/capabilities") {
@@ -910,12 +912,37 @@ async function withRouteManifestPublishHarness(callback) {
     }
     if (String(url) === "https://taira.sora.org/v1/pipeline/transactions") {
       assert.equal(init.method, "POST");
+      assert.equal(init.headers?.["Content-Type"], "application/x-norito");
+      assert.equal(init.headers?.Accept, "application/x-norito, application/json");
       assert.deepEqual(
         [...Buffer.from(init.body).values()],
         [0x01, 0xaa, 0xbb, 0xcc],
       );
-      return new Response(JSON.stringify({ accepted: true }), {
-        status: 202,
+      const body = options.pipelineBody ?? { accepted: true };
+      return new Response(
+        typeof body === "string" ? body : JSON.stringify(body),
+        {
+          status: options.pipelineStatus ?? 202,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }
+    if (
+      String(url).startsWith(
+        "https://taira.sora.org/v1/pipeline/transactions/status",
+      )
+    ) {
+      assert.equal(init.method ?? "GET", "GET");
+      const body = statusResponses.shift() ?? {
+        hash: `0x${"11".repeat(32)}`,
+        status: { kind: "Applied" },
+      };
+      const responseBody =
+        body && typeof body === "object" && !Array.isArray(body) && !body.hash
+          ? { hash: `0x${"11".repeat(32)}`, ...body }
+          : body;
+      return new Response(JSON.stringify(responseBody), {
+        status: 200,
         headers: { "content-type": "application/json" },
       });
     }
@@ -2176,7 +2203,7 @@ test("BSC publish-route-manifest records default gas limit in transaction metada
     assert.equal(result.gasLimit, DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT);
     assert.equal(result.gasAssetId, "6TEAJqbb8oEPmLncoNiMRbLEK6tw");
     assert.equal(result.hash, `0x${"11".repeat(32)}`);
-    assert.equal(result.submittedHash, `0x${"22".repeat(32)}`);
+    assert.equal(result.submittedHash, `0x${"11".repeat(32)}`);
     assert.equal(
       artifact.submission.gasLimit,
       DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT,
@@ -2204,7 +2231,6 @@ test("BSC publish-route-manifest records default gas limit in transaction metada
       "publish_sccp_route_manifest",
     );
     assert.deepEqual(calls.fetch.map((call) => call.url), [
-      "https://taira.sora.org/v1/node/capabilities",
       "https://taira.sora.org/v1/pipeline/transactions",
     ]);
     assert.doesNotMatch(
@@ -2212,6 +2238,146 @@ test("BSC publish-route-manifest records default gas limit in transaction metada
       /private[_-]?key|mnemonic|seed|SCCP_TAIRA_ROUTE_MANIFEST_TEST_PRIVATE_KEY/iu,
     );
   });
+});
+
+test("BSC publish-route-manifest waits for raw pipeline Applied status by default", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-publish-route-applied-"));
+  const manifestPath = join(dir, "route.manifest.json");
+  const out = join(dir, "route.upsert-isi.json");
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+  );
+
+  await withRouteManifestPublishHarness(async ({ calls, privateKeyEnv }) => {
+    const result = await main([
+      "publish-route-manifest",
+      "--manifest",
+      manifestPath,
+      "--out",
+      out,
+      "--submit",
+      "true",
+      "--authority",
+      TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY,
+      "--private-key-env",
+      privateKeyEnv,
+      "--commit-timeout-ms",
+      "1000",
+    ]);
+    const artifact = JSON.parse(await readFile(out, "utf8"));
+
+    assert.equal(result.ok, true);
+    assert.equal(result.statusKind, "Applied");
+    assert.equal(artifact.submission.statusKind, "Applied");
+    assert.equal(artifact.submission.submittedHash, `0x${"11".repeat(32)}`);
+    assert.equal(artifact.submission.waitForCommit, true);
+    const statusCall = calls.fetch.find(
+      (call) =>
+        call.method === "GET" &&
+        call.url.startsWith(
+          "https://taira.sora.org/v1/pipeline/transactions/status",
+        ),
+    );
+    assert.ok(statusCall);
+    const statusHash = new URL(statusCall.url).searchParams.get("hash") ?? "";
+    assert.equal(statusHash.replace(/^0x/u, ""), "11".repeat(32));
+  });
+});
+
+test("BSC publish-route-manifest rejects terminal non-Applied raw pipeline status", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-publish-route-rejected-"));
+  const manifestPath = join(dir, "route.manifest.json");
+  const out = join(dir, "route.upsert-isi.json");
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+  );
+
+  await withRouteManifestPublishHarness(
+    async ({ privateKeyEnv }) => {
+      await assert.rejects(
+        () =>
+          main([
+            "publish-route-manifest",
+            "--manifest",
+            manifestPath,
+            "--out",
+            out,
+            "--submit",
+            "true",
+            "--authority",
+            TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY,
+            "--private-key-env",
+            privateKeyEnv,
+            "--commit-timeout-ms",
+            "1000",
+          ]),
+        /TAIRA route manifest publication was not applied: Rejected/u,
+      );
+      const artifact = JSON.parse(await readFile(out, "utf8"));
+      assert.equal(artifact.submission.statusKind, "Rejected");
+      assert.doesNotMatch(
+        JSON.stringify(artifact),
+        /private[_-]?key|mnemonic|seed|SCCP_TAIRA_ROUTE_MANIFEST_TEST_PRIVATE_KEY/iu,
+      );
+    },
+    {
+      statusResponses: [
+        {
+          status: {
+            kind: "Rejected",
+            content: { rejection_reason: "permission denied" },
+          },
+        },
+      ],
+    },
+  );
+});
+
+test("BSC publish-route-manifest reports raw pipeline HTTP rejection preview", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-publish-route-http-"));
+  const manifestPath = join(dir, "route.manifest.json");
+  const out = join(dir, "route.upsert-isi.json");
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+  );
+
+  await withRouteManifestPublishHarness(
+    async ({ privateKeyEnv }) => {
+      await assert.rejects(
+        () =>
+          main([
+            "publish-route-manifest",
+            "--manifest",
+            manifestPath,
+            "--out",
+            out,
+            "--submit",
+            "true",
+            "--authority",
+            TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY,
+            "--private-key-env",
+            privateKeyEnv,
+            "--wait-for-commit",
+            "false",
+          ]),
+        (error) => {
+          assert.match(
+            error.message,
+            /HTTP 500 while submitting raw signed transaction: pipeline unavailable/u,
+          );
+          assert.doesNotMatch(error.message, /33{16,}|private[_-]?key|seed/iu);
+          return true;
+        },
+      );
+    },
+    {
+      pipelineStatus: 500,
+      pipelineBody: "pipeline unavailable",
+    },
+  );
 });
 
 test("BSC publish-route-manifest supports explicit gas limit and rejects invalid values before submit", async () => {
@@ -2269,7 +2435,7 @@ test("BSC publish-route-manifest supports explicit gas limit and rejects invalid
       );
     }
     assert.equal(calls.buildTransaction.length, 1);
-    assert.equal(calls.fetch.length, 2);
+    assert.equal(calls.fetch.length, 1);
   });
 });
 

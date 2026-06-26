@@ -3656,6 +3656,89 @@ function transactionStatusKind(status) {
   return null;
 }
 
+function isTerminalTransactionStatus(status) {
+  const kind = transactionStatusKind(status);
+  if (typeof kind !== "string") {
+    return false;
+  }
+  return /applied|committed|rejected|failed|expired/iu.test(kind);
+}
+
+async function delayMs(ms) {
+  await new Promise((resolveDelay) => {
+    setTimeout(resolveDelay, ms);
+  });
+}
+
+async function responseBodyPreview(response) {
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.length === 0) {
+    return "";
+  }
+  const utf8 = bytes.toString("utf8").replace(/[^\t\n\r -~]/gu, "");
+  if (utf8.trim()) {
+    return utf8.trim().slice(0, 512);
+  }
+  return `0x${bytes.toString("hex").slice(0, 512)}`;
+}
+
+async function submitSignedTransactionRawToTairaPipeline(
+  client,
+  toriiUrl,
+  signedTransaction,
+  hashHex,
+  options = {},
+) {
+  const txBuffer = Buffer.from(signedTransaction);
+  const versionedPayload = Buffer.concat([Buffer.from([1]), txBuffer]);
+  const pipelineUrl = new URL("/v1/pipeline/transactions", toriiUrl);
+  const response = await fetch(pipelineUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-norito",
+      Accept: "application/x-norito, application/json",
+    },
+    body: versionedPayload,
+  });
+  if (![200, 201, 202, 204].includes(response.status)) {
+    const preview = await responseBodyPreview(response);
+    throw new Error(
+      `Torii responded with HTTP ${response.status} while submitting raw signed transaction${
+        preview ? `: ${preview}` : ""
+      }`,
+    );
+  }
+  const submission = {
+    accepted: true,
+    httpStatus: response.status,
+    pipelineUrl: pipelineUrl.toString(),
+  };
+  if (!options.waitForCommit) {
+    return { hash: hashHex, submission };
+  }
+
+  const pollIntervalMs = options.pollIntervalMs ?? 500;
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const deadline = Date.now() + timeoutMs;
+  let status = null;
+  while (Date.now() <= deadline) {
+    status = await client.getTransactionStatus(hashHex, {
+      allowShortHash: true,
+      scope: options.scope ?? "auto",
+    });
+    if (isTerminalTransactionStatus(status)) {
+      return { hash: hashHex, submission, status };
+    }
+    await delayMs(pollIntervalMs);
+  }
+
+  const error = new Error("timed out waiting for transaction status");
+  error.hash = hashHex;
+  error.submission = submission;
+  error.status = status;
+  throw error;
+}
+
 function normalizeStrictBase64(value, label) {
   const normalized = normalizeNonEmptyText(value, label);
   if (
@@ -14173,7 +14256,7 @@ async function commandPublishRouteManifest(options) {
     gas_asset_id: gasAssetId,
     gas_limit: gasLimit,
   };
-  const { buildTransaction, submitSignedTransaction } = await import(
+  const { buildTransaction } = await import(
     "../javascript/iroha_js/src/transaction.js"
   );
   const { ToriiClient } = await import("../javascript/iroha_js/src/toriiClient.js");
@@ -14185,14 +14268,16 @@ async function commandPublishRouteManifest(options) {
     privateKey,
   });
   const client = new ToriiClient(toriiUrl);
-  const submission = await submitSignedTransaction(
-    client,
-    transaction.signedTransaction,
-    { waitForCommit, timeoutMs: commitTimeoutMs },
-  );
   const hash = normalizeTransactionHash(
     transaction.hash.toString("hex"),
     "local transaction hash",
+  );
+  const submission = await submitSignedTransactionRawToTairaPipeline(
+    client,
+    toriiUrl,
+    transaction.signedTransaction,
+    hash,
+    { waitForCommit, timeoutMs: commitTimeoutMs },
   );
   const submittedHash = normalizeTransactionHash(
     submission.hash,
