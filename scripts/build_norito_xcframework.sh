@@ -163,6 +163,72 @@ cp "$INC_DIR/connect_norito_bridge.h" "$HEADERS_MAC/connect_norito_bridge.h"
 cp "$INC_DIR/NoritoBridge.h" "$HEADERS_MAC/NoritoBridge.h"
 cp "$CRATE_DIR/module.modulemap.template" "$HEADERS_MAC/module.modulemap"
 
+write_static_xcframework_info_plist() {
+  local plist="$OUT_DIR/${FRAMEWORK_NAME}.xcframework/Info.plist"
+
+  mkdir -p "$(dirname "$plist")"
+  cat > "$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>AvailableLibraries</key>
+  <array>
+    <dict>
+      <key>HeadersPath</key>
+      <string>Headers</string>
+      <key>LibraryIdentifier</key>
+      <string>ios-arm64</string>
+      <key>LibraryPath</key>
+      <string>${STATIC_LIB_NAME}</string>
+      <key>SupportedArchitectures</key>
+      <array>
+        <string>arm64</string>
+      </array>
+      <key>SupportedPlatform</key>
+      <string>ios</string>
+    </dict>
+    <dict>
+      <key>HeadersPath</key>
+      <string>Headers</string>
+      <key>LibraryIdentifier</key>
+      <string>ios-arm64_x86_64-simulator</string>
+      <key>LibraryPath</key>
+      <string>${STATIC_LIB_NAME}</string>
+      <key>SupportedArchitectures</key>
+      <array>
+        <string>arm64</string>
+        <string>x86_64</string>
+      </array>
+      <key>SupportedPlatform</key>
+      <string>ios</string>
+      <key>SupportedPlatformVariant</key>
+      <string>simulator</string>
+    </dict>
+    <dict>
+      <key>HeadersPath</key>
+      <string>Headers</string>
+      <key>LibraryIdentifier</key>
+      <string>macos-arm64</string>
+      <key>LibraryPath</key>
+      <string>${STATIC_LIB_NAME}</string>
+      <key>SupportedArchitectures</key>
+      <array>
+        <string>arm64</string>
+      </array>
+      <key>SupportedPlatform</key>
+      <string>macos</string>
+    </dict>
+  </array>
+  <key>CFBundlePackageType</key>
+  <string>XFWK</string>
+  <key>XCFrameworkFormatVersion</key>
+  <string>1.0</string>
+</dict>
+</plist>
+EOF
+}
+
 echo "[+] Creating XCFramework" >&2
 if ! xcodebuild -create-xcframework \
   -library "$LIB_DEV_STAGED" -headers "$HEADERS_DEV" \
@@ -187,6 +253,7 @@ if ! xcodebuild -create-xcframework \
   copy_static_xcframework_slice "ios-arm64" "$LIB_DEV_STAGED" "$HEADERS_DEV"
   copy_static_xcframework_slice "ios-arm64_x86_64-simulator" "$LIB_SIM_STAGED" "$HEADERS_SIM"
   copy_static_xcframework_slice "macos-arm64" "$LIB_MAC_STAGED" "$HEADERS_MAC"
+  write_static_xcframework_info_plist
 
   REQUIRED_OUTPUTS=(
     "$OUT_DIR/${FRAMEWORK_NAME}.xcframework/Info.plist"

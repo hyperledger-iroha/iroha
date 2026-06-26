@@ -827,6 +827,14 @@ def _section_readiness_blockers(
                 section=section_key,
             )
         ]
+    if section.get("ok") is True and section_blockers:
+        return [
+            blocker(
+                "kagemusha_readiness_section_inconsistent",
+                f"{label} reported blockers while marked ready",
+                section=section_key,
+            )
+        ]
     return []
 
 

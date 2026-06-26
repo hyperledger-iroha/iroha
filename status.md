@@ -2,6 +2,39 @@
 
 Last updated: 2026-06-27
 
+## 2026-06-27 Readiness Section Guard Pinning
+
+- Extended the recursive Kagemusha policy guard so the production-readiness
+  section-consistency invariant and its adversarial tests are pinned by the
+  normal policy lane.
+- Added a workflow-routed negative control that mutates both the readiness
+  rollup call and the malformed-section test marker, then requires the exact
+  production-readiness section-consistency diagnostic before accepting the
+  negative-control pass.
+- Mirrored the new policy negative-control mode in the JavaScript parity
+  meta-test so workflow inventory and exact diagnostics cannot drift silently.
+- The live readiness rollup still exits blocked only on external release
+  evidence: missing Reserved-lineage proof evidence, missing recursive compact
+  key evidence, missing trusted Android signer, and missing Android
+  standard/D2D device-lab matrix evidence.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-readiness-section-consistency`
+  - `node --test --test-name-pattern "recursive Kagemusha policy workflow and doc negative controls require exact diagnostics|recursive Kagemusha active marker scan covers workflow-backed non-C# test surfaces" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root . --summary-out target/kagemusha-readiness-summary-current.json`
+    (expected exit 1 with only the external evidence blockers above)
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_recursive_spend_policy.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py status.md`
+    (no matches)
+  - `git diff --name-only -- csharp Cargo.lock` (empty)
+- No existing processes were stopped, signaled, or inspected during this
+  validation pass.
+
 ## 2026-06-27 Readiness Summary Section Consistency
 
 - Hardened `scripts/kagemusha_production_readiness.py` so the top-level
