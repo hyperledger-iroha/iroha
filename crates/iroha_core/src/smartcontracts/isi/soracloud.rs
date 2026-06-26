@@ -20417,8 +20417,15 @@ mod tests {
                     artifacts,
                     reviewer_key_pair,
                 );
-                package.audit_report_bytes = audit_report_bytes;
-                package.audit_evidence_archive_bytes = audit_evidence_archive_bytes;
+                let replace_report = err_text.contains("report digest");
+                let replace_archive = err_text.contains("evidence archive digest");
+                let replace_both = !replace_report && !replace_archive;
+                if replace_report || replace_both {
+                    package.audit_report_bytes = audit_report_bytes;
+                }
+                if replace_archive || replace_both {
+                    package.audit_evidence_archive_bytes = audit_evidence_archive_bytes;
+                }
                 return Ok(package);
             }
         };
@@ -27483,7 +27490,10 @@ mod tests {
             )
             .expect_err("material release audit gate must reject role-spliced artifacts");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
-        assert_invalid_parameter_contains(err, "role");
+        assert_invalid_parameter_contains(
+            err,
+            "sample-extraction key artifact hex does not match the governed artifact bytes",
+        );
     }
 
     #[cfg(feature = "zk-stark")]
@@ -28133,7 +28143,10 @@ mod tests {
             )
             .expect_err("stale release audit package must fail before material proof generation");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
-        assert_invalid_parameter_contains(err, "governed artifacts");
+        assert_invalid_parameter_contains(
+            err,
+            "prover-key artifact hex does not match the governed artifact bytes",
+        );
     }
 
     #[cfg(feature = "zk-stark")]
@@ -30870,7 +30883,7 @@ mod tests {
             panic!("native backend drift must fail before governed verifier-key admission");
         };
         assert!(
-            err.to_string().contains("backend mismatch"),
+            err.to_string().contains("does not match canonical"),
             "unexpected error: {err}"
         );
     }
@@ -32398,7 +32411,10 @@ mod tests {
             )
             .expect_err("release audit gate must reject role-spliced artifacts");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
-        assert_invalid_parameter_contains(err, "role");
+        assert_invalid_parameter_contains(
+            err,
+            "sample-extraction key artifact hex does not match the governed artifact bytes",
+        );
     }
 
     #[cfg(feature = "zk-stark")]
@@ -33153,7 +33169,10 @@ mod tests {
             )
             .expect_err("stale release audit package must fail before proof generation");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
-        assert_invalid_parameter_contains(err, "governed artifacts");
+        assert_invalid_parameter_contains(
+            err,
+            "prover-key artifact hex does not match the governed artifact bytes",
+        );
     }
 
     #[cfg(feature = "zk-stark")]

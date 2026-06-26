@@ -1,6 +1,24 @@
 # Status
 
-Last updated: 2026-06-25
+Last updated: 2026-06-26
+
+## 2026-06-26 Soracloud BFV Full-Bootstrap Fixture Drift
+
+- Refreshed the Soracloud BFV operation-vector full-bootstrap material fixture
+  digests to match the generated canonical circuit artifacts and statement
+  digest.
+- Updated the audited release-package negative test helper so deliberately
+  inert report/archive fixtures replace only the malformed artifact side,
+  allowing archive-body validation to reach the intended malformed archive
+  checks. Audited role-splice and stale-package assertions now expect the
+  earlier governed artifact-byte archive preflight.
+- Validation passed:
+  - `cargo test -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_native_backend_drift`
+  - `cargo test -p iroha_core --features zk-stark soracloud_bfv_operation_vectors`
+  - `cargo test -p iroha_core --features zk-stark audited_prover_rejects_role_spliced_artifacts`
+  - `cargo test -p iroha_core --features zk-stark audited_prover_rejects_untrusted_or_stale_package`
+  - `cargo fmt --all`
+  - `git diff --check`
 
 ## 2026-06-25 Torii Recipient Lookup Config Snapshot
 
