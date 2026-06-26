@@ -8,13 +8,13 @@ seiyaku TairaXorSccpBurnRecord {
   kotoage fn burn_and_record(
     sender: AccountId,
     settlement_asset: AssetDefinitionId,
-    amount: int,
-    record_instruction: Blob
+    amount: Amount,
+    record_instruction: bytes
   ) permission(AssetTransferRole) {
     require(amount > 0);
     require(sender == authority());
 
     burn_asset(sender, settlement_asset, amount);
-    execute_instruction(norito_bytes(record_instruction));
+    execute_instruction(record_instruction);
   }
 }

@@ -324,23 +324,26 @@ function toVersionedTransactionPayload(payload, nativeBinding) {
   const native = resolveOptionalNativeBinding(nativeBinding);
   if (
     native &&
-    typeof native.encodeSignedTransactionNorito === "function"
+    typeof native.encodeSignedTransactionVersioned === "function"
   ) {
     try {
-      return Buffer.concat([
-        Buffer.from([VERSIONED_TRANSACTION_PAYLOAD_VERSION]),
-        Buffer.from(native.encodeSignedTransactionNorito(rawPayload)),
-      ]);
+      const encoded = Buffer.from(native.encodeSignedTransactionVersioned(rawPayload));
+      if (encoded[0] === VERSIONED_TRANSACTION_PAYLOAD_VERSION) {
+        return encoded;
+      }
     } catch {
       // Preserve the pre-native path for opaque or foreign signed payload bytes.
     }
   }
   if (
     native &&
-    typeof native.encodeSignedTransactionVersioned === "function"
+    typeof native.encodeSignedTransactionNorito === "function"
   ) {
     try {
-      return Buffer.from(native.encodeSignedTransactionVersioned(rawPayload));
+      return Buffer.concat([
+        Buffer.from([VERSIONED_TRANSACTION_PAYLOAD_VERSION]),
+        unwrapNrt0NoritoFrame(Buffer.from(native.encodeSignedTransactionNorito(rawPayload))),
+      ]);
     } catch {
       // Preserve the pre-native path for opaque or foreign signed payload bytes.
     }

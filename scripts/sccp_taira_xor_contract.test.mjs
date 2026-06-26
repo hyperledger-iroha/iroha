@@ -36,8 +36,8 @@ test("TAIRA XOR SCCP burn-record contract compiles as IVM ZK proved artifact", a
     [
       ["sender", "AccountId"],
       ["settlement_asset", "AssetDefinitionId"],
-      ["amount", "int"],
-      ["record_instruction", "Blob"],
+      ["amount", "Amount"],
+      ["record_instruction", "bytes"],
     ],
   );
   assert.equal(entrypoint.access_hints_complete, true);

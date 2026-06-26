@@ -11803,6 +11803,13 @@ export async function buildBscTairaXorRouteManifestDraft(input = {}) {
 
 function normalizeVerifierKeyRefText(value, label) {
   const normalized = normalizeNonEmptyText(value, label);
+  const compact = normalized.toLowerCase().replace(/[-_\s]+/gu, "");
+  if (compact === "halo2ipa") {
+    return "halo2/ipa";
+  }
+  if (compact === "starkfri") {
+    return "stark/fri";
+  }
   if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u.test(normalized)) {
     throw new Error(`${label} contains unsupported characters.`);
   }
