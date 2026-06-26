@@ -133,6 +133,10 @@ CommitWorkerConfigExactness ==
   /\ CommitWorkerConfigExplicitExact
   /\ CommitWorkerConfigPositiveExact
 
+CommitWorkerConfigCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CommitWorkerConfigExactness
+
 SafetyFast ==
   CommitWorkerConfigExactness
 

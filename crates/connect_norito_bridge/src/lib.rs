@@ -578,27 +578,6 @@ fn parse_json_value(bytes: &[u8]) -> BridgeResult<Json> {
     Json::from_norito_value_ref(&value).map_err(|_| BridgeError::MetadataValue)
 }
 
-unsafe fn read_metadata_json_bridge(ptr: *const c_uchar, len: c_ulong) -> BridgeResult<Metadata> {
-    if ptr.is_null() || len == 0 {
-        return Ok(Metadata::default());
-    }
-    let bytes = unsafe { slice::from_raw_parts(ptr, len as usize) };
-    parse_metadata_json(bytes)
-}
-
-fn parse_metadata_json(bytes: &[u8]) -> BridgeResult<Metadata> {
-    let value: norito::json::Value =
-        norito::json::from_slice(bytes).map_err(|_| BridgeError::MetadataValue)?;
-    let object = value.as_object().ok_or(BridgeError::MetadataValue)?;
-    let mut metadata = Metadata::default();
-    for (key, value) in object {
-        let name = Name::from_str(key).map_err(|_| BridgeError::MetadataKey)?;
-        let json = Json::from_norito_value_ref(value).map_err(|_| BridgeError::MetadataValue)?;
-        metadata.insert(name, json);
-    }
-    Ok(metadata)
-}
-
 fn normalize_zk_ballot_public_inputs(value: &mut JsonValue) -> BridgeResult<()> {
     let map = match value {
         JsonValue::Object(map) => map,
@@ -6940,11 +6919,10 @@ pub unsafe extern "C" fn connect_norito_offline_prove_note_audit(
     bridge_result_to_code(result)
 }
 
-/// Encode and sign a `RedeemOfflineNote` on-chain transaction.
+/// Retired classic offline-note redemption transaction encoder.
 ///
-/// `redeem_norito` is the Norito archive of `OfflineNoteRedeem` with the
-/// recursive proof already embedded. The output is canonical versioned
-/// `SignedTransaction` bytes matching the transfer/mint encoders.
+/// Kagemusha is the only active offline payment implementation, so this
+/// entrypoint always fails closed with `ERR_OFFLINE_NOTE_PROVE`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_redeem_offline_note_signed_transaction(
     chain_ptr: *const c_char,
@@ -6965,49 +6943,32 @@ pub unsafe extern "C" fn connect_norito_encode_redeem_offline_note_signed_transa
     out_hash_ptr: *mut c_uchar,
     out_hash_len: c_ulong,
 ) -> c_int {
-    let result = (|| {
-        if redeem_norito_ptr.is_null()
-            || private_key_ptr.is_null()
-            || out_signed_ptr.is_null()
-            || out_signed_len.is_null()
-            || out_hash_ptr.is_null()
-        {
-            return Err(BridgeError::NullPtr);
-        }
-        let chain_id: ChainId = unsafe { read_string_bridge(chain_ptr, chain_len) }?
-            .parse()
-            .map_err(|_| BridgeError::ChainId)?;
-        let authority =
-            parse_account_id(unsafe { read_string_bridge(authority_ptr, authority_len) }?)?;
-        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-        let private_key = parse_private_key(key_slice)?;
-        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let nonce = parse_nonce(nonce, nonce_present != 0)?;
-        let redeem_bytes =
-            unsafe { slice::from_raw_parts(redeem_norito_ptr, redeem_norito_len as usize) };
-        let redemption: iroha_data_model::offline::OfflineNoteRedeem =
-            norito::decode_from_bytes(redeem_bytes).map_err(|_| BridgeError::OfflineNoteProve)?;
-        let instruction = InstructionBox::from(
-            iroha_data_model::isi::offline::RedeemOfflineNote::new(redemption),
-        );
-        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
-            chain_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            nonce,
-            private_key,
-            move || Executable::from([instruction]),
-        )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
+    let _ = (
+        chain_ptr,
+        chain_len,
+        authority_ptr,
+        authority_len,
+        creation_time_ms,
+        ttl_ms,
+        ttl_present,
+        nonce,
+        nonce_present,
+        redeem_norito_ptr,
+        redeem_norito_len,
+        private_key_ptr,
+        private_key_len,
+        out_signed_ptr,
+        out_signed_len,
+        out_hash_ptr,
+        out_hash_len,
+    );
+    bridge_result_to_code(retired_offline_note_payment_transaction())
 }
 
-/// Encode and sign an `AuditOfflineNote` on-chain transaction.
+/// Retired classic offline-note audit transaction encoder.
+///
+/// Kagemusha is the only active offline payment implementation, so this
+/// entrypoint always fails closed with `ERR_OFFLINE_NOTE_PROVE`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_audit_offline_note_signed_transaction(
     chain_ptr: *const c_char,
@@ -7028,48 +6989,32 @@ pub unsafe extern "C" fn connect_norito_encode_audit_offline_note_signed_transac
     out_hash_ptr: *mut c_uchar,
     out_hash_len: c_ulong,
 ) -> c_int {
-    let result = (|| {
-        if audit_norito_ptr.is_null()
-            || private_key_ptr.is_null()
-            || out_signed_ptr.is_null()
-            || out_signed_len.is_null()
-            || out_hash_ptr.is_null()
-        {
-            return Err(BridgeError::NullPtr);
-        }
-        let chain_id: ChainId = unsafe { read_string_bridge(chain_ptr, chain_len) }?
-            .parse()
-            .map_err(|_| BridgeError::ChainId)?;
-        let authority =
-            parse_account_id(unsafe { read_string_bridge(authority_ptr, authority_len) }?)?;
-        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-        let private_key = parse_private_key(key_slice)?;
-        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let nonce = parse_nonce(nonce, nonce_present != 0)?;
-        let audit_bytes =
-            unsafe { slice::from_raw_parts(audit_norito_ptr, audit_norito_len as usize) };
-        let audit: iroha_data_model::offline::OfflineNoteAuditBundle =
-            norito::decode_from_bytes(audit_bytes).map_err(|_| BridgeError::OfflineNoteProve)?;
-        let instruction =
-            InstructionBox::from(iroha_data_model::isi::offline::AuditOfflineNote::new(audit));
-        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
-            chain_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            nonce,
-            private_key,
-            move || Executable::from([instruction]),
-        )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
+    let _ = (
+        chain_ptr,
+        chain_len,
+        authority_ptr,
+        authority_len,
+        creation_time_ms,
+        ttl_ms,
+        ttl_present,
+        nonce,
+        nonce_present,
+        audit_norito_ptr,
+        audit_norito_len,
+        private_key_ptr,
+        private_key_len,
+        out_signed_ptr,
+        out_signed_len,
+        out_hash_ptr,
+        out_hash_len,
+    );
+    bridge_result_to_code(retired_offline_note_payment_transaction())
 }
 
-/// Encode and sign an `IssueOfflineNote` on-chain transaction.
+/// Retired classic offline-note issue transaction encoder.
+///
+/// Kagemusha is the only active offline payment implementation, so this
+/// entrypoint always fails closed with `ERR_OFFLINE_NOTE_PROVE`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_issue_offline_note_signed_transaction(
     chain_ptr: *const c_char,
@@ -7090,48 +7035,32 @@ pub unsafe extern "C" fn connect_norito_encode_issue_offline_note_signed_transac
     out_hash_ptr: *mut c_uchar,
     out_hash_len: c_ulong,
 ) -> c_int {
-    let result = (|| {
-        if issue_norito_ptr.is_null()
-            || private_key_ptr.is_null()
-            || out_signed_ptr.is_null()
-            || out_signed_len.is_null()
-            || out_hash_ptr.is_null()
-        {
-            return Err(BridgeError::NullPtr);
-        }
-        let chain_id: ChainId = unsafe { read_string_bridge(chain_ptr, chain_len) }?
-            .parse()
-            .map_err(|_| BridgeError::ChainId)?;
-        let authority =
-            parse_account_id(unsafe { read_string_bridge(authority_ptr, authority_len) }?)?;
-        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-        let private_key = parse_private_key(key_slice)?;
-        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let nonce = parse_nonce(nonce, nonce_present != 0)?;
-        let issue_bytes =
-            unsafe { slice::from_raw_parts(issue_norito_ptr, issue_norito_len as usize) };
-        let issue: iroha_data_model::offline::OfflineNoteIssue =
-            norito::decode_from_bytes(issue_bytes).map_err(|_| BridgeError::OfflineNoteProve)?;
-        let instruction =
-            InstructionBox::from(iroha_data_model::isi::offline::IssueOfflineNote::new(issue));
-        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
-            chain_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            nonce,
-            private_key,
-            move || Executable::from([instruction]),
-        )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
+    let _ = (
+        chain_ptr,
+        chain_len,
+        authority_ptr,
+        authority_len,
+        creation_time_ms,
+        ttl_ms,
+        ttl_present,
+        nonce,
+        nonce_present,
+        issue_norito_ptr,
+        issue_norito_len,
+        private_key_ptr,
+        private_key_len,
+        out_signed_ptr,
+        out_signed_len,
+        out_hash_ptr,
+        out_hash_len,
+    );
+    bridge_result_to_code(retired_offline_note_payment_transaction())
 }
 
-/// Encode and sign a defund transaction: bearer audits followed by redemption.
+/// Retired classic offline-note defund transaction encoder.
+///
+/// Kagemusha is the only active offline payment implementation, so this
+/// entrypoint always fails closed with `ERR_OFFLINE_NOTE_PROVE`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_defund_offline_note_signed_transaction(
     chain_ptr: *const c_char,
@@ -7155,278 +7084,39 @@ pub unsafe extern "C" fn connect_norito_encode_defund_offline_note_signed_transa
     out_hash_ptr: *mut c_uchar,
     out_hash_len: c_ulong,
 ) -> c_int {
-    let result = (|| {
-        if redeem_norito_ptr.is_null()
-            || private_key_ptr.is_null()
-            || out_signed_ptr.is_null()
-            || out_signed_len.is_null()
-            || out_hash_ptr.is_null()
-        {
-            return Err(BridgeError::NullPtr);
-        }
-        let chain_id: ChainId = unsafe { read_string_bridge(chain_ptr, chain_len) }?
-            .parse()
-            .map_err(|_| BridgeError::ChainId)?;
-        let authority =
-            parse_account_id(unsafe { read_string_bridge(authority_ptr, authority_len) }?)?;
-        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-        let private_key = parse_private_key(key_slice)?;
-        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let nonce = parse_nonce(nonce, nonce_present != 0)?;
-
-        let trail: &[u8] = if audit_trail_count > 0 {
-            if audit_trail_ptr.is_null() {
-                return Err(BridgeError::NullPtr);
-            }
-            unsafe { slice::from_raw_parts(audit_trail_ptr, audit_trail_len as usize) }
-        } else {
-            &[]
-        };
-        let mut instructions: Vec<InstructionBox> =
-            Vec::with_capacity(audit_trail_count as usize + 1);
-        let mut cursor: usize = 0;
-        for _ in 0..audit_trail_count {
-            if cursor + 8 > trail.len() {
-                return Err(BridgeError::OfflineNoteProve);
-            }
-            let len = usize::try_from(u64::from_le_bytes(
-                <[u8; 8]>::try_from(&trail[cursor..cursor + 8])
-                    .map_err(|_| BridgeError::OfflineNoteProve)?,
-            ))
-            .map_err(|_| BridgeError::OfflineNoteProve)?;
-            cursor += 8;
-            if cursor + len > trail.len() {
-                return Err(BridgeError::OfflineNoteProve);
-            }
-            let audit: iroha_data_model::offline::OfflineNoteAuditBundle =
-                norito::decode_from_bytes(&trail[cursor..cursor + len])
-                    .map_err(|_| BridgeError::OfflineNoteProve)?;
-            cursor += len;
-            instructions.push(InstructionBox::from(
-                iroha_data_model::isi::offline::AuditOfflineNote::new(audit),
-            ));
-        }
-        if cursor != trail.len() {
-            return Err(BridgeError::OfflineNoteProve);
-        }
-
-        let redeem_bytes =
-            unsafe { slice::from_raw_parts(redeem_norito_ptr, redeem_norito_len as usize) };
-        let redemption: iroha_data_model::offline::OfflineNoteRedeem =
-            norito::decode_from_bytes(redeem_bytes).map_err(|_| BridgeError::OfflineNoteProve)?;
-        instructions.push(InstructionBox::from(
-            iroha_data_model::isi::offline::RedeemOfflineNote::new(redemption),
-        ));
-
-        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
-            chain_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            nonce,
-            private_key,
-            move || Executable::from(instructions),
-        )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
-}
-
-#[derive(Clone, Copy)]
-enum OfflineNoteTxKind {
-    Issue,
-    Redeem,
-    Audit,
-}
-
-fn offline_note_instruction_from_archive(
-    kind: OfflineNoteTxKind,
-    archive: &[u8],
-) -> BridgeResult<InstructionBox> {
-    match kind {
-        OfflineNoteTxKind::Issue => {
-            let issue: iroha_data_model::offline::OfflineNoteIssue =
-                norito::decode_from_bytes(archive).map_err(|_| BridgeError::OfflineNoteProve)?;
-            Ok(InstructionBox::from(
-                iroha_data_model::isi::offline::IssueOfflineNote::new(issue),
-            ))
-        }
-        OfflineNoteTxKind::Redeem => {
-            let redemption: iroha_data_model::offline::OfflineNoteRedeem =
-                norito::decode_from_bytes(archive).map_err(|_| BridgeError::OfflineNoteProve)?;
-            Ok(InstructionBox::from(
-                iroha_data_model::isi::offline::RedeemOfflineNote::new(redemption),
-            ))
-        }
-        OfflineNoteTxKind::Audit => {
-            let audit: iroha_data_model::offline::OfflineNoteAuditBundle =
-                norito::decode_from_bytes(archive).map_err(|_| BridgeError::OfflineNoteProve)?;
-            Ok(InstructionBox::from(
-                iroha_data_model::isi::offline::AuditOfflineNote::new(audit),
-            ))
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-unsafe fn encode_offline_note_signed_transaction_with_metadata_impl(
-    kind: OfflineNoteTxKind,
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    nonce: u32,
-    nonce_present: c_uchar,
-    metadata_json_ptr: *const c_uchar,
-    metadata_json_len: c_ulong,
-    model_ptr: *const c_uchar,
-    model_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> BridgeResult<()> {
-    if model_ptr.is_null()
-        || private_key_ptr.is_null()
-        || out_signed_ptr.is_null()
-        || out_signed_len.is_null()
-        || out_hash_ptr.is_null()
-    {
-        return Err(BridgeError::NullPtr);
-    }
-    let chain_id: ChainId = unsafe { read_string_bridge(chain_ptr, chain_len) }?
-        .parse()
-        .map_err(|_| BridgeError::ChainId)?;
-    let authority = parse_account_id(unsafe { read_string_bridge(authority_ptr, authority_len) }?)?;
-    let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-    let private_key = parse_private_key(key_slice)?;
-    let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-    let nonce = parse_nonce(nonce, nonce_present != 0)?;
-    let metadata = unsafe { read_metadata_json_bridge(metadata_json_ptr, metadata_json_len) }?;
-    let model_bytes = unsafe { slice::from_raw_parts(model_ptr, model_len as usize) };
-    let instruction = offline_note_instruction_from_archive(kind, model_bytes)?;
-    let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
-        chain_id,
-        authority,
+    let _ = (
+        chain_ptr,
+        chain_len,
+        authority_ptr,
+        authority_len,
         creation_time_ms,
-        ttl,
+        ttl_ms,
+        ttl_present,
         nonce,
-        metadata,
-        private_key,
-        move || Executable::from([instruction]),
-    )?;
-    write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-    unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-    Ok(())
+        nonce_present,
+        audit_trail_ptr,
+        audit_trail_len,
+        audit_trail_count,
+        redeem_norito_ptr,
+        redeem_norito_len,
+        private_key_ptr,
+        private_key_len,
+        out_signed_ptr,
+        out_signed_len,
+        out_hash_ptr,
+        out_hash_len,
+    );
+    bridge_result_to_code(retired_offline_note_payment_transaction())
 }
 
-#[allow(clippy::too_many_arguments)]
-unsafe fn encode_defund_offline_note_signed_transaction_with_metadata_impl(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    nonce: u32,
-    nonce_present: c_uchar,
-    metadata_json_ptr: *const c_uchar,
-    metadata_json_len: c_ulong,
-    audit_trail_ptr: *const c_uchar,
-    audit_trail_len: c_ulong,
-    audit_trail_count: u32,
-    redeem_norito_ptr: *const c_uchar,
-    redeem_norito_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> BridgeResult<()> {
-    if redeem_norito_ptr.is_null()
-        || private_key_ptr.is_null()
-        || out_signed_ptr.is_null()
-        || out_signed_len.is_null()
-        || out_hash_ptr.is_null()
-    {
-        return Err(BridgeError::NullPtr);
-    }
-    let chain_id: ChainId = unsafe { read_string_bridge(chain_ptr, chain_len) }?
-        .parse()
-        .map_err(|_| BridgeError::ChainId)?;
-    let authority = parse_account_id(unsafe { read_string_bridge(authority_ptr, authority_len) }?)?;
-    let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-    let private_key = parse_private_key(key_slice)?;
-    let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-    let nonce = parse_nonce(nonce, nonce_present != 0)?;
-    let metadata = unsafe { read_metadata_json_bridge(metadata_json_ptr, metadata_json_len) }?;
-
-    let trail: &[u8] = if audit_trail_count > 0 {
-        if audit_trail_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        unsafe { slice::from_raw_parts(audit_trail_ptr, audit_trail_len as usize) }
-    } else {
-        &[]
-    };
-    let mut instructions: Vec<InstructionBox> = Vec::with_capacity(audit_trail_count as usize + 1);
-    let mut cursor: usize = 0;
-    for _ in 0..audit_trail_count {
-        if cursor + 8 > trail.len() {
-            return Err(BridgeError::OfflineNoteProve);
-        }
-        let len = usize::try_from(u64::from_le_bytes(
-            <[u8; 8]>::try_from(&trail[cursor..cursor + 8])
-                .map_err(|_| BridgeError::OfflineNoteProve)?,
-        ))
-        .map_err(|_| BridgeError::OfflineNoteProve)?;
-        cursor += 8;
-        if cursor + len > trail.len() {
-            return Err(BridgeError::OfflineNoteProve);
-        }
-        instructions.push(offline_note_instruction_from_archive(
-            OfflineNoteTxKind::Audit,
-            &trail[cursor..cursor + len],
-        )?);
-        cursor += len;
-    }
-    if cursor != trail.len() {
-        return Err(BridgeError::OfflineNoteProve);
-    }
-
-    let redeem_bytes =
-        unsafe { slice::from_raw_parts(redeem_norito_ptr, redeem_norito_len as usize) };
-    instructions.push(offline_note_instruction_from_archive(
-        OfflineNoteTxKind::Redeem,
-        redeem_bytes,
-    )?);
-
-    let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
-        chain_id,
-        authority,
-        creation_time_ms,
-        ttl,
-        nonce,
-        metadata,
-        private_key,
-        move || Executable::from(instructions),
-    )?;
-    write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-    unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-    Ok(())
+fn retired_offline_note_payment_transaction() -> BridgeResult<()> {
+    Err(BridgeError::OfflineNoteProve)
 }
 
-/// Encode and sign a `RedeemOfflineNote` transaction with caller-supplied transaction metadata.
+/// Retired classic offline-note metadata redemption transaction encoder.
+///
+/// Kagemusha is the only active offline payment implementation, so this
+/// entrypoint always fails closed with `ERR_OFFLINE_NOTE_PROVE`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_redeem_offline_note_signed_transaction_with_metadata(
     chain_ptr: *const c_char,
@@ -7449,34 +7139,34 @@ pub unsafe extern "C" fn connect_norito_encode_redeem_offline_note_signed_transa
     out_hash_ptr: *mut c_uchar,
     out_hash_len: c_ulong,
 ) -> c_int {
-    let result = unsafe {
-        encode_offline_note_signed_transaction_with_metadata_impl(
-            OfflineNoteTxKind::Redeem,
-            chain_ptr,
-            chain_len,
-            authority_ptr,
-            authority_len,
-            creation_time_ms,
-            ttl_ms,
-            ttl_present,
-            nonce,
-            nonce_present,
-            metadata_json_ptr,
-            metadata_json_len,
-            redeem_norito_ptr,
-            redeem_norito_len,
-            private_key_ptr,
-            private_key_len,
-            out_signed_ptr,
-            out_signed_len,
-            out_hash_ptr,
-            out_hash_len,
-        )
-    };
-    bridge_result_to_code(result)
+    let _ = (
+        chain_ptr,
+        chain_len,
+        authority_ptr,
+        authority_len,
+        creation_time_ms,
+        ttl_ms,
+        ttl_present,
+        nonce,
+        nonce_present,
+        metadata_json_ptr,
+        metadata_json_len,
+        redeem_norito_ptr,
+        redeem_norito_len,
+        private_key_ptr,
+        private_key_len,
+        out_signed_ptr,
+        out_signed_len,
+        out_hash_ptr,
+        out_hash_len,
+    );
+    bridge_result_to_code(retired_offline_note_payment_transaction())
 }
 
-/// Encode and sign an `AuditOfflineNote` transaction with caller-supplied transaction metadata.
+/// Retired classic offline-note metadata audit transaction encoder.
+///
+/// Kagemusha is the only active offline payment implementation, so this
+/// entrypoint always fails closed with `ERR_OFFLINE_NOTE_PROVE`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_audit_offline_note_signed_transaction_with_metadata(
     chain_ptr: *const c_char,
@@ -7499,34 +7189,34 @@ pub unsafe extern "C" fn connect_norito_encode_audit_offline_note_signed_transac
     out_hash_ptr: *mut c_uchar,
     out_hash_len: c_ulong,
 ) -> c_int {
-    let result = unsafe {
-        encode_offline_note_signed_transaction_with_metadata_impl(
-            OfflineNoteTxKind::Audit,
-            chain_ptr,
-            chain_len,
-            authority_ptr,
-            authority_len,
-            creation_time_ms,
-            ttl_ms,
-            ttl_present,
-            nonce,
-            nonce_present,
-            metadata_json_ptr,
-            metadata_json_len,
-            audit_norito_ptr,
-            audit_norito_len,
-            private_key_ptr,
-            private_key_len,
-            out_signed_ptr,
-            out_signed_len,
-            out_hash_ptr,
-            out_hash_len,
-        )
-    };
-    bridge_result_to_code(result)
+    let _ = (
+        chain_ptr,
+        chain_len,
+        authority_ptr,
+        authority_len,
+        creation_time_ms,
+        ttl_ms,
+        ttl_present,
+        nonce,
+        nonce_present,
+        metadata_json_ptr,
+        metadata_json_len,
+        audit_norito_ptr,
+        audit_norito_len,
+        private_key_ptr,
+        private_key_len,
+        out_signed_ptr,
+        out_signed_len,
+        out_hash_ptr,
+        out_hash_len,
+    );
+    bridge_result_to_code(retired_offline_note_payment_transaction())
 }
 
-/// Encode and sign an `IssueOfflineNote` transaction with caller-supplied transaction metadata.
+/// Retired classic offline-note metadata issue transaction encoder.
+///
+/// Kagemusha is the only active offline payment implementation, so this
+/// entrypoint always fails closed with `ERR_OFFLINE_NOTE_PROVE`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_issue_offline_note_signed_transaction_with_metadata(
     chain_ptr: *const c_char,
@@ -7549,34 +7239,34 @@ pub unsafe extern "C" fn connect_norito_encode_issue_offline_note_signed_transac
     out_hash_ptr: *mut c_uchar,
     out_hash_len: c_ulong,
 ) -> c_int {
-    let result = unsafe {
-        encode_offline_note_signed_transaction_with_metadata_impl(
-            OfflineNoteTxKind::Issue,
-            chain_ptr,
-            chain_len,
-            authority_ptr,
-            authority_len,
-            creation_time_ms,
-            ttl_ms,
-            ttl_present,
-            nonce,
-            nonce_present,
-            metadata_json_ptr,
-            metadata_json_len,
-            issue_norito_ptr,
-            issue_norito_len,
-            private_key_ptr,
-            private_key_len,
-            out_signed_ptr,
-            out_signed_len,
-            out_hash_ptr,
-            out_hash_len,
-        )
-    };
-    bridge_result_to_code(result)
+    let _ = (
+        chain_ptr,
+        chain_len,
+        authority_ptr,
+        authority_len,
+        creation_time_ms,
+        ttl_ms,
+        ttl_present,
+        nonce,
+        nonce_present,
+        metadata_json_ptr,
+        metadata_json_len,
+        issue_norito_ptr,
+        issue_norito_len,
+        private_key_ptr,
+        private_key_len,
+        out_signed_ptr,
+        out_signed_len,
+        out_hash_ptr,
+        out_hash_len,
+    );
+    bridge_result_to_code(retired_offline_note_payment_transaction())
 }
 
-/// Encode and sign an atomic defund transaction with caller-supplied transaction metadata.
+/// Retired classic offline-note metadata defund transaction encoder.
+///
+/// Kagemusha is the only active offline payment implementation, so this
+/// entrypoint always fails closed with `ERR_OFFLINE_NOTE_PROVE`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_defund_offline_note_signed_transaction_with_metadata(
     chain_ptr: *const c_char,
@@ -7602,33 +7292,31 @@ pub unsafe extern "C" fn connect_norito_encode_defund_offline_note_signed_transa
     out_hash_ptr: *mut c_uchar,
     out_hash_len: c_ulong,
 ) -> c_int {
-    let result = unsafe {
-        encode_defund_offline_note_signed_transaction_with_metadata_impl(
-            chain_ptr,
-            chain_len,
-            authority_ptr,
-            authority_len,
-            creation_time_ms,
-            ttl_ms,
-            ttl_present,
-            nonce,
-            nonce_present,
-            metadata_json_ptr,
-            metadata_json_len,
-            audit_trail_ptr,
-            audit_trail_len,
-            audit_trail_count,
-            redeem_norito_ptr,
-            redeem_norito_len,
-            private_key_ptr,
-            private_key_len,
-            out_signed_ptr,
-            out_signed_len,
-            out_hash_ptr,
-            out_hash_len,
-        )
-    };
-    bridge_result_to_code(result)
+    let _ = (
+        chain_ptr,
+        chain_len,
+        authority_ptr,
+        authority_len,
+        creation_time_ms,
+        ttl_ms,
+        ttl_present,
+        nonce,
+        nonce_present,
+        metadata_json_ptr,
+        metadata_json_len,
+        audit_trail_ptr,
+        audit_trail_len,
+        audit_trail_count,
+        redeem_norito_ptr,
+        redeem_norito_len,
+        private_key_ptr,
+        private_key_len,
+        out_signed_ptr,
+        out_signed_len,
+        out_hash_ptr,
+        out_hash_len,
+    );
+    bridge_result_to_code(retired_offline_note_payment_transaction())
 }
 
 /// Generate a recursive Halo2/IPA proof for an Offline redemption against a chain-supplied verifying key.
@@ -14969,29 +14657,6 @@ mod offline_note_prover_tests {
         assert_eq!(out_len, 0);
     }
 
-    fn decode_signed_from_ffi_output(
-        out_hash: [u8; Hash::LENGTH],
-        out_ptr: *mut c_uchar,
-        out_len: c_ulong,
-    ) -> SignedTransaction {
-        assert!(!out_ptr.is_null());
-        let bytes = unsafe { slice::from_raw_parts(out_ptr, out_len as usize) };
-        let signed = decode_signed_transaction(bytes).expect("decode signed transaction");
-        assert_eq!(out_hash, *signed.hash().as_ref());
-        connect_norito_free(out_ptr);
-        signed
-    }
-
-    fn assert_single_instruction<T: 'static>(signed: &SignedTransaction) {
-        match signed.instructions() {
-            Executable::Instructions(instructions) => {
-                assert_eq!(instructions.len(), 1);
-                assert!(instructions[0].as_any().downcast_ref::<T>().is_some());
-            }
-            other => panic!("unexpected executable: {other:?}"),
-        }
-    }
-
     #[test]
     fn bridge_asset_transaction_checked_signing_verifies() {
         let keypair = fixture_key_pair(0x5A);
@@ -15016,16 +14681,29 @@ mod offline_note_prover_tests {
     }
 
     #[test]
-    fn offline_note_signed_transaction_ffis_encode_canonical_transactions() {
+    fn offline_note_signed_transaction_ffis_are_retired() {
         let chain = CString::new("00000042").expect("valid chain id");
         let (authority, private_key) = sample_authority_and_private_key(0x55);
         let issue_archive = norito::to_bytes(&sample_issue()).expect("encode issue");
         let redeem_archive = norito::to_bytes(&sample_redemption()).expect("encode redemption");
         let audit_archive = norito::to_bytes(&sample_audit()).expect("encode audit");
+        let metadata_json = br#"{"gas_asset_id":"xor#universal","gas_limit":1000}"#;
+
+        fn assert_retired_output(
+            status: c_int,
+            out_ptr: *mut c_uchar,
+            out_len: c_ulong,
+            out_hash: [u8; Hash::LENGTH],
+        ) {
+            assert_eq!(status, ERR_OFFLINE_NOTE_PROVE);
+            assert!(out_ptr.is_null());
+            assert_eq!(out_len, 0);
+            assert_eq!(out_hash, [0u8; Hash::LENGTH]);
+        }
+
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len: c_ulong = 0;
         let mut out_hash = [0u8; Hash::LENGTH];
-
         let issue_status = unsafe {
             connect_norito_encode_issue_offline_note_signed_transaction(
                 chain.as_ptr(),
@@ -15047,11 +14725,8 @@ mod offline_note_prover_tests {
                 out_hash.len() as c_ulong,
             )
         };
-        assert_eq!(issue_status, 0);
-        let signed = decode_signed_from_ffi_output(out_hash, out_ptr, out_len);
-        assert_single_instruction::<iroha_data_model::isi::offline::IssueOfflineNote>(&signed);
+        assert_retired_output(issue_status, out_ptr, out_len, out_hash);
 
-        let metadata_json = br#"{"gas_asset_id":"xor#universal","gas_limit":1000}"#;
         out_ptr = ptr::null_mut();
         out_len = 0;
         out_hash = [0u8; Hash::LENGTH];
@@ -15078,19 +14753,7 @@ mod offline_note_prover_tests {
                 out_hash.len() as c_ulong,
             )
         };
-        assert_eq!(issue_with_metadata_status, 0);
-        let signed = decode_signed_from_ffi_output(out_hash, out_ptr, out_len);
-        assert_single_instruction::<iroha_data_model::isi::offline::IssueOfflineNote>(&signed);
-        let gas_asset_key = Name::from_str("gas_asset_id").expect("metadata key");
-        let gas_limit_key = Name::from_str("gas_limit").expect("metadata key");
-        assert_eq!(
-            signed.payload().metadata.get(&gas_asset_key),
-            Some(&Json::new("xor#universal"))
-        );
-        assert_eq!(
-            signed.payload().metadata.get(&gas_limit_key),
-            Some(&Json::new(1000u64))
-        );
+        assert_retired_output(issue_with_metadata_status, out_ptr, out_len, out_hash);
 
         out_ptr = ptr::null_mut();
         out_len = 0;
@@ -15116,9 +14779,35 @@ mod offline_note_prover_tests {
                 out_hash.len() as c_ulong,
             )
         };
-        assert_eq!(redeem_status, 0);
-        let signed = decode_signed_from_ffi_output(out_hash, out_ptr, out_len);
-        assert_single_instruction::<iroha_data_model::isi::offline::RedeemOfflineNote>(&signed);
+        assert_retired_output(redeem_status, out_ptr, out_len, out_hash);
+
+        out_ptr = ptr::null_mut();
+        out_len = 0;
+        out_hash = [0u8; Hash::LENGTH];
+        let redeem_with_metadata_status = unsafe {
+            connect_norito_encode_redeem_offline_note_signed_transaction_with_metadata(
+                chain.as_ptr(),
+                chain.as_bytes().len() as c_ulong,
+                authority.as_ptr(),
+                authority.as_bytes().len() as c_ulong,
+                1_736_000_000_000,
+                0,
+                0,
+                0,
+                0,
+                metadata_json.as_ptr(),
+                metadata_json.len() as c_ulong,
+                redeem_archive.as_ptr(),
+                redeem_archive.len() as c_ulong,
+                private_key.as_ptr(),
+                private_key.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+                out_hash.as_mut_ptr(),
+                out_hash.len() as c_ulong,
+            )
+        };
+        assert_retired_output(redeem_with_metadata_status, out_ptr, out_len, out_hash);
 
         out_ptr = ptr::null_mut();
         out_len = 0;
@@ -15144,9 +14833,35 @@ mod offline_note_prover_tests {
                 out_hash.len() as c_ulong,
             )
         };
-        assert_eq!(audit_status, 0);
-        let signed = decode_signed_from_ffi_output(out_hash, out_ptr, out_len);
-        assert_single_instruction::<iroha_data_model::isi::offline::AuditOfflineNote>(&signed);
+        assert_retired_output(audit_status, out_ptr, out_len, out_hash);
+
+        out_ptr = ptr::null_mut();
+        out_len = 0;
+        out_hash = [0u8; Hash::LENGTH];
+        let audit_with_metadata_status = unsafe {
+            connect_norito_encode_audit_offline_note_signed_transaction_with_metadata(
+                chain.as_ptr(),
+                chain.as_bytes().len() as c_ulong,
+                authority.as_ptr(),
+                authority.as_bytes().len() as c_ulong,
+                1_736_000_000_000,
+                0,
+                0,
+                0,
+                0,
+                metadata_json.as_ptr(),
+                metadata_json.len() as c_ulong,
+                audit_archive.as_ptr(),
+                audit_archive.len() as c_ulong,
+                private_key.as_ptr(),
+                private_key.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+                out_hash.as_mut_ptr(),
+                out_hash.len() as c_ulong,
+            )
+        };
+        assert_retired_output(audit_with_metadata_status, out_ptr, out_len, out_hash);
 
         let mut trail = Vec::new();
         let audit_len = u64::try_from(audit_archive.len()).expect("audit archive length fits u64");
@@ -15179,26 +14894,38 @@ mod offline_note_prover_tests {
                 out_hash.len() as c_ulong,
             )
         };
-        assert_eq!(defund_status, 0);
-        let signed = decode_signed_from_ffi_output(out_hash, out_ptr, out_len);
-        match signed.instructions() {
-            Executable::Instructions(instructions) => {
-                assert_eq!(instructions.len(), 2);
-                assert!(
-                    instructions[0]
-                        .as_any()
-                        .downcast_ref::<iroha_data_model::isi::offline::AuditOfflineNote>()
-                        .is_some()
-                );
-                assert!(
-                    instructions[1]
-                        .as_any()
-                        .downcast_ref::<iroha_data_model::isi::offline::RedeemOfflineNote>()
-                        .is_some()
-                );
-            }
-            other => panic!("unexpected executable: {other:?}"),
-        }
+        assert_retired_output(defund_status, out_ptr, out_len, out_hash);
+
+        out_ptr = ptr::null_mut();
+        out_len = 0;
+        out_hash = [0u8; Hash::LENGTH];
+        let defund_with_metadata_status = unsafe {
+            connect_norito_encode_defund_offline_note_signed_transaction_with_metadata(
+                chain.as_ptr(),
+                chain.as_bytes().len() as c_ulong,
+                authority.as_ptr(),
+                authority.as_bytes().len() as c_ulong,
+                1_736_000_000_000,
+                0,
+                0,
+                0,
+                0,
+                metadata_json.as_ptr(),
+                metadata_json.len() as c_ulong,
+                trail.as_ptr(),
+                trail.len() as c_ulong,
+                1,
+                redeem_archive.as_ptr(),
+                redeem_archive.len() as c_ulong,
+                private_key.as_ptr(),
+                private_key.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+                out_hash.as_mut_ptr(),
+                out_hash.len() as c_ulong,
+            )
+        };
+        assert_retired_output(defund_with_metadata_status, out_ptr, out_len, out_hash);
     }
 }
 

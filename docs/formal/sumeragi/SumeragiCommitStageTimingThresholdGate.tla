@@ -318,6 +318,10 @@ CommitStageTimingThresholdExactness ==
   /\ CommitStageTimingStageExact
   /\ CommitStageTimingRecordedGateExact
 
+CommitStageTimingThresholdCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CommitStageTimingThresholdExactness
+
 SafetyFast ==
   CommitStageTimingThresholdExactness
 

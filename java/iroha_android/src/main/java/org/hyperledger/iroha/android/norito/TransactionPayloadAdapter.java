@@ -222,6 +222,10 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
           OPTIONAL_STRING_ADAPTER,
           optionalValidationFeePolicyHash(value.validationFeePolicyHash()));
       encodeSizedField(encoder, ENCODED_INSTRUCTION_LIST_ADAPTER, value.instructions());
+      encodeSizedField(
+          encoder,
+          OPTIONAL_STRING_ADAPTER,
+          optionalValidationFeeInstructionIndex(value.validationFeeInstructionIndex()));
     }
 
     @Override
@@ -540,6 +544,16 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     return Optional.of(normalizeValidationFeePolicyHash(value));
   }
 
+  private static Optional<String> optionalValidationFeeInstructionIndex(final Long value) {
+    if (value == null) {
+      return Optional.empty();
+    }
+    if (value.longValue() < 0L) {
+      throw new IllegalArgumentException("validationFeeInstructionIndex must be non-negative");
+    }
+    return Optional.of(value.toString());
+  }
+
   private static String normalizeValidationFeePolicyHash(final String value) {
     final String normalized =
         requireNonBlank(value, "validationFeePolicyHash").toLowerCase(Locale.ROOT);
@@ -588,12 +602,18 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     }
     final boolean hasPolicyVersion = request.validationFeePolicyVersion() != null;
     final boolean hasPolicyHash = request.validationFeePolicyHash() != null;
+    final boolean hasInstructionIndex = request.validationFeeInstructionIndex() != null;
     if (hasPolicyVersion != hasPolicyHash) {
       throw new IllegalArgumentException(
           "validationFeePolicyVersion and validationFeePolicyHash must be provided together");
     }
+    if (!hasPolicyVersion && hasInstructionIndex) {
+      throw new IllegalArgumentException(
+          "validationFeeInstructionIndex requires validation fee policy metadata");
+    }
     optionalValidationFeePolicyVersion(request.validationFeePolicyVersion());
     optionalValidationFeePolicyHash(request.validationFeePolicyHash());
+    optionalValidationFeeInstructionIndex(request.validationFeeInstructionIndex());
   }
 
   private static InstructionBox tryDecodeWireInstruction(

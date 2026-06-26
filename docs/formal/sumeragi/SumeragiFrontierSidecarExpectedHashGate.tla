@@ -270,6 +270,11 @@ FrontierSidecarExpectedHashSafetyAnchors ==
   /\ CacheHintAnchors
   /\ SidecarCommitQcAnchors
 
+FrontierSidecarExpectedHashCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ FrontierSidecarExpectedHashSafetyAnchors
+
 Safety == FrontierSidecarExpectedHashSafetyAnchors
 
 ====

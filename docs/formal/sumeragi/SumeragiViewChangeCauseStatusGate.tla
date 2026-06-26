@@ -420,5 +420,10 @@ SafetyAnchors ==
   /\ SnapshotProjectionAnchors
   /\ ResetAfterRecordsClearsAllAnchors
 
+ViewChangeCauseStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ Safety
+  /\ SafetyAnchors
+
 =============================================================================
 ====

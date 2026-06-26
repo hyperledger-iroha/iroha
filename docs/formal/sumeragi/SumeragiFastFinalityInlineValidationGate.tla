@@ -245,4 +245,8 @@ Safety ==
   /\ AcceptedCandidatesSatisfyAllGuards
   /\ ReturnedCountsMatchEligibleTxCounts
 
+FastFinalityInlineValidationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ Safety
+
 ====

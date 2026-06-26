@@ -379,4 +379,9 @@ ConsensusPenaltyActionSafetyAnchors ==
   /\ EffectOrderingAnchors
   /\ ApplyMutationAnchors
 
+ConsensusPenaltyActionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ConsensusPenaltyActionCoreSafety
+  /\ ConsensusPenaltyActionSafetyAnchors
+
 ====

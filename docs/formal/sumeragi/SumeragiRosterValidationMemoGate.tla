@@ -287,6 +287,10 @@ RosterValidationMemoCacheExactness ==
   /\ RosterValidationMemoLaneIsolationExact
   /\ RosterValidationMemoRefreshCapacityExact
 
+RosterValidationMemoCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RosterValidationMemoCacheExactness
+
 BugNewNotEmpty ==
   ImplementationActions(NewEmpty) = SpecActions(NewEmpty)
 

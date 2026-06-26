@@ -383,6 +383,10 @@ BlockSyncHistoryRosterExactness ==
   /\ BlockSyncHistoryRosterSelectionFallbackExact
   /\ BlockSyncHistoryRosterStakeForwardExact
 
+BlockSyncHistoryRosterCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncHistoryRosterExactness
+
 BugPermissionedUsesNposTag ==
   ImplementationActions(ModeTagPermissioned) = SpecActions(ModeTagPermissioned)
 

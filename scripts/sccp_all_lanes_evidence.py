@@ -263,6 +263,15 @@ ROUTE_CANARY_EVIDENCE_SOURCE_BY_DOMAIN = {
     SCCP_DOMAIN_TON: "ton_live_account_snapshot",
     SCCP_DOMAIN_TRON: "tron_message_proof_accepted_transaction",
 }
+ROUTE_CANARY_REQUIRED_TRUE_FIELDS_BY_DOMAIN = {
+    SCCP_DOMAIN_ETH: ("message_proof_used", "receipt_block_finalized"),
+    SCCP_DOMAIN_BSC: ("message_proof_used", "receipt_block_finalized"),
+    SCCP_DOMAIN_TRON: (
+        "message_proof_used",
+        "raw_data_owner_matches_transaction",
+        "signature_recovers_to_owner",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -1253,10 +1262,15 @@ def _blocker_list_errors(record: dict[str, Any], label: str) -> list[str]:
     if not isinstance(blockers, list):
         return [f"{label} blockers must be a list of non-empty canonical strings"]
     errors: list[str] = []
+    seen_blockers: set[str] = set()
     for index, blocker in enumerate(blockers):
         issue = _blocker_text_issue(blocker)
         if issue is not None:
             errors.append(f"{label} blockers[{index}] {issue}")
+            continue
+        if blocker in seen_blockers:
+            errors.append(f"{label} blockers must not contain duplicate strings")
+        seen_blockers.add(blocker)
     if blockers:
         errors.append(f"{label} blockers must be empty")
     return errors
@@ -1270,12 +1284,18 @@ def _canonical_blocker_list(
         return [], [f"{label} blockers must be a list of non-empty canonical strings"]
     blockers: list[str] = []
     errors: list[str] = []
+    seen_blockers: set[str] = set()
     for index, blocker in enumerate(value):
         issue = _blocker_text_issue(blocker)
         if issue is not None:
             errors.append(f"{label} blockers[{index}] {issue}")
-        else:
-            blockers.append(blocker)
+            continue
+        if blocker in seen_blockers:
+            errors.append(f"{label} blockers must not contain duplicate strings")
+            blockers = [item for item in blockers if item != blocker]
+            continue
+        seen_blockers.add(blocker)
+        blockers.append(blocker)
     return blockers, errors
 
 
@@ -7063,6 +7083,9 @@ def _release_checklist(
             canary_blockers.append(
                 f"{lane_label}: route canary evidence_bound must be boolean"
             )
+        required_true_fields = set(
+            ROUTE_CANARY_REQUIRED_TRUE_FIELDS_BY_DOMAIN.get(lane.get("domain"), ())
+        )
         for field, schema_blocker, semantic_blocker in (
             (
                 "message_proof_used",
@@ -7086,6 +7109,8 @@ def _release_checklist(
             ),
         ):
             if field not in canary:
+                if field in required_true_fields:
+                    canary_blockers.append(f"{lane_label}: {semantic_blocker}")
                 continue
             if type(canary.get(field)) is not bool:
                 canary_blockers.append(f"{lane_label}: {schema_blocker}")

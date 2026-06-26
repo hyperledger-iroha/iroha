@@ -293,6 +293,11 @@ FrontierSidecarRetargetSafetyAnchors ==
   /\ UntrackedSeedAnchors
   /\ ReacquireAnchors
 
+FrontierSidecarRetargetCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ FrontierSidecarRetargetSafetyAnchors
+
 Safety == FrontierSidecarRetargetSafetyAnchors
 
 ====

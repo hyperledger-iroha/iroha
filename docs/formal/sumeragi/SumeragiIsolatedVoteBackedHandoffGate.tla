@@ -376,6 +376,10 @@ IsolatedVoteBackedHandoffExactness ==
   /\ IsolatedRangePullActionExact
   /\ IsolatedReasonLabelExact
 
+IsolatedVoteBackedHandoffCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ IsolatedVoteBackedHandoffExactness
+
 Safety ==
   IsolatedVoteBackedHandoffCoreSafety
 

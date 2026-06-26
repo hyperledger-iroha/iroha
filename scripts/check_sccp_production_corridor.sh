@@ -192,6 +192,54 @@ run_capture_in_dir() {
   printf -v "$result_var" '%s' "$output"
 }
 
+dotnet_info_field_count() {
+  local label="$1"
+  awk -v label="$label" '
+    {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      if (index(line, label ":") == 1) {
+        count++
+      }
+    }
+    END {
+      print count + 0
+    }
+  '
+}
+
+dotnet_info_field_value() {
+  local label="$1"
+  awk -v label="$label" '
+    {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      if (index(line, label ":") == 1) {
+        value = substr(line, length(label) + 2)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        print value
+        exit
+      }
+    }
+  '
+}
+
+validate_dotnet_trx_content() {
+  local trx_path="$1"
+  if ! grep -aFq "Hyperledger.Iroha.Sdk.Tests.dll" "$trx_path"; then
+    echo "SCCP .NET SDK validation requires TRX result to name Hyperledger.Iroha.Sdk.Tests.dll: $trx_path" >&2
+    return 1
+  fi
+  if grep -aEq '<UnitTestResult[[:space:]][^>]*outcome="(Failed|NotExecuted|Error|Timeout|Aborted)"' "$trx_path"; then
+    echo "SCCP .NET SDK validation requires TRX result to contain no failed, skipped, timed-out, or aborted SCCP test results: $trx_path" >&2
+    return 1
+  fi
+  if ! grep -aEq '<UnitTestResult[[:space:]][^>]*outcome="Passed"' "$trx_path"; then
+    echo "SCCP .NET SDK validation requires TRX result to contain at least one passed SCCP test result: $trx_path" >&2
+    return 1
+  fi
+}
+
 ensure_swift_bridge_artifact() {
   local bridge_dir="$ROOT/dist/NoritoBridge.xcframework"
   local bridge_zip="$ROOT/dist/NoritoBridge.xcframework.zip"
@@ -447,8 +495,14 @@ phase_dotnet_sdk() {
   local dotnet_trx_paths
   local dotnet_version
   local dotnet_info
+  local dotnet_os_name
+  local dotnet_os_name_count
+  local dotnet_os_platform
+  local dotnet_os_platform_count
   local dotnet_rid
+  local dotnet_rid_count
   local dotnet_arch
+  local dotnet_arch_count
   local dotnet_arch_lc
   bridge_target_dir="${SCCP_DOTNET_BRIDGE_TARGET_DIR:-$CARGO_TARGET_DIR}"
   case "$bridge_target_dir" in
@@ -476,7 +530,10 @@ phase_dotnet_sdk() {
     "${dotnet_env[@]}" "$dotnet_cli" --version
   if [[ "$DRY_RUN" -eq 0 ]]; then
     dotnet_version="${dotnet_version//$'\r'/}"
-    dotnet_version="${dotnet_version%%$'\n'*}"
+    if [[ "$dotnet_version" == *$'\n'* ]]; then
+      echo "SCCP .NET SDK validation requires dotnet --version to emit exactly one canonical SDK version line." >&2
+      return 1
+    fi
     if [[ ! "$dotnet_version" =~ ^8\.0\.[1-9][0-9]*$ ]]; then
       echo "SCCP .NET SDK validation requires a stable canonical .NET 8.0.x SDK version with a non-zero patch; found: $dotnet_version" >&2
       return 1
@@ -486,51 +543,39 @@ phase_dotnet_sdk() {
   run_capture_in_dir dotnet_info "$ROOT/csharp" \
     "${dotnet_env[@]}" "$dotnet_cli" --info
   if [[ "$DRY_RUN" -eq 0 ]]; then
-    if ! grep -Eq '^[[:space:]]*OS (Name|Platform):[[:space:]]*Windows[[:space:]]*$' <<<"$dotnet_info"; then
-      echo "SCCP .NET SDK validation must be captured on Windows." >&2
+    dotnet_os_name_count="$(dotnet_info_field_count "OS Name" <<<"$dotnet_info")"
+    dotnet_os_platform_count="$(dotnet_info_field_count "OS Platform" <<<"$dotnet_info")"
+    if [[ "$dotnet_os_name_count" != 1 || "$dotnet_os_platform_count" != 1 ]]; then
+      echo "SCCP .NET SDK validation requires exactly one OS Name and one OS Platform from dotnet --info." >&2
       return 1
     fi
-    dotnet_rid="$(
-      awk -F: '
-        /^[[:space:]]*RID:/ {
-          value = $2
-          gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
-          print value
-          exit
-        }
-      ' <<<"$dotnet_info"
-    )"
+    dotnet_os_name="$(dotnet_info_field_value "OS Name" <<<"$dotnet_info")"
+    dotnet_os_platform="$(dotnet_info_field_value "OS Platform" <<<"$dotnet_info")"
+    if [[ "$dotnet_os_name" != "Windows" || "$dotnet_os_platform" != "Windows" ]]; then
+      echo "SCCP .NET SDK validation must be captured on Windows; found OS Name: $dotnet_os_name, OS Platform: $dotnet_os_platform" >&2
+      return 1
+    fi
+    dotnet_rid_count="$(dotnet_info_field_count "RID" <<<"$dotnet_info")"
+    if [[ "$dotnet_rid_count" != 1 ]]; then
+      echo "SCCP .NET SDK validation requires exactly one canonical Windows RID from dotnet --info; found: $dotnet_rid_count" >&2
+      return 1
+    fi
+    dotnet_rid="$(dotnet_info_field_value "RID" <<<"$dotnet_info")"
     if [[ ! "$dotnet_rid" =~ ^win-(x64|x86|arm64|arm)$ ]]; then
       echo "SCCP .NET SDK validation requires a canonical Windows RID; found: $dotnet_rid" >&2
       return 1
     fi
-    dotnet_arch="$(
-      awk -F: '
-        /^[[:space:]]*OS Architecture:/ {
-          value = $2
-          gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
-          print value
-          exit
-        }
-      ' <<<"$dotnet_info"
-    )"
-    if [[ -z "$dotnet_arch" ]]; then
-      dotnet_arch="$(
-        awk -F: '
-          /^[[:space:]]*Architecture:/ {
-            value = $2
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
-            print value
-            exit
-          }
-        ' <<<"$dotnet_info"
-      )"
+    dotnet_arch_count="$(dotnet_info_field_count "OS Architecture" <<<"$dotnet_info")"
+    if [[ "$dotnet_arch_count" != 1 ]]; then
+      echo "SCCP .NET SDK validation requires exactly one OS Architecture from dotnet --info; found: $dotnet_arch_count" >&2
+      return 1
     fi
-    dotnet_arch_lc="$(printf '%s' "$dotnet_arch" | tr '[:upper:]' '[:lower:]')"
-    if [[ ! "$dotnet_arch_lc" =~ ^(x64|x86|arm64|arm)$ ]]; then
+    dotnet_arch="$(dotnet_info_field_value "OS Architecture" <<<"$dotnet_info")"
+    if [[ ! "$dotnet_arch" =~ ^(x64|x86|arm64|arm)$ ]]; then
       echo "SCCP .NET SDK validation requires a canonical architecture; found: $dotnet_arch" >&2
       return 1
     fi
+    dotnet_arch_lc="$dotnet_arch"
     if [[ "${dotnet_rid#win-}" != "$dotnet_arch_lc" ]]; then
       echo "SCCP .NET SDK validation requires the Windows RID architecture to match the reported architecture; found RID: $dotnet_rid, architecture: $dotnet_arch_lc" >&2
       return 1
@@ -600,8 +645,7 @@ phase_dotnet_sdk() {
     dotnet_trx_path="${dotnet_trx_paths[0]}"
     dotnet_trx_display="${dotnet_trx_path#$ROOT/}"
     case "$dotnet_trx_display" in
-      csharp/tests/Hyperledger.Iroha.Sdk.Tests/TestResults/sccp-dotnet-sdk.trx | \
-      csharp/tests/Hyperledger.Iroha.Sdk.Tests/*/TestResults/sccp-dotnet-sdk.trx)
+      csharp/tests/Hyperledger.Iroha.Sdk.Tests/TestResults/sccp-dotnet-sdk.trx)
         ;;
       *)
         echo "SCCP .NET SDK validation produced an unexpected TRX path: $dotnet_trx_path" >&2
@@ -612,6 +656,7 @@ phase_dotnet_sdk() {
       echo "SCCP .NET SDK validation produced an empty TRX result: $dotnet_trx_path" >&2
       return 1
     fi
+    validate_dotnet_trx_content "$dotnet_trx_path"
     dotnet_trx_bytes="$(wc -c < "$dotnet_trx_path" | tr -d '[:space:]')"
     if ! [[ "$dotnet_trx_bytes" =~ ^[1-9][0-9]*$ ]]; then
       echo "SCCP .NET SDK validation could not compute a non-zero TRX byte size: $dotnet_trx_path" >&2

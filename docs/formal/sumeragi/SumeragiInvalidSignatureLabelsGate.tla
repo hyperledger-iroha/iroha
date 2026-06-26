@@ -183,4 +183,9 @@ InvalidSignatureLabelSafetyAnchors ==
   /\ KindLabelsDistinct
   /\ OutcomeLabelsDistinct
 
+InvalidSignatureLabelsCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ InvalidSignatureLabelSafetyAnchors
+
 ====

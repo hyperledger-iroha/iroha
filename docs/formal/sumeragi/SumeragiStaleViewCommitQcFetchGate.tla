@@ -217,6 +217,10 @@ StaleViewCommitQcFetchExactness ==
   /\ StaleViewTipExtensionExact
   /\ StaleViewPositiveAdmissionExact
 
+StaleViewCommitQcFetchCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ StaleViewCommitQcFetchExactness
+
 BugSkipBlockHash ==
   ImplAllowed(BlockHashMismatch) = SpecAllowed(BlockHashMismatch)
 

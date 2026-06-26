@@ -340,4 +340,8 @@ NoBugInvariant ==
 
 SafetyFast == NoBugInvariant
 
+KeepFrontierPendingActiveCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ NoBugInvariant
+
 ====

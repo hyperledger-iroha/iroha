@@ -431,6 +431,10 @@ VoteBackedReassemblyStallExactness ==
   /\ VoteBackedProgressAgeExact
   /\ VoteBackedExpiryThresholdExact
 
+VoteBackedReassemblyStallCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VoteBackedReassemblyStallExactness
+
 Safety ==
   VoteBackedReassemblyStallCoreSafety
 

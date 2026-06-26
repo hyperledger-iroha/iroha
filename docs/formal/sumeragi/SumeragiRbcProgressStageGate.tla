@@ -489,4 +489,9 @@ SafetyAnchors ==
   /\ RosterQuorumAnchors
   /\ RosterProgressAnchors
 
+RbcProgressStageCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ SafetyAnchors
+
 ====

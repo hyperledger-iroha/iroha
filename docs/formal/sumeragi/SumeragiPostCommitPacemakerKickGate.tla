@@ -320,6 +320,10 @@ PostCommitPacemakerKickExactness ==
   /\ PostCommitPacemakerKickCallbackExact
   /\ PostCommitPacemakerKickTimestampExact
 
+PostCommitPacemakerKickCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PostCommitPacemakerKickExactness
+
 Safety ==
   PostCommitPacemakerKickExactness
 

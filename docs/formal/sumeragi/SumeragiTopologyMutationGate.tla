@@ -314,6 +314,10 @@ TopologyOrderedRosterMutationExactness ==
   /\ TopologyBlockCommitResetExact
   /\ TopologyCanonicalizationExact
 
+TopologyOrderedRosterMutationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ TopologyOrderedRosterMutationExactness
+
 BugRotateIgnoresModulo ==
   ActualOutput("rotate_len4_idx6") = SpecOutput("rotate_len4_idx6")
 

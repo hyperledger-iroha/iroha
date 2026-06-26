@@ -21,6 +21,7 @@ public final class MultisigProposeRequest {
   private final String memo;
   private final Long validationFeePolicyVersion;
   private final String validationFeePolicyHash;
+  private final Long validationFeeInstructionIndex;
 
   private MultisigProposeRequest(final Builder builder) {
     this.multisigAccountId = builder.multisigAccountId;
@@ -34,6 +35,7 @@ public final class MultisigProposeRequest {
     this.memo = builder.memo;
     this.validationFeePolicyVersion = builder.validationFeePolicyVersion;
     this.validationFeePolicyHash = builder.validationFeePolicyHash;
+    this.validationFeeInstructionIndex = builder.validationFeeInstructionIndex;
   }
 
   public static Builder builder() {
@@ -51,6 +53,7 @@ public final class MultisigProposeRequest {
   public String memo() { return memo; }
   public Long validationFeePolicyVersion() { return validationFeePolicyVersion; }
   public String validationFeePolicyHash() { return validationFeePolicyHash; }
+  public Long validationFeeInstructionIndex() { return validationFeeInstructionIndex; }
 
   private static List<byte[]> copyInstructions(final List<byte[]> source) {
     final List<byte[]> copy = new ArrayList<>();
@@ -74,6 +77,7 @@ public final class MultisigProposeRequest {
     private String memo;
     private Long validationFeePolicyVersion;
     private String validationFeePolicyHash;
+    private Long validationFeeInstructionIndex;
 
     public Builder setMultisigAccountId(final String value) {
       this.multisigAccountId = value;
@@ -147,6 +151,11 @@ public final class MultisigProposeRequest {
 
     public Builder setValidationFeePolicyHash(final String value) {
       this.validationFeePolicyHash = value;
+      return this;
+    }
+
+    public Builder setValidationFeeInstructionIndex(final Long value) {
+      this.validationFeeInstructionIndex = value;
       return this;
     }
 

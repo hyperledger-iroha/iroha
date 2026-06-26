@@ -471,4 +471,9 @@ ClassicSignatureSafetyAnchors ==
   /\ ConcreteHighestFailuresFailClosed
   /\ ConcreteNposMissingVoteAnchor
 
+ClassicSignatureCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ Safety
+  /\ ClassicSignatureSafetyAnchors
+
 ====

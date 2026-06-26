@@ -325,6 +325,10 @@ ConsensusParamsIngressExactness ==
   /\ ConsensusParamsTelemetryExact
   /\ ConsensusParamsResultExact
 
+ConsensusParamsIngressCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ConsensusParamsIngressExactness
+
 IngressMatchesSpec ==
   ConsensusParamsIngressExactness
 

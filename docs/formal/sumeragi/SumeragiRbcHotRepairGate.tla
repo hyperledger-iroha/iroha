@@ -508,4 +508,9 @@ SafetyAnchors ==
   /\ ExemptAnchors
   /\ ProposalBlockingAnchors
 
+RbcHotRepairCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ SafetyAnchors
+
 ====

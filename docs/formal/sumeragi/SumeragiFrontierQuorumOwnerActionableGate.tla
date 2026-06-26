@@ -211,6 +211,11 @@ FrontierQuorumOwnerActionableSafetyAnchors ==
   /\ ActionableSourceAnchors
   /\ LiveCleanupPreserveAnchors
 
+FrontierQuorumOwnerActionableCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ FrontierQuorumOwnerActionableSafetyAnchors
+
 Safety == FrontierQuorumOwnerActionableSafetyAnchors
 
 ====

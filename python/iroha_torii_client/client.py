@@ -2536,24 +2536,79 @@ class RbcSample:
 class OfflineReadiness:
     """Offline readiness advertised by Torii."""
 
-    offline_note: bool
-    offline_one_use_keys: bool
-    offline_recursive_note_proof: bool
-    offline_fountain_qr: bool
-    offline_sync_optional: bool
+    offline_kagemusha_abi7: bool
+    offline_kagemusha_abi7_mode: str
+    offline_kagemusha_abi7_bridge_abi_version: int
+    offline_kagemusha_abi7_circuit_id: str
+    offline_kagemusha_abi7_artifacts: bool
+    offline_kagemusha_recursive_compact_available: bool
+    offline_kagemusha_recursive_compact_mode: str
+    offline_kagemusha_recursive_compact_required_native_bridge_abi_version: int
+    offline_kagemusha_recursive_compact_circuit_id: str
+    offline_kagemusha_recursive_compact_artifacts_available: bool
     offline_telemetry: bool
+    offline_note: Optional[bool] = None
+    offline_one_use_keys: Optional[bool] = None
+    offline_recursive_note_proof: Optional[bool] = None
+    offline_fountain_qr: Optional[bool] = None
+    offline_sync_optional: Optional[bool] = None
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineReadiness":
         if not isinstance(payload, Mapping):
             raise RuntimeError("offline readiness response must be an object")
+
+        def required_bool(field: str) -> bool:
+            return ToriiClient._coerce_bool(payload.get(field), f"offline readiness.{field}")
+
+        def required_string(field: str) -> str:
+            return _require_exact_non_empty_string(
+                payload.get(field), f"offline readiness.{field}"
+            )
+
+        def required_positive_int(field: str) -> int:
+            return ToriiClient._coerce_positive_int(
+                payload.get(field), context=f"offline readiness.{field}"
+            )
+
+        def optional_bool(field: str) -> Optional[bool]:
+            if field not in payload:
+                return None
+            return ToriiClient._coerce_bool(payload.get(field), f"offline readiness.{field}")
+
         return cls(
-            offline_note=ToriiClient._coerce_bool(payload.get("offline_note"), "offline readiness.offline_note"),
-            offline_one_use_keys=ToriiClient._coerce_bool(payload.get("offline_one_use_keys"), "offline readiness.offline_one_use_keys"),
-            offline_recursive_note_proof=ToriiClient._coerce_bool(payload.get("offline_recursive_note_proof"), "offline readiness.offline_recursive_note_proof"),
-            offline_fountain_qr=ToriiClient._coerce_bool(payload.get("offline_fountain_qr"), "offline readiness.offline_fountain_qr"),
-            offline_sync_optional=ToriiClient._coerce_bool(payload.get("offline_sync_optional"), "offline readiness.offline_sync_optional"),
-            offline_telemetry=ToriiClient._coerce_bool(payload.get("offline_telemetry"), "offline readiness.offline_telemetry"),
+            offline_kagemusha_abi7=required_bool("offline_kagemusha_abi7"),
+            offline_kagemusha_abi7_mode=required_string("offline_kagemusha_abi7_mode"),
+            offline_kagemusha_abi7_bridge_abi_version=required_positive_int(
+                "offline_kagemusha_abi7_bridge_abi_version"
+            ),
+            offline_kagemusha_abi7_circuit_id=required_string(
+                "offline_kagemusha_abi7_circuit_id"
+            ),
+            offline_kagemusha_abi7_artifacts=required_bool(
+                "offline_kagemusha_abi7_artifacts"
+            ),
+            offline_kagemusha_recursive_compact_available=required_bool(
+                "offline_kagemusha_recursive_compact_available"
+            ),
+            offline_kagemusha_recursive_compact_mode=required_string(
+                "offline_kagemusha_recursive_compact_mode"
+            ),
+            offline_kagemusha_recursive_compact_required_native_bridge_abi_version=required_positive_int(
+                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version"
+            ),
+            offline_kagemusha_recursive_compact_circuit_id=required_string(
+                "offline_kagemusha_recursive_compact_circuit_id"
+            ),
+            offline_kagemusha_recursive_compact_artifacts_available=required_bool(
+                "offline_kagemusha_recursive_compact_artifacts_available"
+            ),
+            offline_telemetry=required_bool("offline_telemetry"),
+            offline_note=optional_bool("offline_note"),
+            offline_one_use_keys=optional_bool("offline_one_use_keys"),
+            offline_recursive_note_proof=optional_bool("offline_recursive_note_proof"),
+            offline_fountain_qr=optional_bool("offline_fountain_qr"),
+            offline_sync_optional=optional_bool("offline_sync_optional"),
         )
 
 

@@ -312,5 +312,10 @@ SafetyAnchors ==
   /\ SnapshotAnchors
   /\ SaturationAnchors
 
+RbcMismatchStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ Safety
+  /\ SafetyAnchors
+
 =============================================================================
 ====

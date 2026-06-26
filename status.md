@@ -1,6 +1,5645 @@
 # Status
 
-Last updated: 2026-06-25
+Last updated: 2026-06-27
+
+## 2026-06-27 SCCP .NET TRX content hardening
+
+- Tightened `scripts/check_sccp_production_corridor.sh --phase dotnet-sdk` so
+  the Windows C# handoff validates the direct
+  `csharp/tests/Hyperledger.Iroha.Sdk.Tests/TestResults/sccp-dotnet-sdk.trx`
+  XML before printing release TRX markers.
+- The runner now requires the TRX to name
+  `Hyperledger.Iroha.Sdk.Tests.dll`, contain at least one passed SCCP
+  `UnitTestResult`, and contain no failed, skipped, timed-out, or aborted SCCP
+  test results; placeholder, wrong-assembly, skipped, and failed TRX XML files
+  fail before `SCCP .NET SDK TRX:` or byte-count evidence is emitted.
+- Updated `roadmap.md` and `docs/source/bridge_proofs.md` with the direct-TRX
+  content rule.
+- Validation passed:
+  - `bash -n scripts/check_sccp_production_corridor.sh`
+  - `python3 -m py_compile pytests/scripts/check_sccp_production_corridor_test.py`
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py::test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades pytests/scripts/check_sccp_production_corridor_test.py::test_sccp_production_corridor_dotnet_phase_rejects_nested_trx_path pytests/scripts/check_sccp_production_corridor_test.py::test_sccp_production_corridor_dotnet_phase_rejects_malformed_trx_content`
+    (`7` passed)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence must still be produced on a Windows machine, and governed/live
+  deployment evidence still requires the operator-controlled deployment
+  environment.
+
+## 2026-06-27 SCCP release-note zero-SHA artifact redaction
+
+- Tightened strict release-note attachment invariants so all-zero canonical
+  SHA-256 artifact values are treated as invalid public metadata rather than as
+  literal artifact hashes that must appear in release notes.
+- Extended the builder/verifier release-note artifact-row regression and the
+  release-notes attachment source-inventory marker set with a positive-byte
+  artifact carrying an all-zero SHA-256, which must render as
+  `<invalid artifact.sha256>`.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_release_notes_reject_malformed_artifact_rows pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_notes_attachment_invariants_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_notes_attachment_invariants_gate_inventory`
+    (`3` passed)
+
+## 2026-06-27 BFV bounded bootstrap refresh-round domain hardening
+
+- Domain-separated bounded deterministic bootstrap refresh-round seed derivation
+  from the exact v1 refresh-round seed domain while preserving the existing
+  exact domain.
+- Added a regression proving exact and bounded bootstrap refreshes do not reuse
+  the same per-round seed for the same key id, round count, and public seed,
+  while bounded bootstrap derivation remains deterministic and both transcript
+  validators still accept the generated material.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-sample-switch-domain CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bounded_bootstrap_refresh_round_seed_domain_is_separate_from_exact_mode --lib -- --nocapture`
+    (`1` passed, `805` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-sample-switch-domain CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bootstrap_refresh_keys_reject_overbudget_round_capacity --lib -- --nocapture`
+    (`1` passed, `805` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-sample-switch-domain CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bootstrap_refresh_uses_round_specific_public_material --lib -- --nocapture`
+    (`1` passed, `805` filtered out)
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+  - `git diff --quiet -- Cargo.lock`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+    (no matches)
+
+## 2026-06-26 Soracloud BFV Full-Bootstrap Fixture Drift
+
+- Refreshed the Soracloud BFV operation-vector full-bootstrap material fixture
+  digests to match the generated canonical circuit artifacts and statement
+  digest.
+- Updated the audited release-package negative test helper so deliberately
+  inert report/archive fixtures replace only the malformed artifact side,
+  allowing archive-body validation to reach the intended malformed archive
+  checks. Audited role-splice and stale-package assertions now expect the
+  earlier governed artifact-byte archive preflight.
+- Validation passed:
+  - `cargo test -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_native_backend_drift`
+  - `cargo test -p iroha_core --features zk-stark soracloud_bfv_operation_vectors`
+  - `cargo test -p iroha_core --features zk-stark audited_prover_rejects_role_spliced_artifacts`
+  - `cargo test -p iroha_core --features zk-stark audited_prover_rejects_untrusted_or_stale_package`
+  - `cargo fmt --all`
+  - `git diff --check`
+
+## 2026-06-26 SCCP public artifact SHA-256 zero-sentinel hardening
+
+- Hardened SCCP readiness reports, release-bundle packaging, strict bundle
+  verification, verifier summaries, and release-note artifact tables so public
+  artifact SHA-256 fields must be non-zero canonical lowercase SHA-256 text.
+- All-zero digest sentinels now fail before copied readiness JSON, Markdown,
+  release notes, or public verifier summaries can present the artifact row as
+  valid.
+- Updated `roadmap.md` to keep the remaining C#/.NET SCCP certification on the
+  Windows-machine handoff path; macOS/Linux `.NET 8` evidence cannot clear the
+  Windows-only SCCP row.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_cli_rejects_zero_input_artifact_sha_without_leaking pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_cli_rejects_malformed_input_artifacts_without_leaking pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_json_root_schema_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_artifacts_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_json_root_schema_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_input_provenance_schema_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_artifact_digest_text_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_zero_artifact_hashes pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_malformed_artifact_fields`
+    (`9` passed)
+- Remaining SCCP release blockers are external: Windows `.NET 8` SCCP TRX
+  evidence must be produced on a Windows machine, and governed/live deployment
+  evidence still requires the operator-controlled deployment environment.
+
+## 2026-06-26 BFV bounded deterministic domain hardening
+
+- Domain-separated bounded deterministic BFV keygen, encryption, and Galois
+  keygen from the exact v1 seed domains while preserving the existing exact
+  domains.
+- Added a regression proving bounded keygen, encryption mask sampling, and
+  bounded Galois keygen remain deterministic for repeated derivations but do
+  not reuse the exact-mode public/random streams for the same seed.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-sample-switch-domain CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bounded_bfv_seed_domains_are_separate_from_exact_modes --lib -- --nocapture`
+    (`1` passed, `804` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-sample-switch-domain CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto deterministic_bfv --lib -- --nocapture`
+    (`4` passed, `801` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-sample-switch-domain CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bounded_noise_bfv_galois_key_switch_matches_plaintext_automorphism --lib -- --nocapture`
+    (`1` passed, `804` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-sample-switch-domain CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto sample_extraction_switch_key_domains_separate_exact_and_bounded_modes --lib -- --nocapture`
+    (`1` passed, `804` filtered out)
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+  - `git diff --quiet -- Cargo.lock`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+    (no matches)
+
+## 2026-06-26 BFV sample-extraction switch-key mode-domain hardening
+
+- Domain-separated deterministic full-bootstrap sample-extraction switch-key
+  derivation so bounded-noise switch-key material uses a distinct RNG domain
+  from the exact v1 path while preserving the existing exact domain.
+- Added a regression proving exact and bounded sample-extraction switch keys
+  generated for the same seed and secret do not reuse the same public `a` limb,
+  while the bounded path remains deterministic for repeated derivations.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-sample-switch-domain CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto sample_extraction_switch_key_domains_separate_exact_and_bounded_modes --lib -- --nocapture`
+    (`1` passed, `803` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-sample-switch-domain CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_sample_extraction_artifact_is_typed_and_profile_bound --lib -- --nocapture`
+    (`1` passed, `803` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-sample-switch-domain CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_raw_sample_extraction_matches_source_decrypt_coefficient --lib -- --nocapture`
+    (`1` passed, `803` filtered out)
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+  - `git diff --quiet -- Cargo.lock`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+    (no matches)
+
+## 2026-06-26 BFV padded marker schema contract refresh
+
+- Updated the Soracloud full-bootstrap material and execution public-input
+  schema contract notes to advertise the current external-review marker
+  hardening: separator-alias reviewer labels and padded-colon marker aliases
+  fail closed alongside the printable marker-statement contract.
+- Refreshed the current material/execution schema hashes to
+  `05890816bd1fb865e3836018316b01d07e3cff757446d1f8d30f68d156de5e0f` and
+  `25506f98acc6cc99a363a8adf53ea83eaaf6ad15c081b98b6e2b16985db77421`.
+- Validation passed:
+  - `env CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-marker-printable-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1620` filtered out)
+  - `env CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-marker-printable-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model schema_advertises --lib -- --nocapture`
+    (`5` passed, `1616` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_data_model/src/soracloud.rs status.md docs/source/engineering_backlog.md roadmap.md`
+  - `git status --short -- Cargo.toml Cargo.lock crates/iroha_crypto/Cargo.toml crates/iroha_data_model/Cargo.toml`
+    (no manifest or lockfile changes)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_data_model/src/soracloud.rs status.md docs/source/engineering_backlog.md roadmap.md`
+    (no matches)
+
+## 2026-06-26 SCCP public readiness path-locality hardening
+
+- Hardened SCCP readiness public path handling so copied `inputs`,
+  `input_artifacts[].path`, readiness Markdown artifact cells, and native-prover
+  support artifact cells require canonical local POSIX public paths.
+- Raw traversal (`..`), absolute POSIX paths, Windows backslashes or drive-style
+  paths, duplicate separators, `.` aliases, percent-encoded traversal, and
+  sensitive path markers now fail closed before copied public roots can be
+  emitted.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_public_path_helpers_reject_escape_forms pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_cli_rejects_escaping_input_paths_without_leaking pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_cli_rejects_malformed_input_artifacts_without_leaking pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_json_root_schema_gate_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_readiness_markdown_invariants_gate_inventory`
+    (`5` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_json_root_schema_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_readiness_markdown_invariants_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_missing_release_public_json_root_schema_inventory_gate pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_missing_readiness_markdown_invariants_inventory_gate`
+    (`4` passed)
+- Remaining SCCP release blockers are external: Windows `.NET 8` SCCP TRX
+  evidence must be produced on a Windows machine, and governed/live deployment
+  evidence still requires the operator-controlled deployment environment.
+
+## 2026-06-26 BFV external-review reviewer-label separator-alias hardening
+
+- Hardened BFV full-bootstrap release-audit external-review marker statements
+  so separator-spelled reviewer labels such as `reviewer_id=`, `reviewerid=`,
+  and `reviewed.by=` fail closed instead of being counted as ordinary review
+  prose beside a valid signed `reviewer-id=` label.
+- Kept the canonical lowercase labels `reviewer-id=`, `reviewer=`, and
+  `reviewed-by=` accepted, and extended the production package fixture so
+  report-side conflicting aliases and archive-side duplicate aliases are
+  rejected before trusted package admission.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-external-review-marker CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto release_audit_external_review_reviewer_labels_reject_separator_aliases --lib -- --nocapture`
+    (`1` passed, `798` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-external-review-marker CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `798` filtered out; finished in `1479.51s`)
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+  - `git status --short -- Cargo.toml Cargo.lock crates/iroha_crypto/Cargo.toml`
+    (no manifest or lockfile changes)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+    (no matches)
+
+## 2026-06-26 BFV key-switch public-limb hardening
+
+- Hardened exact and bounded deterministic BFV key generation to resample
+  all-zero public-key `a` components and nonzero `b` components before returning
+  key material.
+- Hardened exact and bounded key-switch entry generation to resample all-zero
+  public `a` limbs and all-zero `b` limbs, and tightened shared key-switch
+  validation so imported relinearization/Galois entries with an all-zero public
+  `b` or `a` component fail before digesting or cryptographic use.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-nonzero-u CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto deterministic_bfv_keygen_resamples_inert_public_key_a_components --lib -- --nocapture`
+    (`1` passed, `802` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-nonzero-u CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto deterministic_key_switch_generation_resamples_inert_public_a_components --lib -- --nocapture`
+    (`1` passed, `802` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-nonzero-u CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto key_switch_entries_reject_zero_public_components --lib -- --nocapture`
+    (`1` passed, `802` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-nonzero-u CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto deterministic_bfv_keygen_resamples_inert_secret_candidates --lib -- --nocapture`
+    (`1` passed, `802` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-nonzero-u CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto public_key_validator_rejects_malformed_components --lib -- --nocapture`
+    (`1` passed, `802` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-nonzero-u CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bfv_decomposition_digits_are_checked --lib -- --nocapture`
+    (`1` passed, `802` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-nonzero-u CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto evaluation_key_bundle_secret_consistency_rejects_tampered_key_switch_entries --lib -- --nocapture`
+    (`1` passed, `802` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-nonzero-u CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_execution_witness_digest_binds_governed_trace --lib -- --nocapture`
+    (`1` passed, `802` filtered out)
+  - `cargo fmt --package iroha_crypto`
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+    (no matches)
+
+## 2026-06-26 SCCP copied launch-domain pre-render hardening
+
+- Tightened the release-bundle packager's copied all-lanes evidence validation
+  so `required_domains`, `supported_launch_domains`, and
+  `unsupported_launch_domains` must match the strict launch-scope constants
+  before Markdown or public JSON can be rendered.
+- The pre-render guard now rejects non-exact supported-domain lists, non-empty
+  or non-exact unsupported-domain lists, supported/unsupported overlap, and
+  supported-plus-unsupported drift from `required_domains`; the source-inventory
+  marker sweep pins those diagnostics.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_evidence_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_copied_evidence_launch_scope_drift_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_evidence_root_schema_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_runs_all_lanes_evidence_root_schema_inventory_sweep pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_all_lanes_evidence_root_schema_gate_inventory`
+    (`5` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_launch_scope_domain_drift pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_evidence_bundle_is_ready pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_cli_rejects_drifted_domain_lists`
+    (`3` passed)
+- Remaining SCCP release blockers are external: Windows `.NET 8` SCCP TRX
+  evidence must be produced on a Windows machine, and governed/live deployment
+  evidence still requires the operator-controlled deployment environment.
+
+## 2026-06-26 SCCP public route-canary transcript hash binding
+
+- Added route-canary transcript commitment fields to SCCP public
+  cryptographic-evidence rows and Markdown output:
+  `route_canary_call_data_sha256`, `route_canary_payload_hash`,
+  `route_canary_statement_hash`, `route_canary_commitment_root`,
+  `route_canary_finality_height`, and
+  `route_canary_finality_block_hash`.
+- The readiness report, release-bundle packager, and standalone strict verifier
+  now require ETH/BSC/TRON message-proof route-canary rows to publish non-zero
+  canonical bytes32 transcript commitments, keep those fields `null` for
+  Solana/TON, and bind copied public rows back to embedded all-lanes evidence.
+- Updated `roadmap.md` to keep Substrate/Polkadot networks explicitly out of
+  SCCP scope for now, and to keep `.NET 8` SCCP release evidence on the
+  Windows-machine handoff path.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - Focused SCCP public cryptographic-evidence pytest selection covering
+    readiness generation, copied-row rejection, Markdown invariants, full-bundle
+    field binding, type drift, BSC testnet shape, TRON owner/signature drift,
+    and source-inventory guards (`19` passed).
+- Remaining SCCP release blockers are external: Windows `.NET 8` SCCP TRX
+  evidence must be produced on a Windows machine, and governed/live deployment
+  evidence still requires the operator-controlled deployment environment.
+
+## 2026-06-26 BFV printable marker schema contract refresh
+
+- Updated the Soracloud full-bootstrap material and execution public-input
+  schemas to advertise
+  `requires_printable_ascii_external_review_marker_statement_text`, matching
+  the BFV release-audit parser's fail-closed handling for NUL, control
+  whitespace, and UTF-8 control marker statements.
+- Refreshed the current material/execution schema hashes to
+  `05890816bd1fb865e3836018316b01d07e3cff757446d1f8d30f68d156de5e0f` and
+  `25506f98acc6cc99a363a8adf53ea83eaaf6ad15c081b98b6e2b16985db77421`.
+- Validation passed:
+  - `env CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-marker-printable-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1620` filtered out)
+  - `env CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-marker-printable-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model schema_advertises --lib -- --nocapture`
+    (`5` passed, `1616` filtered out)
+
+## 2026-06-26 BFV seeded encryption ephemeral-mask hardening
+
+- Hardened exact and bounded deterministic BFV encryption to resample
+  all-zero ternary ephemeral masks before ciphertext construction, so
+  caller-chosen seeds cannot produce plaintext-plus-error-only ciphertexts.
+  Secret-key sampling now shares the same nonzero ternary sampler.
+- Added a deterministic regression that searches for seeds whose first
+  ephemeral-mask draw is all zero, reconstructs the old ciphertext formula,
+  and proves both encryption modes emit different decryptable ciphertexts.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-nonzero-u CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto deterministic_bfv_encryption_resamples_inert_ephemeral_masks --lib -- --nocapture`
+    (`1` passed, `799` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-nonzero-u CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto deterministic_bfv_keygen_resamples_inert_secret_candidates --lib -- --nocapture`
+    (`1` passed, `799` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-nonzero-u CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto deterministic_bfv_seeded_helpers_reject_empty_or_oversized_seeds --lib -- --nocapture`
+    (`1` passed, `799` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-nonzero-u CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto seeded_encryption_preflights_public_input_and_seed_before_public_key_shape --lib -- --nocapture`
+    (`1` passed, `799` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-nonzero-u CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto seeded_encryption_rejects_insufficient_residual_capacity --lib -- --nocapture`
+    (`1` passed, `799` filtered out)
+  - `cargo fmt --package iroha_crypto`
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+    (no matches)
+
+## 2026-06-26 SCCP public route-canary scalar proof-context binding
+
+- Added route-canary scalar proof-context fields to SCCP public
+  cryptographic-evidence rows and Markdown output:
+  `route_canary_log_index`, `route_canary_target_domain`,
+  `route_canary_proof_version`, and `route_canary_proof_source_domain`.
+- The readiness report, release-bundle packager, and standalone strict verifier
+  now require ETH/BSC/TRON message-proof route-canary rows to publish exact
+  scalar context (`log_index` as non-negative u32, target domain equal to the
+  lane, proof version `1`, and SORA proof source), keep those fields `null` for
+  Solana/TON, and bind copied public rows back to embedded all-lanes evidence.
+- Added adversarial coverage for malformed scalar types, forged exact scalar
+  context, Solana/TON non-null scalar drift, full-bundle lane-binding drift,
+  Markdown row presence, and public source-inventory markers.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_for_complete_evidence_and_corridor pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_with_only_active_launch_lane pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_cli_rejects_malformed_cryptographic_evidence_without_leaking pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_public_crypto_rejects_route_canary_scalar_drift pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_public_crypto_rejects_tron_owner_signature_drift pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_public_crypto_rejects_route_canary_transcript_replay pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_crypto_evidence_binding_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_copied_crypto_message_proof_drift_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_copied_crypto_scalar_drift_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_copied_tron_crypto_owner_signature_drift_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_copied_crypto_evidence_lane_binding_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_markdown_invariants_require_crypto_route_canary_row pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_crypto_evidence_field_binding_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_accepts_bsc_testnet_crypto_profile pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_tron_crypto_owner_signature_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_crypto_evidence_binding_inventory`
+    (`18` passed)
+- Remaining SCCP release blockers are external: Windows `.NET 8` SCCP TRX
+  evidence must be produced on a Windows machine, and governed/live deployment
+  evidence still requires the operator-controlled deployment environment.
+
+## 2026-06-26 BFV external-review padded-marker hardening
+
+- Tightened BFV full-bootstrap release-audit marker replay detection so
+  duplicate external-review marker tokens followed by ordinary spaces before
+  the colon are still treated as pasted production markers. The required
+  leading marker remains exact, while same-statement `external-review-approved :`
+  and mixed-case `External-Review-Evidence-Archive :` replays fail closed.
+- Extended the same-statement duplicate marker parser regression with
+  padded-colon report/archive cases, then reran the governed release-audit
+  artifact fixture.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-external-review-marker CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto release_audit_external_review_marker_statements_reject_same_statement_duplicates --lib -- --nocapture`
+    (`1` passed, `797` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-external-review-marker CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `797` filtered out)
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+  - `git status --short -- Cargo.toml Cargo.lock 'crates/**/Cargo.toml'`
+    (no manifest or lockfile changes)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+    (no matches)
+
+## 2026-06-26 SCCP TRON public route-canary owner/signature binding
+
+- Added TRON route-canary owner/signature proof flags to SCCP public
+  cryptographic-evidence rows and Markdown output:
+  `route_canary_raw_data_owner_matches_transaction` and
+  `route_canary_signature_recovers_to_owner`.
+- The readiness report, bundle packager, and standalone strict verifier now
+  require those fields to be exact `true` for TRON route-canary evidence, keep
+  them `null` for non-TRON rows, and bind copied public rows back to embedded
+  all-lanes lane evidence before rendering public artifacts.
+- Added adversarial coverage for malformed copied row types, missing public
+  fields, false/null TRON owner or signature flags, non-TRON forged values,
+  full-bundle field-binding drift, Markdown row presence, and public
+  source-inventory markers.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_cli_rejects_malformed_cryptographic_evidence_without_leaking pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_public_crypto_rejects_tron_owner_signature_drift pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_for_complete_evidence_and_corridor pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_copied_tron_crypto_owner_signature_drift_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_copied_crypto_evidence_lane_binding_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_crypto_evidence_field_binding_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_markdown_invariants_require_crypto_route_canary_row pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_tron_crypto_owner_signature_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_crypto_evidence_binding_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_crypto_evidence_binding_gate_inventory`
+    (`12` passed)
+- Remaining SCCP release blockers are external: Windows `.NET 8` SCCP TRX
+  evidence must be produced on a Windows machine, and governed/live deployment
+  evidence still requires the operator-controlled deployment environment.
+
+## 2026-06-26 SCCP public cryptographic-evidence message-proof binding
+
+- Added `route_canary_message_proof_used` to SCCP public
+  cryptographic-evidence rows and Markdown output, with strict row validation
+  and embedded-lane binding in the release bundle verifier.
+- Copied ETH/BSC/TRON route-canary public rows now fail before public output if
+  message-proof usage is missing, false, type-drifted, or no longer matches the
+  embedded lane evidence; Solana/TON snapshot canary rows must keep that field
+  `null`.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_for_complete_evidence_and_corridor pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_with_only_active_launch_lane pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_preserves_malformed_crypto_evidence_values pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_cli_rejects_malformed_cryptographic_evidence_without_leaking pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_public_crypto_rejects_route_canary_transcript_replay pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_unbound_copied_crypto_evidence_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_copied_crypto_message_proof_drift_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_copied_crypto_evidence_lane_binding_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_markdown_invariants_require_crypto_route_canary_row pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_crypto_evidence_field_binding_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_accepts_bsc_testnet_crypto_profile pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_crypto_evidence_binding_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_crypto_evidence_binding_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_evidence_root_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_all_lanes_evidence_root_schema_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_route_canary_scalar_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_all_lanes_route_canary_scalar_gate_inventory`
+    (`19` passed)
+- Remaining SCCP release blockers are external: Windows `.NET 8` SCCP TRX
+  evidence must be produced on a Windows machine, and governed/live deployment
+  evidence still requires the operator-controlled deployment environment.
+
+## 2026-06-26 BFV reviewer-label schema contract refresh
+
+- Updated the Soracloud full-bootstrap material and execution public-input
+  schemas to advertise
+  `rejects_case_drifted_external_review_marker_reviewer_id_labels` beside the
+  duplicate/conflicting reviewer-label checks, keeping the public schema
+  contract aligned with the hardened BFV external-review marker parser.
+- Refreshed the current material/execution schema hashes to
+  `05890816bd1fb865e3836018316b01d07e3cff757446d1f8d30f68d156de5e0f` and
+  `25506f98acc6cc99a363a8adf53ea83eaaf6ad15c081b98b6e2b16985db77421`.
+- Validation passed:
+  - `env CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-reviewer-label-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1620` filtered out)
+  - `env CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-reviewer-label-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model schema_advertises --lib -- --nocapture`
+    (`5` passed, `1616` filtered out)
+
+## 2026-06-26 BFV external-review statement printable-text hardening
+
+- Tightened BFV full-bootstrap release-audit marker parsing so the leading
+  external-review report/archive statement must be printable ASCII before
+  reviewer-id binding or signed-field replay. NUL-hidden text, control
+  whitespace, and UTF-8 bidi/control bytes now fail closed at the production
+  marker boundary.
+- Added a focused parser regression for non-printable report/archive marker
+  statements, then reran the governed release-audit artifact fixture to prove
+  valid printable production packages still pass.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-external-review-marker CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto release_audit_external_review_marker_statements_reject_nonprintable_text --lib -- --nocapture`
+    (`1` passed, `797` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-external-review-marker CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `797` filtered out)
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+  - `git status --short -- Cargo.toml Cargo.lock 'crates/**/Cargo.toml'`
+    (no manifest or lockfile changes)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+    (no matches)
+
+## 2026-06-26 SCCP all-lanes route-canary required-flag hardening
+
+- Tightened the all-lanes release checklist so lane-specific route-canary truth
+  flags are required, not optional copied metadata: ETH/BSC now fail closed
+  when `message_proof_used` or `receipt_block_finalized` is missing, and TRON
+  now fails closed when `message_proof_used`,
+  `raw_data_owner_matches_transaction`, or `signature_recovers_to_owner` is
+  missing.
+- Expanded all-lanes adversarial tests for missing versus present `null`
+  route-canary fields across EVM evidence binding, message-proof usage,
+  finalized-receipt state, TRON raw-data owner binding, and TRON signature
+  recovery, then pinned the required-field map and missing-field cases in the
+  strict release-bundle source inventory.
+- Extended copied public-summary regressions so the all-lanes CLI and strict
+  bundle verifier report exact missing-field blockers when copied ETH/BSC/TRON
+  route canaries drop those required truth flags before rendering public
+  output.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_release_checklist_rejects_malformed_tron_route_canary_boolean_scalars pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_route_canary_scalar_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_all_lanes_route_canary_scalar_gate_inventory`
+    (`4` passed)
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_cli_rejects_copied_not_ready_route_canary_missing_fields pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_release_checklist_rejects_malformed_tron_route_canary_boolean_scalars pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_route_canary_scalar_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_all_lanes_route_canary_scalar_gate_inventory`
+    (`5` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_copied_route_canary_required_truth_fields_when_lane_not_ready`
+    (`1` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_evidence_root_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_all_lanes_evidence_root_schema_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_route_canary_scalar_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_all_lanes_route_canary_scalar_gate_inventory`
+    (`4` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py`
+    (`236` passed)
+
+## 2026-06-26 SCCP active route-canary source/finality strict bundle guard
+
+- Expanded strict release-bundle adversarial coverage for active route-canary
+  metadata so `evidence_source` must be a canonical
+  `evm_message_proof_accepted_transaction` string and
+  `receipt_block_finalized` must remain exactly boolean `true`; wrong,
+  uppercase, missing, null, padded, numeric, string, and false variants now hit
+  the intended blockers without unrelated receipt-block-number or
+  message-proof blockers.
+- Updated `roadmap.md` so active route-canary source-inventory requirements
+  name evidence-source and finalized-block exactness beside the transaction
+  hash, receipt-block, message-id, positive block-number, and
+  message-proof-used markers.
+- Added readiness-report present-null coverage and shared source-inventory
+  markers for route-canary `evidence_bound`, `message_proof_used`,
+  `receipt_block_finalized`, and `evidence_source`, so copied JSON `null`
+  values stay distinct from missing fields in the release checklist.
+- Split strict-bundle recomputation tests for route-canary `evidence_bound`,
+  `message_proof_used`, and `receipt_block_finalized` into named null and
+  missing cases, with source-inventory markers for the null-vs-missing paths.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_malformed_active_route_canary_metadata pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_active_launch_checklist_schema_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_active_launch_checklist_schema_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_recomputes_active_route_canary_evidence_bound_exactly pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_recomputes_active_route_canary_message_proof_used_exactly pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_recomputes_active_route_canary_receipt_finalized_exactly`
+    (`7` passed)
+
+## 2026-06-26 SCCP active route-canary message-proof strict bundle guard
+
+- Added strict release-bundle adversarial coverage for active route-canary
+  `message_proof_used` metadata: string, numeric, false, and missing values now
+  prove the verifier reports either the boolean schema blocker or the
+  message-proof-used blocker without cascading into unrelated receipt-block
+  diagnostics.
+- Pinned the new `route_canary_message_proof_used_exactness_cases` coverage and
+  the `route canary message proof must be used` blocker in the active launch
+  checklist source inventory.
+- Updated `roadmap.md` so active route-canary source-inventory requirements name
+  message-proof-used exactness beside receipt block and finalized-block markers.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_active_launch_checklist_schema_inventory`
+    (`2` passed)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in
+  `roadmap.md`.
+
+## 2026-06-26 BFV external-review marker case hardening
+
+- Tightened BFV full-bootstrap release-audit marker parsing so duplicate
+  standalone external-review marker tokens inside the leading review statement
+  are detected case-insensitively; mixed-case pasted markers now fail closed
+  while the required leading production marker remains canonical lowercase.
+- Extended the same-statement duplicate marker parser regression with uppercase
+  report and mixed-case evidence-archive marker replays, then reran the governed
+  release-audit artifact fixture.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-external-review-marker CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto release_audit_external_review_marker_statements_reject_same_statement_duplicates --lib -- --nocapture`
+    (`1` passed, `795` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-external-review-marker CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `795` filtered out)
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+  - `git status --short -- Cargo.toml Cargo.lock 'crates/**/Cargo.toml'`
+    (no manifest or lockfile changes)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+    (no matches)
+
+## 2026-06-26 SCCP .NET corridor dotnet-info colon injection guard
+
+- Hardened `scripts/check_sccp_production_corridor.sh --phase dotnet-sdk` so
+  `dotnet --info` metadata extraction preserves the full value after the first
+  label colon. Colon-injected values such as `Windows: Linux`,
+  `win-x64:linux-x64`, and `x64:arm64` now fail canonical host checks instead
+  of being truncated to an acceptable prefix.
+- Added executable fake-Windows `.NET` regressions for colon-injected `OS Name:`,
+  `OS Platform:`, `RID:`, and `OS Architecture:` metadata, all proving the
+  runner stops before SCCP host markers, native bridge build, restore, or test
+  execution.
+- Pinned the parser helper and new adversarial fixture labels in the SCCP
+  release corridor phase-transcript source inventory for readiness and strict
+  bundle verification.
+- Validation passed:
+  - `bash -n scripts/check_sccp_production_corridor.sh`
+  - `python3 -m py_compile pytests/scripts/check_sccp_production_corridor_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py -k 'dotnet_phase_covers_native_bsc_facades or dotnet_phase_rejects_rid_architecture_mismatch or dotnet_phase_rejects_multiline_version or dotnet_phase_rejects_contradictory_os_markers or dotnet_phase_rejects_ambiguous_os_metadata or dotnet_phase_rejects_duplicate_rid or dotnet_phase_rejects_ambiguous_rid_or_architecture_metadata or dotnet_phase_rejects_noncanonical_rid_values or dotnet_phase_rejects_missing_os_architecture or dotnet_phase_rejects_noncanonical_architecture_values or dotnet_phase_rejects_colon_injected_info_values or dotnet_phase_rejects_uppercase_architecture or dotnet_phase_rejects_nested_trx_path'`
+    (`13` passed, `27` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_corridor_phase_transcript_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_corridor_phase_transcript_inventory`
+    (`2` passed)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in
+  `roadmap.md`.
+
+## 2026-06-26 SCCP .NET corridor noncanonical architecture value guard
+
+- Added executable fake-Windows `.NET` corridor coverage proving
+  `scripts/check_sccp_production_corridor.sh --phase dotnet-sdk` rejects
+  architecture alias values `amd64`, `x86_64`, and `aarch64` from
+  `dotnet --info` before emitting SCCP architecture markers, building
+  `connect_norito_bridge`, restoring, or running tests.
+- Pinned the new regression and fixture labels in the SCCP release corridor
+  phase-transcript source inventory for readiness and strict bundle
+  verification.
+- Updated the Windows `.NET 8` handoff in `roadmap.md` so architecture alias
+  values are explicitly forged evidence alongside missing/duplicate
+  architecture metadata and uppercase architecture values.
+- Validation passed:
+  - `bash -n scripts/check_sccp_production_corridor.sh`
+  - `python3 -m py_compile pytests/scripts/check_sccp_production_corridor_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py -k 'dotnet_phase_covers_native_bsc_facades or dotnet_phase_rejects_rid_architecture_mismatch or dotnet_phase_rejects_multiline_version or dotnet_phase_rejects_contradictory_os_markers or dotnet_phase_rejects_ambiguous_os_metadata or dotnet_phase_rejects_duplicate_rid or dotnet_phase_rejects_ambiguous_rid_or_architecture_metadata or dotnet_phase_rejects_noncanonical_rid_values or dotnet_phase_rejects_missing_os_architecture or dotnet_phase_rejects_noncanonical_architecture_values or dotnet_phase_rejects_uppercase_architecture or dotnet_phase_rejects_nested_trx_path'`
+    (`12` passed, `27` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_corridor_phase_transcript_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_corridor_phase_transcript_inventory`
+    (`2` passed)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in
+  `roadmap.md`.
+
+## 2026-06-26 SCCP .NET corridor noncanonical RID value guard
+
+- Added executable fake-Windows `.NET` corridor coverage proving
+  `scripts/check_sccp_production_corridor.sh --phase dotnet-sdk` rejects
+  uppercase Windows RID (`WIN-x64`), foreign-platform RID (`linux-x64`), and
+  alias-architecture RID (`win-amd64`) values from `dotnet --info` before
+  emitting SCCP host markers, building `connect_norito_bridge`, restoring, or
+  running tests.
+- Pinned the new regression and fixture labels in the SCCP release corridor
+  phase-transcript source inventory for readiness and strict bundle
+  verification.
+- Updated the Windows `.NET 8` handoff in `roadmap.md` so noncanonical single
+  RID values are explicitly forged evidence alongside missing/duplicate RID
+  metadata.
+- Validation passed:
+  - `bash -n scripts/check_sccp_production_corridor.sh`
+  - `python3 -m py_compile pytests/scripts/check_sccp_production_corridor_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py -k 'dotnet_phase_covers_native_bsc_facades or dotnet_phase_rejects_rid_architecture_mismatch or dotnet_phase_rejects_multiline_version or dotnet_phase_rejects_contradictory_os_markers or dotnet_phase_rejects_ambiguous_os_metadata or dotnet_phase_rejects_duplicate_rid or dotnet_phase_rejects_ambiguous_rid_or_architecture_metadata or dotnet_phase_rejects_noncanonical_rid_values or dotnet_phase_rejects_missing_os_architecture or dotnet_phase_rejects_uppercase_architecture or dotnet_phase_rejects_nested_trx_path'`
+    (`11` passed, `27` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_corridor_phase_transcript_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_corridor_phase_transcript_inventory`
+    (`2` passed)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in
+  `roadmap.md`.
+
+## 2026-06-26 BFV release-audit reviewer-label alias hardening
+
+- Hardened BFV full-bootstrap external-review marker admission so
+  `reviewer-id=`, `reviewer=`, and `reviewed-by=` labels are accepted only with
+  canonical lowercase label names. Case-drifted duplicate or conflicting
+  reviewer labels now fail with a lowercase-label error instead of hiding as
+  ordinary review prose after a valid lowercase reviewer id.
+- Extended the production package fixture so
+  `full_bootstrap_release_audit_evidence_binds_generated_artifacts` also covers
+  case-drifted conflicting report reviewer labels and case-drifted duplicate
+  archive reviewer labels. Kept the existing marker/header and copied-statement
+  checks intact; this only tightens reviewer-label detection inside the
+  external-review statement parser.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_crypto release_audit_external_review_reviewer_labels_reject_case_drift --lib -- --nocapture`
+    (`1` passed, `797` filtered out)
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `797` filtered out; finished in `1444.78s`)
+
+## 2026-06-26 SCCP .NET corridor RID and architecture count guard
+
+- Added executable fake-Windows `.NET` corridor coverage proving
+  `scripts/check_sccp_production_corridor.sh --phase dotnet-sdk` rejects missing
+  `RID:` metadata and duplicate `OS Architecture:` metadata from
+  `dotnet --info` before emitting SCCP host markers, building `connect_norito_bridge`,
+  restoring, or running tests.
+- Pinned the new regression and fixture labels in the SCCP release corridor
+  phase-transcript source inventory for readiness and strict bundle
+  verification.
+- Updated the Windows `.NET 8` handoff in `roadmap.md` so missing or duplicate
+  RID fields and missing or duplicate OS-architecture fields are explicitly
+  forged evidence.
+- Validation passed:
+  - `bash -n scripts/check_sccp_production_corridor.sh`
+  - `python3 -m py_compile pytests/scripts/check_sccp_production_corridor_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py -k 'dotnet_phase_covers_native_bsc_facades or dotnet_phase_rejects_rid_architecture_mismatch or dotnet_phase_rejects_multiline_version or dotnet_phase_rejects_contradictory_os_markers or dotnet_phase_rejects_ambiguous_os_metadata or dotnet_phase_rejects_duplicate_rid or dotnet_phase_rejects_ambiguous_rid_or_architecture_metadata or dotnet_phase_rejects_missing_os_architecture or dotnet_phase_rejects_uppercase_architecture or dotnet_phase_rejects_nested_trx_path'`
+    (`10` passed, `27` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_corridor_phase_transcript_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_corridor_phase_transcript_inventory`
+    (`2` passed)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in
+  `roadmap.md`.
+
+## 2026-06-26 SCCP .NET corridor symmetric OS metadata guard
+
+- Expanded the fake-Windows `.NET` corridor adversarial matrix so
+  `scripts/check_sccp_production_corridor.sh --phase dotnet-sdk` now has
+  executable coverage for missing `OS Name:`, duplicate `OS Name:`, missing
+  `OS Platform:`, and duplicate `OS Platform:` metadata from `dotnet --info`.
+  Every case fails before SCCP host markers, native bridge build, restore, or
+  test execution.
+- Pinned the new fixture labels in the SCCP release corridor phase-transcript
+  source inventory for readiness and strict bundle verification.
+- Updated `roadmap.md` so the Windows `.NET 8` handoff explicitly treats all
+  missing/duplicate OS-name/platform variants as forged evidence.
+- Validation passed:
+  - `bash -n scripts/check_sccp_production_corridor.sh`
+  - `python3 -m py_compile pytests/scripts/check_sccp_production_corridor_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py -k 'dotnet_phase_covers_native_bsc_facades or dotnet_phase_rejects_rid_architecture_mismatch or dotnet_phase_rejects_multiline_version or dotnet_phase_rejects_contradictory_os_markers or dotnet_phase_rejects_ambiguous_os_metadata or dotnet_phase_rejects_duplicate_rid or dotnet_phase_rejects_missing_os_architecture or dotnet_phase_rejects_uppercase_architecture or dotnet_phase_rejects_nested_trx_path'`
+    (`9` passed, `27` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_corridor_phase_transcript_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_corridor_phase_transcript_inventory`
+    (`2` passed)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in
+  `roadmap.md`.
+
+## 2026-06-26 BFV release-audit copied review statement rejection
+
+- Hardened production-pinned BFV full-bootstrap release-audit package
+  admission so the external-review report marker and evidence-archive marker
+  must carry distinct review statement text after reviewer-id label
+  normalization. A copied report/archive review line can no longer satisfy both
+  artifacts even when both marker headers and reviewer labels are structurally
+  valid.
+- Strengthened the public external-review marker validator to enforce the same
+  signed reviewer-id-labelled statement and distinct-statement policy. Data
+  model `FheExecutionPolicyV1::validate()` now rejects structurally signed
+  release-audit packages whose marker prose omits the signed reviewer id,
+  matching the schema obligations it advertises.
+- Updated the Soracloud material/execution public-input schemas to advertise
+  `requires_distinct_external_review_marker_statements`; the current material
+  and execution schema hashes are
+  `05890816bd1fb865e3836018316b01d07e3cff757446d1f8d30f68d156de5e0f` and
+  `25506f98acc6cc99a363a8adf53ea83eaaf6ad15c081b98b6e2b16985db77421`.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `795` filtered out; finished in `1365.72s`)
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `796` filtered out; finished in `1476.75s`)
+  - `cargo test -j 1 -p iroha_data_model fhe_execution_policy_validate_binds_release_audit_trusted_reviewer --lib -- --nocapture`
+    (`1` passed, `1620` filtered out; finished in `134.22s`)
+  - `cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap --lib -- --nocapture`
+    (`2` passed, `1619` filtered out)
+  - `cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1620` filtered out)
+  - `cargo fmt --package iroha_crypto --package iroha_data_model -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_data_model/src/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-26 SCCP .NET corridor ambiguous OS metadata guard
+
+- Added executable fake-Windows `.NET` corridor coverage proving
+  `scripts/check_sccp_production_corridor.sh --phase dotnet-sdk` rejects
+  duplicate `OS Name:` metadata and missing `OS Platform:` metadata from
+  `dotnet --info` before emitting SCCP host markers, building
+  `connect_norito_bridge`, restoring, or running tests.
+- Pinned the new adversarial regression and fixture labels in the SCCP release
+  corridor phase-transcript source inventory for readiness and strict bundle
+  verification.
+- Updated the Windows `.NET 8` handoff in `roadmap.md` so duplicate or missing
+  OS-name/platform fields are explicitly forged evidence, alongside duplicate
+  RID, missing OS architecture, and RID/architecture mismatch cases.
+- Validation passed:
+  - `bash -n scripts/check_sccp_production_corridor.sh`
+  - `python3 -m py_compile pytests/scripts/check_sccp_production_corridor_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py -k 'dotnet_phase_covers_native_bsc_facades or dotnet_phase_rejects_rid_architecture_mismatch or dotnet_phase_rejects_multiline_version or dotnet_phase_rejects_contradictory_os_markers or dotnet_phase_rejects_ambiguous_os_metadata or dotnet_phase_rejects_duplicate_rid or dotnet_phase_rejects_missing_os_architecture or dotnet_phase_rejects_uppercase_architecture or dotnet_phase_rejects_nested_trx_path'`
+    (`9` passed, `27` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_corridor_phase_transcript_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_corridor_phase_transcript_inventory`
+    (`2` passed)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in
+  `roadmap.md`.
+
+## 2026-06-26 Sumeragi commit and pacemaker correctness envelopes
+
+- Added correctness envelopes to seven adjacent formal helper gates and wired
+  each into its fast cfg:
+  `CommitJobDispatchCorrectnessEnvelope`,
+  `CommitWorkerConfigCorrectnessEnvelope`,
+  `CommitStageTimingThresholdCorrectnessEnvelope`,
+  `CommitInflightTimeoutCorrectnessEnvelope`,
+  `PostCommitPacemakerKickCorrectnessEnvelope`,
+  `IdleViewProposalBudgetCorrectnessEnvelope`, and
+  `PacemakerCoreCorrectnessEnvelope`.
+- The envelopes compose `TypeInvariant` with the corresponding aggregate
+  exactness or direct safety surface, covering bounded domain safety together
+  with commit-job dispatch ownership, commit-worker channel capacity,
+  slow-stage timing thresholds, commit-inflight timeout reporting,
+  post-commit pacemaker kick gating, idle-view proposal budget preservation,
+  and Pacemaker state-machine transitions.
+- Documented the envelopes in `docs/formal/sumeragi/README.md` and recorded
+  the corresponding correctness-envelope checkpoints in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.30s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typechecked
+    `SumeragiCommitJobDispatchGate.tla`,
+    `SumeragiCommitWorkerConfigGate.tla`,
+    `SumeragiCommitStageTimingThresholdGate.tla`,
+    `SumeragiCommitInflightTimeoutGate.tla`,
+    `SumeragiPostCommitPacemakerKickGate.tla`,
+    `SumeragiIdleViewProposalBudgetGate.tla`, and
+    `SumeragiPacemakerCoreGate.tla` with no errors.
+  - `bash scripts/formal/sumeragi_apalache.sh commit-job-dispatch-fast`
+    (`CommitJobDispatchCorrectnessEnvelope` produced `41` verification
+    conditions; Apalache checked `110` state invariants and reported `NoError`)
+  - `bash scripts/formal/sumeragi_apalache.sh commit-worker-config-fast`
+    (`CommitWorkerConfigCorrectnessEnvelope` produced `13` verification
+    conditions; Apalache checked `47` state invariants and reported `NoError`)
+  - `JVM_ARGS="-Xss16m -Xmx8192m" bash scripts/formal/sumeragi_apalache.sh commit-stage-timing-threshold-fast`
+    (`CommitStageTimingThresholdCorrectnessEnvelope` produced `20`
+    verification conditions; Apalache checked `40` state invariants and
+    reported `NoError`)
+  - `JVM_ARGS="-Xss16m -Xmx8192m" bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-fast`
+    (`CommitInflightTimeoutCorrectnessEnvelope` produced `45` verification
+    conditions; Apalache checked `90` state invariants and reported `NoError`)
+  - `JVM_ARGS="-Xss16m -Xmx8192m" bash scripts/formal/sumeragi_apalache.sh post-commit-pacemaker-kick-fast`
+    (`PostCommitPacemakerKickCorrectnessEnvelope` produced `23` verification
+    conditions; Apalache checked `46` state invariants and reported `NoError`)
+  - `JVM_ARGS="-Xss16m -Xmx8192m" bash scripts/formal/sumeragi_apalache.sh idle-view-proposal-budget-fast`
+    (`IdleViewProposalBudgetCorrectnessEnvelope` produced `30` verification
+    conditions; Apalache checked `60` state invariants and reported `NoError`)
+  - `JVM_ARGS="-Xss16m -Xmx8192m" bash scripts/formal/sumeragi_apalache.sh pacemaker-core-fast`
+    (`PacemakerCoreCorrectnessEnvelope` produced `5` verification conditions;
+    Apalache checked `10` state invariants and reported `NoError`)
+  - TLC fast checks passed:
+    `commit-job-dispatch-fast` (`25` states, `13` distinct, depth `2`),
+    `commit-worker-config-fast` (`2` states, `1` distinct, depth `1`),
+    `commit-stage-timing-threshold-fast` (`2` states, `1` distinct, depth `1`),
+    `commit-inflight-timeout-fast` (`17` states, `9` distinct, depth `2`),
+    `post-commit-pacemaker-kick-fast` (`47` states, `24` distinct, depth `2`),
+    `idle-view-proposal-budget-fast` (`59` states, `30` distinct, depth `2`),
+    and `pacemaker-core-fast` (`2` states, `1` distinct, depth `1`).
+
+## 2026-06-26 Sumeragi roster and membership correctness envelopes
+
+- Added correctness envelopes to seven adjacent formal helper gates and wired
+  each into its fast cfg:
+  `RosterIndexProjectionCorrectnessEnvelope`,
+  `MembershipViewHashCorrectnessEnvelope`,
+  `MembershipMismatchStatusCorrectnessEnvelope`,
+  `MembershipAdvertBridgeCorrectnessEnvelope`,
+  `MembershipMismatchIngressCorrectnessEnvelope`,
+  `ConsensusParamsIngressCorrectnessEnvelope`, and
+  `PrevalidatedCommitArtifactCorrectnessEnvelope`.
+- The envelopes compose `TypeInvariant` with the corresponding aggregate
+  exactness or fast-safety surface, covering bounded domain safety together
+  with roster index projection, membership-view hashing, membership mismatch
+  status, membership advert publication, mismatch fail-closed ingress,
+  consensus-params advert ingress, and prevalidated commit artifact trust.
+- Documented the envelopes in `docs/formal/sumeragi/README.md` and recorded
+  the corresponding correctness-envelope checkpoints in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.29s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typechecked
+    `SumeragiRosterIndexProjectionGate.tla`,
+    `SumeragiMembershipViewHashGate.tla`,
+    `SumeragiMembershipMismatchStatusGate.tla`,
+    `SumeragiMembershipAdvertGate.tla`,
+    `SumeragiMembershipMismatchIngressGate.tla`,
+    `SumeragiConsensusParamsIngressGate.tla`, and
+    `SumeragiPrevalidatedCommitArtifactGate.tla` with no errors.
+  - `bash scripts/formal/sumeragi_apalache.sh roster-index-projection-fast`
+    (`RosterIndexProjectionCorrectnessEnvelope` produced `9` verification
+    conditions; Apalache checked `24` state invariants and reported `NoError`)
+  - `bash scripts/formal/sumeragi_apalache.sh membership-view-hash-fast`
+    (`MembershipViewHashCorrectnessEnvelope` produced `8` verification
+    conditions; Apalache checked `21` state invariants and reported `NoError`)
+  - `bash scripts/formal/sumeragi_apalache.sh membership-mismatch-status-fast`
+    (`MembershipMismatchStatusCorrectnessEnvelope` produced `23` verification
+    conditions; Apalache checked `52` state invariants and reported `NoError`)
+  - `bash scripts/formal/sumeragi_apalache.sh membership-advert-fast`
+    (`MembershipAdvertBridgeCorrectnessEnvelope` produced `37` verification
+    conditions; Apalache checked `108` state invariants and reported
+    `NoError`)
+  - `bash scripts/formal/sumeragi_apalache.sh membership-mismatch-ingress-fast`
+    (`MembershipMismatchIngressCorrectnessEnvelope` produced `13`
+    verification conditions; Apalache checked `32` state invariants and
+    reported `NoError`)
+  - `bash scripts/formal/sumeragi_apalache.sh consensus-params-ingress-fast`
+    (`ConsensusParamsIngressCorrectnessEnvelope` produced `29` verification
+    conditions; Apalache checked `74` state invariants and reported `NoError`)
+  - `bash scripts/formal/sumeragi_apalache.sh prevalidated-commit-artifact-fast`
+    (`PrevalidatedCommitArtifactCorrectnessEnvelope` produced `5`
+    verification conditions; Apalache checked `16` state invariants and
+    reported `NoError`)
+  - TLC fast checks passed:
+    `roster-index-projection-fast` (`2` states, `1` distinct, depth `1`),
+    `membership-view-hash-fast` (`2` states, `1` distinct, depth `1`),
+    `membership-mismatch-status-fast` (`12` states, `12` distinct, depth `2`),
+    `membership-advert-fast` (`2` states, `1` distinct, depth `1`),
+    `membership-mismatch-ingress-fast` (`19` states, `19` distinct, depth `2`),
+    `consensus-params-ingress-fast` (`2` states, `1` distinct, depth `1`), and
+    `prevalidated-commit-artifact-fast` (`2` states, `1` distinct, depth `1`).
+
+## 2026-06-26 Sumeragi BlockSyncUpdate roster hydration correctness envelope
+
+- Added `BlockSyncUpdateRosterHydrationCorrectnessEnvelope` to
+  `SumeragiBlockSyncUpdateRosterHydrationGate.tla` and wired it into
+  `SumeragiBlockSyncUpdateRosterHydrationGate_fast.cfg`. The envelope composes
+  `TypeInvariant` with `BlockSyncUpdateRosterHydrationExactness`, giving the
+  outbound BlockSyncUpdate roster hydration helper one checkable invariant for
+  bounded domain safety, update construction, persisted/history lookup order
+  and arguments, source short-circuiting, uncertified fallback gating,
+  fallback roster selection, update application, and NPoS stake-fill behavior.
+- Documented the envelope in `docs/formal/sumeragi/README.md` and recorded the
+  BlockSyncUpdate roster hydration correctness-envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.29s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-block-sync-update-roster-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiBlockSyncUpdateRosterHydrationGate.tla`
+    (type checker reports no errors)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-update-roster-fast`
+    (`BlockSyncUpdateRosterHydrationCorrectnessEnvelope` produced `12`
+    verification conditions; Apalache checked `32` state invariants and
+    reported `NoError` to computation length `1`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-update-roster-fast`
+    (`2` states generated, `1` distinct state, depth `1`; no errors)
+
+## 2026-06-26 Sumeragi persisted roster selection correctness envelope
+
+- Added `PersistedRosterSelectionCorrectnessEnvelope` to
+  `SumeragiPersistedRosterSelectionGate.tla` and wired it into
+  `SumeragiPersistedRosterSelectionGate_fast.cfg`. The envelope composes
+  `TypeInvariant` with `PersistedRosterSelectionExactness`, giving the
+  persisted block-sync roster selection helper one checkable invariant for
+  bounded domain safety, mode-tag selection, commit-journal source priority
+  and selection/cache behavior, sidecar gating and selection/cache behavior,
+  successor/previous-evidence admission, previous-evidence checkpoint-only
+  selection, and fail-closed no-source behavior.
+- Documented the envelope in `docs/formal/sumeragi/README.md` and recorded the
+  persisted roster selection correctness-envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.28s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-persisted-roster-selection-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiPersistedRosterSelectionGate.tla`
+    (type checker reports no errors)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh persisted-roster-selection-fast`
+    (`PersistedRosterSelectionCorrectnessEnvelope` produced `12`
+    verification conditions; Apalache checked `32` state invariants and
+    reported `NoError` to computation length `1`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh persisted-roster-selection-fast`
+    (`2` states generated, `1` distinct state, depth `1`; no errors)
+
+## 2026-06-26 Sumeragi block-sync history roster correctness envelope
+
+- Added `BlockSyncHistoryRosterCorrectnessEnvelope` to
+  `SumeragiBlockSyncHistoryRosterGate.tla` and wired it into
+  `SumeragiBlockSyncHistoryRosterGate_fast.cfg`. The envelope composes
+  `TypeInvariant` with `BlockSyncHistoryRosterExactness`, giving the
+  block-sync history roster helper one checkable invariant for bounded domain
+  safety, mode-tag selection, precommit/cert/checkpoint history filtering,
+  derived-QC gating and fallback, source selection, roster height/view
+  adjustment, post-validation fallback, and stake-snapshot forwarding.
+- Documented the envelope in `docs/formal/sumeragi/README.md` and recorded the
+  block-sync history roster correctness-envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.30s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-block-sync-history-roster-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiBlockSyncHistoryRosterGate.tla`
+    (type checker reports no errors)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-history-roster-fast`
+    (`BlockSyncHistoryRosterCorrectnessEnvelope` produced `13` verification
+    conditions; Apalache checked `35` state invariants and reported `NoError`
+    to computation length `1`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-history-roster-fast`
+    (`2` states generated, `1` distinct state, depth `1`; no errors)
+
+## 2026-06-26 Sumeragi block-sync roster evidence correctness envelope
+
+- Added `BlockSyncRosterEvidenceCorrectnessEnvelope` to
+  `SumeragiBlockSyncRosterEvidenceGate.tla` and wired it into
+  `SumeragiBlockSyncRosterEvidenceGate_fast.cfg`. The envelope composes
+  `TypeInvariant` with `BlockSyncRosterEvidenceExactness`, giving the
+  block-sync roster evidence helper one checkable invariant for bounded domain
+  safety, missing-proof priority, Permissioned proof admission, NPoS stake
+  requirements, has-roster projection, selection copy, absent-lane clearing,
+  and unrelated-field preservation.
+- Documented the envelope in `docs/formal/sumeragi/README.md` and recorded the
+  block-sync roster evidence correctness-envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.29s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-block-sync-roster-evidence-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiBlockSyncRosterEvidenceGate.tla`
+    (type checker reports no errors)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-roster-evidence-fast`
+    (`BlockSyncRosterEvidenceCorrectnessEnvelope` produced `11`
+    verification conditions; Apalache checked `29` state invariants and
+    reported `NoError` to computation length `1`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-roster-evidence-fast`
+    (`2` states generated, `1` distinct state, depth `1`; no errors)
+
+## 2026-06-26 Sumeragi block roster cache correctness envelope
+
+- Added `BlockRosterCacheCorrectnessEnvelope` to
+  `SumeragiBlockRosterCachesGate.tla` and wired it into
+  `SumeragiBlockRosterCachesGate_fast.cfg`. The envelope composes
+  `TypeInvariant` with `BlockRosterCacheExactness`, giving the block roster
+  cache helper one checkable invariant for bounded domain safety,
+  roster-selection cache keys, signer cache keys, signer-cache
+  lifecycle/lookup/insert-evict/removal exactness, and roster-selection-cache
+  lifecycle/lookup/insert-evict exactness.
+- Documented the envelope in `docs/formal/sumeragi/README.md` and recorded the
+  block roster cache correctness-envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.30s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-block-roster-cache-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiBlockRosterCachesGate.tla`
+    (type checker reports no errors)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-roster-caches-fast`
+    (`BlockRosterCacheCorrectnessEnvelope` produced `13` verification
+    conditions; Apalache checked `35` state invariants and reported `NoError`
+    to computation length `1`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-roster-caches-fast`
+    (`2` states generated, `1` distinct state, depth `1`; no errors)
+
+## 2026-06-26 Sumeragi roster artifact-selection correctness envelope
+
+- Added `RosterArtifactSelectionCorrectnessEnvelope` to
+  `SumeragiRosterArtifactSelectionGate.tla` and wired it into
+  `SumeragiRosterArtifactSelectionGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `RosterArtifactSelectionExactness`, giving the roster
+  artifact-selection helper one checkable envelope for bounded domain safety,
+  view selection, artifact attachment, checkpoint compatibility, stake
+  priority, stake-roster binding, checkpoint validation inputs, epoch
+  selection, and genesis-stub eligibility exactness.
+- Documented the envelope in `docs/formal/sumeragi/README.md` and recorded the
+  roster artifact-selection correctness-envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.31s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-roster-artifact-selection-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiRosterArtifactSelectionGate.tla`
+    (type checker OK; total time `0.983s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh roster-artifact-selection-fast`
+    (`NoError`; `RosterArtifactSelectionCorrectnessEnvelope` produced `12`
+    VCs; `32` state-0 invariants; total time `5.436s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh roster-artifact-selection-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi core roster-validation correctness envelope
+
+- Added `RosterValidationCoreCorrectnessEnvelope` to
+  `SumeragiRosterValidationCoreGate.tla` and wired it into
+  `SumeragiRosterValidationCoreGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `RosterValidationCoreExactness`, giving the core
+  roster-validation helper one checkable envelope for bounded domain safety,
+  commit admission, commit genesis/signature, commit signer-bitmap, commit
+  quorum/stake, commit BLS/output, checkpoint admission, checkpoint
+  genesis/signature, checkpoint signer-bitmap, checkpoint quorum/stake,
+  checkpoint root/preimage, and checkpoint BLS/output exactness.
+- Documented the envelope in `docs/formal/sumeragi/README.md` and recorded the
+  core roster-validation correctness-envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.29s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-roster-validation-core-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiRosterValidationCoreGate.tla`
+    (type checker OK; total time `0.930s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh roster-validation-core-fast`
+    (`NoError`; `RosterValidationCoreCorrectnessEnvelope` produced `15` VCs;
+    `41` state-0 invariants; total time `9.199s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh roster-validation-core-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi cached roster-validation wrapper correctness envelope
+
+- Added `RosterValidationCachedCorrectnessEnvelope` to
+  `SumeragiRosterValidationCachedGate.tla` and wired it into
+  `SumeragiRosterValidationCachedGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `RosterValidationCachedExactness`, giving the cached
+  roster-validation wrapper helper one checkable envelope for bounded domain
+  safety, commit/checkpoint prefilters, empty-aggregate bypass, memo-key
+  construction, memo hit/miss/insert flow, validation forwarding, and
+  prefilter-order exactness.
+- Documented the envelope in `docs/formal/sumeragi/README.md` and recorded the
+  cached roster-validation wrapper correctness-envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.29s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-roster-validation-cached-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiRosterValidationCachedGate.tla`
+    (type checker OK; total time `0.807s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh roster-validation-cached-fast`
+    (`NoError`; `RosterValidationCachedCorrectnessEnvelope` produced `11`
+    VCs; `29` state-0 invariants; total time `6.489s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh roster-validation-cached-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi roster-validation memo cache correctness envelope
+
+- Added `RosterValidationMemoCorrectnessEnvelope` to
+  `SumeragiRosterValidationMemoGate.tla` and wired it into
+  `SumeragiRosterValidationMemoGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `RosterValidationMemoCacheExactness`, giving the
+  roster-validation memo cache helper one checkable envelope for bounded domain
+  safety, construction, get/touch, insert/update, eviction, lane-isolation, and
+  refresh/capacity exactness.
+- Documented the envelope in `docs/formal/sumeragi/README.md` and recorded the
+  roster-validation memo cache correctness-envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.29s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-roster-validation-memo-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiRosterValidationMemoGate.tla`
+    (type checker OK; total time `0.784s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh roster-validation-memo-fast`
+    (`NoError`; `RosterValidationMemoCorrectnessEnvelope` produced `10` VCs;
+    `26` state-0 invariants; total time `4.34s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh roster-validation-memo-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi cached-QC precommit signer-record correctness envelope
+
+- Added `PrecommitSignerRecordCorrectnessEnvelope` to
+  `SumeragiPrecommitSignerRecordGate.tla` and wired it into
+  `SumeragiPrecommitSignerRecordGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `PrecommitSignerRecordExactness`, giving the cached-QC
+  precommit signer-record helper one checkable envelope for bounded domain
+  safety, permissioned admission, common-input rejection, NPoS stake/snapshot
+  gates, snapshot attachment, and output-metadata exactness.
+- Documented the envelope in `docs/formal/sumeragi/README.md` and recorded the
+  cached-QC precommit signer-record correctness-envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.28s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-precommit-signer-record-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiPrecommitSignerRecordGate.tla`
+    (type checker OK; total time `0.547s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh precommit-signer-record-fast`
+    (`NoError`; `PrecommitSignerRecordCorrectnessEnvelope` produced `7` VCs;
+    `55` state-0 invariants; total time `2.752s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh precommit-signer-record-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi commit-QC cache/history lookup correctness envelope
+
+- Added `CommitQcLookupCorrectnessEnvelope` to
+  `SumeragiCommitQcLookupGate.tla` and wired it into
+  `SumeragiCommitQcLookupGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `CommitQcLookupExactness`, giving the commit-QC lookup
+  helper one checkable envelope for bounded domain safety, cache priority,
+  positive-history admission, history identity/context rejection,
+  aggregate-signature rejection, and absent-history exactness.
+- Documented the envelope in `docs/formal/sumeragi/README.md` and recorded the
+  commit-QC cache/history lookup correctness-envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.30s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-commit-qc-lookup-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiCommitQcLookupGate.tla`
+    (type checker OK; total time `0.460s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-qc-lookup-fast`
+    (`NoError`; `CommitQcLookupCorrectnessEnvelope` produced `8` VCs; `38`
+    state-0 invariants; total time `2.445s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-qc-lookup-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi commit-pipeline scheduling correctness envelope
+
+- Added `CommitPipelineSchedulingCorrectnessEnvelope` to
+  `SumeragiCommitPipelineSchedulingGate.tla` and wired it into
+  `SumeragiCommitPipelineSchedulingGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `CommitPipelineSchedulingExactness`, giving
+  commit-pipeline scheduling one checkable envelope for bounded domain safety,
+  pipeline entry, recovery scope, deadline/budget, wakeup/event ordering,
+  candidate progress, and idle-budget preservation exactness.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  commit-pipeline scheduling correctness envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.30s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-commit-pipeline-scheduling-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiCommitPipelineSchedulingGate.tla`
+    (`EXITCODE: OK`; total time `0.535s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-pipeline-scheduling-fast`
+    (`NoError`; `CommitPipelineSchedulingCorrectnessEnvelope`: `23` VCs; `89`
+    state-0 invariants, `23` state-1 invariants; total time `2.884s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-pipeline-scheduling-fast`
+    (`45` states generated, `23` distinct states, depth `2`)
+
+## 2026-06-26 Sumeragi pending-block Kura retry correctness envelope
+
+- Added `KuraRetryStateCorrectnessEnvelope` to `SumeragiKuraRetryGate.tla` and
+  wired it into `SumeragiKuraRetryGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `KuraRetryStateExactness`, giving pending-block Kura
+  retry helpers one checkable envelope for bounded domain safety, due-state,
+  reset/persisted reset, max-attempt, backoff, abort-boundary, and
+  delay-reporting exactness.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  pending-block Kura retry correctness envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.28s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-kura-retry-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiKuraRetryGate.tla`
+    (`EXITCODE: OK`; total time `0.705s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh kura-retry-fast`
+    (`NoError`; `KuraRetryStateCorrectnessEnvelope`: `10` VCs; `42` state-0
+    invariants; total time `5.280s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh kura-retry-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi pending-block marker/cooldown correctness envelope
+
+- Added `PendingBlockMarkerCooldownCorrectnessEnvelope` to
+  `SumeragiPendingBlockMarkerGate.tla` and wired it into
+  `SumeragiPendingBlockMarkerGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `PendingBlockMarkerCooldownExactness`, giving
+  pending-block marker/cooldown helpers one checkable envelope for bounded
+  domain safety, commit-stage marker transitions, quorum-reschedule cooldowns,
+  vote-backed reschedules, reschedule marker writes, precommit rebroadcast
+  cooldowns, and validation-redrive cooldowns.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  pending-block marker/cooldown correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.30s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-pending-block-marker-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiPendingBlockMarkerGate.tla`
+    (`EXITCODE: OK`; total time `0.731s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh pending-block-marker-fast`
+    (`NoError`; `PendingBlockMarkerCooldownCorrectnessEnvelope`: `10` VCs; `32`
+    state-0 invariants; total time `5.270s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pending-block-marker-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi pending-block lifecycle correctness envelope
+
+- Added `PendingBlockLifecycleCorrectnessEnvelope` to
+  `SumeragiPendingBlockLifecycleGate.tla` and wired it into
+  `SumeragiPendingBlockLifecycleGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `PendingBlockLifecycleExactness`, giving pending-block
+  lifecycle helpers one checkable envelope for bounded domain safety,
+  constructor defaults, same-subject and different-subject replacement, revive,
+  retire/abort, and retired-payload refresh exactness.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  pending-block lifecycle correctness envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.28s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-pending-block-lifecycle-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiPendingBlockLifecycleGate.tla`
+    (`EXITCODE: OK`; total time `0.704s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh pending-block-lifecycle-fast`
+    (`NoError`; `PendingBlockLifecycleCorrectnessEnvelope`: `11` VCs; `36`
+    state-0 invariants; total time `4.563s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pending-block-lifecycle-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi pending-progress accounting correctness envelope
+
+- Added `PendingProgressAccountingCorrectnessEnvelope` to
+  `SumeragiPendingProgressGate.tla` and wired it into
+  `SumeragiPendingProgressGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `PendingProgressAccountingExactness`, giving
+  pending-progress accounting one checkable envelope for bounded domain safety,
+  owner-touch output, activation-window refreshes, tip-activation refreshes,
+  and RBC recent-progress window decisions.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  pending-progress accounting correctness envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.29s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-pending-progress-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiPendingProgressGate.tla`
+    (`EXITCODE: OK`; total time `0.542s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh pending-progress-fast`
+    (`NoError`; `PendingProgressAccountingCorrectnessEnvelope`: `6` VCs; `16`
+    state-0 invariants; total time `3.265s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pending-progress-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi empty-block QC drop correctness envelope
+
+- Added `EmptyBlockQcDropCorrectnessEnvelope` to
+  `SumeragiEmptyBlockQcDropGate.tla` and wired it into
+  `SumeragiEmptyBlockQcDropGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `EmptyBlockQcDropExactness`, giving empty-block QC drop
+  handling one checkable envelope for bounded domain safety, drop/continue
+  decisions, invalid-payload telemetry, and every pending/request/RBC/QC/
+  proposal/vote/roster/signer cleanup family.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  empty-block QC drop correctness envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.29s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-empty-block-qc-drop-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiEmptyBlockQcDropGate.tla`
+    (`EXITCODE: OK`; total time `0.506s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh empty-block-qc-drop-fast`
+    (`NoError`; `EmptyBlockQcDropCorrectnessEnvelope`: `16` VCs; `60`
+    state-0 invariants; total time `2.713s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh empty-block-qc-drop-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi committed-height QC admission correctness envelope
+
+- Added `CommittedHeightQcAdmissionCorrectnessEnvelope` to
+  `SumeragiCommittedHeightQcGate.tla` and wired it into
+  `SumeragiCommittedHeightQcGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `CommittedHeightQcAdmissionExactness`, giving
+  committed-height QC admission one checkable envelope for bounded domain
+  safety, admission/drop decisions, record-only side effects, divergent-commit
+  validation context, genesis-stub policy, and finality-conflict evidence.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  committed-height QC admission correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.28s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-committed-height-qc-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiCommittedHeightQcGate.tla`
+    (`EXITCODE: OK`; total time `0.559s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh committed-height-qc-fast`
+    (`NoError`; `CommittedHeightQcAdmissionCorrectnessEnvelope`: `53` VCs;
+    `140` state-0 invariants; total time `3.260s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh committed-height-qc-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi commit-anchor QC promotion correctness envelope
+
+- Added `CommitAnchorQcPromotionCorrectnessEnvelope` to
+  `SumeragiCommitAnchorQcGate.tla` and wired it into
+  `SumeragiCommitAnchorQcGate_fast.cfg`. The aggregate composes `TypeInvariant`
+  with `CommitAnchorQcPromotionExactness`, giving commit-anchor QC promotion one
+  checkable envelope for bounded domain safety, highest/locked QC selection,
+  lock-change pruning, incompatible-highest realignment, and status publication.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  commit-anchor QC promotion correctness envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.27s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-commit-anchor-qc-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiCommitAnchorQcGate.tla`
+    (`EXITCODE: OK`; total time `0.449s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-anchor-qc-fast`
+    (`NoError`; `CommitAnchorQcPromotionCorrectnessEnvelope`: `15` VCs; `40`
+    state-0 invariants; total time `2.130s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-anchor-qc-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi stale-view commit-QC fetch correctness envelope
+
+- Added `StaleViewCommitQcFetchCorrectnessEnvelope` to
+  `SumeragiStaleViewCommitQcFetchGate.tla` and wired it into
+  `SumeragiStaleViewCommitQcFetchGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `StaleViewCommitQcFetchExactness`, giving stale-view
+  commit-QC fetch admission one checkable envelope for bounded domain safety,
+  exact request identity, pending-state/local-vote gates, tip-extension
+  behavior, all-absent parent/tip acceptance, and positive admission exactness.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  stale-view commit-QC fetch correctness envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.26s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-stale-view-commit-qc-fetch-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiStaleViewCommitQcFetchGate.tla`
+    (`EXITCODE: OK`; total time `0.552s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh stale-view-commit-qc-fetch-fast`
+    (`NoError`; `StaleViewCommitQcFetchCorrectnessEnvelope`: `9` VCs; `23`
+    state-0 invariants; total time `3.794s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh stale-view-commit-qc-fetch-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi known-block commit-QC recovery correctness envelope
+
+- Added `KnownBlockCommitQcRecoveryCorrectnessEnvelope` to
+  `SumeragiKnownBlockCommitQcRecoveryGate.tla` and wired it into
+  `SumeragiKnownBlockCommitQcRecoveryGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `KnownBlockCommitQcRecoveryExactness`, giving
+  known-block commit-QC recovery helpers one checkable envelope for bounded
+  domain safety, recovery request planning, pending tip-extension exactness, and
+  stale-view commit-QC fetch admission exactness.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  known-block commit-QC recovery correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.27s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-known-block-commit-qc-recovery-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiKnownBlockCommitQcRecoveryGate.tla`
+    (`EXITCODE: OK`; total time `0.496s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh known-block-commit-qc-recovery-fast`
+    (`NoError`; `KnownBlockCommitQcRecoveryCorrectnessEnvelope`: `5` VCs; `13`
+    state-0 invariants; total time `1.796s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh known-block-commit-qc-recovery-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi commit-pipeline recovery correctness envelope
+
+- Added `CommitPipelineRecoveryCorrectnessEnvelope` to
+  `SumeragiCommitPipelineRecoveryGate.tla` and wired it into
+  `SumeragiCommitPipelineRecoveryGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `CommitPipelineRecoveryExactness`, giving adapter-side
+  recovery logic one checkable envelope for bounded domain safety, local
+  commit-QC ordering, observed-QC preservation, missing-QC recovery gates, and
+  quorum retransmit target exactness.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  commit-pipeline recovery correctness envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.27s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-commit-pipeline-recovery-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiCommitPipelineRecoveryGate.tla`
+    (`EXITCODE: OK`; total time `0.475s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-pipeline-recovery-fast`
+    (`NoError`; `CommitPipelineRecoveryCorrectnessEnvelope`: `30` VCs; `90`
+    state-0 invariants; total time `2.751s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-pipeline-recovery-fast`
+    (`61441` states generated, `8192` distinct states, depth `14`)
+
+## 2026-06-26 Sumeragi formal signer and reschedule validation pass
+
+- Revalidated the current dirty Sumeragi formal wiring and a representative
+  consensus-critical Apalache slice covering QC signer-bitmaps, raw signer
+  counts, signer-index normalization, commit-root consistency, RBC availability
+  rescheduling, vote-backed reassembly stalls, completed-quorum view advance,
+  and quorum rebroadcast dispatch.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `env PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-signer-count-fast`
+    (`NoError`, length `1`, `12.609s`)
+  - `env PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-signers-fast`
+    (`NoError`, length `2`, `2.197s`)
+  - `env PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh build-signers-bitmap-fast`
+    (`NoError`, length `1`, `31.678s`)
+  - `env PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh signer-index-normalization-fast`
+    (`NoError`, length `1`, `22.75s`)
+  - `env PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-roots-fast`
+    (`NoError`, length `2`, `3.32s`)
+  - `env PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-availability-reschedule-fast`
+    (`NoError`, length `1`, `3.361s`)
+  - `env PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vote-backed-reassembly-stall-fast`
+    (`NoError`, length `1`, `7.597s`)
+  - `env PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh completed-quorum-view-advance-fast`
+    (`NoError`, length `1`, `8.2s`)
+  - `env PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh quorum-rebroadcast-dispatch-fast`
+    (`NoError`, length `1`, `83.363s`)
+
+## 2026-06-26 SCCP .NET corridor dotnet-info exact host metadata guard
+
+- Tightened `scripts/check_sccp_production_corridor.sh --phase dotnet-sdk` so
+  `dotnet --info` must contain exactly one `OS Name:`, one `OS Platform:`, one
+  `RID:`, and one `OS Architecture:` field before the Windows SCCP phase can
+  build the native bridge, restore, or run tests.
+- The runner now requires both OS fields to be exactly `Windows`, rejects
+  duplicate RID fields, and rejects missing `OS Architecture:` instead of
+  falling back to the generic host `Architecture:` line.
+- Added executable fake-Windows `.NET` regressions for contradictory OS markers,
+  duplicate RID metadata, and missing OS architecture, then pinned those markers
+  in the SCCP release corridor phase-transcript inventory for readiness and
+  strict bundle verification.
+- Validation passed:
+  - `bash -n scripts/check_sccp_production_corridor.sh`
+  - `python3 -m py_compile pytests/scripts/check_sccp_production_corridor_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py -k 'dotnet_phase_covers_native_bsc_facades or dotnet_phase_rejects_rid_architecture_mismatch or dotnet_phase_rejects_multiline_version or dotnet_phase_rejects_contradictory_os_markers or dotnet_phase_rejects_duplicate_rid or dotnet_phase_rejects_missing_os_architecture or dotnet_phase_rejects_uppercase_architecture or dotnet_phase_rejects_nested_trx_path'`
+    (`8` passed, `27` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_corridor_phase_transcript_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_corridor_phase_transcript_inventory`
+    (`2` passed)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in
+  `roadmap.md`.
+
+## 2026-06-26 BFV external-review marker token hardening
+
+- Tightened BFV full-bootstrap release-audit marker parsing so a second
+  standalone `external-review-approved:` or `external-review-evidence-archive:`
+  token inside the leading review statement is rejected as an ambiguous pasted
+  production marker, while joined prose remains allowed.
+- Added a lightweight parser regression for same-statement duplicate report and
+  archive markers, then reran the governed release-audit artifact fixture to
+  prove valid production package admission still passes.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-external-review-marker CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto release_audit_external_review_marker_statements_reject_same_statement_duplicates --lib -- --nocapture`
+    (`1` passed, `795` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-external-review-marker CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `795` filtered out)
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+  - `git status --short -- Cargo.toml Cargo.lock 'crates/**/Cargo.toml'`
+    (no manifest or lockfile changes)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+    (no matches)
+
+## 2026-06-26 SCCP .NET corridor single-line version guard
+
+- Tightened `scripts/check_sccp_production_corridor.sh --phase dotnet-sdk` so
+  `dotnet --version` must emit exactly one canonical `.NET 8.0.x` SDK version
+  line; the runner no longer truncates multi-line version output to the first
+  line before printing `SCCP .NET SDK version:`.
+- Added an executable fake-Windows `.NET` regression proving multi-line version
+  output fails before `dotnet --info`, `cargo build -p connect_norito_bridge`,
+  `dotnet restore`, `dotnet test`, or the SCCP version marker can run.
+- Pinned the new runtime regression in the SCCP release corridor
+  phase-transcript inventory for readiness and strict bundle verification.
+- Validation passed:
+  - `bash -n scripts/check_sccp_production_corridor.sh`
+  - `python3 -m py_compile pytests/scripts/check_sccp_production_corridor_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py -k 'dotnet_phase_covers_native_bsc_facades or dotnet_phase_rejects_rid_architecture_mismatch or dotnet_phase_rejects_multiline_version or dotnet_phase_rejects_uppercase_architecture or dotnet_phase_rejects_nested_trx_path'`
+    (`5` passed, `27` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_corridor_phase_transcript_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_corridor_phase_transcript_inventory`
+    (`2` passed)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in
+  `roadmap.md`.
+
+## 2026-06-26 SCCP .NET corridor architecture-casing guard
+
+- Tightened `scripts/check_sccp_production_corridor.sh --phase dotnet-sdk` so
+  Windows `.NET` host architecture values from `dotnet --info` must already be
+  canonical lower-case `x64`/`x86`/`arm64`/`arm`; the runner no longer
+  lowercases uppercase or mixed-case host metadata into valid release markers.
+- Added an executable fake-Windows `.NET` regression proving `OS Architecture:
+  X64` fails before `cargo build -p connect_norito_bridge`, `dotnet restore`,
+  `dotnet test`, or `SCCP .NET SDK Architecture:` output can run.
+- Pinned the new runtime regression in the SCCP release corridor
+  phase-transcript inventory for readiness and strict bundle verification.
+- Validation passed:
+  - `bash -n scripts/check_sccp_production_corridor.sh`
+  - `python3 -m py_compile pytests/scripts/check_sccp_production_corridor_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py -k 'dotnet_phase_covers_native_bsc_facades or dotnet_phase_rejects_rid_architecture_mismatch or dotnet_phase_rejects_uppercase_architecture or dotnet_phase_rejects_nested_trx_path'`
+    (`4` passed, `27` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_corridor_phase_transcript_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_corridor_phase_transcript_inventory`
+    (`2` passed)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in
+  `roadmap.md`.
+
+## 2026-06-26 Soracloud FHE input admission validation order
+
+- Restored Core FHE input-admission validation ordering so malformed or
+  oversized BFV input envelopes are decoded and shape-checked before proof
+  material normalization, while preserving public-key digest and ciphertext
+  proof-statement digest binding checks.
+- Cleaned the `zk-stark` build by gating the now test-only generic
+  explicit-base AIR helper and BFV native-label attempt constant behind
+  `#[cfg(test)]`.
+- Validation passed:
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core fhe_input_admission -- --nocapture`
+    (`9` passed, `5434` filtered out)
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --features zk-stark full_bootstrap_execution_native_air_uses_crypto_domain_and_base_label -- --nocapture`
+    (`1` passed, `5641` filtered out)
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_prover_emits_valid_input_material_native_air_proof -- --nocapture`
+    (`1` passed, `5641` filtered out; test body finished in `239.15s`)
+  - `cargo fmt --package iroha_core -- --check`
+
+## 2026-06-26 SCCP .NET corridor nested-TRX runtime guard
+
+- Added an executable adversarial regression for
+  `scripts/check_sccp_production_corridor.sh` that uses fake Windows `.NET`
+  and fake Cargo tools to create a forged nested
+  `codex-forged-nested-trx/TestResults/sccp-dotnet-sdk.trx` result, proving the
+  corridor runner fails before emitting `SCCP .NET SDK TRX:` or TRX byte
+  markers unless the result is the direct C# test-project `TestResults` path.
+- Pinned the new runtime regression in the SCCP release corridor
+  phase-transcript inventory so readiness and strict bundle verification cannot
+  drop the nested-TRX guard while preserving only static string checks.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/check_sccp_production_corridor_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py -k 'dotnet_phase_covers_native_bsc_facades or dotnet_phase_rejects_rid_architecture_mismatch or dotnet_phase_rejects_nested_trx_path'`
+    (`3` passed, `27` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_corridor_phase_transcript_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_corridor_phase_transcript_inventory`
+    (`2` passed)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP release-tool focused validation pass
+
+- Re-ran the focused SCCP release-readiness, release-bundle, and all-lanes
+  evidence regressions covering malformed path preflights, non-ASCII/sensitive
+  artifact paths, Required Release Evidence uniqueness/canonical Markdown,
+  direct `.NET` TRX marker validation, strict `.NET` marker spacing, and
+  empty `PATH` segment rejection.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_all_lanes_evidence.py`
+  - `python3 -m py_compile pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k 'duplicate_public_blockers'`
+    (`1` passed, `235` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'markdown_names_direct_dotnet_trx_evidence_path or required_evidence_items_are_unique or top_level_exception_details or malformed_output_paths or malformed_phase_evidence_dir_paths or malformed_phase_evidence_paths or dotnet_summary_non_space_whitespace or dotnet_summary_collapsed_spacing or dotnet_malformed_duration_summary or dotnet_trx_named_subdirectory or dotnet_trx_backslash_or_drive_path or dotnet_padded_or_tabbed_marker_separators or dotnet_empty_path_segments or non_ascii_or_sensitive_artifact_paths or non_ascii_or_sensitive_native_evm_payload_paths or input_artifacts_without_leaking'`
+    (`17` passed, `492` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'malformed_phase_evidence_paths or malformed_phase_evidence_dir_paths or non_ascii_or_sensitive_evidence_filename or top_level_exception_details or non_ascii_or_sensitive_native_evm_manifest_filename or non_ascii_or_sensitive_native_evm_payload_filename or malformed_output_directory_paths or force_rejects_sensitive_existing_output_directory or verifier_rejects_non_ascii_or_sensitive_native_evm_prover_payload_paths or verifier_rejects_non_ascii_or_sensitive_filesystem_entries or rejects_non_ascii_or_sensitive_artifact_paths or verifier_rejects_non_ascii_or_sensitive_manifest_paths or verifier_rejects_noncanonical_readiness_title_status_block or verifier_rejects_duplicate_required_evidence_items or verifier_rejects_whitespace_variant_required_evidence_duplicates or verifier_rejects_noncanonical_required_evidence_bullets or verifier_rejects_duplicate_readiness_markdown_section or verifier_rejects_noncanonical_readiness_markdown_heading or verifier_rejects_unexpected_readiness_markdown_section or verifier_rejects_out_of_order_readiness_markdown_section or dotnet_noncanonical_zero_skipped_summary or dotnet_summary_non_space_whitespace or dotnet_summary_collapsed_spacing or dotnet_trx_named_subdirectory or dotnet_trx_backslash_or_drive_path or dotnet_padded_or_tabbed_marker_separators or dotnet_empty_path_segments or release_notes_reject_malformed_artifact_rows or release_notes_attachment_invariants_inventory'`
+    (`31` passed, `812` deselected)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 BFV external-review marker uniqueness hardening
+
+- Tightened BFV full-bootstrap production release-audit package admission so
+  external-review report and evidence-archive bodies must contain exactly one
+  canonical leading external-review marker field.
+- Extended the governed artifact release-audit regression to reject duplicate
+  report/archive marker fields before trusted production package admission.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-external-review-marker CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `794` filtered out)
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+  - `git status --short -- Cargo.toml Cargo.lock 'crates/**/Cargo.toml'`
+    (no manifest or lockfile changes)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+    (no matches)
+
+## 2026-06-26 SCCP release-notes artifact byte rendering hardening
+
+- Aligned the release-bundle builder and strict verifier release-notes artifact
+  table renderers with the positive-byte artifact contract, so zero-byte copied
+  artifact rows render as `<invalid bytes>` instead of looking valid in public
+  release notes.
+- Extended the malformed release-notes artifact-row regression with a zero-byte
+  artifact and pinned the positive-byte renderer in the release-notes attachment
+  invariants source inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'release_notes_reject_malformed_artifact_rows or release_notes_attachment_invariants_inventory'`
+    (`3` passed, `840` deselected)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP Required Release Evidence source-inventory coverage
+
+- Added a generated-output invariant so Required Release Evidence
+  source-inventory markers must be unique, must appear in the rendered section,
+  and must match the generated `source_inventory` gate count before readiness
+  Markdown coverage can pass.
+- Pinned that regression in the strict release-bundle readiness Markdown
+  inventory, and updated the roadmap/backlog wording so the item is no longer
+  tracked as an open SCCP task.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'required_evidence_items_are_unique or readiness_markdown_invariants_gate_inventory'`
+    (`2` passed, `507` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'readiness_markdown_invariants_inventory or required_evidence_markers_are_unique_and_generated'`
+    (`3` passed, `840` deselected)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP copied input-artifact byte-count hardening
+
+- Tightened release-readiness public JSON validation so copied
+  `input_artifacts[].bytes` values must be positive integers before public
+  readiness artifacts can be rendered, matching the strict release-bundle
+  verifier's input-artifact contract.
+- Extended malformed input-artifact coverage with boolean, zero, and negative
+  byte-count cases, and pinned the positive-byte rule in the release public
+  JSON-root source inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'malformed_input_artifacts_without_leaking or release_public_json_root_schema_gate_inventory'`
+    (`2` passed, `507` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'release_public_json_root_schema_inventory'`
+    (`2` passed, `841` deselected)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP .NET PATH handoff empty-segment hardening
+
+- Tightened release-readiness and strict release-bundle `.NET` phase transcript
+  validation so restore/test `PATH` prefixes reject interior empty path-list
+  segments after the printed `connect_norito_bridge.dll` directory, not only
+  leading-after-prefix or trailing empty segments.
+- Extended readiness and strict-verifier adversarial coverage with forged
+  restore/test transcripts containing interior `::` and `;;` path-list gaps,
+  and pinned the shared helper in the release-corridor transcript source
+  inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'dotnet_empty_path_segments or guards_release_corridor_phase_transcript_gate_inventory'`
+    (`2` passed, `507` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'dotnet_empty_path_segments or guards_release_corridor_phase_transcript_inventory'`
+    (`2` passed, `841` deselected)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 BFV execution AIR backend fail-closed guard
+
+- Hardened the Core BFV full-bootstrap execution arithmetic STARK verifier
+  entry point so a non-STARK `OpenVerifyEnvelope` is rejected directly, even
+  if a caller bypasses the higher-level proof-envelope validator.
+- Extended the native BFV AIR boundary regression to exercise that direct
+  verifier guard before the governed trace and public-padding replay checks.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_bfv_native_air_boundary_runs_before_dedicated_verifier_error --lib -- --nocapture`
+    (`1` passed, `5641` filtered out)
+  - `cargo fmt --package iroha_core -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_core/src/smartcontracts/isi/soracloud.rs status.md roadmap.md docs/source/engineering_backlog.md crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_data_model/src/soracloud.rs`
+    (no matches)
+
+## 2026-06-26 STARK explicit-AIR reserved circuit gate
+
+- Tightened the crate-visible STARK row/composition AIR builders so generic
+  callers reject BFV full-bootstrap, ZK-ACE, and IVM execution circuit aliases
+  before envelope synthesis instead of relying on downstream dedicated
+  verifiers to reject misrouted reserved proofs.
+- Routed BFV-native execution proof construction and Soracloud BFV trace
+  fixtures through an explicitly named reserved-circuit helper, keeping the
+  canonical BFV path available only after BFV-specific statement/trace checks.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-stark-reserved-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark public_generic_air_provers_reject_bfv_full_bootstrap_circuit_aliases --lib -- --nocapture`
+    (`1` passed, `5641` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-stark-reserved-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark bfv_full_bootstrap_air_rejects_auxiliary_generic_composition_sidecars --lib -- --nocapture`
+    (`1` passed, `5641` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark public_generic_air_provers_reject --lib -- --nocapture`
+    (`3` passed, `5639` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark bfv_full_bootstrap_air_prover_binds_statement_and_public_openings --lib -- --nocapture`
+    (`1` passed, `5641` filtered out)
+  - `cargo fmt --package iroha_core -- --check`
+  - `git diff --check -- crates/iroha_core/src/zk_stark.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs status.md docs/source/engineering_backlog.md roadmap.md`
+  - `git status --short -- Cargo.toml Cargo.lock 'crates/**/Cargo.toml'`
+    (no manifest or lockfile changes)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_core/src/zk_stark.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs status.md docs/source/engineering_backlog.md roadmap.md`
+    (no matches)
+
+## 2026-06-26 SCCP evidence-root blocker duplicate hardening
+
+- Tightened release-readiness and strict release-bundle active-launch
+  unresolved-blocker collection so duplicate canonical embedded evidence-root
+  blockers become bounded schema diagnostics instead of silently deduped copied
+  blocker text.
+- Added readiness and strict-verifier adversarial coverage for duplicate
+  top-level all-lanes evidence blockers, and pinned the guard in the
+  active-launch checklist source inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'active_lane_unresolved_blockers or active_launch_checklist_schema_gate_inventory'`
+    (`2` passed, `507` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'active_launch_blockers_reject_malformed_containers or active_launch_checklist_schema_inventory'`
+    (`3` passed, `840` deselected)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP active-lane blocker duplicate hardening
+
+- Tightened release-readiness and strict release-bundle active-launch checklist
+  recomputation so duplicate canonical active-lane blocker strings become
+  bounded schema diagnostics instead of copied operator blocker text in category,
+  no-unresolved, or Markdown output.
+- Extended the active-lane blocker adversarial matrices and active-launch
+  checklist source-inventory markers with a duplicate route-canary blocker case.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'classifies_malformed_active_lane_blockers or active_launch_checklist_schema_gate_inventory'`
+    (`2` passed, `507` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'classifies_malformed_active_lane_blockers or active_launch_checklist_schema_inventory'`
+    (`3` passed, `840` deselected)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP native-prover validation-blocker duplicate hardening
+
+- Tightened release-readiness and strict release-bundle active-launch checklist
+  recomputation so copied native EVM prover `validation_blockers` reject
+  duplicate canonical strings before checklist or Markdown output can copy the
+  duplicated operator text.
+- Added duplicate native-prover blocker cases to the readiness generator and
+  strict verifier adversarial matrices, and pinned the implementation and test
+  markers in the native-prover bundle source inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'malformed_native_prover_blockers or release_native_prover_bundle_schema_gate_inventory or release_public_blocker_list_schema_gate_inventory'`
+    (`3` passed, `506` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'malformed_native_prover_blockers or release_native_prover_bundle_schema_inventory or release_public_blocker_list_schema_inventory'`
+    (`5` passed, `838` deselected)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP all-lanes public blocker duplicate hardening
+
+- Tightened the shared all-lanes public blocker canonicalizer so copied root,
+  lane, source-adapter-gate, and release-checklist blocker arrays reject
+  duplicate canonical strings and do not echo the duplicated operator text in
+  public JSON diagnostics.
+- Added an all-lanes CLI adversarial regression for duplicate public blocker
+  lists and extended the release public blocker-list source inventory to pin
+  that upstream guard beside the strict bundle verifier checks.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k 'duplicate_public_blockers_without_leaking or malformed_summary_blockers or malformed_governed_blocker_containers'`
+    (`3` passed, `233` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'release_public_blocker_list_schema_inventory or all_lanes_release_checklist_exact_boolean'`
+    (`4` passed, `839` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'release_public_blocker_list_schema_gate_inventory or all_lanes_release_checklist_exact_boolean_gate_inventory'`
+    (`2` passed, `507` deselected)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP all-lanes governed blocker duplicate hardening
+
+- Tightened `scripts/sccp_all_lanes_evidence.py` so governed destination
+  rollout and route-allowlist `blockers` containers reject duplicate canonical
+  public blocker strings before they can be summarized as copied all-lanes
+  evidence.
+- Added all-lanes adversarial coverage for duplicate destination-rollout and
+  route-allowlist blockers, and extended the governed blocker schema
+  source-inventory markers so release-readiness and strict bundle verification
+  pin the upstream duplicate guard.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k 'malformed_governed_blocker_containers'`
+    (`1` passed, `234` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'all_lanes_governed_blocker_schema_inventory'`
+    (`2` passed, `841` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'all_lanes_governed_blocker_schema_gate_inventory'`
+    (`1` passed, `508` deselected)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP active-launch blocker-list duplicate hardening
+
+- Tightened the active-launch readiness and strict bundle gates so copied
+  route-canary, route-allowlist, destination-rollout, and source-adapter-gate
+  blocker arrays reject duplicate canonical public blocker strings before they
+  can satisfy release readiness or be published in a bundle.
+- Updated the active-launch checklist schema source inventory and roadmap
+  blocker-list note so duplicate rejection stays pinned for those nested
+  governed/live evidence surfaces.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'active_route_canary_metadata_rejects_exact_type_drift or active_route_allowlist_metadata_rejects_exact_flag_and_role_reuse or active_governed_deployment_metadata_rejects_exact_flag_and_role_reuse or active_launch_checklist_schema_inventory'`
+    (`5` passed, `838` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'malformed_active_route_canary_metadata or malformed_active_route_allowlist_binding or malformed_active_governed_deployment_metadata or active_launch_checklist_schema_gate_inventory'`
+    (`4` passed, `505` deselected)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP Java Android corridor phase clean
+
+- Revalidated the Java Android SCCP production-corridor phase on JDK 21 with
+  the local Android SDK, covering the Gradle harness for EVM/source-hash/TON/TRON
+  SCCP prover suites and the separate Solana SCCP prover filter. The corridor
+  script completed first, then both filtered Gradle commands were rerun with
+  `--rerun-tasks` for fresh execution evidence.
+- Validation passed:
+  - `bash scripts/check_sccp_production_corridor.sh --phase java-android`
+    (`BUILD SUCCESSFUL`)
+  - `env JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk GRADLE_OPTS='-Dorg.gradle.jvmargs=-Xmx6g -Dkotlin.daemon.jvmargs=-Xmx6g -Dkotlin.daemon.jvm.options=-Xmx6g' PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH ANDROID_HARNESS_MAINS='org.hyperledger.iroha.android.sccp.EvmSccpProverTests,org.hyperledger.iroha.android.sccp.SourceSccpProofsTests,org.hyperledger.iroha.android.sccp.TonSccpProverTests,org.hyperledger.iroha.android.sccp.TronSccpProverTests' ./gradlew :core:test --console=plain --rerun-tasks --tests org.hyperledger.iroha.android.GradleHarnessTests`
+    from `java/iroha_android/` (`4` harness tests passed, `0` skipped,
+    `0` failures, `0` errors; `7` Gradle tasks executed)
+  - `env JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk GRADLE_OPTS='-Dorg.gradle.jvmargs=-Xmx6g -Dkotlin.daemon.jvmargs=-Xmx6g -Dkotlin.daemon.jvm.options=-Xmx6g' PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH ./gradlew :core:test --console=plain --rerun-tasks --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests`
+    from `java/iroha_android/` (`31` Solana SCCP tests passed, `0`
+    skipped, `0` failures, `0` errors; `7` Gradle tasks executed)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP Kotlin SDK corridor phase clean
+
+- Revalidated the Kotlin/JVM SCCP production-corridor phase on JDK 21, covering
+  EVM, Solana, source proof hash, TON, and TRON SCCP prover tests. The corridor
+  script completed first, then the same filtered Gradle test task was rerun
+  with `--rerun-tasks` so the evidence is a fresh execution rather than an
+  up-to-date cache hit.
+- Validation passed:
+  - `bash scripts/check_sccp_production_corridor.sh --phase kotlin-sdk`
+    (`BUILD SUCCESSFUL`)
+  - `env JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home GRADLE_OPTS='-Dorg.gradle.jvmargs=-Xmx6g -Dkotlin.daemon.jvmargs=-Xmx6g -Dkotlin.daemon.jvm.options=-Xmx6g' PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH ./gradlew :core-jvm:test --console=plain --rerun-tasks --tests 'org.hyperledger.iroha.sdk.sccp.*' --tests 'org.hyperledger.iroha.sdk.sccp.TonSccpProverTest'`
+    from `kotlin/` (`84` tests passed, `0` skipped, `0` failures, `0` errors;
+    `7` Gradle tasks executed)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP Swift SDK corridor phase clean
+
+- Revalidated the Swift SCCP production-corridor phase with the local
+  `dist/NoritoBridge.xcframework` materialized, covering the filtered
+  `SccpSolanaProverTests` surface and the Torii bridge-proof submission
+  payload builder.
+- Validation passed:
+  - `bash scripts/check_sccp_production_corridor.sh --phase swift-sdk`
+    (`83` `SccpSolanaProverTests` passed in `52.619s`; `1`
+    `ToriiClientTests` payload test passed in `16.568s`)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP core-admission corridor phase clean
+
+- Revalidated the SCCP `iroha_core` bridge-proof admission corridor after the
+  Rust SCCP and contract-smoke phases, covering configured source adapter
+  admission, replay rejection, launch ordering, audit-hash binding, route
+  allowlist material, and diagnostic TRON inbound-message config gating.
+- Validation passed:
+  - `bash scripts/check_sccp_production_corridor.sh --phase core-admission`
+    (`49` passed, `145` filtered out, finished in `2948.19s`)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP rust corridor phase clean
+
+- Revalidated the Rust SCCP production-corridor phase after the local
+  helper/evidence hardening, covering the `iroha_sccp` unit and doc-test
+  surface under the corridor's isolated Cargo target directory.
+- Validation passed:
+  - `bash scripts/check_sccp_production_corridor.sh --phase rust-sccp`
+    (`271` Rust tests passed, `0` doc-tests passed, finished in `4452.20s`)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP contract-smoke corridor phase clean
+
+- Revalidated the SCCP EVM/BSC/TRON contract-smoke corridor after the helper
+  and evidence-script hardening. This covers BSC Groth16 material generation
+  and attestation flows, BSC TAIRA XOR deployment/route helpers, TRON TAIRA XOR
+  deploy/route helpers, TAIRA XOR contract helper coverage, the EVM smoke
+  syntax check, and the Ganache-backed `sccp_message_bridge_smoke` execution.
+- Validation passed:
+  - `bash scripts/check_sccp_production_corridor.sh --phase contract-smoke`
+    (`246` Node tests passed, `sccp_message_bridge_smoke: ok`)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP JS and Python SDK corridor phases clean
+
+- Revalidated the local SCCP JavaScript and Python SDK corridor phases after
+  the evidence-scripts cleanup, covering browser/package SCCP exports, BSC and
+  Ethereum mainnet facades, Solana/TON/TRON proof helpers, route-manifest
+  helpers, Python SCCP client payload construction, and Python proof/evidence
+  admission paths.
+- Validation passed:
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk`
+    (`311` passed in `33974.352042ms`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase python-sdk`
+    (`93` passed in `23.40s`)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP evidence-scripts corridor clean
+
+- Kept the copied input-provenance verifier regressions aligned with the
+  stricter sensitive-path preflight by replacing the stale `secret-token-*`
+  drift fixtures with neutral copied/renamed/operator paths. This preserves
+  coverage for duplicate input paths, bundle escapes, backslash/canonical path
+  drift, and copied evidence layout checks without letting the sensitive-name
+  gate mask the intended diagnostics.
+- Updated the release input-provenance source-inventory marker to pin the
+  neutral `evidence/renamed.toml` copied-layout regression instead of the
+  removed secret-looking fixture name.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/check_sccp_production_corridor_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py --maxfail=1`
+    (`843` passed in `5183.33s`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`2230` passed in `5969.27s`)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP .NET PATH handoff hardening
+
+- Tightened the SCCP release-readiness and strict bundle `.NET` transcript
+  parser so traced restore/test `PATH` values must either equal the freshly
+  printed `connect_norito_bridge.dll` directory or start with that directory
+  followed by a non-empty path-list segment. Trailing separators and doubled
+  separators are now fixed not-ready evidence because they can smuggle
+  current-directory lookup into copied Windows `.NET 8` transcripts.
+- Added readiness-report and published-bundle adversarial coverage using
+  directory-qualified `dotnet` commands with matching `DOTNET_ROOT`, so the
+  tests isolate empty `PATH` segment rejection instead of relying on the
+  existing bare-binary rejection.
+- Updated the public Required Release Evidence wording, roadmap, and backlog
+  to name empty `.NET` path-list segments as forged evidence.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/check_sccp_production_corridor_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'dotnet_empty_path_segments or mismatched_dotnet_path_prefix or release_corridor_phase_transcript_gate_inventory or required_evidence_items_are_unique or markdown_names_direct_dotnet_trx_evidence_path'`
+    (`5` passed, `504` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'dotnet_empty_path_segments or mismatched_dotnet_path_prefix or release_corridor_phase_transcript_inventory or required_evidence_markers_are_unique_and_generated or requires_native_sdk_id_readiness_evidence'`
+    (`6` passed, `837` deselected)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP readiness Markdown structure invariants
+
+- Pinned the strict release-bundle readiness Markdown parser against
+  noncanonical top-level title/status blocks, non-exact public section-heading
+  spelling, unexpected public section headings, Setext headings, repeated public
+  section headings, and noncanonical required-section order, so duplicate
+  titles, conflicting statuses, padded, inserted, short-indented,
+  Setext-underlined, duplicate, or swapped headings cannot preserve all marker
+  substrings while satisfying the public artifact invariant.
+- Shared that Markdown heading recognition with release-notes attachment
+  invariants, so short-indented and Setext-underlined top-level or section
+  headings cannot bypass public release-note structure checks either.
+- Added adversarial bundle-verifier coverage for padded Required Release
+  Evidence headings, inserted forged section headings at column zero and with
+  short indentation, Setext-underlined forged top-level/section headings,
+  duplicate readiness titles, unexpected H1 headings, conflicting status lines,
+  a repeated Required Release Evidence heading, and swapped Blocking Items /
+  Required Release Evidence headings, with source-inventory markers for those
+  regressions.
+- Tightened the generated Required Release Evidence marker so public readiness
+  Markdown explicitly names canonical top-level title/status blocks, Markdown
+  short-indented heading recognition, Setext heading rejection, exact public
+  section-heading spelling, no unexpected public section headings, repeated
+  public section headings, noncanonical required-section order, and canonical
+  Required Release Evidence bullet spelling as pinned invariants, and added
+  generated-output assertions for that wording.
+- Tightened Required Release Evidence bullet parsing so whitespace-normalized
+  duplicate bullets, alternate Markdown bullet markers, and noncanonical
+  Markdown bullet spelling fail with category-only diagnostics before public
+  readiness Markdown can pass.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'release_notes_invariants_require_single_top_level_title or release_notes_invariants_reject_unexpected_section_headings or noncanonical_readiness_title_status_block or unexpected_readiness_markdown_section or whitespace_variant_required_evidence or noncanonical_required_evidence_bullet or duplicate_required_evidence_items or required_evidence_markers_are_unique_and_generated or readiness_markdown_invariants_inventory or release_notes_attachment_invariants_inventory or missing_readiness_markdown_invariants_inventory_gate or missing_release_notes_attachment_invariants_inventory_gate'`
+    (`12` passed, `830` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'required_evidence_items_are_unique or readiness_markdown_invariants_gate_inventory or release_notes_attachment_invariants_gate_inventory or missing_readiness_markdown_invariants_gate or missing_release_notes_attachment_invariants_gate'`
+    (`5` passed, `503` deselected)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP Required Release Evidence uniqueness
+
+- Tightened strict readiness Markdown invariant checks so duplicated Required
+  Release Evidence bullets are rejected with a category-only diagnostic instead
+  of passing because all required marker substrings remain present.
+- Added bundle-verifier tamper coverage for duplicated Required Release Evidence
+  bullets, and added generated-output assertions on both readiness and bundle
+  paths so rendered release-evidence bullets and strict marker tuples remain
+  unique and fully represented.
+- Pinned the new regressions in the readiness Markdown invariants source
+  inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'required_evidence_items_are_unique or readiness_markdown_invariants_gate_inventory or missing_readiness_markdown_invariants_gate or markdown_names_direct_dotnet_trx_evidence_path'`
+    (`4` passed, `504` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'duplicate_required_evidence_items or required_evidence_markers_are_unique_and_generated or required_evidence_source_rows_have_strict_markers or readiness_markdown_invariants_inventory or missing_readiness_markdown_invariants_inventory_gate'`
+    (`5` passed, `830` deselected)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP .NET VSTest summary canonical spacing
+
+- Tightened the release-readiness and strict bundle `.NET` VSTest success
+  matcher so count labels such as `Failed: 0` / `Passed: 42` and duration
+  values such as `1 s` must keep visible ordinary-space separators. Collapsed
+  labels like `Passed:42` and compact units like `1s` are now forged evidence,
+  alongside the existing tab/control-whitespace rejection.
+- Added readiness and bundle-verifier regressions for collapsed count labels
+  and compact duration units, and pinned those tests in the strict verifier
+  source inventory. The Required Release Evidence wording now says VSTest
+  label/value and number/unit separators must be present.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'dotnet_summary_collapsed_spacing or dotnet_summary_non_space_whitespace or dotnet_noncanonical_zero_skipped_summary or dotnet_malformed_duration_summary or sccp_readiness_markdown'`
+    (`4` passed, `503` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'dotnet_summary_collapsed_spacing or dotnet_summary_non_space_whitespace or dotnet_noncanonical_zero_skipped_summary or dotnet_malformed_duration_summary or readiness_markdown_invariant or dotnet_sdk_transcript'`
+    (`6` passed, `828` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'source_inventory or sccp_readiness_markdown or release_public_scalar_text_schema_gate_inventory or dotnet_summary_collapsed_spacing'`
+    (`7` passed, `500` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_inventory or readiness_markdown_invariant or release_public_scalar_text_schema_inventory or dotnet_sdk_transcript or dotnet_summary_collapsed_spacing'`
+    (`20` passed, `814` deselected)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 SCCP .NET VSTest summary whitespace hardening
+
+- Tightened the release-readiness and strict bundle `.NET` VSTest success
+  matcher so it still accepts ordinary VSTest space padding, but rejects
+  tab/control-whitespace splices in the `Passed!` summary and duration fields.
+  The Windows `.NET 8` evidence task remains external, but copied or forged
+  local transcripts now fail before they can satisfy that blocker.
+- Added readiness and bundle-verifier regressions for tabbed VSTest summaries,
+  and updated the readiness Markdown/source-inventory wording to pin the
+  ordinary-spaces-only summary rule alongside the existing `Failed: 0`,
+  `Skipped: 0`, `Total == Passed`, numeric-duration, and assembly-suffix
+  requirements.
+- Kept malformed copied source-inventory bundle errors classified and
+  user-actionable after the stricter CLI control-character redaction by emitting
+  single-line safe details and avoiding malformed gate keys in bracketed labels.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'dotnet_summary_non_space_whitespace or dotnet_noncanonical_zero_skipped_summary or dotnet_malformed_duration_summary or sccp_readiness_markdown'`
+    (`3` passed, `503` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'dotnet_summary_non_space_whitespace or dotnet_noncanonical_zero_skipped_summary or dotnet_malformed_duration_summary or readiness_markdown_invariant or dotnet_sdk_transcript'`
+    (`5` passed, `828` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'source_inventory or sccp_readiness_markdown or release_public_scalar_text_schema_gate_inventory or dotnet_summary_non_space_whitespace'`
+    (`7` passed, `499` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'malformed_copied_source_inventory_before_render or empty_copied_source_inventory_before_render'`
+    (`2` passed, `831` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_inventory or readiness_markdown_invariant or release_public_scalar_text_schema_inventory or dotnet_sdk_transcript'`
+    (`19` passed, `814` deselected)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-26 BFV full-bootstrap non-inert execution preflight
+
+- Hardened direct and artifact-aware BFV full-bootstrap execution preflight so
+  all-zero ciphertext inputs are rejected before artifact fallback or governed
+  prefix execution. The exact and bounded artifact-aware prefix constructors
+  now run the same non-inert input check before transform work.
+- The witness-backed execution statement helper now preflights public claim
+  digest sentinels before governed trace replay, so placeholder witness digests
+  cannot be masked by later ciphertext or bound diagnostics.
+- BFV full-bootstrap release-audit evidence archives now carry and validate the
+  signed arithmetic trace-profile digest and arithmetic AIR constraint-system
+  digest, and the Soracloud full-bootstrap public schemas advertise those
+  release-audit evidence and archive obligations.
+- Production-pinned BFV full-bootstrap external-review markers now require
+  review text beyond the signed reviewer-id label, and the Soracloud schemas
+  advertise the marker statement-text obligation.
+- Updated the current full-bootstrap artifact-bundle digest golden for the
+  active proof-profile material in this worktree.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_execution_witness_digest_binds_governed_trace --lib -- --nocapture`
+    (`1` passed, `794` filtered out)
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_circuit_material_validation_binds_registered_profile --lib -- --nocapture`
+    (`1` passed, `794` filtered out)
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_artifact_bundle_binds_material_commitments_and_execution_preflight --lib -- --nocapture`
+    (`1` passed, `794` filtered out)
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_execution_prefix_trace_consumes_governed_artifacts --lib -- --nocapture`
+    (`1` passed, `794` filtered out)
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `794` filtered out)
+  - `cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_material_schema_advertises_statement_header --lib -- --nocapture`
+    (`1` passed, `1620` filtered out)
+  - `cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest --lib -- --nocapture`
+    (`1` passed, `1620` filtered out)
+  - `cargo fmt --package iroha_crypto --package iroha_data_model -- --check`
+  - `git diff --check`
+  - Cargo.lock diff guard and anchored conflict-marker scan across the touched
+    BFV release-audit files
+
+## 2026-06-26 SCCP release CLI top-level exception redaction
+
+- Tightened the top-level SCCP release-readiness and release-bundle CLI
+  exception redaction filters so standalone `bearer`, `session`, and `token`
+  payloads, plus non-ASCII exception text, are treated as sensitive. This keeps
+  confusable or localized operator payloads out of stderr, not only
+  `bearer `, `session=`, or `token=` variants.
+- Expanded the release-readiness and release-bundle top-level exception tests to
+  cover `secret-token`, standalone bearer, standalone session, standalone token,
+  and non-ASCII payloads plus newline/tab control-character payloads across
+  `OSError`, `RuntimeError`, `TypeError`, and `ValueError`, while adding safe
+  non-sensitive exception cases to prove ordinary structured validation details
+  still pass through.
+- Updated the public scalar text source inventory and roadmap invariant so the
+  bearer/session/token, non-ASCII, and control-character redaction cases stay
+  pinned in both readiness and strict bundle verification.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'top_level_exception_details or release_public_scalar_text_schema_inventory or missing_release_public_scalar_text_schema_inventory_gate'`
+    (`4` passed, `828` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'top_level_exception_details or release_public_scalar_text_schema_gate_inventory or missing_release_public_scalar_text_schema_gate'`
+    (`4` passed, `501` deselected)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-25 BFV release-audit reviewer-id label gate
+
+- Tightened production-pinned BFV full-bootstrap release-audit package
+  admission so the `external-review-approved:` report marker and
+  `external-review-evidence-archive:` archive marker must bind the signed
+  reviewer through an explicit `reviewer-id=`, `reviewer=`, or `reviewed-by=`
+  label, and each marker statement may contain exactly one such reviewer label.
+  Bare reviewer-id prose plus duplicate or conflicting reviewer labels no longer
+  satisfy the production gate.
+- Updated the Soracloud material and execution public-input schemas to
+  advertise `requires_external_review_marker_reviewer_id_label`,
+  `requires_single_external_review_marker_reviewer_id_label`,
+  `rejects_conflicting_external_review_marker_reviewer_id_labels`, and
+  `rejects_duplicate_external_review_marker_reviewer_id_labels`; the current
+  material/execution schema hashes are
+  `05890816bd1fb865e3836018316b01d07e3cff757446d1f8d30f68d156de5e0f` and
+  `25506f98acc6cc99a363a8adf53ea83eaaf6ad15c081b98b6e2b16985db77421`.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto --package iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-reviewer-single-label CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `794` filtered out; finished in `1234.42s`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-reviewer-single-label-dm CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (first reruns intentionally exposed the new material schema hash
+    `05890816bd1fb865e3836018316b01d07e3cff757446d1f8d30f68d156de5e0f`
+    and execution schema hash
+    `25506f98acc6cc99a363a8adf53ea83eaaf6ad15c081b98b6e2b16985db77421`;
+    final rerun passed: `1` passed, `1620` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-reviewer-single-label-dm CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_material_schema_advertises_statement_header --lib -- --nocapture`
+    (`1` passed, `1620` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-reviewer-single-label-dm CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest --lib -- --nocapture`
+    (`1` passed, `1620` filtered out)
+
+## 2026-06-25 SCCP native EVM manifest-relative path sanitization
+
+- Hardened native EVM Groth16 prover manifest-relative payload path parsing in
+  the release bundle builder, readiness report, and strict bundle verifier so
+  non-ASCII and secret-looking path text fails with category-only diagnostics
+  before public artifact rows, source-copy staging, or strict verifier summaries
+  can process those paths.
+- Added readiness, bundle-generation, and tampered-bundle verifier regressions
+  for non-ASCII and secret-looking native prover payload paths. Updated adjacent
+  symlink and missing-payload fixtures to use neutral filenames so those tests
+  still exercise their intended path classes after the earlier sensitive-name
+  gate.
+- Updated the artifact-path text source inventory and roadmap wording to pin
+  native prover manifest-relative path rejection alongside manifest, report,
+  copied-filename, readiness-input, and raw bundle-entry path checks.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'native_evm_payload_paths or native_evm_prover_percent_encoded_path or missing_native_evm_payload_paths_without_path_leak or duplicate_native_evm_prover_payload_paths or non_ascii_or_sensitive_native_evm_payload_paths'`
+    (`6` passed, `498` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'native_evm_prover_payload_paths or missing_native_evm_payload_without_path_leak or duplicate_native_evm_prover_payload_paths or symlinked_native_evm_prover_payload or symlinked_native_evm_payload_ancestor or non_ascii_or_sensitive_native_evm_payload_filename_before_copy'`
+    (`11` passed, `820` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'release_artifact_path_text_gate_inventory or missing_sccp_release_artifact_path_text_gate or non_ascii_or_sensitive_native_evm_payload_paths'`
+    (`3` passed, `501` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'release_artifact_path_text_inventory or missing_release_artifact_path_text_inventory_gate or release_bundle_source_copy_inventory or missing_release_bundle_source_copy_inventory_gate or non_ascii_or_sensitive_native_evm_payload_filename_before_copy or non_ascii_or_sensitive_native_evm_prover_payload_paths'`
+    (`6` passed, `825` deselected)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-25 BFV full-bootstrap witness-material self-validation
+
+- Hardened the governed BFV full-bootstrap execution witness-material
+  constructor so the assembled typed witness package is validated before it is
+  returned for digesting or release-prover input construction.
+- Extended the existing governed-trace witness regression to assert that the
+  constructor returns material accepted by the public witness-material validator.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_execution_witness_digest_binds_governed_trace --lib -- --nocapture`
+    (`1` passed, `794` filtered out)
+
+## 2026-06-25 BFV full-bootstrap executable bound self-validation
+
+- Hardened the exact and bounded artifact-aware BFV full-bootstrap prefix bound
+  constructors so they validate the aggregate bound vector before returning it.
+  Direct executable callers now receive only self-validating propagated bounds,
+  matching the release-prover material validator that already checks the same
+  typed bound package before proof construction.
+- Extended the full-bootstrap prefix regression to assert that both exact and
+  bounded bound constructors return values accepted by the aggregate prefix
+  bound validator.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_execution_prefix_trace_consumes_governed_artifacts --lib -- --nocapture`
+    (`1` passed, `794` filtered out)
+
+## 2026-06-25 SCCP public artifact path text sanitization
+
+- Hardened generated release artifact rows, readiness input artifact paths, and
+  strict release-bundle manifest/report artifact path validation so non-ASCII
+  and secret-looking public path text is rejected with category-only diagnostics
+  before release notes, manifest rows, or verifier summaries can publish it.
+- Hardened the strict release-bundle filesystem-entry scan so tampered bundles
+  containing non-ASCII or secret-looking unmanifested file/directory names fail
+  before untrusted path text can be echoed or classified as ordinary
+  unmanifested content.
+- Added adversarial readiness and bundle tests for non-ASCII and secret-looking
+  artifact paths, plus strict manifest tampering tests that prove those values
+  are rejected without echoing the unsafe path text. Added direct filesystem
+  entry tests for non-ASCII and secret-looking bundle entries.
+- Updated Required Release Evidence, roadmap invariants, and the artifact-path
+  source inventory to pin Markdown-unsafe, non-ASCII, secret-looking,
+  whitespace, and encoded-traversal path rejection across generated artifacts
+  and strict verification.
+- Validation passed:
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'non_ascii_or_sensitive_artifact_paths or non_ascii_or_sensitive_manifest_paths or release_artifact_path_text_inventory or required_evidence_source_rows_have_strict_markers or required_evidence_markers_are_unique_and_generated'`
+    (`6` passed, `823` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'non_ascii_or_sensitive_artifact_paths or release_artifact_path_text_gate_inventory or missing_sccp_release_artifact_path_text_gate'`
+    (`3` passed, `500` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'non_ascii_or_sensitive_filesystem_entries or unmanifested_artifact or unmanifested_directory or unsupported_entry_without_path_leak or release_artifact_path_text_inventory'`
+    (`6` passed, `824` deselected)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `git diff --check -- scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py docs/source/engineering_backlog.md roadmap.md status.md`
+  - Conflict-marker, `__pycache__`, and `Cargo.lock` diff guards passed for the
+    touched SCCP release files.
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-25 BFV full-bootstrap executable trace self-validation
+
+- Hardened the exact and bounded artifact-aware BFV full-bootstrap prefix
+  constructors so they validate the constructed trace before returning it.
+  Direct executable callers now reject inert all-zero trace material at the
+  crypto boundary instead of relying on later release-prover material
+  validation to catch malformed trace packages.
+- Updated the full-bootstrap prefix regression to cover exact and bounded
+  all-zero constructed-trace rejection, and refreshed the stale artifact
+  replay expectation to the current release-audit artifact-hex diagnostic.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_execution_prefix_trace_consumes_governed_artifacts --lib -- --nocapture`
+    (`1` passed, `794` filtered out)
+
+## 2026-06-25 SCCP bundle source filename sanitization
+
+- Hardened release-bundle source copying so evidence input, native EVM prover
+  manifest, and native EVM prover payload filenames with non-ASCII text or
+  secret-looking names are rejected before report preflight, bundle creation,
+  or copied public artifact paths can be emitted. `_safe_name` now enforces the
+  same fallback rule for future copy callers, while existing duplicate, symlink,
+  symlink-ancestor, control,
+  Markdown-unsafe, padded, and encoded-traversal source-copy diagnostics remain
+  category-only.
+- Added adversarial bundle CLI tests proving non-ASCII and secret-looking
+  evidence/native-manifest/native-payload filenames do not create output
+  directories, do not print success logs, and do not echo the unsafe local
+  filename.
+- Updated Required Release Evidence and the SCCP source-copy source inventory so
+  non-ASCII filename and secret-looking filename rejection is pinned alongside
+  symlink/control-character source-copy preflights.
+- Validation passed:
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'non_ascii_or_sensitive_evidence_filename_before_copy or non_ascii_or_sensitive_native_evm_manifest_filename_before_copy or non_ascii_or_sensitive_native_evm_payload_filename_before_copy or release_bundle_source_copy_inventory'`
+    (`5` passed, `822` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'release_bundle_source_copy_gate_inventory or missing_sccp_release_bundle_source_copy_gate'`
+    (`2` passed, `500` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'required_evidence_source_rows_have_strict_markers or required_evidence_markers_are_unique_and_generated'`
+    (`2` passed, `824` deselected)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `git diff --check -- scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py docs/source/engineering_backlog.md roadmap.md status.md`
+  - Conflict-marker, `__pycache__`, and `Cargo.lock` diff guards passed for the
+    touched SCCP release files.
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-25 SCCP bundle output directory path sanitization
+
+- Hardened `scripts/sccp_release_bundle.py --output-dir` so new bundle output
+  directories and forced replacement targets reject unsafe path text before
+  report preflight, bundle creation, deletion, or success logs. The preflight
+  now rejects surrounding whitespace, control characters, non-ASCII text,
+  Markdown-unsafe characters, secret-looking names, and percent-encoded
+  traversal segments while preserving the existing generic no-force
+  `output directory already exists` and symlink diagnostics.
+- Added adversarial bundle CLI tests proving malformed new output directories
+  do not create bundles or echo local path text, and `--force` refuses a
+  secret-looking existing output directory without deleting its sentinel file.
+- Extended the SCCP release output-path source inventory so the bundle
+  output-directory sanitizer, call site, failure phrases, and adversarial tests
+  are pinned by the release gate.
+- Validation passed:
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'malformed_output_directory_paths_before_create or force_rejects_sensitive_existing_output_directory or control_character_output_directory_before_create or release_bundle_output_path_inventory'`
+    (`5` passed, `819` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'release_bundle_output_path_gate_inventory or missing_sccp_release_bundle_output_path_gate'`
+    (`2` passed, `500` deselected)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `git diff --check -- scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py docs/source/engineering_backlog.md roadmap.md status.md`
+  - Conflict-marker, `__pycache__`, and `Cargo.lock` diff guards passed for the
+    touched SCCP release files.
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-25 SCCP readiness output path sanitization
+
+- Hardened `scripts/sccp_release_readiness_report.py --output` so malformed
+  report sink paths are rejected before evidence parsing, report rendering, or
+  filesystem writes. The preflight now rejects surrounding whitespace, control
+  characters, non-ASCII text, Markdown-unsafe characters, secret-looking names,
+  and percent-encoded traversal segments with category-only diagnostics.
+- Added an adversarial readiness CLI test proving malformed output paths do not
+  call `_build_report`, do not create output files, and do not echo
+  secret-looking path text.
+- Extended the SCCP release output-path source inventory so the readiness
+  output sanitizer, call site, failure phrases, and adversarial test are pinned
+  by the release gate.
+- Validation passed:
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'malformed_output_paths_before_build or release_bundle_output_path_gate_inventory or missing_sccp_release_bundle_output_path_gate'`
+    (`3` passed, `499` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'release_bundle_output_path_inventory'`
+    (`2` passed, `820` deselected)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `git diff --check -- scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py docs/source/engineering_backlog.md roadmap.md status.md`
+  - Conflict-marker, `__pycache__`, and `Cargo.lock` diff guards passed for the
+    touched SCCP release files.
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-25 SCCP phase-evidence path sanitization
+
+- Hardened `--phase-evidence NAME=PATH` and `--phase-evidence-dir` handling in
+  the readiness-report and release-bundle CLIs so unsafe path text is rejected
+  before artifact hashing, report rendering, directory lookup, or bundle
+  copying. Phase evidence paths now fail closed for surrounding whitespace,
+  control characters, non-ASCII text, Markdown-unsafe characters, secret-looking
+  names, and percent-encoded traversal segments.
+- Added readiness and bundle adversarial tests proving malformed phase-evidence
+  paths and phase-evidence directory paths do not echo the supplied local path
+  text, while duplicate assignment, symlink, symlink-ancestor, control-character,
+  Markdown-unsafe, padded, and encoded-traversal source-copy tests still cover
+  their specific failure paths.
+- Updated the SCCP phase-evidence and release-bundle source-copy inventories so
+  the new path sanitizer, redacted diagnostics, and fixture names are pinned by
+  the release gate.
+- Validation passed:
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'malformed_phase_evidence_paths or sccp_phase_evidence_source_gate_inventory'`
+    (`2` passed, `498` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'malformed_phase_evidence_paths or sccp_phase_evidence_source_inventory'`
+    (`2` passed, `819` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'phase_evidence_dir_paths or missing_phase_evidence_dir_path or accepts_phase_evidence_dir or sccp_phase_evidence_source_gate_inventory'`
+    (`4` passed, `497` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'phase_evidence_dir_paths or missing_phase_evidence_dir_path or sccp_phase_evidence_source_inventory'`
+    (`3` passed, `819` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'phase_evidence'`
+    (`40` passed, `1283` deselected)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `git diff --check -- scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' ...` over the touched SCCP release files
+    returned no matches.
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-25 SCCP contract smoke corridor revalidation
+
+- Revalidated the SCCP BSC Groth16 material, BSC/TAIRA XOR deploy helper, TRON
+  deploy helper, TAIRA XOR contract, and EVM message-bridge smoke checks. The
+  BSC deploy malformed boolean validation-order regression remains covered in
+  the contract phase.
+- Validation passed:
+  - `bash scripts/check_sccp_production_corridor.sh --phase contract-smoke`
+    (Node contract/deploy suites: `246` passed; `node --check` passed;
+    `sccp_message_bridge_smoke: ok`)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-25 SCCP Java Android corridor revalidation
+
+- Revalidated the Java Android SCCP SDK corridor with JDK 21 and the configured
+  Android SDK. The phase ran the selected Gradle harness mains for EVM,
+  source-proof hashes, TON, and TRON, then the direct Solana SCCP JUnit suite.
+- Validation passed:
+  - `bash scripts/check_sccp_production_corridor.sh --phase java-android`
+    (`4` selected SCCP harness mains passed; Solana SCCP JUnit: `31` passed,
+    `0` failures, `0` errors, `0` skipped)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-25 SCCP Kotlin SDK corridor revalidation
+
+- Revalidated the Kotlin/JVM SCCP SDK source-state, EVM, BSC-family, Solana,
+  TON, TRON, and shared proof-hash coverage with the corridor's JDK 21 Gradle
+  phase.
+- Validation passed:
+  - `bash scripts/check_sccp_production_corridor.sh --phase kotlin-sdk`
+    (`84` focused SCCP tests passed; `0` failures, `0` errors, `0` skipped)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-25 SCCP JS/Python SDK corridor declaration recovery
+
+- Recovered the JavaScript SDK published TypeScript declaration surface for the
+  SCCP domain-id, v1-version, and BSC Parlia commit helper checks without
+  changing runtime SCCP helper behavior.
+- Revalidated the JavaScript and Python SCCP SDK corridor phases against the
+  current `scripts/check_sccp_production_corridor.sh` command set.
+- Validation passed:
+  - `node --test --test-name-pattern "published TypeScript declarations expose SCCP domain id inputs|published TypeScript declarations expose SCCP v1 version inputs|published TypeScript declarations expose BSC Parlia commit inputs" javascript/iroha_js/test/sccpPackageExports.test.js`
+    (`3` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk --phase python-sdk`
+    (JavaScript SDK: `311` passed; Python SDK: `93` passed)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-25 SCCP Rust and evidence corridor revalidation
+
+- Revalidated the dirty SCCP library and release-evidence scripts after the
+  core-admission recovery. The Rust SCCP phase now proves the current
+  source-adapter deployment, launch-policy, route allowlist, EVM/BSC, Solana,
+  TON, TRON, FastPQ, and submission-package coverage still passes as a full
+  crate suite.
+- Revalidated the release-readiness and release-bundle Python evidence gates
+  against the current `scripts/sccp_release_readiness_report.py` and
+  `scripts/sccp_verify_release_bundle.py` changes.
+- Validation passed:
+  - `bash scripts/check_sccp_production_corridor.sh --phase rust-sccp --phase evidence-scripts`
+    (`iroha_sccp`: `271` passed; evidence scripts: `2190` passed)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-25 BFV native execution verifier-key circuit retarget guard
+
+- Added a Core zk-stark regression proving governed full-bootstrap execution
+  verifier-key artifacts reject native metadata verifier payloads retargeted to
+  the full-bootstrap material circuit. This complements the canonical STARK VK
+  payload retarget guard and keeps Core canonicalization from accepting a
+  structurally valid production-floor native verifier payload for the wrong
+  circuit.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_wrong_circuit_native_payload --lib -- --nocapture`
+    (`1` passed, `5635` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_wrong_circuit_stark_payload --lib -- --nocapture`
+    (`1` passed, `5636` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_opaque_stark_payload --lib -- --nocapture`
+    (`1` passed, `5636` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_below_floor_stark_payload --lib -- --nocapture`
+    (`1` passed, `5636` filtered out)
+  - `cargo fmt --package iroha_core -- --check`
+
+## 2026-06-25 BFV bounded-noise release-audit prover regression
+
+- Added a Core zk-stark regression proving the release-audit-gated
+  full-bootstrap execution prover accepts governed bounded-noise
+  `FullBootstrapV1` material, artifacts, Galois keys, and a caller-pinned
+  release audit package with a bounded-noise transcript. This keeps the
+  release-prover boundary from silently regressing to exact-lift-only
+  validation while the bounded runtime path remains artifact/audit gated.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_audited_prover_accepts_bounded_noise_release_package --lib -- --nocapture`
+    (`1` passed, `5639` filtered out)
+
+## 2026-06-25 BFV bounded-noise input public-key digest gate
+
+- Added a Core regression proving bounded-noise FHE input loading rejects a
+  persisted ciphertext row whose stored public-key digest differs from the
+  governed bounded-noise public key, even when the ciphertext payload, bound
+  mode, and bounded-noise capacity metadata are otherwise valid.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_core load_soracloud_fhe_inputs_rejects_bounded_noise_public_key_digest_mismatch --lib -- --nocapture`
+    (`1` passed, `5439` filtered out)
+  - `cargo fmt --package iroha_core -- --check`
+
+## 2026-06-25 BFV bounded-noise input admission mode replay guard
+
+- Added a Core regression proving a valid bounded-noise FHE input-admission
+  proof cannot be replayed as exact-residual admission by changing only the
+  declared bound mode; Core recomputes the mode-separated ciphertext statement
+  digest before verifier lookup.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_core fhe_input_admission_bounded_proof_rejects_exact_mode_replay --lib -- --nocapture`
+    (`1` passed, `5440` filtered out)
+  - `cargo fmt --package iroha_core -- --check`
+
+## 2026-06-26 Sumeragi commit-root consistency correctness envelope
+
+- Added `CommitRootConsistencyCorrectnessEnvelope` to
+  `SumeragiCommitRootConsistency.tla` and wired it into both
+  `SumeragiCommitRootConsistency_fast.cfg` and the witness-constrained
+  `SumeragiCommitRootConsistency_tlc_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `CommitRootConsistencyExactness`, giving commit-root
+  selection, quorum, and validation logic one checkable envelope for bounded
+  domain safety, root selection/evidence exactness, permissioned and NPoS quorum
+  exactness, mixed-root rejection, wrong-context signer/stake rejection, and QC
+  root-validation exactness.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  commit-root consistency correctness envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.27s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-commit-root-consistency-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiCommitRootConsistency.tla`
+    (`EXITCODE: OK`; total time `0.576s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-roots-fast`
+    (`NoError`; `CommitRootConsistencyCorrectnessEnvelope`: `44` VCs; `108`
+    state-0 invariants; total time `2.856s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-roots-fast`
+    (`579626` states generated, `25` distinct states, depth `2`)
+
+## 2026-06-26 Sumeragi signer-index normalization correctness envelope
+
+- Added `SignerIndexNormalizationCorrectnessEnvelope` to
+  `SumeragiSignerIndexNormalizationGate.tla` and wired it into
+  `SumeragiSignerIndexNormalizationGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SignerIndexNormalizationExactness`, giving the
+  canonical/view signer-index helper one checkable envelope for bounded domain
+  safety, canonical normalization anchors, canonical-to-view index lookup,
+  canonical-set-to-view normalization, round-trip preservation/filtering, and
+  exact actual/spec result equality.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  signer-index normalization correctness envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.28s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-signer-index-normalization-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiSignerIndexNormalizationGate.tla`
+    (`EXITCODE: OK`; total time `0.665s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh signer-index-normalization-fast`
+    (`NoError`; `SignerIndexNormalizationCorrectnessEnvelope`: `51` VCs; `139`
+    state-0 invariants; total time `22.266s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh signer-index-normalization-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi QC signer-bitmap construction correctness envelope
+
+- Added `BuildSignersBitmapCorrectnessEnvelope` to
+  `SumeragiBuildSignersBitmapGate.tla` and wired it into
+  `SumeragiBuildSignersBitmapGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `BuildSignersBitmapExactness`, giving the signer-bitmap
+  helper one checkable envelope for bounded domain safety, exact bitmap length,
+  zero-roster/non-empty allocation behavior, single-signer bit placement,
+  multi-signer OR behavior, out-of-range/padding filtering, duplicate collapse,
+  and full-roster coverage.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  QC signer-bitmap construction correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.27s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-build-signers-bitmap-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiBuildSignersBitmapGate.tla`
+    (`EXITCODE: OK`; total time `0.578s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh build-signers-bitmap-fast`
+    (`NoError`; `BuildSignersBitmapCorrectnessEnvelope`: `27` VCs; `72`
+    state-0 invariants; total time `32.168s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh build-signers-bitmap-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi raw QC signer-count correctness envelope
+
+- Added `QcSignerRawCountCorrectnessEnvelope` to
+  `SumeragiQcSignerCountGate.tla` and wired it into
+  `SumeragiQcSignerCountGate_fast.cfg`. The aggregate composes `TypeInvariant`
+  with `QcSignerRawCountExactness`, giving the raw signer-bitmap population
+  helper one checkable envelope for bitmap-width bounds, empty/zero-byte
+  handling, single-bit handling, full-byte and padding-bit handling, and
+  multi-byte accumulation.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the raw QC signer-count correctness envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.30s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-qc-signer-raw-count-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiQcSignerCountGate.tla`
+    (`EXITCODE: OK`; total time `0.536s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-signer-count-fast`
+    (`NoError`; `QcSignerRawCountCorrectnessEnvelope`: `31` VCs; `88`
+    state-0 invariants; total time `12.839s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh qc-signer-count-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi QC signer-bitmap admission correctness envelope
+
+- Added `QcSignerBitmapAdmissionCorrectnessEnvelope` to
+  `SumeragiQcSignerBitmap.tla` and wired it into
+  `SumeragiQcSignerBitmap_fast.cfg`. The aggregate composes `TypeInvariant`
+  with `QcSignerBitmapAdmissionExactness`, giving QC signer-bitmap parser and
+  admission logic one checkable envelope for topology-width matching,
+  voting-only quorum accounting, observer/padding rejection, out-of-bounds
+  rejection, length-mismatch rejection, and accepted-evidence exactness.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the QC signer-bitmap admission correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.30s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-qc-signer-bitmap-admission-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiQcSignerBitmap.tla`
+    (`EXITCODE: OK`; total time `0.459s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-signers-fast`
+    (`NoError`; `QcSignerBitmapAdmissionCorrectnessEnvelope`: `29` VCs;
+    `65` state-0 invariants; total time `2.432s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh qc-signers-fast`
+    (`7,842,801` states generated, `2,800` distinct states, depth `2`)
+
+## 2026-06-26 Sumeragi manifest-gate reschedule correctness envelope
+
+- Added `ManifestGateRescheduleCorrectnessEnvelope` to
+  `SumeragiManifestGateRescheduleGate.tla` and wired it into
+  `SumeragiManifestGateRescheduleGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `ManifestGateRescheduleExactness`, giving the
+  manifest-gated quorum-reschedule branch one checkable envelope for manifest
+  retention/action behavior, no-target no-ops, zero-work cleanup,
+  vote-backed handling, authoritative rotation admission, and passive evidence
+  preservation.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the manifest-gate reschedule correctness envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.30s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-manifest-gate-reschedule-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiManifestGateRescheduleGate.tla`
+    (`EXITCODE: OK`; total time `0.571s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh manifest-gate-reschedule-fast`
+    (`NoError`; `ManifestGateRescheduleCorrectnessEnvelope`: `62` VCs;
+    `184` state-0 invariants; total time `6.671s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh manifest-gate-reschedule-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi near-quorum preemptive escalation correctness envelope
+
+- Added `NearQuorumPreemptiveEscalationCorrectnessEnvelope` to
+  `SumeragiNearQuorumPreemptiveEscalationGate.tla` and wired it into
+  `SumeragiNearQuorumPreemptiveEscalationGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `NearQuorumPreemptiveEscalationExactness`, giving the
+  pre-timeout near-quorum escalation coordinator one checkable envelope for
+  budget and pending gates, duplicate-suppression freshness, delegate-result
+  authority, per-tick cap enforcement, and progress/counter consistency.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the near-quorum preemptive escalation correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.32s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-near-quorum-preemptive-escalation-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiNearQuorumPreemptiveEscalationGate.tla`
+    (`EXITCODE: OK`; total time `0.617s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh near-quorum-preemptive-escalation-fast`
+    (`NoError`; `NearQuorumPreemptiveEscalationCorrectnessEnvelope`: `56` VCs;
+    `166` state-0 invariants; total time `14.497s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh near-quorum-preemptive-escalation-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi preemptive vote-backed retransmit correctness envelope
+
+- Added `PreemptiveVoteBackedRetransmitCorrectnessEnvelope` to
+  `SumeragiPreemptiveVoteBackedRetransmitGate.tla` and wired it into
+  `SumeragiPreemptiveVoteBackedRetransmitGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `PreemptiveVoteBackedRetransmitExactness`, giving the
+  pre-timeout vote-backed retransmit helper one checkable envelope for
+  candidate gating, pending-state preservation, target selection, output-based
+  progress, and near-quorum flag exactness.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the preemptive vote-backed retransmit correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.30s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-preemptive-vote-backed-retransmit-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiPreemptiveVoteBackedRetransmitGate.tla`
+    (`EXITCODE: OK`; total time `0.525s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh preemptive-vote-backed-retransmit-fast`
+    (`NoError`; `PreemptiveVoteBackedRetransmitCorrectnessEnvelope`: `55` VCs;
+    `163` state-0 invariants; total time `3.508s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh preemptive-vote-backed-retransmit-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi isolated vote-backed handoff correctness envelope
+
+- Added `IsolatedVoteBackedHandoffCorrectnessEnvelope` to
+  `SumeragiIsolatedVoteBackedHandoffGate.tla` and wired it into
+  `SumeragiIsolatedVoteBackedHandoffGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `IsolatedVoteBackedHandoffExactness`, giving the
+  one-vote frontier handoff helper one checkable envelope for admission and
+  side-effect gating, slot validation, anchor requests, range-pull outcomes,
+  and reason labeling.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the isolated vote-backed handoff correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.29s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-isolated-vote-backed-handoff-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiIsolatedVoteBackedHandoffGate.tla`
+    (`EXITCODE: OK`; total time `0.562s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh isolated-vote-backed-handoff-fast`
+    (`NoError`; `IsolatedVoteBackedHandoffCorrectnessEnvelope`: `76` VCs;
+    `226` state-0 invariants; total time `4.896s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh isolated-vote-backed-handoff-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi quorum rebroadcast dispatch correctness envelope
+
+- Added `QuorumRebroadcastDispatchCorrectnessEnvelope` to
+  `SumeragiQuorumRebroadcastDispatchGate.tla` and wired it into
+  `SumeragiQuorumRebroadcastDispatchGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `QuorumRebroadcastDispatchExactness`, giving the
+  pending-block rebroadcast dispatcher one checkable envelope for local-vote
+  gating, fail-closed exits, forced fanout, vote replay, payload dispatch,
+  block-sync dispatch, and rebroadcast-marker stamping.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the quorum rebroadcast dispatch correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.31s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-quorum-rebroadcast-dispatch-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiQuorumRebroadcastDispatchGate.tla`
+    (`EXITCODE: OK`; total time `0.646s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh quorum-rebroadcast-dispatch-fast`
+    (`NoError`; `QuorumRebroadcastDispatchCorrectnessEnvelope`: `70` VCs;
+    `208` state-0 invariants; total time `86.30s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh quorum-rebroadcast-dispatch-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi completed quorum view-advance correctness envelope
+
+- Added `CompletedQuorumViewAdvanceCorrectnessEnvelope` to
+  `SumeragiCompletedQuorumViewAdvanceGate.tla` and wired it into
+  `SumeragiCompletedQuorumViewAdvanceGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `CompletedQuorumViewAdvanceExactness`, giving the
+  completed quorum-reschedule view-advance helper one checkable envelope for
+  exact/generic routing, fallback behavior, current-view selection, saturated
+  increment, timestamp/cause preservation, rebroadcast clearing, and generic
+  slot-state preservation.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the completed quorum view-advance correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.33s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-completed-quorum-view-advance-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiCompletedQuorumViewAdvanceGate.tla`
+    (`EXITCODE: OK`; total time `0.603s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh completed-quorum-view-advance-fast`
+    (`NoError`; `CompletedQuorumViewAdvanceCorrectnessEnvelope`: `64` VCs;
+    `190` state-0 invariants; total time `8.0s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh completed-quorum-view-advance-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi vote-backed reassembly stall correctness envelope
+
+- Added `VoteBackedReassemblyStallCorrectnessEnvelope` to
+  `SumeragiVoteBackedReassemblyStallGate.tla` and wired it into
+  `SumeragiVoteBackedReassemblyStallGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `VoteBackedReassemblyStallExactness`, giving the
+  vote-backed same-height frontier reassembly stall helper one checkable
+  envelope for hard-cap arithmetic, slot/recovery owner gating, recovery
+  fallback, latest-progress age selection, and expiry thresholds.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the vote-backed reassembly stall correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.30s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-vote-backed-reassembly-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiVoteBackedReassemblyStallGate.tla`
+    (`EXITCODE: OK`; total time `0.555s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vote-backed-reassembly-stall-fast`
+    (`NoError`; `VoteBackedReassemblyStallCorrectnessEnvelope`: `48` VCs;
+    `142` state-0 invariants; total time `8.76s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vote-backed-reassembly-stall-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi RBC availability reschedule correctness envelope
+
+- Added `RbcAvailabilityRescheduleCorrectnessEnvelope` to
+  `SumeragiRbcAvailabilityRescheduleGate.tla` and wired it into
+  `SumeragiRbcAvailabilityRescheduleGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `RbcAvailabilityRescheduleExactness`, giving the direct
+  DA/RBC availability reschedule gate one checkable envelope for fail-open
+  exits, pending-entry/session blocking, invalid chunk-shape checks,
+  missing-chunk blocks, and READY quorum checks.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the RBC availability reschedule correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.31s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-rbc-availability-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiRbcAvailabilityRescheduleGate.tla`
+    (`EXITCODE: OK`; total time `0.523s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-availability-reschedule-fast`
+    (`NoError`; `RbcAvailabilityRescheduleCorrectnessEnvelope`: `45` VCs;
+    `132` state-0 invariants; total time `3.63s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-availability-reschedule-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi quorum reschedule backoff correctness envelope
+
+- Added `QuorumRescheduleBackoffCorrectnessEnvelope` to
+  `SumeragiQuorumRescheduleBackoffGate.tla` and wired it into
+  `SumeragiQuorumRescheduleBackoffGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `QuorumRescheduleBackoffExactness`, giving the direct
+  quorum reschedule helper one checkable envelope for zero-base backoff,
+  deficit multipliers, stall escalation, resend-window clamping, accepted fast
+  resend windows, and every fast-resend rejection gate.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the quorum reschedule backoff correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.31s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-quorum-reschedule-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiQuorumRescheduleBackoffGate.tla`
+    (`EXITCODE: OK`; total time `0.586s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh quorum-reschedule-backoff-fast`
+    (`NoError`; `QuorumRescheduleBackoffCorrectnessEnvelope`: `49` VCs; `145`
+    state-0 invariants; total time `11.209s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh quorum-reschedule-backoff-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi paced retransmit target correctness envelope
+
+- Added `PacedRetransmitTargetSelectionCorrectnessEnvelope` to
+  `SumeragiPacedRetransmitTargetsGate.tla` and wired it into
+  `SumeragiPacedRetransmitTargetsGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `PacedRetransmitTargetSelectionExactness`, giving the
+  direct paced retransmit target helper one checkable envelope for fail-closed
+  zero/empty selection, pre-cap order and duplicate preservation, canonical
+  sort/dedup, height/view offset rotation, and exact truncation.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the paced retransmit target correctness envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.31s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-paced-retransmit-target-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiPacedRetransmitTargetsGate.tla`
+    (`EXITCODE: OK`; total time `0.602s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh paced-retransmit-targets-fast`
+    (`NoError`; `PacedRetransmitTargetSelectionCorrectnessEnvelope`: `23` VCs;
+    `67` state-0 invariants; total time `3.353s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh paced-retransmit-targets-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi retransmit backpressure correctness envelope
+
+- Added `RetransmitBackpressureCorrectnessEnvelope` to
+  `SumeragiRetransmitBackpressureGate.tla` and wired it into
+  `SumeragiRetransmitBackpressureGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `RetransmitBackpressurePacingExactness`, giving the
+  direct retransmit helper one checkable envelope for queue pressure, RBC
+  pressure, combined pressure, target limiting, cooldown, backoff, timeout
+  clamping, and paced retransmit admission.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the retransmit backpressure correctness envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.31s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-retransmit-backpressure-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiRetransmitBackpressureGate.tla`
+    (`EXITCODE: OK`; total time `0.632s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh retransmit-backpressure-fast`
+    (`NoError`; `RetransmitBackpressureCorrectnessEnvelope`: `50` VCs; `148`
+    state-0 invariants; total time `10.550s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh retransmit-backpressure-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi quorum retransmit target correctness envelope
+
+- Added `QuorumRetransmitTargetCorrectnessEnvelope` to
+  `SumeragiQuorumRetransmitTargetsGate.tla` and wired it into
+  `SumeragiQuorumRetransmitTargetsGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `QuorumRetransmitTargetExactness`, giving the bounded
+  quorum retransmit helper one checkable envelope for empty/local-only exits,
+  missing-voter targeting, near-quorum fanout, mapping fallback, local
+  exclusion, order/distinctness, and view-mapped signer resolution.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the quorum retransmit target correctness envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.30s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-quorum-retransmit-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiQuorumRetransmitTargetsGate.tla`
+    (`EXITCODE: OK`; total time `0.665s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx16384m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh quorum-retransmit-fast`
+    (`NoError`; `QuorumRetransmitTargetCorrectnessEnvelope`: `22` VCs; `64`
+    state-0 invariants; total time `204.428s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh quorum-retransmit-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi P2P topology refresh correctness envelope
+
+- Added `P2pTopologyRefreshCorrectnessEnvelope` to
+  `SumeragiP2pTopologyRefreshGate.tla` and wired it into
+  `SumeragiP2pTopologyRefreshGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `P2pTopologyRefreshExactness`, giving the bounded P2P
+  topology refresh coordinator one checkable envelope for refresh decisions,
+  advertisements, network updates, local-removal state, idle skips, and
+  stray-count propagation.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the P2P topology refresh correctness envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.33s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-p2p-topology-refresh-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiP2pTopologyRefreshGate.tla`
+    (`EXITCODE: OK`; total time `0.734s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh p2p-topology-refresh-fast`
+    (`NoError`; `P2pTopologyRefreshCorrectnessEnvelope`: `17` VCs; `48`
+    state-0 invariants; total time `10.857s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh p2p-topology-refresh-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi trusted-peer P2P topology correctness envelope
+
+- Added `TrustedP2pTopologyCorrectnessEnvelope` to
+  `SumeragiP2pTopologyTrustedGate.tla` and wired it into
+  `SumeragiP2pTopologyTrustedGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `TrustedP2pTopologyExactness`, giving the bounded
+  trusted-peer P2P helper one checkable envelope for expected-topology
+  construction, deduplicated size, outside-peer filtering, trusted-observer
+  exclusion, and stray order/duplicate preservation.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the trusted-peer P2P topology correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.30s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-p2p-topology-trusted-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiP2pTopologyTrustedGate.tla`
+    (`EXITCODE: OK`; total time `0.661s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh p2p-topology-trusted-fast`
+    (`NoError`; `TrustedP2pTopologyCorrectnessEnvelope`: `7` VCs; `20`
+    state-0 invariants; total time `7.412s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh p2p-topology-trusted-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi active topology-selection correctness envelope
+
+- Added `ActiveTopologySelectionCorrectnessEnvelope` to
+  `SumeragiActiveTopologySelectionGate.tla` and wired it into
+  `SumeragiActiveTopologySelectionGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `ActiveTopologySelectionExactness`, giving the bounded
+  active-topology helper one checkable envelope for source priority, output
+  normalization, PoP filtering, quorum guards, and final fallback behavior.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the active topology-selection correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.29s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-active-topology-selection-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiActiveTopologySelectionGate.tla`
+    (`EXITCODE: OK`; total time `0.608s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh active-topology-selection-fast`
+    (`NoError`; `ActiveTopologySelectionCorrectnessEnvelope`: `46` VCs;
+    `114` state-0 invariants; total time `5.152s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh active-topology-selection-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi topology role-filter correctness envelope
+
+- Added `TopologyRoleFilterCorrectnessEnvelope` to
+  `SumeragiTopologyRoleFilterGate.tla` and wired it into
+  `SumeragiTopologyRoleFilterGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `TopologyRoleFilterExactness`, giving the bounded
+  role-filter helper one checkable envelope for role partitioning, role-slice
+  projection, signature filtering, and audit-role canonicalization/rotation.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the topology role-filter correctness envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.30s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-topology-role-filter-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiTopologyRoleFilterGate.tla`
+    (`EXITCODE: OK`; total time `0.731s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh topology-role-filter-fast`
+    (`NoError`; `TopologyRoleFilterCorrectnessEnvelope`: `9` VCs; `22`
+    state-0 invariants; `2` state-1 invariants; total time `2.346s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh topology-role-filter-fast`
+    (`2` states generated, `2` distinct states, depth `2`)
+
+## 2026-06-26 Sumeragi topology fanout/redundant-send correctness envelope
+
+- Added `TopologyFanoutCorrectnessEnvelope` to
+  `SumeragiTopologyFanoutGate.tla` and wired it into
+  `SumeragiTopologyFanoutGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `TopologyFanoutHelperExactness`, giving the bounded
+  topology fanout helper one checkable envelope for redundant-send count,
+  view-change quorum, configured redundant-send floor, and tail-fanout
+  selection exactness.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the topology fanout/redundant-send correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.33s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-topology-fanout-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiTopologyFanoutGate.tla`
+    (`EXITCODE: OK`; total time `0.574s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh topology-fanout-fast`
+    (`NoError`; `TopologyFanoutCorrectnessEnvelope`: `32` VCs; `94` state-0
+    invariants; total time `5.401s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh topology-fanout-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi PRF leader/shuffle correctness envelope
+
+- Added `PrfLeaderShuffleCorrectnessEnvelope` to
+  `SumeragiPrfLeaderShuffleGate.tla` and wired it into
+  `SumeragiPrfLeaderShuffleGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `PrfLeaderShuffleExactness`, giving the bounded PRF
+  topology-ordering helper one checkable envelope for leader selection, cycle
+  periodicity/distinctness, deterministic permutation behavior, wrapper
+  canonicalization/deduplication, and view reset.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the PRF leader/shuffle correctness envelope checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.30s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-prf-leader-shuffle-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiPrfLeaderShuffleGate.tla`
+    (`EXITCODE: OK`; total time `0.750s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh prf-leader-shuffle-fast`
+    (`NoError`; `PrfLeaderShuffleCorrectnessEnvelope`: `7` VCs; `19` state-0
+    invariants; `2` state-1 invariants; total time `7.592s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh prf-leader-shuffle-fast`
+    (`3` states generated, `2` distinct states, depth `2`)
+
+## 2026-06-26 Sumeragi topology ordered-roster mutation correctness envelope
+
+- Added `TopologyOrderedRosterMutationCorrectnessEnvelope` to
+  `SumeragiTopologyMutationGate.tla` and wired it into
+  `SumeragiTopologyMutationGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `TopologyOrderedRosterMutationExactness`, giving the
+  bounded ordered-roster mutation helper one checkable envelope for exact
+  modulo rotation, forward-only `nth_rotation`, deduplicating construction,
+  peer-list update, block-commit view reset, and canonical sort/dedup behavior.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the topology ordered-roster mutation correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.31s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-topology-mutation-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiTopologyMutationGate.tla`
+    (`EXITCODE: OK`; total time `0.633s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh topology-mutation-fast`
+    (`NoError`; `TopologyOrderedRosterMutationCorrectnessEnvelope`: `8` VCs;
+    `23` state-0 invariants; `2` state-1 invariants; total time `18.803s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh topology-mutation-fast`
+    (`3` states generated, `2` distinct states, depth `2`)
+
+## 2026-06-26 Sumeragi collector fanout/selection correctness envelope
+
+- Added `CollectorSelectionCorrectnessEnvelope` to
+  `SumeragiCollectorSelectionGate.tla` and wired it into
+  `SumeragiCollectorSelectionGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `CollectorSelectionExactness`, giving the bounded
+  collector fanout/selection helper one checkable envelope for quorum/proxy-tail
+  derivation, effective fanout floors/caps, default and fallback routing, PRF
+  safety, and deterministic seed routing.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the collector fanout/selection correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.31s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-collector-selection-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiCollectorSelectionGate.tla`
+    (`EXITCODE: OK`; total time `0.600s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh collector-selection-fast`
+    (`NoError`; `CollectorSelectionCorrectnessEnvelope`: `39` VCs; `115`
+    state-0 invariants; total time `20.493s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh collector-selection-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi collector retry/gossip plan correctness envelope
+
+- Added `CollectorPlanCorrectnessEnvelope` to
+  `SumeragiCollectorPlanGate.tla` and wired it into
+  `SumeragiCollectorPlanGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `CollectorPlanRetryGossipExactness`, giving the bounded
+  `CollectorPlan` helper one checkable envelope for constructor state, cursor
+  reads and advancement, exhaustion/no-op behavior, and one-shot gossip
+  fallback exactness.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the collector retry/gossip plan correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.33s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-collector-plan-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiCollectorPlanGate.tla`
+    (`EXITCODE: OK`; total time `0.530s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh collector-plan-fast`
+    (`NoError`; `CollectorPlanCorrectnessEnvelope`: `36` VCs; `91` state-0
+    invariants; total time `3.14s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh collector-plan-fast`
+    (`16` states generated, `8` distinct states, depth `1`)
+
+## 2026-06-26 Sumeragi voting-roster support-count correctness envelope
+
+- Added `VotingSignerSupportCountCorrectnessEnvelope` to
+  `SumeragiVotingSignerCountGate.tla` and wired it into
+  `SumeragiVotingSignerCountGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `VotingSignerSupportCountExactness`, giving the bounded
+  voting-roster support-count helper one checkable envelope for set-based
+  duplicate collapse, roster-boundary filtering, high-index support, and exact
+  support counts.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the voting-roster support-count correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.32s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-voting-signer-count-correctness-typecheck typecheck docs/formal/sumeragi/SumeragiVotingSignerCountGate.tla`
+    (`EXITCODE: OK`; total time `0.576s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh voting-signer-count-fast`
+    (`NoError`; `VotingSignerSupportCountCorrectnessEnvelope`: `38` VCs;
+    `107` state-0 invariants; total time `5.627s`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh voting-signer-count-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+
+## 2026-06-26 Sumeragi QC aggregate-verification worker config correctness envelope
+
+- Added `QcVerifyWorkerConfigCorrectnessEnvelope` to
+  `SumeragiQcVerifyWorkerConfigGate.tla` and wired it into
+  `SumeragiQcVerifyWorkerConfigGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast`, giving QC aggregate-verification worker
+  configuration one checkable envelope for exact output tuples, automatic and
+  explicit thread derivation, zero work/result queue-cap derivation, explicit
+  cap preservation, positive queue-capacity floors, and the existing aggregate
+  exactness.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the QC aggregate-verification worker config correctness envelope checkpoint
+  in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.29s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-qc-verify-worker-config-correctness typecheck docs/formal/sumeragi/SumeragiQcVerifyWorkerConfigGate.tla`
+    (`Total time: 0.590 sec`, `EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-verify-worker-config-fast`
+    (`QcVerifyWorkerConfigCorrectnessEnvelope` produced `46`
+    verification conditions; `Total time: 4.839 sec`, `EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh qc-verify-worker-config-fast`
+    (`2` states generated, `1` distinct state, depth `1`; finished at
+    `2026-06-26 01:03:35`)
+
+## 2026-06-26 Sumeragi vote-verification worker config correctness envelope
+
+- Added `VoteVerifyWorkerConfigCorrectnessEnvelope` to
+  `SumeragiVoteVerifyWorkerConfigGate.tla` and wired it into
+  `SumeragiVoteVerifyWorkerConfigGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast`, giving vote-signature verification worker
+  configuration one checkable envelope for exact output tuples, automatic and
+  explicit thread derivation, zero work/result queue-cap derivation, explicit
+  cap preservation, positive queue-capacity floors, and the existing aggregate
+  exactness.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the vote-verification worker config correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.29s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-vote-verify-worker-config-correctness typecheck docs/formal/sumeragi/SumeragiVoteVerifyWorkerConfigGate.tla`
+    (`Total time: 0.528 sec`, `EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vote-verify-worker-config-fast`
+    (`VoteVerifyWorkerConfigCorrectnessEnvelope` produced `46`
+    verification conditions; `Total time: 4.305 sec`, `EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vote-verify-worker-config-fast`
+    (`2` states generated, `1` distinct state, depth `1`; finished at
+    `2026-06-26 00:58:48`)
+
+## 2026-06-26 Sumeragi frontier parent QC-hint retarget correctness envelope
+
+- Added `FrontierParentQcHintRetargetCorrectnessEnvelope` to
+  `SumeragiFrontierParentQcHintRetargetGate.tla` and wired it into
+  `SumeragiFrontierParentQcHintRetargetGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and
+  `FrontierParentQcHintRetargetSafetyAnchors`, giving contiguous-frontier
+  parent QC-hint retargeting one checkable envelope for exact stall bypass,
+  canonical reanchor progress gating, previous-emission requirements, parent
+  request branch filtering, QC-hint target rewrites, exact positive/negative
+  evidence, and concrete parent retarget anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the contiguous-frontier parent-QC hint retarget correctness envelope
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.30s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-frontier-parent-qc-hint-retarget-correctness typecheck docs/formal/sumeragi/SumeragiFrontierParentQcHintRetargetGate.tla`
+    (`Total time: 0.519 sec`, `EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-parent-qc-hint-retarget-fast`
+    (`FrontierParentQcHintRetargetCorrectnessEnvelope` produced `110`
+    verification conditions; `Total time: 3.560 sec`, `EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-parent-qc-hint-retarget-fast`
+    (`14` states generated, `13` distinct states, depth `13`; finished at
+    `2026-06-26 00:54:00`)
+
+## 2026-06-26 Sumeragi contiguous-frontier payload-hint correctness envelope
+
+- Added `ContiguousFrontierPayloadHintCorrectnessEnvelope` to
+  `SumeragiContiguousFrontierPayloadHintGate.tla` and wired it into
+  `SumeragiContiguousFrontierPayloadHintGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and
+  `ContiguousFrontierPayloadHintSafetyAnchors`, giving contiguous-frontier
+  payload-hint selection one checkable envelope for phase ranking, exact
+  deferred/marker source selection, deterministic view/hash ordering,
+  wrong-height and non-actionable rejection, empty fallback behavior, and
+  concrete payload-hint anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the contiguous-frontier payload-hint correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.30s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-contiguous-frontier-payload-hint-correctness typecheck docs/formal/sumeragi/SumeragiContiguousFrontierPayloadHintGate.tla`
+    (`Total time: 0.530 sec`, `EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh contiguous-frontier-payload-hint-fast`
+    (`ContiguousFrontierPayloadHintCorrectnessEnvelope` produced `105`
+    verification conditions; `Total time: 3.933 sec`, `EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh contiguous-frontier-payload-hint-fast`
+    (`15` states generated, `14` distinct states, depth `14`; finished at
+    `2026-06-26 00:49:20`)
+
+## 2026-06-26 Sumeragi frontier sidecar expected-hash correctness envelope
+
+- Added `FrontierSidecarExpectedHashCorrectnessEnvelope` to
+  `SumeragiFrontierSidecarExpectedHashGate.tla` and wired it into
+  `SumeragiFrontierSidecarExpectedHashGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and
+  `FrontierSidecarExpectedHashSafetyAnchors`, giving contiguous-frontier
+  sidecar expected-hash selection one checkable envelope for tracked,
+  deferred, observed, cached Prepare/Commit QC, and sidecar commit-QC sources,
+  deterministic source and phase/view/hash ordering, exact positive/negative
+  evidence, and concrete expected-hash anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the contiguous-frontier sidecar expected-hash correctness envelope checkpoint
+  in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.30s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-frontier-sidecar-expected-hash-correctness typecheck docs/formal/sumeragi/SumeragiFrontierSidecarExpectedHashGate.tla`
+    (`Total time: 0.429 sec`, `EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-sidecar-expected-hash-fast`
+    (`FrontierSidecarExpectedHashCorrectnessEnvelope` produced `102`
+    verification conditions; `Total time: 2.846 sec`, `EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-sidecar-expected-hash-fast`
+    (`27` states generated, `26` distinct states, depth `26`; finished at
+    `2026-06-26 00:45:17`)
+
+## 2026-06-26 Sumeragi frontier sidecar retarget correctness envelope
+
+- Added `FrontierSidecarRetargetCorrectnessEnvelope` to
+  `SumeragiFrontierSidecarRetargetGate.tla` and wired it into
+  `SumeragiFrontierSidecarRetargetGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and
+  `FrontierSidecarRetargetSafetyAnchors`, giving contiguous-frontier sidecar
+  retargeting one checkable envelope for narrow override reasons, retarget
+  stall/progress gates, confirmation sources, tracked and untracked routing,
+  commit-certified reacquire, exact positive/negative evidence, and concrete
+  retarget anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded
+  the contiguous-frontier sidecar retarget correctness envelope checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed in `0.30s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-frontier-sidecar-retarget-correctness typecheck docs/formal/sumeragi/SumeragiFrontierSidecarRetargetGate.tla`
+    (`Total time: 0.428 sec`, `EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-sidecar-retarget-fast`
+    (`FrontierSidecarRetargetCorrectnessEnvelope` produced `110`
+    verification conditions; `Total time: 2.344 sec`, `EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-sidecar-retarget-fast`
+    (`29` states generated, `28` distinct states, depth `28`; finished at
+    `2026-06-26 00:40:48`)
+
+## 2026-06-26 Sumeragi frontier quorum-owner cleanup correctness envelope
+
+- Added `FrontierQuorumOwnerActionableCorrectnessEnvelope` to
+  `SumeragiFrontierQuorumOwnerActionableGate.tla` and wired it into
+  `SumeragiFrontierQuorumOwnerActionableGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and
+  `FrontierQuorumOwnerActionableSafetyAnchors`, giving frontier quorum-timeout
+  owner cleanup one checkable correctness envelope for exact owner, vote,
+  dependency backlog, RBC sender, missing-block, missing-commit-QC, and
+  vote-backed recovery sources, live cleanup preservation, and rejection of
+  wrong-view, stale, wrong-phase, passive, non-frontier, stale-current-view,
+  and no-actionable cleanup.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed frontier quorum-owner cleanup correctness envelope aggregate
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-frontier-quorum-owner-correctness`
+    (`EXITCODE: OK`, total `0.424 sec`)
+  - TLC with `SumeragiFrontierQuorumOwnerActionableGate_fast.cfg`: model
+    checking completed with no errors, `22` states generated, `21` distinct
+    states found, complete depth `21`; finished in `00s` at
+    `2026-06-26 00:34:13 +04`.
+
+## 2026-06-26 Sumeragi frontier reassembly activity correctness envelope
+
+- Added `FrontierReassemblyActivityCorrectnessEnvelope` to
+  `SumeragiFrontierReassemblyActivityGate.tla` and wired it into
+  `SumeragiFrontierReassemblyActivityGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and
+  `FrontierReassemblyActivitySafetyAnchors`, giving frontier reassembly
+  activity one checkable correctness envelope for dependency progress, exact
+  same-slot ingress, same-height RBC sender and deferral work, validation work,
+  deferred BlockSyncUpdate work, no-source suppression, positive exact
+  evidence, and stale/wrong-height/wrong-view/aborted/non-pending/no-backlog
+  rejection.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed frontier reassembly activity correctness envelope aggregate
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-frontier-reassembly-activity-correctness`
+    (`EXITCODE: OK`, total `0.440 sec`)
+  - TLC with `SumeragiFrontierReassemblyActivityGate_fast.cfg`: model checking
+    completed with no errors, `34` states generated, `33` distinct states
+    found, complete depth `33`; finished in `00s` at
+    `2026-06-26 00:30:37 +04`.
+
+## 2026-06-26 Sumeragi exact-slot frontier recovery activity correctness envelope
+
+- Added `FrontierSameSlotActivityCorrectnessEnvelope` to
+  `SumeragiFrontierSameSlotActivityGate.tla` and wired it into
+  `SumeragiFrontierSameSlotActivityGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and
+  `FrontierSameSlotActivitySafetyAnchors`, giving exact-slot frontier recovery
+  activity one checkable correctness envelope for payload progress, ingress,
+  vote-backed work, missing-block request actionability, missing-commit-QC
+  repair actionability, missing-payload recovery actionability, positive exact
+  evidence, and rejection of old-view, wrong-height, stale, terminal,
+  body-present, no-actionable, and bookkeeping-only sources.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed exact-slot frontier recovery activity correctness envelope
+  aggregate checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-frontier-same-slot-activity-correctness`
+    (`EXITCODE: OK`, total `0.465 sec`)
+  - TLC with `SumeragiFrontierSameSlotActivityGate_fast.cfg`: model checking
+    completed with no errors, `38` states generated, `37` distinct states
+    found, complete depth `37`; finished in `00s` at
+    `2026-06-26 00:26:11 +04`.
+
+## 2026-06-26 Sumeragi cached proposal rebroadcast correctness envelope
+
+- Added `CachedProposalRebroadcastCorrectnessEnvelope` to
+  `SumeragiCachedProposalRebroadcastGate.tla` and wired it into
+  `SumeragiCachedProposalRebroadcastGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and
+  `CachedProposalRebroadcastSafetyAnchors`, giving cached proposal replay one
+  checkable correctness envelope for unsafe-signal admission rejection,
+  normal/recovery backpressure and cooldown selection, cache/hint/authoritative
+  rebuild caching, remote-leader relay, remote-only fanout for `BlockCreated`,
+  `ProposalHint`, and `Proposal`, local-peer exclusion, and successful
+  block-hash returns.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed cached proposal rebroadcast correctness envelope aggregate
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-cached-proposal-rebroadcast-correctness`
+    (`EXITCODE: OK`, total `0.456 sec`)
+  - TLC with `SumeragiCachedProposalRebroadcastGate_fast.cfg`: model checking
+    completed with no errors, `27` states generated, `26` distinct states
+    found, complete depth `26`; finished in `00s` at
+    `2026-06-26 00:22:56 +04`.
+
+## 2026-06-26 Sumeragi BlockCreated payload admission correctness envelope
+
+- Added `BlockCreatedAdmissionCorrectnessEnvelope` to
+  `SumeragiBlockCreatedAdmissionGate.tla` and wired it into
+  `SumeragiBlockCreatedAdmissionGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `BlockCreatedAdmissionExactness`, giving direct
+  `BlockCreated` payload admission one checkable correctness envelope for
+  acceptance/drop/defer outcomes, pending ownership, duplicate handling,
+  replay/repair side effects, stale cleanup, invalid evidence, lock rejection,
+  proposal cache/observation, payload phase sampling, missing-request cleanup,
+  payload-mismatch recovery, and commit-pipeline wakeup.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed BlockCreated payload admission correctness envelope aggregate
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-block-created-admission-correctness`
+    (`EXITCODE: OK`, total `0.585 sec`)
+  - TLC with `SumeragiBlockCreatedAdmissionGate_fast.cfg`: model checking
+    completed with no errors, `626` states generated, `25` distinct states
+    found, complete depth `2`; finished in `00s` at
+    `2026-06-26 00:19:29 +04`.
+
+## 2026-06-26 Sumeragi BlockCreated frontier metadata wire/rebuild correctness envelope
+
+- Added `BlockCreatedFrontierWireCorrectnessEnvelope` to
+  `SumeragiBlockCreatedFrontierWireGate.tla` and wired it into
+  `SumeragiBlockCreatedFrontierWireGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `BlockCreatedFrontierWireExactness`, giving
+  `BlockCreated` frontier metadata wire/rebuild one checkable correctness
+  envelope for plain constructor metadata absence, enriched constructor
+  preservation, proposal/RBC metadata copying, generic/proposal/local wire
+  rebuild fallback and rejection, local authoritative seeding, and cached
+  proposal rebroadcast admission.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed BlockCreated frontier metadata wire/rebuild correctness envelope
+  aggregate checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-block-created-frontier-wire-correctness`
+    (`EXITCODE: OK`, total `0.498 sec`)
+  - TLC with `SumeragiBlockCreatedFrontierWireGate_fast.cfg`: model checking
+    completed with no errors, `36` states generated, `35` distinct states
+    found, complete depth `35`; finished in `00s` at
+    `2026-06-26 00:16:00 +04`.
+
+## 2026-06-26 Sumeragi cached block-message wire-frame correctness envelope
+
+- Added `BlockMessageWireCorrectnessEnvelope` to
+  `SumeragiBlockMessageWireGate.tla` and wired it into
+  `SumeragiBlockMessageWireGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `BlockMessageWireExactness`, giving cached
+  block-message wire frames one checkable correctness envelope for cache
+  construction, cached/uncached serialization, cache invalidation on mutation,
+  frame-header rejection, exact prefix consumption, trailing-byte preservation,
+  decode output, cache preservation, and self-describing cached payloads.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `cached block-message wire-frame correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-block-message-wire-correctness`
+    (`EXITCODE: OK`, total `0.488 sec`)
+  - TLC with `SumeragiBlockMessageWireGate_fast.cfg`: model checking completed
+    with no errors, `22` states generated, `21` distinct states found,
+    complete depth `21`; finished in `00s` at
+    `2026-06-26 00:12:52 +04`.
+
+## 2026-06-26 Sumeragi pipeline event emission correctness envelope
+
+- Added `PipelineEventEmissionCorrectnessEnvelope` to
+  `SumeragiPipelineEventEmissionGate.tla` and wired it into
+  `SumeragiPipelineEventEmissionGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and
+  `PipelineEventEmissionSafetyAnchors`, giving pipeline event forwarding one
+  checkable correctness envelope for attempt count/kind/payload, delivered
+  envelope kind/payload, failure logging, no-panic behavior, empty no-op
+  handling, single-event wrapping, ordered batch wrapping, duplicate
+  preservation, closed-sender non-delivery, and open-sender delivery.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `pipeline event emission correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-pipeline-event-emission-correctness`
+    (`EXITCODE: OK`, total `0.571 sec`)
+  - TLC with `SumeragiPipelineEventEmissionGate_fast.cfg`: model checking
+    completed with no errors, `12` states generated, `11` distinct states
+    found, complete depth `11`; finished in `00s` at
+    `2026-06-26 00:10:05 +04`.
+
+## 2026-06-26 Sumeragi message projection correctness envelope
+
+- Added `MessageProjectionCorrectnessEnvelope` to
+  `SumeragiMessageProjectionGate.tla` and wired it into
+  `SumeragiMessageProjectionGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and `MessageProjectionSafetyAnchors`,
+  giving timing, elapsed, control, and native-AMX message projection one
+  checkable correctness envelope for BlockCreated/BlockSync timing guards,
+  labels, header height/view fields, elapsed-ms saturation, control evidence
+  labels, and native-AMX request/vote prepare/commit labels.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `consensus message projection correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-message-projection-correctness`
+    (`EXITCODE: OK`, total `0.497 sec`)
+  - TLC with `SumeragiMessageProjectionGate_fast.cfg`: model checking completed
+    with no errors, `31` states generated, `30` distinct states found,
+    complete depth `30`; finished in `00s` at
+    `2026-06-26 00:06:22 +04`.
+
+## 2026-06-25 Sumeragi block-message log/status kind correctness envelope
+
+- Added `BlockMessageKindCorrectnessEnvelope` to
+  `SumeragiBlockMessageKindGate.tla` and wired it into
+  `SumeragiBlockMessageKindGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `Safety` and `BlockMessageKindSafetyAnchors`, giving
+  block-message log/status kind projection one checkable correctness envelope
+  for exact log labels, status telemetry projection, certified-fetch subtypes,
+  NewView bypass labels, compact/full RBC chunk collapse, and Kura status
+  omission.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `block-message log/status kind correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-block-message-kind-correctness`
+    (`EXITCODE: OK`, total `0.602 sec`)
+  - TLC with `SumeragiBlockMessageKindGate_fast.cfg`: model checking completed
+    with no errors, `31` states generated, `30` distinct states found,
+    complete depth `30`; finished in `00s` at
+    `2026-06-26 00:01:03 +04`.
+
+## 2026-06-25 Sumeragi block-message height/view correctness envelope
+
+- Added `BlockMessageHeightViewCorrectnessEnvelope` to
+  `SumeragiBlockMessageHeightViewGate.tla` and wired it into
+  `SumeragiBlockMessageHeightViewGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `Safety` and `BlockMessageHeightViewSafetyAnchors`,
+  giving block-message height/view projection one checkable correctness
+  envelope for no-slot exclusions, slot-bearing future-window eligibility,
+  source selection, compact chunk widening, and height/view ordering.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `block-message height/view correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-block-message-height-view-correctness`
+    (`EXITCODE: OK`, total `0.507 sec`)
+  - TLC with `SumeragiBlockMessageHeightViewGate_fast.cfg`: model checking
+    completed with no errors, `27` states generated, `26` distinct states
+    found, complete depth `26`; finished in `00s` at
+    `2026-06-25 23:57:32 +04`.
+
+## 2026-06-25 Sumeragi block-message priority correctness envelope
+
+- Added `BlockMessagePriorityCorrectnessEnvelope` to
+  `SumeragiBlockMessagePriorityGate.tla` and wired it into
+  `SumeragiBlockMessagePriorityGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and `BlockMessagePrioritySafetyAnchors`,
+  giving consensus block-message priority one checkable correctness envelope
+  for block-sync/body-fetch traffic, VRF and execution-witness material, RBC
+  messages, proposal hints, proposals, QC votes, and QCs.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `consensus block-message priority correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-block-message-priority-correctness`
+    (`EXITCODE: OK`, total `0.393 sec`)
+  - TLC with `SumeragiBlockMessagePriorityGate_fast.cfg`: model checking
+    completed with no errors, `24` states generated, `23` distinct states
+    found, complete depth `23`; finished in `00s` at
+    `2026-06-25 23:54:05 +04`.
+
+## 2026-06-25 Sumeragi RBC compact block-message correctness envelope
+
+- Added `BlockMessageRbcCompactCorrectnessEnvelope` to
+  `SumeragiBlockMessageRbcCompactGate.tla` and wired it into
+  `SumeragiBlockMessageRbcCompactGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and `BlockMessageRbcCompactSafetyAnchors`,
+  giving RBC compact block-message helpers one checkable correctness envelope
+  for compact boundary admission, overflow fallback, field preservation,
+  normalization, height/view/epoch widening, and high-priority routing.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `RBC compact block-message correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-block-message-rbc-compact-correctness`
+    (`EXITCODE: OK`, total `0.378 sec`)
+  - TLC with `SumeragiBlockMessageRbcCompactGate_fast.cfg`: model checking
+    completed with no errors, `16` states generated, `15` distinct states
+    found, complete depth `15`; finished in `00s` at
+    `2026-06-25 23:50:37 +04`.
+
+## 2026-06-25 Sumeragi execution-witness root projection correctness envelope
+
+- Added `ExecWitnessRootProjectionCorrectnessEnvelope` to
+  `SumeragiExecWitnessRootProjectionGate.tla` and wired it into
+  `SumeragiExecWitnessRootProjectionGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and `ExecWitnessRootSafetyAnchors`, giving
+  execution-witness parent/post root projection one checkable correctness
+  envelope for post-root read/write selection, parent-root prevalue filtering,
+  root canonicalization, commit-root prevalidation, FASTPQ root binding, and
+  FASTPQ payload isolation.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `execution-witness root projection correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-exec-witness-root-projection-correctness`
+    (`EXITCODE: OK`, total `0.748 sec`)
+  - TLC with `SumeragiExecWitnessRootProjectionGate_fast.cfg`: model checking
+    completed with no errors, `17` states generated, `16` distinct states
+    found, complete depth `16`; finished in `00s` at
+    `2026-06-25 23:46:51 +04`.
+
+## 2026-06-25 Sumeragi local peer removed flag correctness envelope
+
+- Added `LocalPeerRemovedStatusCorrectnessEnvelope` to
+  `SumeragiLocalPeerRemovedStatusGate.tla` and wired it into
+  `SumeragiLocalPeerRemovedStatusGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `Safety` and `LocalPeerRemovedStatusSafetyAnchors`,
+  giving the local peer removed flag one checkable correctness envelope for
+  initial state, removed/present writes, getter projection, overwrite ordering,
+  repeated-write idempotence, and side-effect-free getter reads.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `local peer removed flag correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-local-peer-removed-status-correctness`
+    (`EXITCODE: OK`, total `0.500 sec`)
+  - TLC with `SumeragiLocalPeerRemovedStatusGate_fast.cfg`: model checking
+    completed with no errors, `12` states generated, `11` distinct states
+    found, complete depth `11`; finished in `00s` at
+    `2026-06-25 23:43:00 +04`.
+
+## 2026-06-25 Sumeragi penalty status correctness envelope
+
+- Added `PenaltyStatusCorrectnessEnvelope` to
+  `SumeragiPenaltyStatusGate.tla` and wired it into
+  `SumeragiPenaltyStatusGate_fast.cfg`. The aggregate composes `TypeInvariant`
+  with `Safety` and `PenaltyStatusSafetyAnchors`, giving penalty telemetry
+  storage and projection one checkable correctness envelope for VRF snapshots,
+  epoch parameters, applied/pending counters, accumulation/overwrite behavior,
+  getters, and top-level status fields.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `penalty status correctness envelope aggregate` checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-penalty-status-correctness`
+    (`EXITCODE: OK`, total `0.657 sec`)
+  - TLC with `SumeragiPenaltyStatusGate_fast.cfg`: model checking completed
+    with no errors, `18` states generated, `17` distinct states found,
+    complete depth `17`; finished in `00s` at `2026-06-25 23:39:49 +04`.
+
+## 2026-06-25 Sumeragi consensus penalty-action correctness envelope
+
+- Added `ConsensusPenaltyActionCorrectnessEnvelope` to
+  `SumeragiConsensusPenaltyActionGate.tla` and wired it into
+  `SumeragiConsensusPenaltyActionGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `ConsensusPenaltyActionCoreSafety` and
+  `ConsensusPenaltyActionSafetyAnchors`, giving consensus evidence penalty
+  action derivation and application one checkable correctness envelope for
+  eligibility filtering, slash and marker derivation, sort/dedup behavior, and
+  transaction/outcome mutation anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `consensus penalty-action correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-consensus-penalty-action-correctness`
+    (`EXITCODE: OK`, total `0.876 sec`)
+  - TLC with `SumeragiConsensusPenaltyActionGate_fast.cfg`: model checking
+    completed with no errors, `2` states generated, `1` distinct state found,
+    complete depth `1`; finished in `00s` at `2026-06-25 23:36:30 +04`.
+
+## 2026-06-25 Sumeragi penalty offender-selection correctness envelope
+
+- Added `PenaltyOffenderSelectionCorrectnessEnvelope` to
+  `SumeragiPenaltyOffenderSelectionGate.tla` and wired it into
+  `SumeragiPenaltyOffenderSelectionGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `PenaltyOffenderSelectionCoreSafety` and
+  `PenaltyOffenderSelectionSafetyAnchors`, giving evidence penalty attribution
+  one checkable correctness envelope for canonical offender index handling,
+  evidence-source attribution, censorship anchors, NPoS leader binding,
+  epoch/mode derivation, and roster fallback ordering.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `penalty offender-selection correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-penalty-offender-selection-correctness`
+    (`EXITCODE: OK`, total `1.49 sec`)
+  - TLC with `SumeragiPenaltyOffenderSelectionGate_fast.cfg`: model checking
+    completed with no errors, `2` states generated, `1` distinct state found,
+    complete depth `1`; finished in `00s` at `2026-06-25 23:30:31 +04`.
+
+## 2026-06-25 Sumeragi invalid-signature throttle correctness envelope
+
+- Added `InvalidSignatureThrottleCorrectnessEnvelope` to
+  `SumeragiInvalidSignatureThrottleGate.tla` and wired it into
+  `SumeragiInvalidSignatureThrottleGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `Safety` and `InvalidSignatureThrottleSafetyAnchors`,
+  giving invalid-signature throttling and penalties one checkable correctness
+  envelope for invalid-vote throttle actions, RBC mismatch throttle actions,
+  penalty actions, key/boundary/outcome anchors, and threshold/cooldown/prune
+  anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `invalid-signature throttle/penalty correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-invalid-signature-throttle-correctness`
+    (`EXITCODE: OK`, total `1.447 sec`)
+  - TLC with `SumeragiInvalidSignatureThrottleGate_fast.cfg`: model checking
+    completed with no errors, `2` states generated, `1` distinct state found,
+    complete depth `1`; finished in `00s` at `2026-06-25 23:25:33 +04`.
+
+## 2026-06-25 Sumeragi invalid-signature labels correctness envelope
+
+- Added `InvalidSignatureLabelsCorrectnessEnvelope` to
+  `SumeragiInvalidSignatureLabelsGate.tla` and wired it into
+  `SumeragiInvalidSignatureLabelsGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and `InvalidSignatureLabelSafetyAnchors`,
+  giving the invalid-signature telemetry-label helper one checkable correctness
+  envelope for exact kind labels, telemetry-wrapper identity, outcome labels,
+  RBC mismatch `should_log` semantics, label-set distinctness, and concrete
+  exported label anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `invalid-signature telemetry label correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-invalid-signature-labels-correctness`
+    (`EXITCODE: OK`, total `0.444 sec`)
+  - TLC with `SumeragiInvalidSignatureLabelsGate_fast.cfg`: model checking
+    completed with no errors, `2` states generated, `1` distinct state found,
+    complete depth `1`; finished in `00s` at `2026-06-25 23:21:21 +04`.
+
+## 2026-06-25 Sumeragi classic signature correctness envelope
+
+- Added `ClassicSignatureCorrectnessEnvelope` to
+  `SumeragiClassicSignatureGate.tla` and wired it into
+  `SumeragiClassicSignatureGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `Safety` and `ClassicSignatureSafetyAnchors`, giving the
+  classic Vote/QC signature-verification helper one checkable correctness
+  envelope for accept-decision exactness, returned-signer contracts, fail-closed
+  mode/roster/bitmap/quorum/aggregate/vote/highest-QC gates, and the NPoS
+  missing-vote tolerance anchor.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `classic Vote/QC signature-verification correctness envelope
+  aggregate` checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-classic-signature-correctness`
+    (`EXITCODE: OK`, total `0.552 sec`)
+  - TLC with `SumeragiClassicSignatureGate_fast.cfg`: model checking completed
+    with no errors, `785` states generated, `28` distinct states found,
+    complete depth `2`; finished in `00s` at `2026-06-25 23:17:24 +04`.
+
+## 2026-06-25 Sumeragi classic signing-preimage correctness envelope
+
+- Added `ClassicSigningPreimageCorrectnessEnvelope` to
+  `SumeragiClassicSigningPreimageGate.tla` and wired it into
+  `SumeragiClassicSigningPreimageGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `Safety` and `ClassicPreimageSafetyAnchors`, giving the
+  classic Vote/VRF signing-preimage helper one checkable correctness envelope
+  for live-state exactness, domain/type binding, vote subject roots, highest-QC
+  presence/body handling, VRF body binding, and mutable signature/certificate
+  exclusion.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `classic Vote/VRF signing-preimage correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-classic-preimage-correctness`
+    (`EXITCODE: OK`, total `0.711 sec`)
+  - TLC with `SumeragiClassicSigningPreimageGate_fast.cfg`: model checking
+    completed with no errors, `26` states generated, `5` distinct states found,
+    complete depth `2`; finished in `00s` at `2026-06-25 23:13:18 +04`.
+
+## 2026-06-25 Sumeragi RBC signing-preimage correctness envelope
+
+- Added `RbcSigningPreimageCorrectnessEnvelope` to
+  `SumeragiRbcSigningPreimageGate.tla` and wired it into
+  `SumeragiRbcSigningPreimageGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `Safety` and `RbcPreimageSafetyAnchors`, giving the RBC
+  READY/DELIVER signing-preimage helper one checkable correctness envelope for
+  domain/type/subject binding, self-signature exclusion, READY count binding,
+  and embedded READY-bundle entry anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `RBC signing-preimage correctness envelope aggregate` checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-rbc-preimage-correctness`
+    (`EXITCODE: OK`, total `0.577 sec`)
+  - TLC with `SumeragiRbcSigningPreimageGate_fast.cfg`: model checking
+    completed with no errors, `17` states generated, `4` distinct states found,
+    complete depth `2`; finished in `00s` at `2026-06-25 23:08:05 +04`.
+
+## 2026-06-25 Sumeragi RBC unverified-roster correctness envelope
+
+- Added `RbcUnverifiedRosterCorrectnessEnvelope` to
+  `SumeragiRbcUnverifiedRosterGate.tla` and wired it into
+  `SumeragiRbcUnverifiedRosterGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and `UnverifiedRosterSafetyAnchors`, giving
+  the RBC unverified-roster escape-hatch helper one checkable correctness
+  envelope for exact roster-availability and allow-decision matching,
+  permissioned allow anchors, NPoS rejection anchors, roster-availability
+  anchors, and active/vote/payload fallback-rule anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `direct RBC unverified-roster correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-rbc-unverified-roster-correctness`
+    (`EXITCODE: OK`, total `0.453 sec`)
+  - TLC with `SumeragiRbcUnverifiedRosterGate_fast.cfg`: model checking
+    completed with no errors, `13` states generated, `12` distinct states
+    found, complete depth `12`; finished in `00s` at
+    `2026-06-25 23:02:08 +04`.
+
+## 2026-06-25 Sumeragi RBC missing-block recovery correctness envelope
+
+- Added `RbcMissingBlockRecoveryCorrectnessEnvelope` to
+  `SumeragiRbcMissingBlockRecoveryGate.tla` and wired it into
+  `SumeragiRbcMissingBlockRecoveryGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and `MissingBlockRecoverySafetyAnchors`,
+  giving the RBC missing BlockCreated recovery helper one checkable correctness
+  envelope for exact recovery/materialization/force-fetch/fetch-mode/
+  suppression matching, known-local and metadata recovery anchors,
+  authoritative-only materialization, frontier body-repair forcing, signer
+  fallback threshold, and far-future cleanup/reanchor anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `direct RBC missing BlockCreated recovery correctness envelope
+  aggregate` checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-rbc-missing-block-recovery-correctness`
+    (`EXITCODE: OK`, total `0.580 sec`)
+  - TLC with `SumeragiRbcMissingBlockRecoveryGate_fast.cfg`: model checking
+    completed with no errors, `33` states generated, `32` distinct states
+    found, complete depth `32`; finished in `00s` at
+    `2026-06-25 22:58:27 +04`.
+
+## 2026-06-25 Sumeragi round-gap status correctness envelope
+
+- Added `RoundGapStatusCorrectnessEnvelope` to
+  `SumeragiRoundGapStatusGate.tla` and wired it into
+  `SumeragiRoundGapStatusGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `Safety` and `RoundGapSafetyAnchors`, giving the
+  round-gap marker/snapshot/EMA status helper one checkable correctness
+  envelope for exact candidate/action matching, action-domain bounds, reset,
+  marker storage, incomplete and mismatched isolation, duration, EMA,
+  pruning/overflow, and snapshot projection anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `round-gap status correctness envelope aggregate` checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-round-gap-status-correctness`
+    (`EXITCODE: OK`, total `0.937 sec`)
+  - TLC with `SumeragiRoundGapStatusGate_fast.cfg`: model checking completed
+    with no errors, `27` states generated, `26` distinct states found, complete
+    depth `26`; finished in `00s` at `2026-06-25 22:54:29 +04`.
+
+## 2026-06-25 Sumeragi RBC missing-INIT rebroadcast correctness envelope
+
+- Added `RbcMissingInitRebroadcastCorrectnessEnvelope` to
+  `SumeragiRbcMissingInitRebroadcastGate.tla` and wired it into
+  `SumeragiRbcMissingInitRebroadcastGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and `SafetyAnchors`, giving the missing-INIT
+  broad rebroadcast helper one checkable correctness envelope for exact
+  decision matching, early-reject gates, queue backpressure exemption, targeted
+  INIT repair short-circuits, missing-bundle suppression, and broad rebroadcast
+  payload/READY forwarding anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `direct RBC missing-INIT broad rebroadcast correctness envelope
+  aggregate` checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-rbc-missing-init-rebroadcast-correctness`
+    (`EXITCODE: OK`, total `0.737 sec`)
+  - TLC with `SumeragiRbcMissingInitRebroadcastGate_fast.cfg`: model checking
+    completed with no errors, `19` states generated, `18` distinct states
+    found, complete depth `18`; finished in `00s` at
+    `2026-06-25 22:50:51 +04`.
+
+## 2026-06-25 Sumeragi RBC deferral-throttle correctness envelope
+
+- Added `RbcDeferralThrottleCorrectnessEnvelope` to
+  `SumeragiRbcDeferralThrottleGate.tla` and wired it into
+  `SumeragiRbcDeferralThrottleGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and `SafetyAnchors`, giving the RBC
+  READY/DELIVER deferral throttle helper one checkable correctness envelope for
+  exact DELIVER and READY case matching, first-observation/progress anchors,
+  cooldown and backwards-clock anchors, and admitted-emission state replacement
+  anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `direct RBC READY/DELIVER deferral throttle correctness envelope
+  aggregate` checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-rbc-deferral-throttle-correctness`
+    (`EXITCODE: OK`, total `0.902 sec`)
+  - TLC with `SumeragiRbcDeferralThrottleGate_fast.cfg`: model checking
+    completed with no errors, `24` states generated, `23` distinct states
+    found, complete depth `23`; finished in `00s` at
+    `2026-06-25 22:47:15 +04`.
+
+## 2026-06-25 Sumeragi RBC chunk-post debug correctness envelope
+
+- Added `RbcChunkPostDebugCorrectnessEnvelope` to
+  `SumeragiRbcChunkPostDebugGate.tla` and wired it into
+  `SumeragiRbcChunkPostDebugGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and `SafetyAnchors`, giving the RBC chunk
+  post/debug helper one checkable correctness envelope for mask bounds,
+  selected-bit handling, withholding and equivocation predicates, scheduling
+  skip/post anchors, cached/fresh frame selection, post/skip counts, and READY
+  signature-fork anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `direct RBC chunk post scheduling/debug-mask correctness envelope
+  aggregate` checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-rbc-chunk-post-debug-correctness`
+    (`EXITCODE: OK`, total `0.393 sec`)
+  - TLC with `SumeragiRbcChunkPostDebugGate_fast.cfg`: model checking completed
+    with no errors, `24` states generated, `23` distinct states found, complete
+    depth `23`; finished in `00s` at `2026-06-25 22:43:13 +04`.
+
+## 2026-06-25 Sumeragi RBC outbound-flush correctness envelope
+
+- Added `RbcOutboundFlushCorrectnessEnvelope` to
+  `SumeragiRbcOutboundFlushGate.tla` and wired it into
+  `SumeragiRbcOutboundFlushGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and `SafetyAnchors`, giving the RBC
+  outbound chunk flush helper one checkable correctness envelope for exact
+  flush case matching, observer/DA/empty/relay/queue entry gates, budget
+  flooring and cursor order, payload-exempt queue sends, zero-send cleanup, and
+  cursor/progress anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `direct RBC outbound chunk flush correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-rbc-outbound-flush-correctness`
+    (`EXITCODE: OK`, total `0.775 sec`)
+  - TLC with `SumeragiRbcOutboundFlushGate_fast.cfg`: model checking completed
+    with no errors, `15` states generated, `14` distinct states found, complete
+    depth `14`; finished in `00s` at `2026-06-25 22:38:51 +04`.
+
+## 2026-06-25 Sumeragi RBC targeted-repair correctness envelope
+
+- Added `RbcTargetedRepairCorrectnessEnvelope` to
+  `SumeragiRbcTargetedRepairGate.tla` and wired it into
+  `SumeragiRbcTargetedRepairGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and `SafetyAnchors`, giving the targeted
+  RBC repair helper one checkable correctness envelope for exact
+  READY/DELIVER/rescue matching, targeted READY rejection and send anchors,
+  targeted DELIVER send anchors, rescue early-rejection gates, READY repair due
+  handling, payload repair recording, authoritative READY repair, and delivered
+  missing-commit-QC cooldown anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `direct RBC targeted READY/DELIVER correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-rbc-targeted-repair-correctness`
+    (`EXITCODE: OK`, total `0.902 sec`)
+  - TLC with `SumeragiRbcTargetedRepairGate_fast.cfg`: model checking completed
+    with no errors, `28` states generated, `27` distinct states found, complete
+    depth `27`; finished in `00s` at `2026-06-25 22:36:05 +04`.
+
+## 2026-06-25 Sumeragi RBC repair-request correctness envelope
+
+- Added `RbcRepairRequestCorrectnessEnvelope` to
+  `SumeragiRbcRepairRequestGate.tla` and wired it into
+  `SumeragiRbcRepairRequestGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and `SafetyAnchors`, giving the RBC repair
+  request helper one checkable correctness envelope for exact
+  cooldown/target/missing-READY/INIT/chunk repair matching, due-cooldown
+  anchors, target ordering, deterministic target selection, missing READY
+  projection, INIT request state, and chunk repair request/fallback state
+  anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `direct RBC repair request correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-rbc-repair-request-correctness`
+    (`EXITCODE: OK`, total `1.217 sec`)
+  - TLC with `SumeragiRbcRepairRequestGate_fast.cfg`: model checking completed
+    with no errors, `28` states generated, `27` distinct states found, complete
+    depth `27`; finished in `00s` at `2026-06-25 22:33:10 +04`.
+
+## 2026-06-25 Sumeragi RBC hot-repair correctness envelope
+
+- Added `RbcHotRepairCorrectnessEnvelope` to
+  `SumeragiRbcHotRepairGate.tla` and wired it into
+  `SumeragiRbcHotRepairGate_fast.cfg`. The aggregate composes `TypeInvariant`
+  with `SafetyFast` and `SafetyAnchors`, giving the RBC hot-repair helper one
+  checkable correctness envelope for exact
+  active/suppression/exact-repair/urgent/exempt/proposal matching, active
+  positive/rejection anchors, delivered-session suppression, exact-frontier
+  recovered chunk repair admission, urgent near-tip classification, payload
+  backpressure exemption, and proposal-blocking anchors for
+  pending/inflight/processing RBC work.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `direct RBC hot-repair/backpressure correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with `target/apalache/out-codex-rbc-hot-repair-correctness`
+    (`EXITCODE: OK`, total `0.601 sec`)
+  - TLC with `SumeragiRbcHotRepairGate_fast.cfg`: model checking completed with
+    no errors, `46` states generated, `45` distinct states found, complete
+    depth `45`; finished in `00s` at `2026-06-25 22:30:06 +04`.
+
+## 2026-06-25 Sumeragi RBC progress-stage correctness envelope
+
+- Added `RbcProgressStageCorrectnessEnvelope` to
+  `SumeragiRbcProgressStageGate.tla` and wired it into
+  `SumeragiRbcProgressStageGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and `SafetyAnchors`, giving the RBC
+  progress-stage helper one checkable correctness envelope for exact
+  advance/sync/roster matching, stage-order anchors, monotone forward
+  advancement, no-regression behavior, observation sync ordering,
+  READY-quorum non-advancement, authoritative-roster quorum derivation, and
+  roster-driven payload/READY/DELIVERED projection anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `direct RBC progress-stage correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-rbc-progress-stage-correctness`
+    (`EXITCODE: OK`, total `0.638 sec`)
+  - TLC with `SumeragiRbcProgressStageGate_fast.cfg`: model checking completed
+    with no errors, `22` states generated, `21` distinct states found, complete
+    depth `21`; finished in `00s` at `2026-06-25 22:27:17 +04`.
+
+## 2026-06-25 Sumeragi RBC mismatch status correctness envelope
+
+- Added `RbcMismatchStatusCorrectnessEnvelope` to
+  `SumeragiRbcMismatchStatusGate.tla` and wired it into
+  `SumeragiRbcMismatchStatusGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `Safety` and `SafetyAnchors`, giving the RBC mismatch
+  status helper one checkable correctness envelope for exact candidate action
+  matching, mismatch-kind label stability, reset behavior, first-record
+  per-kind routing, same-peer accumulation, same-peer/different-kind
+  separation, different-peer separation, timestamp set/update behavior,
+  snapshot preservation, saturation behavior, and reset-after-records anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `RBC mismatch status correctness envelope aggregate` checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-rbc-mismatch-status-correctness`
+    (`EXITCODE: OK`, total `0.742 sec`)
+  - TLC with `SumeragiRbcMismatchStatusGate_fast.cfg`: model checking
+    completed with no errors, `17` states generated, `16` distinct states
+    found, complete depth `16`; finished in `00s` at
+    `2026-06-25 22:24:26 +04`.
+
+## 2026-06-25 Sumeragi RBC abort status correctness envelope
+
+- Added `RbcAbortStatusCorrectnessEnvelope` to
+  `SumeragiRbcAbortStatusGate.tla` and wired it into
+  `SumeragiRbcAbortStatusGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `Safety` and `SafetyAnchors`, giving the RBC abort
+  status helper one checkable correctness envelope for exact candidate action
+  matching, reset behavior, first and repeated abort accounting, latest
+  height/view updates, lower-height and zero-slot recording, direct snapshot
+  projection, top-level status projection, and reset-after-records anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `RBC abort status correctness envelope aggregate` checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-rbc-abort-status-correctness`
+    (`EXITCODE: OK`, total `0.567 sec`)
+  - TLC with `SumeragiRbcAbortStatusGate_fast.cfg`: model checking completed
+    with no errors, `12` states generated, `11` distinct states found, complete
+    depth `11`; finished in `00s` at `2026-06-25 22:21:36 +04`.
+
+## 2026-06-25 Sumeragi history status correctness envelope
+
+- Added `HistoryStatusCorrectnessEnvelope` to `SumeragiHistoryStatusGate.tla`
+  and wired it into `SumeragiHistoryStatusGate_fast.cfg`. The aggregate
+  composes `TypeInvariant` with `Safety` and `SafetyAnchors`, giving the
+  history status helper one checkable correctness envelope for exact candidate
+  action matching, checkpoint reset/append/order/cap/route projection,
+  commit-QC replacement, distinct-block preservation, ordering, retention,
+  route-window, latest-snapshot projection, NPoS latest/cap/snapshot
+  projection, and consensus-key replacement/cap/route anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `history status correctness envelope aggregate` checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with `target/apalache/out-codex-history-status-correctness`
+    (`EXITCODE: OK`, total `0.823 sec`)
+  - TLC with `SumeragiHistoryStatusGate_fast.cfg`: model checking completed
+    with no errors, `27` states generated, `26` distinct states found, complete
+    depth `26`; finished in `00s` at `2026-06-25 22:18:47 +04`.
+
+## 2026-06-25 Sumeragi commit-inflight status correctness envelope
+
+- Added `CommitInflightStatusCorrectnessEnvelope` to
+  `SumeragiCommitInflightStatusGate.tla` and wired it into
+  `SumeragiCommitInflightStatusGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `Safety` and `SafetyAnchors`, giving the
+  commit-inflight status helper one checkable correctness envelope for exact
+  candidate action matching, reset behavior, timeout configuration storage,
+  start lifecycle fields, pause/resume queue-depth counters, finish no-op and
+  matching-finish semantics, elapsed-time projection, timeout recording,
+  top-level snapshot projection, JSON projection, and typed Torii status
+  projection anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `commit-inflight status correctness envelope aggregate` checkpoint
+  in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-commit-inflight-status-correctness`
+    (`EXITCODE: OK`, total `0.789 sec`)
+  - TLC with `SumeragiCommitInflightStatusGate_fast.cfg`: model checking
+    completed with no errors, `27` states generated, `26` distinct states
+    found, complete depth `26`; finished in `00s` at
+    `2026-06-25 22:15:53 +04`.
+
+## 2026-06-25 Sumeragi commit-quorum status correctness envelope
+
+- Added `CommitQuorumStatusCorrectnessEnvelope` to
+  `SumeragiCommitQuorumStatusGate.tla` and wired it into
+  `SumeragiCommitQuorumStatusGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `Safety` and `SafetyAnchors`, giving the
+  commit-quorum status helper one checkable correctness envelope for exact
+  candidate action matching, reset behavior, round/hash/count storage,
+  timestamp refresh, overwrite behavior, empty/default snapshots, snapshot
+  projection, JSON projection, and typed Torii status projection anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `commit-quorum status correctness envelope aggregate` checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-commit-quorum-status-correctness`
+    (`EXITCODE: OK`, total `0.720 sec`)
+  - TLC with `SumeragiCommitQuorumStatusGate_fast.cfg`: model checking
+    completed with no errors, `24` states generated, `23` distinct states
+    found, complete depth `23`; finished in `00s` at
+    `2026-06-25 22:12:57 +04`.
+
+## 2026-06-25 Sumeragi QC status correctness envelope
+
+- Added `QcStatusCorrectnessEnvelope` to `SumeragiQcStatusGate.tla` and wired
+  it into `SumeragiQcStatusGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `Safety` and `SafetyAnchors`, giving the QC observability
+  status helper one checkable correctness envelope for exact candidate action
+  matching, initial zero state, leader storage/overwrite, highest-QC
+  tuple/subject storage, getter/snapshot projection, overwrite behavior,
+  locked-QC reset, monotonic higher-tuple admission, lower-tuple rejection,
+  same-tuple subject updates, and locked-QC snapshot anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `QC status correctness envelope aggregate` checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with `target/apalache/out-codex-qc-status-correctness`
+    (`EXITCODE: OK`, total `0.692 sec`)
+  - TLC with `SumeragiQcStatusGate_fast.cfg`: model checking completed with no
+    errors, `19` states generated, `18` distinct states found, complete depth
+    `18`; finished in `00s` at `2026-06-25 22:07:28 +04`.
+
+## 2026-06-25 Sumeragi view-change proof status correctness envelope
+
+- Added `ViewChangeProofStatusCorrectnessEnvelope` to
+  `SumeragiViewChangeProofStatusGate.tla` and wired it into
+  `SumeragiViewChangeProofStatusGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `Safety` and `SafetyAnchors`, giving the view-change
+  proof/index status accounting helper one checkable correctness envelope for
+  exact candidate action matching, initial zero state, index storage/overwrite,
+  proof counter buckets, suggest/install buckets, accumulation, snapshot
+  projection, and reset anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `view-change proof status correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-view-change-proof-status-correctness`
+    (`EXITCODE: OK`, total `0.618 sec`)
+  - TLC with `SumeragiViewChangeProofStatusGate_fast.cfg`: model checking
+    completed with no errors, `17` states generated, `16` distinct states found,
+    complete depth `16`; finished in `00s` at `2026-06-25 22:03:12 +04`.
+
+## 2026-06-25 Sumeragi view-change cause status correctness envelope
+
+- Added `ViewChangeCauseStatusCorrectnessEnvelope` to
+  `SumeragiViewChangeCauseStatusGate.tla` and wired it into
+  `SumeragiViewChangeCauseStatusGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `Safety` and `SafetyAnchors`, giving the view-change
+  cause status accounting helper one checkable correctness envelope for exact
+  candidate action matching, reset behavior, known and unknown cause accounting,
+  accumulation, last-cause/timestamp anchors, per-cause timestamp anchors,
+  snapshot projection, top-level projection, and reset-after-records anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `view-change cause status correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-view-change-cause-status-correctness`
+    (`EXITCODE: OK`, total `0.778 sec`)
+  - TLC with `SumeragiViewChangeCauseStatusGate_fast.cfg`: model checking
+    completed with no errors, `23` states generated, `22` distinct states found,
+    complete depth `22`; finished in `00s` at `2026-06-25 21:58:44 +04`.
+
+## 2026-06-25 Sumeragi peer-key policy status correctness envelope
+
+- Added `PeerKeyPolicyStatusCorrectnessEnvelope` to
+  `SumeragiPeerKeyPolicyStatusGate.tla` and wired it into
+  `SumeragiPeerKeyPolicyStatusGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `Safety` and `SafetyAnchors`, giving the peer-key policy
+  status accounting helper one checkable correctness envelope for exact
+  candidate action matching, reset behavior, total/bucket accounting, stable
+  label anchors, accumulation, timestamp refresh, snapshot projection,
+  top-level projection, and reset-after-records anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `peer-key policy status correctness envelope aggregate` checkpoint
+  in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-peer-key-policy-status-correctness`
+    (`EXITCODE: OK`, total `0.712 sec`)
+  - TLC with `SumeragiPeerKeyPolicyStatusGate_fast.cfg`: model checking
+    completed with no errors, `20` states generated, `19` distinct states found,
+    complete depth `19`; finished in `00s` at `2026-06-25 21:54:39 +04`.
+
+## 2026-06-25 Sumeragi validation reject status correctness envelope
+
+- Added `ValidationRejectStatusCorrectnessEnvelope` to
+  `SumeragiValidationRejectStatusGate.tla` and wired it into
+  `SumeragiValidationRejectStatusGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `Safety` and `SafetyAnchors`, giving the
+  validation-reject status accounting helper one checkable correctness envelope
+  for exact candidate action matching, reset behavior, known and unknown bucket
+  accounting, accumulation, last-field updates, timestamp refresh, snapshot
+  projection, and reset-after-records anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `validation reject status correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-validation-reject-status-correctness`
+    (`EXITCODE: OK`, total `0.690 sec`)
+  - TLC with `SumeragiValidationRejectStatusGate_fast.cfg`: model checking
+    completed with no errors, `18` states generated, `17` distinct states found,
+    complete depth `17`; finished in `00s` at `2026-06-25 21:50:35 +04`.
+
+## 2026-06-25 Sumeragi validation reject reason-label correctness envelope
+
+- Added `ValidationRejectReasonLabelCorrectnessEnvelope` to
+  `SumeragiValidationRejectReasonLabelGate.tla` and wired it into
+  `SumeragiValidationRejectReasonLabelGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast`, giving the validation-reject reason-label
+  classifier one checkable correctness envelope for exact validation/vNext label
+  matching, direct reason labels, execution/stateless bucket anchors, and vNext
+  pass-through/normalization anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `validation reject reason-label correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-validation-reject-reason-label-correctness`
+    (`EXITCODE: OK`, total `0.613 sec`)
+  - TLC with `SumeragiValidationRejectReasonLabelGate_fast.cfg`: model checking
+    completed with no errors, `2` states generated, `1` distinct state found,
+    complete depth `1`; finished in `00s` at `2026-06-25 21:46:58 +04`.
+
+## 2026-06-25 Sumeragi validation failure finalize correctness envelope
+
+- Added `ValidationFailureFinalizeCorrectnessEnvelope` to
+  `SumeragiValidationFailureFinalizeGate.tla` and wired it into
+  `SumeragiValidationFailureFinalizeGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and `SafetyAnchors`, giving the validation
+  failure finalization helper one checkable correctness envelope for exact
+  output matching, previous-height deferral boundaries, deferred side-effect
+  suppression, invalid cleanup, reason labels, evidence/QC gating,
+  previous-roster recovery gating, and cleanup anchors.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `validation failure finalization correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-validation-failure-finalize-correctness`
+    (`EXITCODE: OK`, total `0.656 sec`)
+  - TLC with `SumeragiValidationFailureFinalizeGate_fast.cfg`: model checking
+    completed with no errors, `2` states generated, `1` distinct state found,
+    complete depth `1`; finished in `00s` at `2026-06-25 21:43:37 +04`.
+
+## 2026-06-25 Sumeragi observer signature recovery correctness envelope
+
+- Added `ObserverSignatureRecoveryCorrectnessEnvelope` to
+  `SumeragiObserverSignatureRecoveryGate.tla` and wired it into
+  `SumeragiObserverSignatureRecoveryGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `SafetyFast` and `SafetyAnchors`, giving the
+  observer-signature recovery helper one checkable correctness envelope for
+  full case exactness, recoverable mismatch anchors, independent observed/cached
+  QC sources, local-validator rejection, unsupported-error rejection,
+  missing/mismatched-QC rejection, and accepted-case guard coverage.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `observer signature-mismatch recovery correctness envelope
+  aggregate` checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-observer-signature-recovery-correctness`
+    (`EXITCODE: OK`, total `0.447 sec`)
+  - TLC with `SumeragiObserverSignatureRecoveryGate_fast.cfg`: model checking
+    completed with no errors, `2` states generated, `1` distinct state found,
+    complete depth `1`; finished in `00s` at `2026-06-25 21:39:07 +04`.
+
+## 2026-06-25 Sumeragi fast-finality inline validation correctness envelope
+
+- Added `FastFinalityInlineValidationCorrectnessEnvelope` to
+  `SumeragiFastFinalityInlineValidationGate.tla` and wired it into
+  `SumeragiFastFinalityInlineValidationGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `Safety`, giving the inline-validation helper one
+  checkable correctness envelope for result exactness,
+  DA/priority/height/proposal/inflight/payload gates, cap boundaries,
+  accepted-candidate guard coverage, and returned-count behavior.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `fast-finality inline validation correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-fast-finality-inline-validation-correctness`
+    (`EXITCODE: OK`, total `0.458 sec`)
+  - TLC with `SumeragiFastFinalityInlineValidationGate_fast.cfg`: model
+    checking completed with no errors, `22` states generated, `11` distinct
+    states found, complete depth `1`; finished in `00s` at
+    `2026-06-25 21:35:24 +04`.
+
+## 2026-06-25 Sumeragi highest-QC defer-marker prune correctness envelope
+
+- Added `HighestQcDeferMarkerPruneCorrectnessEnvelope` to
+  `SumeragiHighestQcDeferMarkerPruneGate.tla` and wired it into
+  `SumeragiHighestQcDeferMarkerPruneGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `NoBugInvariant`, giving the defer-marker cleanup helper
+  one checkable correctness envelope for view-change pruning, recovery clearing,
+  committed-height cleanup, local-known cleanup, non-actionable cleanup,
+  unresolved-dependency retention, and predicate short-circuit behavior.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `highest-QC defer-marker prune correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-highest-qc-defer-marker-prune-correctness`
+    (`EXITCODE: OK`, total `0.522 sec`)
+  - TLC with `SumeragiHighestQcDeferMarkerPruneGate_fast.cfg`: model checking
+    completed with no errors, `2` states generated, `1` distinct state found,
+    complete depth `1`; finished in `00s` at `2026-06-25 21:29:42 +04`.
+
+## 2026-06-25 Sumeragi stale RBC session prune correctness envelope
+
+- Added `StaleRbcSessionPruneCorrectnessEnvelope` to
+  `SumeragiStaleRbcSessionPruneGate.tla` and wired it into
+  `SumeragiStaleRbcSessionPruneGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `StaleRbcSessionPruneCoreSafety`, giving the stale RBC
+  session cleanup branch one checkable correctness envelope for stale
+  same-height selection, DA-disabled purge, invalid-session purge, delivered
+  exact-payload gating, undelivered retention, purge-state side effects, and
+  removal-count behavior.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `stale RBC session prune correctness envelope aggregate` checkpoint
+  in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-stale-rbc-session-prune-correctness`
+    (`EXITCODE: OK`, total `0.544 sec`)
+  - TLC with `SumeragiStaleRbcSessionPruneGate_fast.cfg`: model checking
+    completed with no errors, `2` states generated, `1` distinct state found,
+    complete depth `1`; finished in `00s` at `2026-06-25 21:23:38 +04`.
+
+## 2026-06-25 Sumeragi stale missing commit-QC prune correctness envelope
+
+- Added `StaleMissingCommitQcPruneCorrectnessEnvelope` to
+  `SumeragiStaleMissingCommitQcPruneGate.tla` and wired it into
+  `SumeragiStaleMissingCommitQcPruneGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `StaleMissingCommitQcPruneCoreSafety`, giving the missing
+  commit-QC request branch one checkable correctness envelope for stale
+  same-height selection, exact frontier repair, local-payload repair,
+  either-source preservation, gate-check, removal, and removal-counter behavior.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `stale missing commit-QC request prune correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-stale-missing-commit-qc-prune-correctness`
+    (`EXITCODE: OK`, total `0.535 sec`)
+  - TLC with `SumeragiStaleMissingCommitQcPruneGate_fast.cfg`: model checking
+    completed with no errors, `2` states generated, `1` distinct state found,
+    complete depth `1`; finished in `00s` at `2026-06-25 21:18:57 +04`.
+
+## 2026-06-25 Sumeragi superseded frontier payload retention correctness envelope
+
+- Added `SupersededFrontierPayloadRetentionCorrectnessEnvelope` to
+  `SumeragiSupersededFrontierPayloadRetentionGate.tla` and wired it into
+  `SumeragiSupersededFrontierPayloadRetentionGate_fast.cfg`. The aggregate
+  composes `TypeInvariant` with `SafetyAnchors`, giving the superseded
+  contiguous-frontier payload helper one checkable correctness envelope for
+  accepted commit-evidence sources, boundary parent-match retention, admission
+  rejection, no-evidence rejection, and retention-implies-guard behavior.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `superseded frontier payload retention correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-superseded-frontier-payload-retention-correctness`
+    (`EXITCODE: OK`, total `0.497 sec`)
+  - TLC with `SumeragiSupersededFrontierPayloadRetentionGate_fast.cfg`: model
+    checking completed with no errors, `2` states generated, `1` distinct state
+    found, complete depth `1`; finished in `00s` at
+    `2026-06-25 21:14:35 +04`.
+
+## 2026-06-25 Sumeragi stale missing-block request prune correctness envelope
+
+- Added `StaleMissingBlockRequestPruneCorrectnessEnvelope` to
+  `SumeragiStaleMissingBlockRequestPruneGate.tla` and wired it into
+  `SumeragiStaleMissingBlockRequestPruneGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `StaleMissingBlockRequestPruneCoreSafety`, giving the
+  missing-block request branch one checkable correctness envelope for stale
+  same-height selection, DA payload gating, either-source sufficiency,
+  exact-hash availability, unresolved-request retention, and removal-counter
+  behavior.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `stale missing-block request prune correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-stale-missing-block-request-prune-correctness`
+    (`EXITCODE: OK`, total `0.495 sec`)
+  - TLC with `SumeragiStaleMissingBlockRequestPruneGate_fast.cfg`: model
+    checking completed with no errors, `2` states generated, `1` distinct state
+    found, complete depth `1`; finished in `00s` at
+    `2026-06-25 21:10:55 +04`.
+
+## 2026-06-25 Sumeragi stale-view pending prune correctness envelope
+
+- Added `StaleViewPendingPruneCorrectnessEnvelope` to
+  `SumeragiStaleViewPendingPruneGate.tla` and wired it into
+  `SumeragiStaleViewPendingPruneGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `StaleViewPendingPruneCoreSafety`, giving the
+  pending-block stale-view cleanup helper one checkable correctness envelope for
+  stale selection, live-owner preservation, DA retired-branch retention,
+  execution cleanup, retained-branch shape, and RBC cleanup policy.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `stale-view pending prune correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-stale-view-pending-prune-correctness`
+    (`EXITCODE: OK`, total `0.564 sec`)
+  - TLC with `SumeragiStaleViewPendingPruneGate_fast.cfg`: model checking
+    completed with no errors, `2` states generated, `1` distinct state found,
+    complete depth `1`; finished in `00s` at `2026-06-25 21:07:15 +04`.
+
+## 2026-06-25 Sumeragi keep-frontier pending-active correctness envelope
+
+- Added `KeepFrontierPendingActiveCorrectnessEnvelope` to
+  `SumeragiKeepFrontierPendingActiveGate.tla` and wired it into
+  `SumeragiKeepFrontierPendingActiveGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `NoBugInvariant`, giving the view-change pending
+  preservation helper one checkable correctness envelope for live-frontier
+  eligibility, pending evidence, local-vote bridging, exact-hash inflight
+  sources, fallback preservation, and no-source rejection.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `keep-frontier pending-active correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-keep-frontier-pending-active-correctness`
+    (`EXITCODE: OK`, total `0.510 sec`)
+  - TLC with `SumeragiKeepFrontierPendingActiveGate_fast.cfg`: model checking
+    completed with no errors, `2` states generated, `1` distinct state found,
+    complete depth `1`; finished in `00s` at `2026-06-25 21:03:50 +04`.
+
+## 2026-06-25 Sumeragi frontier live-owner work correctness envelope
+
+- Added `FrontierLiveOwnerWorkCorrectnessEnvelope` to
+  `SumeragiFrontierLiveOwnerWorkGate.tla` and wired it into
+  `SumeragiFrontierLiveOwnerWorkGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `NoBugInvariant`, giving the frontier live-owner helper
+  one checkable correctness envelope for owner-work sources, terminal-mode
+  rejection, fallthrough preservation, local-vote-history filtering, no-work
+  rejection, and conflict-adapter behavior.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `frontier live-owner work correctness envelope aggregate` checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-frontier-live-owner-work-correctness`
+    (`EXITCODE: OK`, total `0.640 sec`)
+  - TLC with `SumeragiFrontierLiveOwnerWorkGate_fast.cfg`: model checking
+    completed with no errors, `2` states generated, `1` distinct state found,
+    complete depth `1`; finished in `00s` at `2026-06-25 20:59:56 +04`.
+
+## 2026-06-25 Sumeragi consensus recovery prune correctness envelope
+
+- Added `ConsensusRecoveryPruneCorrectnessEnvelope` to
+  `SumeragiConsensusRecoveryPruneGate.tla` and wired it into
+  `SumeragiConsensusRecoveryPruneGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `ConsensusRecoveryPruneCoreSafety`, giving the
+  consensus-recovery helper one checkable correctness envelope for clear-height,
+  hash-agnostic removal, status/dwell reset, committed-height floor,
+  retention-boundary, timeout-max, and retention-check gating behavior.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `consensus recovery prune correctness envelope aggregate`
+  checkpoint in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-consensus-recovery-prune-correctness`
+    (`EXITCODE: OK`, total `0.548 sec`)
+  - TLC with `SumeragiConsensusRecoveryPruneGate_fast.cfg`: model checking
+    completed with no errors, `2` states generated, `1` distinct state found,
+    complete depth `1`; finished in `00s` at `2026-06-25 20:56:24 +04`.
+
+## 2026-06-25 Sumeragi roster recovery FSM correctness envelope
+
+- Added `RosterRecoveryFsmCorrectnessEnvelope` to
+  `SumeragiRosterRecoveryFsmGate.tla` and wired it into
+  `SumeragiRosterRecoveryFsmGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `RosterRecoveryFsmCoreSafety`, giving the
+  roster-unavailability helper one checkable correctness envelope for
+  state-transition, progress-reporting, dwell, timing-reset, and
+  transition-counter behavior.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `roster recovery FSM correctness envelope aggregate` checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-roster-recovery-fsm-correctness`
+    (`EXITCODE: OK`, total `0.623 sec`)
+  - TLC with `SumeragiRosterRecoveryFsmGate_fast.cfg`: model checking completed
+    with no errors, `2` states generated, `1` distinct state found, complete
+    depth `1`; finished in `00s` at `2026-06-25 20:52:48 +04`.
+
+## 2026-06-25 Sumeragi round liveness correctness envelope
+
+- Added `RoundLivenessCorrectnessEnvelope` to
+  `SumeragiRoundLivenessGate.tla` and wired it into
+  `SumeragiRoundLivenessGate_fast.cfg`. The aggregate composes
+  `TypeInvariant` with `RoundLivenessCoreSafety`, so the helper now has one
+  checkable correctness envelope for exact round-liveness result, action,
+  acceptance/rejection, short-circuit, and fallback behavior.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `round-liveness correctness envelope aggregate` checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-round-liveness-correctness` (`EXITCODE: OK`,
+    total `0.809 sec`)
+  - TLC with `SumeragiRoundLivenessGate_fast.cfg`: model checking completed with
+    no errors, `2` states generated, `1` distinct state found, complete depth
+    `1`; finished in `00s` at `2026-06-25 20:48:05 +04`.
+
+## 2026-06-25 Sumeragi frontier recovery correctness envelope
+
+- Added `FrontierRecoveryStateSafetyEnvelope`,
+  `FrontierRecoveryAlwaysMatchesStateSafetyEnvelope`,
+  `FrontierRecoveryLivenessEnvelope`, and `FrontierRecoveryCorrectnessEnvelope`
+  to the focused frontier recovery TLA+ model. The aggregate composes the full
+  frontier recovery state-safety surface under `[]` with the six fairness-backed
+  temporal progress properties for vote-backed pending-frontier resolution,
+  payload recovery, quorum retransmit follow-through, and future-slot
+  reanchor/promotion.
+- Wired `FrontierRecoveryCorrectnessEnvelope` into the frontier recovery fast,
+  deep, wide, TLC-fast, and TLC-small no-bug configs. Mutation configs keep their
+  existing expected-failure targets.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `frontier recovery correctness envelope aggregate` checkpoint in
+  `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with
+    `target/apalache/out-codex-frontier-recovery-correctness`
+    (`EXITCODE: OK`, total `0.949 sec`)
+  - TLC with `SumeragiFrontierRecovery_tlc_small.cfg`: model checking completed
+    with no errors, `2201523` states generated, `1108740` distinct states found,
+    complete depth `11`; implied-temporal checking covered `12` branches over
+    `13304880` total distinct temporal states; finished in `12min 27s` at
+    `2026-06-25 20:43:49 +04`.
+
+## 2026-06-25 Sumeragi consensus core correctness envelope
+
+- Added `SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope` to the Sumeragi
+  TLA+ proof inventory and wired it into the fast, TLC-fast, and deep configs.
+  The aggregate composes the state+temporal safety theorem with
+  `EventuallyCommit`, giving one checkable consensus-core correctness theorem
+  for the fairness-backed bounded model: every post-GST run eventually commits
+  while preserving the certified safety, evidence, and RBC handoff envelopes.
+- Documented the aggregate in `docs/formal/sumeragi/README.md` and recorded the
+  completed `Sumeragi consensus core correctness envelope aggregate` checkpoint
+  in `roadmap.md`.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - Apalache typecheck with `target/apalache/out-codex-correctness-envelope`
+    (`EXITCODE: OK`, total `12.323 sec`)
+  - Focused TLC for `SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope` with
+    `N = 4`, `F = 1`, `CommitQuorum = 3`, `ViewQuorum = 3`,
+    `StakeQuorum = 8`, `StakePerHonestVote = 3`, `StakePerByzVote = 1`,
+    `MaxView = 4`, `MaxChunks = 2`: model checking completed with no errors,
+    `7799` states generated, `2338` distinct states found, complete depth `24`;
+    implied-temporal checking covered `14` branches over `32732` total distinct
+    temporal states; finished in `06h 35min` at `2026-06-25 20:25:56 +04`.
+
+## 2026-06-25 SCCP core-admission launch-gate ordering recovery
+
+- Fixed configured transparent SCCP message admission so single-lane launch
+  policy rejection happens before destination rollout and route allowlist
+  readiness loading only when source material and source-adapter deployment are
+  configured. Unconfigured or malformed transparent artifacts still reach the
+  structural verifier path instead of being masked by the launch-domain gate.
+- Tightened the core-admission fixtures to match current production profile
+  validation: destination rollout and route/canary hashes now use canonical
+  `0x` lower-hex fixture values, generic source verifier material is asserted
+  to fail structural material binding, and the generic-material admission test
+  submits an otherwise valid unbound SOL proof against generic configured
+  material.
+- Confirmed the BSC deploy helper validates malformed
+  `--allow-diagnostic-verifier` values before verifier JSON normalization and
+  preserved diagnostic verifier material/key-hash validation.
+- Validation passed:
+  - `node --test scripts/sccp_bsc_taira_xor_deploy.test.mjs`
+    (`88` passed)
+  - `CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --test iroha_core_group_01 bridge_proofs::submit_sccp_inbound_message_rejects_generic_source_verifier_material -- --nocapture`
+    (`1` passed, `193` filtered out)
+  - `CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --test iroha_core_group_01 bridge_proofs::submit_sccp_inbound_message_rejects_unready_lane_even_if_config_allows -- --nocapture`
+    (`1` passed, `193` filtered out)
+  - `CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --test iroha_core_group_01 route_allowlist_check -- --nocapture`
+    (`2` passed, `192` filtered out)
+  - `CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --test iroha_core_group_01 bridge_proofs::submit_sccp_inbound_message -- --nocapture`
+    (`25` passed, `169` filtered out)
+  - `bash scripts/check_sccp_production_corridor.sh --phase core-admission`
+    (`49` passed, `145` filtered out)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence and governed/live deployment evidence remain tracked in `roadmap.md`.
+
+## 2026-06-25 SCCP .NET direct TRX evidence path hardening
+
+- Tightened the Windows `.NET 8` SCCP phase evidence contract so the accepted
+  TRX marker must be the direct C# test-project path
+  `csharp/tests/Hyperledger.Iroha.Sdk.Tests/TestResults/sccp-dotnet-sdk.trx`.
+  Named subdirectories before or after `TestResults` no longer match the
+  readiness or strict bundle verifier.
+- Updated the production-corridor shell runner to reject any generated TRX path
+  outside that direct location, while still cleaning stale recursive
+  `TestResults/sccp-dotnet-sdk.trx` files before the Windows run.
+- Added adversarial readiness and bundle verifier tests for
+  `forged/TestResults/sccp-dotnet-sdk.trx` and
+  `TestResults/forged/sccp-dotnet-sdk.trx`, and pinned the new direct-path regex
+  plus regressions in the SCCP phase-transcript source inventory.
+- Pinned the corridor runner's own direct-TRX path assertion in the
+  phase-transcript source inventory, including the negative marker that nested
+  `*/TestResults/sccp-dotnet-sdk.trx` paths must remain rejected.
+- Updated the generated Required Release Evidence Markdown and strict bundle
+  invariant markers so public reports now state that `.NET` TRX evidence must
+  full-match the direct C# test-project `TestResults/sccp-dotnet-sdk.trx` path.
+  Named or traversal subdirectories before or after `TestResults` are now
+  explicitly documented as forged evidence.
+- Added a generator-side readiness Markdown regression for the same direct
+  `.NET` TRX evidence wording and pinned that test in the readiness Markdown
+  invariant source inventory, so the report producer and strict bundle verifier
+  cannot drift independently.
+- Aligned the earlier Windows handoff roadmap section with the same direct-path
+  `.NET` TRX wording; the only remaining old wording occurrence is now the
+  negative regression that asserts stale Markdown must not be generated.
+- Added adversarial readiness and strict-bundle verifier coverage for Windows
+  backslash-separated and drive-qualified `.NET` TRX markers, and documented
+  those as forged aliases rather than accepted forms of the canonical
+  project-relative forward-slash path.
+- Updated generated Required Release Evidence Markdown and the strict verifier
+  marker list to name the same Windows backslash/drive-qualified TRX marker
+  rejection, so public release evidence cannot imply those paths are acceptable
+  Windows aliases.
+- Tightened canonical `.NET` SCCP marker matching to require one literal space
+  after each marker colon, and added readiness/report-bundle adversarial tests
+  proving double-space and tab separators remain forged evidence.
+- Additional validation passed:
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'dotnet_padded_or_tabbed_marker_separators or release_corridor_phase_transcript_gate_inventory or direct_dotnet_trx_evidence_path'`
+    (`3` passed, `496` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'dotnet_padded_or_tabbed_marker_separators or release_corridor_phase_transcript_inventory or native_sdk_id_readiness_evidence'`
+    (`4` passed, `816` deselected)
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'dotnet'`
+    (`130` passed, `1218` deselected)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `bash -n scripts/check_sccp_production_corridor.sh`
+  - `git diff --check -- scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' ...` over the same touched SCCP files
+    returned no matches.
+- Validation passed:
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'release_corridor_phase_transcript_gate_inventory'`
+    (`1` passed, `495` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'release_corridor_phase_transcript_inventory'`
+    (`2` passed, `816` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'dotnet_trx_named_subdirectory or release_corridor_phase_transcript_gate_inventory'`
+    (`2` passed, `494` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'direct_dotnet_trx_evidence_path or readiness_markdown_invariants_gate_inventory'`
+    (`2` passed, `495` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'readiness_markdown_invariants_inventory'`
+    (`2` passed, `816` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'direct_dotnet_trx_evidence_path'`
+    (`1` passed, `496` deselected)
+  - `rg -n "must full-match the C# test project|full-match the C# test project|full-matches the C# test project|path before release readiness can pass" roadmap.md docs/source/engineering_backlog.md status.md scripts pytests -g '!**/__pycache__/**'`
+    (only the intentional negative assertion in `test_release_readiness_report_markdown_names_direct_dotnet_trx_evidence_path` remains)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'dotnet_trx_named_subdirectory or release_corridor_phase_transcript_inventory'`
+    (`3` passed, `815` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'native_sdk_id_readiness_evidence or dotnet_trx_named_subdirectory or release_corridor_phase_transcript_inventory'`
+    (`4` passed, `814` deselected)
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py -k 'dotnet_phase_covers_native_bsc_facades'`
+    (`1` passed, `28` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'dotnet_trx_named_subdirectory or release_corridor_phase_transcript_gate_inventory'`
+    (`2` passed, `494` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'dotnet_trx_backslash_or_drive_path or dotnet_trx_named_subdirectory or release_corridor_phase_transcript_gate_inventory'`
+    (`3` passed, `495` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'dotnet_trx_backslash_or_drive_path or dotnet_trx_named_subdirectory or release_corridor_phase_transcript_inventory'`
+    (`4` passed, `815` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'direct_dotnet_trx_evidence_path or dotnet_trx_backslash_or_drive_path or readiness_markdown_invariants_gate_inventory'`
+    (`3` passed, `495` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'native_sdk_id_readiness_evidence or dotnet_trx_backslash_or_drive_path or readiness_markdown_invariants_inventory'`
+    (`4` passed, `815` deselected)
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'dotnet'`
+    (`125` passed, `1218` deselected)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py`
+  - `bash -n scripts/check_sccp_production_corridor.sh`
+- Remaining SCCP release blockers are unchanged: the direct-path `.NET` TRX
+  evidence must still be produced on Windows, and governed/live deployment
+  evidence remains tracked in `roadmap.md`.
+
+## 2026-06-25 SCCP source-adapter deployment descriptor drift hardening
+
+- Added all-lane Rust SCCP coverage for source-adapter deployment descriptor
+  drift using production-ready material/deployment fixtures for Ethereum, BSC,
+  Solana, TON, and TRON.
+- The regression mutates descriptor schema version, target domain, source-chain
+  label, source proof plan, finality model, adapter proof family/circuit/VK,
+  zero or role-replayed deployment receipts, foreign Solana/TON audit fields,
+  and Solana/TON audit role reuse. Each mutation must fail standalone descriptor
+  shape, material/deployment matching, and source-adapter readiness.
+- Pinned the new descriptor-drift regression in the SCCP source-material
+  role-validation source inventory and Required Release Evidence text. While
+  rerunning the strict verifier, fixed a stale BSC route-config
+  canonical-manifest inventory marker so it matches the current exported
+  `compiledContractCodeHashesFromArtifacts` helper signature.
+- Validation passed:
+  - `cargo fmt -p iroha_sccp`
+  - `CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_sccp source_adapter_deployment_descriptors_reject_cross_lane_control_field_drift --lib -- --nocapture`
+    (`1` passed, `270` filtered out)
+  - `CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_sccp source_adapter_deployment --lib -- --nocapture`
+    (`6` passed, `265` filtered out)
+  - `bash scripts/check_sccp_production_corridor.sh --phase rust-sccp`
+    (`271` passed, `0` failed; SCCP production corridor completed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'source_material_role_validation_gate_inventory or blocks_missing_sccp_source_material_role_validation_gate'`
+    (`2` passed, `493` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_material_role_validation_inventory'`
+    (`1` passed, `816` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'bsc_route_config_canonical_manifest_gate_inventory or blocks_missing_bsc_route_config_canonical_manifest_gate'`
+    (`2` passed, `493` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'bsc_route_config_canonical_manifest_inventory or missing_bsc_route_config_canonical_manifest_inventory_gate'`
+    (`2` passed, `815` deselected)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py`
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`2190` passed in `1:40:22`; SCCP production corridor completed)
+- Remaining SCCP release blockers are still external/host evidence: Windows
+  `.NET 8` SCCP TRX evidence and governed/live deployment evidence remain
+  tracked in `roadmap.md`.
+
+## 2026-06-25 BFV ciphertext proof-statement digest surface
+
+- Added domain-separated exact-lift and bounded-noise BFV ciphertext proof
+  statement digest helpers. The typed Norito statement material binds the
+  parameter set, public key material, public-key digest, ciphertext bytes,
+  non-inert ciphertext digest, and declared residual/noise bound, with
+  mode-separated hash domains so exact and bounded statements cannot collide.
+- Ciphertext digesting now rejects all-zero ciphertext sentinels at the
+  verifier-facing statement boundary, and exact ciphertext statement hashing
+  now shares the exact public-key statement's seeded-encryption residual
+  headroom preflight so structurally valid but non-admissible exact profiles
+  cannot emit verifier-facing ciphertext statement hashes. Existing owner-side
+  decrypt/noise diagnostics keep their current public-bound error ordering.
+- Soracloud data-model refresh transcripts now derive exact-lift or
+  bounded-noise ciphertext statement digests from their public key, wrapping
+  malformed public keys, ciphertexts, and declared bounds as manifest errors.
+  The wrapper coverage now also rejects inert all-zero transcript public keys
+  for both public-key and ciphertext proof-statement derivation.
+  The input-admission public-input schema advertises the ciphertext statement
+  digest domains/material, including the exact seeded-encryption capacity
+  preflight on per-ciphertext statement hashes, and is pinned to
+  `828907b1ebc7d05e38e8528109feff1c92a7761ff8dda725ba1486e513bb84ad`.
+  Portable validation now also rejects inert all-zero proof public keys, and
+  coverage pins proof public-key presence, ciphertext digest-list
+  arity/sentinel checks, rejection of `fhe_public_key_digest` metadata on
+  non-FHE state rows, and all-zero `fhe_public_key_digest` placeholders on FHE
+  rows.
+- Core input-admission verification now recomputes the per-slot ciphertext
+  statement digests from the decoded payload and proof public key, persists the
+  admitted public-key digest beside proven FHE bound metadata, and
+  `RunSoracloudFheJob` rejects persisted FHE inputs whose public-key digest does
+  not match the governed job key or whose BFV-shaped payload is an all-zero
+  ciphertext sentinel before evaluator execution.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto`
+  - `cargo fmt --package iroha_data_model`
+  - `cargo fmt --package iroha_core --package iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-ciphertext-statement CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto ciphertext_proof_statement_digest_binds_public_key_ciphertext_and_bound --lib -- --nocapture`
+    (`1` passed, `793` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-ciphertext-statement-capacity CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto ciphertext_proof_statement_digest_binds_public_key_ciphertext_and_bound --lib -- --nocapture`
+    (`1` passed, `794` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-ciphertext-statement-data CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model bfv_refresh_transcript_derives_ciphertext_proof_statement_digest --lib -- --nocapture`
+    (`1` passed, `1617` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-binding-data cargo test -p iroha_data_model bfv_refresh_transcript_derives_public_key_proof_statement_digest -- --nocapture`
+    (`1` passed, `1620` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-binding-data cargo test -p iroha_data_model bfv_refresh_transcript_derives_ciphertext_proof_statement_digest -- --nocapture`
+    (`1` passed, `1620` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-binding-data CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1617` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-binding-data CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_input_admission_statement_hash_encodes_canonical_tuple --lib -- --nocapture`
+    (`1` passed, `1617` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-binding-data CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_input_admission_schema_advertises_backend --lib -- --nocapture`
+    (`1` passed, `1617` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-schema-capacity CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1620` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-schema-capacity CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_input_admission_schema_advertises_backend --lib -- --nocapture`
+    (`1` passed, `1620` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-binding-data CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model service_state_entry_validate_rejects_over_capacity_fhe_bounds --lib -- --nocapture`
+    (`1` passed, `1617` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-binding-data CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_input_admission_proof_validate_requires_vk_commitment_and_matching_envelope_hash --lib -- --nocapture`
+    (`1` passed, `1617` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-binding-data CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_input_admission_proof_validate_rejects_over_capacity_bounds --lib -- --nocapture`
+    (`1` passed, `1617` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-binding-data cargo test -p iroha_data_model fhe_input_admission_proof_validate_requires_public_key_and_ciphertext_digests -- --nocapture`
+    (`1` passed, `1620` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-binding-data cargo test -p iroha_data_model service_state_entry_validate_rejects_fhe_public_key_digest_on_non_fhe_rows -- --nocapture`
+    (`1` passed, `1620` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-binding-data cargo test -p iroha_data_model service_state_entry_validate_rejects_zero_fhe_public_key_digest -- --nocapture`
+    (`1` passed, `1620` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-binding-data CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core fhe_input_admission_proof_binds_actual_payload_metadata --lib -- --nocapture`
+    (`1` passed, `5437` filtered out; existing unused test-helper warnings)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-binding-data CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core run_soracloud_fhe_job_rejects_input_public_key_digest_mismatch --lib -- --nocapture`
+    (`1` passed, `5437` filtered out; existing unused test-helper warnings)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-binding-data cargo test -p iroha_core run_soracloud_fhe_job_rejects_all_zero_persisted_fhe_input -- --nocapture`
+    (`1` passed, `5438` filtered out; existing unused test-helper warnings)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-binding-data CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core run_soracloud_fhe_job_rejects_missing_policy_bound_public_key_proof --lib -- --nocapture`
+    (`1` passed, `5437` filtered out; existing unused test-helper warnings)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-binding-data CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core run_soracloud_fhe_job_rejects_client_mutated_fhe_input_without_residual_metadata --lib -- --nocapture`
+    (`1` passed, `5437` filtered out; existing unused test-helper warnings)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-binding-data CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core run_soracloud_fhe_job_rejects_persisted_fhe_input_without_bound_mode --lib -- --nocapture`
+    (`1` passed, `5437` filtered out; existing unused test-helper warnings)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-binding-data CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core mutate_soracloud_state_rejects_bounded_noise_fhe_input_admission_proof_without_registered_verifier --lib -- --nocapture`
+    (`1` passed, `5437` filtered out; existing unused test-helper warnings)
+
+## 2026-06-25 BFV release-audit proof-profile transcript label contract
+
+- Extended the BFV full-bootstrap release-audit proof-profile wire record to
+  field count 44 so release evidence explicitly advertises canonical base
+  native AIR transcript-label enforcement and suffixed-label alias rejection.
+  The release-audit profile builder sets both obligations and the shape
+  validator and full evidence downgrade matrix reject downgraded profiles before
+  evidence can be accepted. Profile construction now derives those obligations
+  from the audited proof-key metadata, so downgraded proof keys cannot be masked
+  by hardcoded release-profile flags.
+- The typed BFV full-bootstrap proof public-input schema, proof-key metadata,
+  proof-key material envelope, native proof-circuit fingerprint material, and
+  generated circuit body also set and validate the canonical base-label and
+  suffixed-label rejection requirements. The proof-key material envelope field
+  count is now `43`, the native proof-circuit fingerprint material field count
+  is `45`, and generated circuit bodies use field count `46`. The canonical
+  proof-schema artifact digest remains
+  `a3ad6b103afc6c296a79f46ebd124b1c38cffe31dc74d828037eca7221f332bb`, and the
+  schema-bound prover-key material commitment golden is
+  `e716f6a210664e510e0c6b9be0d0cc72e49c897245570bf568e3e01e31c601ab`.
+- Updated the Soracloud full-bootstrap material and execution public-input
+  schemas so release-audit evidence advertises `proof_profile_field_count:44`,
+  `proof_profile_requires_canonical_base_transcript_label`, and
+  `proof_profile_rejects_suffixed_transcript_label_aliases`. The execution
+  schema's `release_prover_input` contract now advertises the same canonical
+  base transcript-label and suffixed-label alias rejection obligations. The
+  current material/execution schema hashes are
+  `05890816bd1fb865e3836018316b01d07e3cff757446d1f8d30f68d156de5e0f` and
+  `25506f98acc6cc99a363a8adf53ea83eaaf6ad15c081b98b6e2b16985db77421`.
+- The deterministic release-audit report/archive inventory builders now spell
+  out the proof-profile field count plus canonical base transcript-label
+  enforcement and suffixed-label alias rejection. Package validation requires
+  those labels in both report/archive bodies, the Soracloud material/execution
+  public-input schemas advertise the report/archive marker requirements, and
+  the generated-artifacts regression now rejects missing or downgraded profile
+  markers.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto --package iroha_data_model --package iroha_core`
+  - `cargo fmt --package iroha_crypto --package iroha_data_model --package iroha_core -- --check`
+  - `cargo test -j 1 -p iroha_crypto release_audit_proof_profile_binds_key_and_native_role --lib -- --nocapture`
+    (`1` passed, `793` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-profile-label CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_proof_schema --lib -- --nocapture`
+    (`2` passed, `791` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-profile-label CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_arithmetic_trace_profile_digest_binds_schema_and_native_material --lib -- --nocapture`
+    (`1` passed, `792` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-profile-label CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_native_generated_circuit_body_rejects_profile_drift --lib -- --nocapture`
+    (`1` passed, `792` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-profile-label CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_proof_native_key_material_is_typed_and_profile_bound --lib -- --nocapture`
+    (`1` passed, `792` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-profile-label CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_proof_profile_artifacts_are_typed_and_profile_bound --lib -- --nocapture`
+    (`1` passed, `792` filtered out)
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `792` filtered out; finished in `1095.21s`)
+  - `cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_material_schema_advertises_statement_header --lib -- --nocapture`
+    (`1` passed, `1617` filtered out)
+  - `cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest --lib -- --nocapture`
+    (`1` passed, `1617` filtered out)
+  - `cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1617` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-release-prover-label CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (first run intentionally failed with the new execution schema hash
+    `25506f98acc6cc99a363a8adf53ea83eaaf6ad15c081b98b6e2b16985db77421`;
+    rerun after pinning passed: `1` passed, `1616` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-release-prover-label CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest --lib -- --nocapture`
+    (`1` passed, `1616` filtered out)
+  - `git diff --check`
+  - Conflict-marker, stale proof-profile field-count/hash, and manifest/lockfile
+    diff guards passed for the touched BFV files.
+
+## 2026-06-25 SCCP core-admission route precedence corridor fix
+
+- Confirmed the SCCP core admission route-precedence fixtures use Solana and
+  TRON lane-launch ordering tests that drift the route-canary evidence hash
+  while keeping the route allowlist profile production-ready. This preserves
+  the intended fail-closed ordering: lane launch policy is reported before
+  later route evidence binding drift.
+- Confirmed the generic Solana source-verifier material rejection remains green
+  after the source-state fixture rebuild.
+- Validation passed:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --test iroha_core_group_01 bridge_proofs::submit_sccp_inbound_message_rejects_generic_source_verifier_material -- --nocapture`
+    (`1` passed, `193` filtered)
+  - `CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --test iroha_core_group_01 bridge_proofs::submit_sccp_inbound_message_waits_for_sol_lane_launch_before_route_allowlist_check -- --nocapture`
+    (`1` passed, `193` filtered)
+  - `CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --test iroha_core_group_01 bridge_proofs::submit_sccp_inbound_message_waits_for_tron_lane_launch_before_route_allowlist_check -- --nocapture`
+    (`1` passed, `193` filtered)
+  - `bash scripts/check_sccp_production_corridor.sh --phase core-admission`
+    (`49` passed, `145` filtered; SCCP production corridor completed)
+- Remaining SCCP release blockers are external/host evidence: Windows `.NET 8`
+  SCCP TRX evidence and governed/live deployment evidence remain tracked in
+  `roadmap.md`.
+
+## 2026-06-25 BFV native AIR canonical transcript label
+
+- Tightened the BFV full-bootstrap native STARK/AIR boundary so execution AIR
+  proofs must use the canonical base transcript label. Structurally valid
+  explicit-schedule envelopes with suffixed BFV labels are still accepted by the
+  generic explicit verifier but are rejected by both BFV native AIR verifier
+  entry points.
+- Updated the BFV regression to build a suffixed-label explicit-schedule proof
+  with the same canonical BFV public-padding base indices, proving the generic
+  verifier accepts the envelope while the BFV-specific verifiers fail closed.
+- Tightened the Soracloud execution proof wrapper path so generated BFV-native
+  AIR envelopes must carry the canonical base label before the wrapper packages
+  them into execution proof attachments.
+- Extended the Soracloud full-bootstrap execution public-input schema with
+  `requires_canonical_base_transcript_label` and
+  `rejects_suffixed_transcript_label_aliases`; the release-audit proof-profile
+  contract entry above tracks the current schema hashes.
+- Validation:
+  - `cargo fmt --package iroha_core`
+  - `cargo fmt --package iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-air-label CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark bfv_full_bootstrap_air_prover_binds_statement_and_public_openings --lib -- --nocapture`
+    (`1` passed, `5633` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-air-label CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark bfv_full_bootstrap_air_transcript_label_is_canonical_base_label --lib -- --nocapture`
+    (`1` passed, `5633` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bfv-label CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_execution_native_air_uses_crypto_domain_and_base_label --lib -- --nocapture`
+    (`1` passed, `5633` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bfv-label CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_prover_emits_valid_input_material_native_air_proof --lib -- --nocapture`
+    (`1` passed, `5633` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-schema-label CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest --lib -- --nocapture`
+    (`1` passed, `1616` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-schema-label CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1616` filtered out)
+  - `cargo fmt --package iroha_core --package iroha_data_model -- --check`
+  - `git diff --check -- crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_data_model/src/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - Anchored conflict-marker scan and stale retry-label wording scan across the
+    touched Soracloud BFV code/docs/status files found no matches.
+  - Cargo manifest and lockfile diff guard found no touched manifests or lockfiles.
 
 ## 2026-06-25 Torii Recipient Lookup Config Snapshot
 
@@ -13,6 +5652,49 @@ Last updated: 2026-06-25
   - `git diff --check -- crates/iroha_config/tests/fixtures.rs status.md`
   - `CARGO_INCREMENTAL=0 cargo test -p iroha_config --test fixtures minimal_config_snapshot -- --nocapture`
   - `CARGO_INCREMENTAL=0 cargo test -p iroha_config --test fixtures -- --nocapture`
+
+## 2026-06-25 Kagemusha-only offline payment fee policy
+
+- Offline payment admission now treats Kagemusha as the only active chain
+  implementation: classic Offline Note issue/audit/redeem instructions are no
+  longer registered in the default instruction registry, routed by the queue, or
+  dispatched by the core executor. Their core `Execute` impls are retained only
+  for historical unit fixtures under `cfg(test)`.
+- Nexus fee admission now exempts pure offline-offline `KagemushaTransfer`
+  batches only. Online-to-offline shield top-ups and offline-to-online
+  `RedeemKagemushaRecursive` redemptions stay on the normal fee-budget/receipt
+  path. The removed `settlement.offline.kagemusha_force_legacy` config knob can
+  no longer force a legacy bearer-audit fallback.
+- Torii and the Norito bridge reject legacy Offline Note transaction
+  construction. Torii offline-v2 issue and audit compatibility routes fail
+  closed and the OpenAPI descriptions now point callers to Kagemusha. Swift SDK
+  V1/V2 payment builders and Kotlin/JVM plus Java Android default Offline Note
+  submitters now fail before signing or submitting classic audit/redeem/defund
+  transactions; default mobile Torii issuer clients also reject classic note
+  issue locally before posting to Torii. Kagemusha transaction builders remain
+  the supported SDK payment path.
+- Python and JavaScript Torii readiness clients now parse the Kagemusha-only
+  readiness shape and leave legacy `offline_note` style booleans absent unless
+  an older server explicitly sends them. SDK and portal docs now show
+  `offline_kagemusha_abi7` readiness instead of legacy one-use note readiness.
+- Validation passed:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-only-2 cargo test -p iroha_config kagemusha --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-only-2 cargo test -p iroha_data_model kagemusha_transfer_instruction_is_registered_and_boxable --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-only-2 cargo test -p iroha_core nexus_fee_kagemusha --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-only-2 cargo test -p iroha_core nexus_fee_online_to_offline_shield_requires_fee_budget --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-only-2 cargo test -p connect_norito_bridge offline_note_signed_transaction_ffis_are_retired --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-only-2 cargo test -p iroha_torii --test offline_kagemusha_only_smoke --features app_api -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-only-2 cargo test -p iroha_torii --test offline_v2_kagemusha_redeem_smoke --features app_api -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-only-2 cargo test -p iroha_torii generated_spec_includes_documented_paths --lib --features app_api -- --nocapture`
+  - `python3 -m py_compile python/iroha_torii_client/client.py python/iroha_torii_client/tests/test_client.py`
+  - `pytest python/iroha_torii_client/tests/test_client.py -k get_offline_readiness -q`
+  - `node --check javascript/iroha_js/src/toriiClient.js && node --check javascript/iroha_js/dist/toriiClient.js`
+  - `node --test --test-name-pattern "getOfflineReadiness" javascript/iroha_js/test/toriiClient.test.js`
+  - `swift test --filter 'OfflineNoteTests/testIrohaOfflineNoteTransactionSubmitterIsRetiredBeforeSdkSubmission|OfflineNoteTests/testToriiIssuerClientBodySignsRefillAndRetiresNoteIssue|OfflineNoteTests/testOfflineNoteTransactionBuildersAreRetired|OfflineNoteTests/testOfflineNoteTransactionBuilderCoversOptionalNonceAndInputValidation|OfflineNoteTests/testRedeemBuilderRejectsMismatchedProofBinding|OfflineNoteV2Tests/testOfflineNoteV2PaymentTransactionBuildersAreRetiredAndRegistrationStillSigns|OfflineNoteV2Tests/testOfflineNoteV2TransactionBuilderCoversOptionalNonceAndInputValidation|OfflineNoteV2Tests/testRedeemBuilderRejectsMismatchedProofBinding'`
+  - `./gradlew -Pkotlin.daemon.jvmargs=-Xmx4096m :core-jvm:test --tests 'org.hyperledger.iroha.sdk.offline.OfflineNoteTest.offlineNoteTransactionSubmitterIsRetiredAndKeepsFeeMetadataHelper' --tests 'org.hyperledger.iroha.sdk.offline.OfflineNoteTest.toriiIssuerClientBodySignsRefillAndRetiresNoteIssue' --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
 
 ## 2026-06-25 Kagemusha Zero-Prehash Hash Validation
 
@@ -17071,6 +22753,10 @@ evidence outstanding.
   proof-statement, execution preflight, and release-audited material/execution
   prover paths reject any encrypted-zero refresh metadata or material before
   package-digest or artifact execution can mask the mixed-mode key shape.
+  Coverage now also mutates `zero_refresh` and `round_refreshes` independently
+  while `max_refresh_rounds = 0`, proving artifact-aware preflight plus exact
+  and bounded direct execution and bound-preflight entrypoints fail before
+  artifact fallback.
 - Updated the Core full-bootstrap fixtures and shared Soracloud operation
   vectors to install constructor-built no-refresh full keys. The shared fixture
   now carries the crypto proof public-input schema artifact digest
@@ -17090,6 +22776,8 @@ evidence outstanding.
   prover-verifier artifacts; encrypted-zero refresh material remains confined to
   `RefreshOnlyV1`.
 - Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-legacy-refresh CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_execution_preflight_rejects_legacy_refresh_material --lib -- --nocapture`
+    (`1` passed, `794` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-stage-surface CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_material_serialization_roundtrips_and_digest_binds --lib -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-stage-surface CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_material_proof_statement_digest_binds_governance_inventory --lib -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-stage-surface CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_execution_proof_statement_binds_claim_and_artifacts --lib -- --nocapture`
@@ -26965,9 +32653,9 @@ evidence outstanding.
 - Added Core input-admission replay coverage that mutates the proof's public
   bound value and bound mode independently while leaving the proof statement
   hash unchanged.
-- The verifier rejects both mutations as statement-hash mismatches before
-  verifier lookup, confirming exact and bounded-noise bound metadata are bound
-  into the admitted payload statement.
+- The verifier now rejects both mutations as ciphertext statement digest
+  mismatches before verifier lookup, confirming exact and bounded-noise bound
+  metadata are bound into the admitted payload statement.
 - Validation passed:
   - `cargo fmt --package iroha_core`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-bound-replay CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core fhe_input_admission_proof_binds_actual_payload_metadata --lib -- --nocapture`
@@ -27722,10 +33410,11 @@ evidence outstanding.
 ## 2026-06-21 BFV input-admission bound schema contract
 
 - Updated the Soracloud FHE input-admission public-input schema to advertise
-  exact-residual and bounded-noise bound modes plus the capacity checks already
-  enforced by `SoracloudFheInputAdmissionProofV1::validate`.
+  exact-residual and bounded-noise bound modes, the capacity checks already
+  enforced by `SoracloudFheInputAdmissionProofV1::validate`, and the ciphertext
+  proof-statement digest domains/material consumed by verifier records.
 - Pinned the refreshed input-admission schema hash
-  `1cf3dd56010dc765bd671004b1c9262499666ac1c1313573fceb59bae26d6caf`.
+  `828907b1ebc7d05e38e8528109feff1c92a7761ff8dda725ba1486e513bb84ad`.
 - Validation passed:
   - `cargo fmt --package iroha_data_model`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-native-payload-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_input_admission_schema_advertises_backend --lib -- --nocapture`
@@ -92686,11 +98375,11 @@ evidence outstanding.
   rejects the circuit-id mismatch.
 - Validation:
   - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_wrong_circuit_stark_payload --lib -- --nocapture`
-    (`1` passed, `5618` filtered out)
+    (`1` passed, `5633` filtered out)
   - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_opaque_stark_payload --lib -- --nocapture`
-    (`1` passed, `5618` filtered out)
+    (`1` passed, `5633` filtered out)
   - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_below_floor_stark_payload --lib -- --nocapture`
-    (`1` passed, `5618` filtered out)
+    (`1` passed, `5633` filtered out)
   - `cargo fmt --package iroha_core -- --check`
   - `git diff --check`
   - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_accepts_verified_active_verifier --lib -- --nocapture`

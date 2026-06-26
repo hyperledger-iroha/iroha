@@ -277,4 +277,8 @@ ActiveTopologySelectionExactness ==
   /\ ActiveTopologyPopFilterExact
   /\ ActiveTopologyFallbackExact
 
+ActiveTopologySelectionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ActiveTopologySelectionExactness
+
 ====

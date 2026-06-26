@@ -105,10 +105,9 @@ int32_t connect_norito_offline_prove_note_audit(
     uint8_t** out_recursive_proof_ptr,
     unsigned long* out_recursive_proof_len);
 
-// Encode and sign a `RedeemOfflineNote` on-chain transaction.
-// `redeem_norito` is the Norito archive of `OfflineNoteRedeem` with the
-// recursive proof already embedded. Output is canonical versioned
-// SignedTransaction bytes matching the transfer/mint encoders below.
+// Retired compatibility entry point for classic `RedeemOfflineNote` payments.
+// Always fails without producing signed transaction bytes; production offline
+// payments must use Kagemusha transfer/redeem flows.
 int32_t connect_norito_encode_redeem_offline_note_signed_transaction(
     const char* chain_id, unsigned long chain_len,
     const char* authority, unsigned long authority_len,
@@ -122,9 +121,9 @@ int32_t connect_norito_encode_redeem_offline_note_signed_transaction(
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
-// Encode and sign an `AuditOfflineNote` on-chain transaction.
-// `audit_norito` is the Norito archive of `OfflineNoteAuditBundle` with the
-// recursive proof already embedded.
+// Retired compatibility entry point for classic `AuditOfflineNote` payments.
+// Always fails without producing signed transaction bytes; production offline
+// payments must use Kagemusha transfer/redeem flows.
 int32_t connect_norito_encode_audit_offline_note_signed_transaction(
     const char* chain_id, unsigned long chain_len,
     const char* authority, unsigned long authority_len,
@@ -138,8 +137,9 @@ int32_t connect_norito_encode_audit_offline_note_signed_transaction(
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
-// Encode and sign an `IssueOfflineNote` on-chain transaction.
-// `issue_norito` is the Norito archive of `OfflineNoteIssue`.
+// Retired compatibility entry point for classic `IssueOfflineNote` payments.
+// Always fails without producing signed transaction bytes; production offline
+// top-ups must use Kagemusha online-to-offline flows.
 int32_t connect_norito_encode_issue_offline_note_signed_transaction(
     const char* chain_id, unsigned long chain_len,
     const char* authority, unsigned long authority_len,
@@ -153,10 +153,9 @@ int32_t connect_norito_encode_issue_offline_note_signed_transaction(
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
-// Encode and sign a defund transaction: bearer audit trail followed by the
-// redemption, atomically in one signed transaction. `audit_trail` is a
-// count-prefixed concatenation. Each entry is an 8-byte little-endian length
-// followed by that many bytes of an `OfflineNoteAuditBundle` archive.
+// Retired compatibility entry point for classic Offline Note defund payments.
+// Always fails without producing signed transaction bytes; production offline
+// payments must use Kagemusha transfer/redeem flows.
 int32_t connect_norito_encode_defund_offline_note_signed_transaction(
     const char* chain_id, unsigned long chain_len,
     const char* authority, unsigned long authority_len,

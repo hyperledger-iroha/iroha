@@ -8287,7 +8287,7 @@ pub struct SccpRouteAllowlist {
 }
 
 /// Route-bound browser prover manifest reference advertised to wallet clients.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 pub struct SccpRouteBrowserProverManifestRef {
     /// Browser-safe prover module URL.
     pub module_url: String,
@@ -8306,7 +8306,7 @@ pub struct SccpRouteBrowserProverManifestRef {
 }
 
 /// Configured SCCP route manifest material advertised to wallet clients.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 pub struct SccpRouteManifest {
     /// Material format version.
     pub version: u8,
@@ -8679,8 +8679,6 @@ pub struct Offline {
     /// `KagemushaTransfer` enforces this gate before forwarding to the shared
     /// shielded ZK asset accumulator.
     pub kagemusha_enabled: bool,
-    /// Whether nodes force legacy bearer-audit lineage during migration.
-    pub kagemusha_force_legacy: bool,
 }
 
 impl Default for Offline {
@@ -8693,7 +8691,6 @@ impl Default for Offline {
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
             kagemusha_enabled: defaults::settlement::offline::KAGEMUSHA_ENABLED,
-            kagemusha_force_legacy: defaults::settlement::offline::KAGEMUSHA_FORCE_LEGACY,
         }
     }
 }
@@ -9850,10 +9847,6 @@ mod tests {
         assert!(
             offline.kagemusha_enabled,
             "Kagemusha must remain enabled by default"
-        );
-        assert!(
-            !offline.kagemusha_force_legacy,
-            "legacy Kagemusha fallback must remain opt-in"
         );
     }
 

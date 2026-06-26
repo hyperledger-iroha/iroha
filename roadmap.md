@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-25
+Last updated: 2026-06-27
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -11,6 +11,11 @@ and completed history lives in [`status.md`](./status.md).
 
 **Status:** active.
 
+- Kagemusha is now the only active chain implementation for offline payments.
+  Bridge, Swift, Kotlin/JVM, and Java Android payment builders, issuer clients,
+  or submitters for legacy Offline Note issue/audit/redeem paths now fail
+  closed; remaining cleanup is to archive historical model/codec helpers in the
+  mobile SDKs that are still needed only for compatibility fixtures.
 - Snapshot-backed node restarts now target hash-journal validation for
   historical blocks, keeping full Kura block-body loads only for suffix replay
   and the existing latest-tip rollback repair path.
@@ -699,6 +704,10 @@ and completed history lives in [`status.md`](./status.md).
   `status.md` with the Windows C# SDK evidence and rerun the Kagemusha SDK
   parity or production readiness guards needed to clear the Windows-only row.
   Windows-machine TODOs:
+  - Run this certification on a Windows machine. macOS or Linux `.NET 8`
+    transcript evidence, even when locally green, must not clear the
+    Windows-only SCCP row because the release gate must prove
+    `connect_norito_bridge.dll`, Windows loader paths, RID, and architecture.
   - Select a stable .NET 8.0.x SDK and capture `dotnet --version` in the run log;
     preview/prerelease SDK version strings or zero-padded numeric segments are
     not release evidence. The `SCCP .NET SDK version:` marker must appear after
@@ -706,14 +715,22 @@ and completed history lives in [`status.md`](./status.md).
     commands must run in `dotnet --version`, `dotnet --info`,
     `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict
     `dotnet test` order; reordered command transcripts are forged.
-  - Capture the Windows `dotnet --info` output, including RID/architecture, so
-    the native C# pass is tied to the host that loaded the bridge. The
-    `SCCP .NET SDK OS:`, `RID:`, and `Architecture:` markers must appear after
-    `dotnet --info`, and the RID architecture segment must agree with the
-    architecture marker; the corridor runner now fails before bridge build,
-    restore, or test execution if `dotnet --info` reports a mismatched
-    RID/architecture pair, and host markers printed earlier or mismatched
-    RID/architecture pairs remain forged evidence.
+  - Capture the Windows `dotnet --info` output, including OS name, OS platform,
+    RID, and OS architecture, so the native C# pass is tied to the host that
+    loaded the bridge. The corridor runner now requires exactly one `OS Name:`,
+    one `OS Platform:`, one `RID:`, and one `OS Architecture:` field from that
+    output; both OS fields must be exactly `Windows`, the RID must be canonical
+    lower-case Windows, and the RID architecture segment must agree with the
+    architecture marker. The `SCCP .NET SDK OS:`, `RID:`, and `Architecture:`
+    markers must appear after `dotnet --info`; duplicate or missing
+    `OS Name:`/`OS Platform:` fields, including missing `OS Name:`, duplicate
+    `OS Name:`, missing `OS Platform:`, and duplicate `OS Platform:` cases,
+    missing or duplicate RID fields, missing or duplicate `OS Architecture:`,
+    uppercase, foreign-platform, or alias-architecture RID values, mismatched
+    RID/architecture pairs, architecture alias values such as `amd64`,
+    `x86_64`, or `aarch64`, colon-injected metadata values, or host markers
+    printed earlier fail before bridge build, restore, or test execution and
+    remain forged evidence.
   - Keep the Windows `.NET 8` SCCP phase transcript free of restore/build
     diagnostics: `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero
     `Error(s)` counts, `Failed to restore`, and restore/build failed markers
@@ -743,15 +760,21 @@ and completed history lives in [`status.md`](./status.md).
     transcript blocker. Traced restore/test `PATH` prefixes, when present, must
     start with the freshly built `connect_norito_bridge.dll` directory printed
     by the bridge marker, so a copied transcript cannot load a different native
-    bridge through `PATH`. The native bridge `cargo build` trace may carry only
-    the runner-owned `CARGO_TARGET_DIR` env assignment; extra bridge-build env
-    knobs are fixed transcript blockers.
+    bridge through `PATH`, and empty path-list segments such as trailing,
+    leading-after-prefix, or interior doubled separators remain fixed transcript
+    blockers. The native bridge
+    `cargo build` trace may carry only the runner-owned `CARGO_TARGET_DIR` env
+    assignment; extra bridge-build env knobs are fixed transcript blockers.
   - Require the Windows `.NET 8` SCCP VSTest summary to report `Skipped: 0`;
     a `Passed!` line with skipped SCCP tests is not production-certifying
     evidence even when `Failed: 0` and the total count is internally consistent,
     and a noncanonical `Skipped: 00` summary is also rejected as forged evidence.
   - Require the VSTest summary duration to be a numeric unit duration such as
     `1 s` or `65 ms`; free-form duration text is not release evidence.
+  - Require the VSTest summary to keep label/value and number/unit separators
+    present and to use only ordinary spaces for VSTest padding;
+    collapsed spacing or tab/control-whitespace splices in the success line are
+    forged evidence.
   - Require the VSTest summary line to end with
     `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)`, so copied pass counts from a
     different test assembly cannot certify the SCCP `.NET` phase.
@@ -2573,8 +2596,9 @@ and completed history lives in [`status.md`](./status.md).
 	  report/archive bytes through the same digest mismatch gates as package
 	  validation. External-review fixture package/digest construction now routes
 	  through the crypto marker-enforcing builder, while deterministic
-	  machine-generated report/archive bytes remain structural evidence material
-	  only and are rejected by the production-pinned path.
+	  machine-generated report/archive bytes now label the audited proof-profile
+	  field count and transcript-label obligations, remain structural evidence
+	  material only, and are rejected by the production-pinned path.
 		  Core's audited material and execution prover wrappers require that gate before
 			  native BFV proof attachments are emitted, including copied report/archive body
 			  rejection after edge-whitespace and alphanumeric normalization plus refresh transcript
@@ -2636,7 +2660,14 @@ and completed history lives in [`status.md`](./status.md).
 	  input digest path now hashes AIR evaluation material only after the same
 	  trace-bound composition-vector validation and hashes witness, embedded
 	  proof-input, plus outer release-prover material only after artifact-aware
-	  prefix-trace replay; material-proof input digests now also have a
+	  prefix-trace replay; the artifact-aware exact and bounded prefix
+	  constructors now validate constructed traces and aggregate prefix-bound
+	  vectors plus assembled witness material before returning them and reject
+	  inert all-zero trace material, invalid propagated bounds, or stale witness
+	  packages, while direct/artifact-aware execution preflight rejects inert
+	  all-zero ciphertext inputs before artifact fallback or prefix execution at
+	  the executable crypto boundary;
+	  material-proof input digests now also have a
 	  caller-bound path that reconstructs the package from caller-owned
 	  evaluation keys and artifacts before hashing, and Core's material native
 	  AIR handoff consumes that caller-bound digest before proof emission. Core's
@@ -2669,8 +2700,8 @@ and completed history lives in [`status.md`](./status.md).
 	  shared STARK/AIR
 			  prover and verifier now derive duplicate-free query schedules by
 			  bound-specific transcript rejection sampling without replacement,
-					  require noncanonical transcript labels, including padded BFV
-					  native AIR retry-label aliases, malformed domain tags,
+						  require noncanonical transcript labels, including BFV
+						  native AIR suffixed-label aliases, malformed domain tags,
 					  and malformed AIR or verifier-key circuit ids to fail closed before query replay or envelope verification,
 					  keep caller-provided verifier limits from relaxing canonical
 					  STARK structure and envelope-byte caps, and reject
@@ -2717,12 +2748,13 @@ and completed history lives in [`status.md`](./status.md).
 			  BFV full-bootstrap STARK circuit ids are now classified the same way,
 			  so public generic AIR construction plus generic wrapper construction
 			  and verification reject BFV aliases before the generic binding AIR can
-			  admit native full-bootstrap proof attachments without BFV-specific
-				  public-opening checks, while Soracloud FHE attachment admission rejects
-				  noncanonical STARK/FRI backend labels and base FHE verifier paths
-				  reject wrong-circuit STARK verifier-key payloads before verifier
-				  lookup, preverified-cache acceptance, or native full-bootstrap
-				  verifier dispatch.
+				  admit native full-bootstrap proof attachments without BFV-specific
+					  public-opening checks, while Soracloud FHE attachment admission rejects
+					  noncanonical STARK/FRI backend labels and base FHE verifier paths
+					  reject wrong-circuit STARK verifier-key payloads, including native
+					  metadata verifier payloads, before verifier lookup,
+					  preverified-cache acceptance, or native full-bootstrap verifier
+					  dispatch.
 			  Wrapper verification also pins inner AIR transcript labels to the
 			  canonical generic binding or ZK-ACE domain so regenerated proofs under
 			  alternate STARK transcript domains fail closed.
@@ -2774,20 +2806,32 @@ and completed history lives in [`status.md`](./status.md).
 				  execution witness digest literals. Generated
 					  execution claims still use that transient value only internally before
 					  deriving the governed digest. The BFV native
-				  STARK/AIR prover/verifier wrapper now derives the domain tag from the
-				  execution statement hash, pins the canonical circuit id and FRI profile,
-				  and rejects sampled openings unless they are the statement-bound
+					  STARK/AIR prover/verifier wrapper now derives the domain tag from the
+					  execution statement hash, pins the BFV native AIR transcript label to
+					  the canonical base label, rejects suffixed-label alternate proof
+					  encodings, pins the canonical circuit id and FRI profile,
+					  and rejects sampled openings unless they are the statement-bound
 				  public-padding rows; the Core execution native-AIR boundary also
 				  requires governed trace rows and AIR composition values before root
 				  reconstruction, sampled opening replay, Merkle/FRI validation, or
-				  dedicated-verifier fallback; the material-native AIR boundary now
+					  dedicated-verifier fallback; the Soracloud execution proof wrapper
+						  now replays the same canonical base-label preflight before native
+						  AIR envelopes are packaged into execution proof attachments, and
+						  the typed crypto proof schema and execution public-input schema
+						  require that canonical base-label/suffixed-label rejection contract; the
+						  material-native AIR boundary now
 				  also checks sampled Merkle path shape, commitments, and FRI/AIR
 				  values before dedicated verifier dispatch; release-audit reviewer admission now
 				  requires Ed25519 public keys across signoff, record, manifest, and
 				  package validation, rejects empty or all-zero reviewer public-key
 				  payloads before stale signed objects can mask malformed trust
 				  anchors, fail-fast Ed25519 reviewer signing keys during
-				  record/package construction, and advertises that trusted-reviewer
+				  record/package construction, rejects duplicate production
+				  external-review report/archive marker fields plus
+				  case-insensitive same-statement marker-token replays and
+				  padded-colon marker replays before trusted package admission,
+				  rejects non-printable marker-statement bytes plus
+				  separator-alias reviewer labels, and advertises that trusted-reviewer
 				  payload contract in the Soracloud full-bootstrap schemas; Soracloud
 				  FHE execution-policy validation now shares those reviewer-id and
 				  reviewer-public-key preflights, so placeholder reviewer ids fail on
@@ -2913,8 +2957,6 @@ and completed history lives in [`status.md`](./status.md).
 									  Core native envelope binary-decorated placeholder preflight,
 										  data-model native envelope placeholder preflight,
 										  Torii signed job-run native envelope placeholder preflight,
-										  data-model release-audit archive evidence schema advertisement,
-										  data-model release-audit per-artifact evidence-digest schema advertisement,
 										  canonical generated release-audit package-builder path,
 									  canonical release-audit package-plus-digest builder path,
 									  native prover/verifier payload generated-circuit body bytes,
@@ -2923,7 +2965,7 @@ and completed history lives in [`status.md`](./status.md).
 										  generated-body embedded AIR material preflight, and
 										  release-audit body-digest binding with matched stale digest and
 										  generated-body SHA-256 placeholder evidence rejection,
-											  release-audit report release-evidence/generated-body/proof-key-pair commitment and evidence-archive artifact-bundle/evaluator-artifact-set/centered-source-chain/generated-body/native-fingerprint/proof-key-pair/prover-key/verifier-key containment,
+											  release-audit report release-evidence/generated-body/proof-key-pair commitment and evidence-archive artifact-bundle/evaluator-artifact-set/centered-source-chain/arithmetic-trace-profile/arithmetic-AIR/generated-body/native-fingerprint/proof-key-pair/prover-key/verifier-key containment,
 											  release-audit evidence-archive generated-body byte-length,
 											  canonical generated-body hex, native prover/verifier payload hex,
 											  governed evaluator-key, accumulator, proof-schema,
@@ -2934,6 +2976,7 @@ and completed history lives in [`status.md`](./status.md).
 												  canonical generated release-audit package-builder path,
 												  canonical release-audit package-plus-digest builder path,
 												  production-pinned byte-leading lowercase external-review marker with non-empty statement plus whitespace-prefixed/uppercase/empty-statement marker rejection and literal/separator-obfuscated machine-generated audit-body rejection,
+													  policy-visible signed reviewer-id-labelled marker validation, lowercase/case-drifted reviewer-label rejection, and copied report/archive external-review statement rejection,
 											  same-field lowercase label/hex-text signed-digest containment with raw-byte and colon-separator rejection, separator-delimited label-token-bound and standalone-value-token release-audit report/archive commitment containment,
 										  native circuit-fingerprint placeholder rejection,
 									  circuit-material registered-profile digest placeholder preflight,
@@ -2953,15 +2996,16 @@ and completed history lives in [`status.md`](./status.md).
 								  transcript-derived canonical AIR opening schedule/public-padding
 							  replay validation with Core trace-material digest pinning,
 							  AIR contract/public-schema and
-									  generated-circuit/fingerprint binding plus native generated-body
+								  generated-circuit/fingerprint binding plus native generated-body
 									  proof public-input schema-payload digest binding and
 									  typed decode plus placeholder/circuit-id/profile/digest/layout/obligation
 									  retarget preflight,
 								  limits-aware Core native AIR opening-root and FRI query-shape replay,
 								  artifact-aware full-bootstrap claim Galois-key-set digest
 								  preflight before ciphertext/bound metadata use,
-								  crypto-canonical execution native-AIR domain tags with bounded
-					  transcript-label attempts, Core release-prover native AIR synthesis
+								  strict witness-backed claim digest sentinel preflight before trace replay,
+								  crypto-canonical execution native-AIR domain tags with canonical
+					  base transcript labels, Core release-prover native AIR synthesis
 				  routed through the shared BFV `zk_stark` wrapper,
 				  or the policy-pinned Core/Torii
 				  release-audit runtime gate.
@@ -3781,12 +3825,25 @@ and completed history lives in [`status.md`](./status.md).
   The strict Required Release Evidence invariant must also require the
   retired-network surface source-inventory row itself, so the sentence cannot
   survive while the release-gate row is silently removed.
-  A generated-output regression must compare all Required Release Evidence
-  source-inventory row labels against the strict Markdown marker list so new
-  release gates cannot be added without public Markdown invariant coverage.
-  That strict marker list must remain unique and every marker must be present
-  in the generated Required Release Evidence section, so duplicate marker
-  entries cannot hide coverage drift.
+	  A generated-output regression now compares the count and rendering of all
+	  Required Release Evidence source-inventory row labels against the strict
+	  Markdown marker list, so new release gates cannot be added without public
+	  Markdown invariant coverage.
+  That strict marker list and the generated Required Release Evidence bullet
+  list must remain unique, and every marker must be present in the generated
+  section, so duplicate marker, exact duplicate bullet, or
+  whitespace-normalized duplicate bullet entries cannot hide coverage drift.
+  The Required Release Evidence list must also reject noncanonical Markdown
+  bullet spelling, including short-indented bullets, extra separator spaces,
+  alternate bullet markers, and trailing spaces.
+  Strict readiness Markdown and release-notes heading parsing must also reject
+  noncanonical top-level title/status blocks, non-exact public section-heading
+  spelling, unexpected public section headings, Setext headings, repeated
+  public section headings, and noncanonical required-section order, with
+  inventory-pinned regressions so duplicate titles, conflicting statuses,
+  padded headings, inserted, short-indented, Setext-underlined, duplicated, or
+  swapped headings cannot preserve marker coverage while changing the public
+  artifact structure.
   The readiness generator must also compare emitted `source_inventory` keys
   against the strict verifier required-gate set so verifier-only gates cannot be
   omitted from generated report JSON.
@@ -4103,10 +4160,11 @@ and completed history lives in [`status.md`](./status.md).
   uppercase byte aliases for public-input hashes, statement hashes, optional
 	  Groth16 artifact hashes, fixed source-proof hashes, and canonical SCCP
 	  message-bundle hash fields; keep the SDK tests and strict bundle/readiness
-	  inventory markers pinned. The focused Kotlin/JVM and Java Android SCCP
-	  suites now pass locally with Homebrew OpenJDK 21 pinned via `JAVA_HOME`;
-	  the remaining host-dependent SCCP SDK certification is the Windows `.NET 8`
-	  evidence pass tracked below.
+	  inventory markers pinned. The focused JavaScript/Python, Swift,
+	  Kotlin/JVM, Java Android, and contract-smoke SCCP corridor phases now pass
+	  locally, with Homebrew OpenJDK 21 pinned via `JAVA_HOME` for the Java
+	  phases; the remaining host-dependent SCCP SDK certification is the Windows
+	  `.NET 8` evidence pass tracked below.
   Deployment-derived Rust bindings must additionally require the full
   standalone deployment descriptor shape before minting binding hashes, including
   TON partial-audit, receipt/VK replay, and adapter verifier-key drift
@@ -4199,6 +4257,11 @@ and completed history lives in [`status.md`](./status.md).
   that reject stripped source proofs, mismatched finality proof bytes,
   public-input drift, payload-body tampering, commitment-root tampering,
   malformed builder bundles, and BSC builder source-domain drift.
+- SCCP network scope for the current release remains EVM-family, Solana, TON,
+  and TRON lanes only. Substrate/Polkadot networks are intentionally unsupported
+  for now; do not add public evidence rows, route manifests, deployment
+  checklists, or SDK readiness tasks for those networks until a future governed
+  network-support plan is accepted.
 - SCCP client SDK route-canary helper parity must stay pinned: Python Torii
   client, JavaScript source/dist, Swift, Kotlin/JVM, and Java Android helpers
   reject reused route-allowlist, destination-binding, source-material, and
@@ -4254,7 +4317,12 @@ and completed history lives in [`status.md`](./status.md).
 		  comparison diagnostics. The bundle builder's pre-render copied-evidence
 		  schema regression now pins duplicate `required_domains`,
 		  `supported_launch_domains`, and `unsupported_launch_domains` blockers
-		  before public artifacts are written. Copied all-lanes summary, lane, and `records`
+		  before public artifacts are written. The bundle builder must also reject
+		  copied launch-domain scope drift before rendering, including non-exact
+		  `supported_launch_domains`, non-empty or non-exact
+		  `unsupported_launch_domains`, overlapping supported/unsupported lists,
+		  and supported-plus-unsupported lists that no longer match
+		  `required_domains`. Copied all-lanes summary, lane, and `records`
 		  unknown field names must use the same public-field classifier before
 		  bundle rendering, so padded, control-character, whitespace,
 	  Markdown-unsafe, or Unicode-confusable names cannot leak raw public
@@ -4303,12 +4371,15 @@ and completed history lives in [`status.md`](./status.md).
   ready-lane checks, even when the aggregate summary is already not-ready, and
   standalone copied summaries enforce the same destination-family field rules
   for claimed-ready EVM, Solana, TON, and TRON lanes plus exact destination,
-  route, and route-canary sibling hash bindings; claimed-ready EVM live metadata
-  and destination binding keys are now required before copied metadata is
-  accepted, and non-EVM launch lanes must keep copied EVM live metadata in the
-  strict empty/non-required state before public summaries can retain it.
-  Standalone copied route-canary records now use the strict domain-specific
-  field sets, so EVM, Solana, TON, and TRON canary fields cannot be replayed
+	  route, and route-canary sibling hash bindings; claimed-ready EVM live metadata
+	  and destination binding keys are now required before copied metadata is
+	  accepted, and non-EVM launch lanes must keep copied EVM live metadata in the
+	  strict empty/non-required state before public summaries can retain it.
+	  Copied readiness input-artifact rows must also keep positive byte counts
+	  before public JSON can be rendered, matching the strict release-bundle
+	  verifier.
+	  Standalone copied route-canary records now use the strict domain-specific
+	  field sets, so EVM, Solana, TON, and TRON canary fields cannot be replayed
   into the wrong launch lane before public summaries are rendered, and omitted
   domain-specific route-canary fields now fail with bounded missing-field
   blockers even for diagnostic not-ready lanes. Other fixed nested copied lane
@@ -4446,11 +4517,14 @@ and completed history lives in [`status.md`](./status.md).
   bundle builder must classify copied report-artifact row field names and reject
   copied report-artifact rows with unknown fields, malformed bundle-relative
   path text, zero, negative, or non-integer byte counts, or noncanonical
-  SHA-256 text before `--allow-not-ready` diagnostics can render or write
-  public artifacts.
+  or all-zero SHA-256 text before `--allow-not-ready` diagnostics can render
+  or write public artifacts.
   Release-readiness and strict bundle source inventory must pin those direct
   artifact-row regressions so deleting the unknown-field, byte-count, or
-  digest-canonicality guards blocks public readiness.
+  digest-canonicality/non-zero guards blocks public readiness. Public verifier
+  summaries and release-note artifact tables must apply the same non-zero
+  canonical SHA-256 rule so an all-zero sentinel cannot survive by passing
+  through a later render or verification surface.
 - SCCP cryptographic-evidence public rows must classify unknown row field names
   before lane binding, route-canary binding, Markdown checks, or source-adapter
   audit semantics. Safe ASCII operator names may remain readable, while
@@ -4471,12 +4545,27 @@ and completed history lives in [`status.md`](./status.md).
   before public output is
   written; the standalone readiness JSON sanitizer now enforces the same
   source-gate audit hash-role separation before it can publish copied rows.
-  Public cryptographic-evidence route-canary rows must also keep
-  `route_canary_evidence_hash` distinct from the copied EVM transaction,
-  receipt-block, receipts-root, and message-id transcript hashes before
-  readiness JSON, bundle Markdown, or strict bundle verification can pass.
-  Release-readiness and strict bundle source inventory must pin the direct
-  public-row schema regressions as well, including zero governed hashes,
+	  Public cryptographic-evidence route-canary rows must also keep
+	  `route_canary_evidence_hash` distinct from the copied EVM transaction,
+	  receipt-block, receipts-root, and message-id transcript hashes before
+	  readiness JSON, bundle Markdown, or strict bundle verification can pass.
+	  Message-proof public route-canary rows for ETH/BSC/TRON must also expose
+	  exact scalar proof context: a non-negative u32
+	  `route_canary_log_index`, `route_canary_target_domain` equal to the lane
+	  domain, `route_canary_proof_version = 1`, and
+	  `route_canary_proof_source_domain = SORA`; Solana/TON public rows must keep
+	  those scalar proof-context fields `null`.
+	  Message-proof public route-canary rows for ETH/BSC/TRON must also expose
+	  exact transcript commitments as non-zero bytes32 fields:
+	  `route_canary_call_data_sha256`, `route_canary_payload_hash`,
+	  `route_canary_statement_hash`, `route_canary_commitment_root`,
+	  `route_canary_finality_height`, and
+	  `route_canary_finality_block_hash`; Solana/TON public rows must keep those
+	  transcript commitment fields `null`, and copied rows must bind them back to
+	  the embedded all-lanes route-canary evidence before readiness JSON, bundle
+	  Markdown, or strict bundle verification can pass.
+	  Release-readiness and strict bundle source inventory must pin the direct
+	  public-row schema regressions as well, including zero governed hashes,
   route-canary/source-gate domain-policy drift, exact JSON type drift, and BSC
   testnet row-shape checks.
 - SCCP BSC TAIRA XOR route-config generation must reject contradictory
@@ -4554,12 +4643,13 @@ and completed history lives in [`status.md`](./status.md).
   buckets must also fail closed on malformed active-lane blocker containers
   before category matching runs, so scalar, padded, or non-string entries cannot
   disappear from category readiness while only the aggregate blocker gate fails.
-  The active no-unresolved-blockers collector must apply the same canonical
-  string policy to embedded evidence root blockers and active-lane blockers, so
-  empty, padded, or non-string entries remain schema diagnostics rather than
-  unstructured blocker text. Numeric and null blocker entries are pinned in
-  readiness and strict bundle inventory checks for the active no-unresolved
-  blocker collector.
+	  The active no-unresolved-blockers collector must apply the same canonical
+	  string policy to embedded evidence root blockers and active-lane blockers, so
+	  empty, padded, non-string, or duplicate entries remain schema diagnostics
+	  rather than unstructured or repeated blocker text. Numeric, null, and
+	  duplicate blocker entries are pinned in
+	  readiness and strict bundle inventory checks for the active no-unresolved
+	  blocker collector.
 - SCCP release-bundle public string-list fields must reject trim-normalized
   evidence. Manifest, readiness-report, corridor, release-checklist, embedded
   evidence, standalone all-lanes, and lane blocker arrays must contain
@@ -4598,10 +4688,13 @@ and completed history lives in [`status.md`](./status.md).
 	  verification.
 - SCCP release-bundle public blocker-list schemas must stay pinned as a
   readiness source-inventory gate: manifest, readiness-report, corridor,
-  release-checklist, embedded evidence, standalone all-lanes, and lane blocker
-  arrays must keep canonical non-empty strings, duplicate rejection, ready-surface
-  empty-blocker checks, and invalid-marker rendering for malformed blocker
-  containers before published bundle readiness can pass. The bundle builder must
+  release-checklist, embedded evidence, standalone all-lanes root, lane,
+  source-adapter-gate, and release-checklist blocker arrays, and active-launch
+  route-canary, route-allowlist, destination-rollout, and source-adapter-gate
+  blocker arrays must keep canonical non-empty strings, duplicate rejection,
+  ready-surface empty-blocker checks, and invalid-marker rendering for
+  malformed blocker containers before published bundle readiness can pass.
+  The bundle builder must
   reject malformed, empty, numeric, null, padded, or duplicate root blockers before
   `--allow-not-ready` diagnostics can render or write public artifacts.
   Sensitive blocker detection now also treats mnemonic, seed-phrase,
@@ -4668,6 +4761,9 @@ and completed history lives in [`status.md`](./status.md).
 			  corridor, release-checklist, source-inventory, native-prover, and
 			  user-prover blocker lists before copied public JSON or Markdown can publish
 			  repeated operator text.
+			  Active-launch release-checklist recomputation must apply the same duplicate
+			  rejection to native EVM prover validation blockers before checklist or
+			  Markdown output can copy operator-provided blocker text.
 			  Readiness-report `source_inventory` gate names and known-gate row fields must
 		  be schema-classified before unknown-gate or unknown-field diagnostics, so safe
 		  operator notes remain readable while padded, control-character, whitespace,
@@ -4711,13 +4807,18 @@ and completed history lives in [`status.md`](./status.md).
   so a weakened report renderer cannot publish drift before final bundle
   verification. The source-inventory marker set must explicitly pin the bundle
   builder's pre-write readiness Markdown and release-notes attachment drift
-  rejections and the tests that assert no drifted public Markdown file is
-  written. Readiness-report and strict bundle sparse inventory checks must
-  remove every uniquely detectable public Markdown text marker across
-  verifier-side UTF-8/load/render/drift guards, bundle pre-write drift guards,
-  redaction tests, adversarial bundle tests, and readiness self-inventory rows.
-  Readiness Markdown
-  source-inventory blocker checks must suppress malformed source-inventory gate
+	  rejections and the tests that assert no drifted public Markdown file is
+	  written. Readiness-report and strict bundle sparse inventory checks must
+	  remove every uniquely detectable public Markdown text marker across
+	  verifier-side UTF-8/load/render/drift guards, bundle pre-write drift guards,
+	  redaction tests, adversarial bundle tests, and readiness self-inventory rows.
+	  Release-notes artifact tables now render zero-byte artifact rows as
+	  `<invalid bytes>` and all-zero SHA-256 artifact rows as
+	  `<invalid artifact.sha256>`, matching the strict manifest/readiness
+	  positive-byte and non-zero-hash artifact contract before copied metadata can
+	  look valid in public notes.
+	  Readiness Markdown
+	  source-inventory blocker checks must suppress malformed source-inventory gate
   names before emitting secondary missing-cell diagnostics, and copied
   input/corridor report-artifact paths must pass path classification before
   Markdown path/hash presence checks.
@@ -4738,13 +4839,22 @@ and completed history lives in [`status.md`](./status.md).
   boolean/null drift, optional bytes32 and block-number drift, duplicate
   domains, row/lane count drift, and copied row-to-embedded-lane
   binding drift before `--allow-not-ready` diagnostics can render or write
-	  public artifacts. EVM route-canary public rows must also require exact
-	  `evm_message_proof_accepted_transaction` evidence source plus exact `true`
-	  evidence-bound and finalized-receipt booleans, and positive u32 receipt block
-	  numbers, before public Markdown can be rendered or strict bundle verification
-	  can pass. TRON route-canary public rows must also keep block numbers as
-	positive u64 integers and block timestamps as non-negative u64 integers before
-	  that same public-output boundary. Public source-adapter gate rows must also
+  public artifacts. EVM route-canary public rows must also require exact
+  `evm_message_proof_accepted_transaction` evidence source plus exact `true`
+  evidence-bound, message-proof-used, and finalized-receipt booleans, and
+  positive u32 receipt block numbers, before public Markdown can be rendered or
+  strict bundle verification can pass. TRON route-canary public rows must also
+  expose exact `true` `route_canary_message_proof_used` for message-proof
+  route-canary evidence and exact `true`
+  `route_canary_raw_data_owner_matches_transaction` plus
+  `route_canary_signature_recovers_to_owner` for TRON transaction-owner and
+  signature-recovery evidence, while Solana/TON snapshot canary rows and EVM
+  rows must keep those TRON-only public fields `null`; copied rows with
+  missing, false, string, or lane-drifted message-proof, owner-binding, or
+  signature-recovery values now fail before public output is emitted. TRON
+  route-canary public rows must also keep block numbers as positive u64
+  integers and block timestamps as non-negative u64 integers before
+  that same public-output boundary. Public source-adapter gate rows must also
 	  enforce domain-specific audit-key policy for Solana, TON, and TRON rows before
 	  non-active copied evidence can pass. The standalone readiness-report JSON
 	  renderer now rejects empty or incomplete copied `cryptographic_evidence` rows
@@ -4982,7 +5092,14 @@ and completed history lives in [`status.md`](./status.md).
   `raw_data_owner_matches_transaction`, and `signature_recovers_to_owner`
   values must become explicit boolean-schema blockers before the not-bound,
   message-proof-used, finalized-receipt, owner-binding, or signature-recovery
-  fallback is applied.
+  fallback is applied. The all-lanes checklist must also require lane-specific
+  route-canary truth flags to be present: ETH/BSC route canaries require
+  `message_proof_used` and `receipt_block_finalized`, while TRON route canaries
+  require `message_proof_used`, `raw_data_owner_matches_transaction`, and
+  `signature_recovers_to_owner`; missing required flags are release blockers
+  rather than optional metadata. Copied public summaries must reject those same
+  missing route-canary truth flags before Markdown or bundle artifacts can be
+  rendered.
   The engineering backlog no longer lists those route-canary scalar/exactness
   checks as open SCCP work because the all-lanes, readiness, and strict-bundle
   adversarial regressions are green.
@@ -5040,6 +5157,11 @@ and completed history lives in [`status.md`](./status.md).
   public field name. Unknown top-level report fields, including sensitive and
   non-string keys, must be classified and stripped before output so copied
   values cannot leak and mixed-key reports cannot crash sorted JSON rendering.
+  Copied readiness `inputs` and `input_artifacts[].path` values must also be
+  canonical local POSIX public paths: raw `..`, absolute paths, Windows
+  backslashes or drive-style paths, duplicate separators, `.` aliases,
+  percent-encoded traversal, and path text with sensitive markers must suppress
+  the copied roots before public JSON output.
   The public JSON-root and blocker-list schema inventories must pin the report
   sanitizer and CLI adversarial tests.
 - SCCP release-readiness Markdown lane rows must stay traceback-safe even when
@@ -5081,7 +5203,9 @@ and completed history lives in [`status.md`](./status.md).
   must stay traceback-safe: malformed artifact rows, unsafe paths,
   noncanonical hashes, non-object corridor roots, malformed phase keys, and
   invalid phase statuses must render as invalid markers or empty artifact
-  cells without raw copied operator text. The readiness Markdown inventory must
+  cells without raw copied operator text. Evidence-input and native-prover
+  support artifact path cells must share the same canonical local POSIX public
+  path policy used by the JSON sanitizer. The readiness Markdown inventory must
   pin the safe input/corridor row helpers plus generator and strict-verifier
   adversarial tests.
 - SCCP release-readiness Markdown collection roots must stay traceback-safe:
@@ -5140,21 +5264,61 @@ and completed history lives in [`status.md`](./status.md).
   debug-output path/hash success markers before
   `dotnet-sdk` evidence can pass. The SDK version marker must be a stable canonical `.NET 8.0.x` SDK
   version with a non-zero patch segment, no preview/prerelease suffix, and no
-  zero-padded numeric segments. The OS marker must be exactly
+  zero-padded numeric segments. The production corridor runner must also reject
+  multi-line `dotnet --version` output before `dotnet --info`, native bridge
+  build, restore, or test execution, so noisy or forged version probes cannot be
+  collapsed into a single release marker. The `dotnet --info` output must expose
+  exactly one `OS Name:`, one `OS Platform:`, one `RID:`, and one
+  `OS Architecture:` field; both OS fields must be exactly `Windows`, duplicate
+  or missing OS-name/platform fields, including missing `OS Name:`, duplicate
+  `OS Name:`, missing `OS Platform:`, and duplicate `OS Platform:` cases,
+  missing or duplicate RID fields, and missing or duplicate OS-architecture
+  fields fail before bridge build, restore, or test execution. Uppercase RID,
+  foreign-platform RID, and alias-architecture RID values such as `WIN-x64`,
+  `linux-x64`, or `win-amd64` fail before any release markers are emitted. The
+  same is true for architecture alias values such as `amd64`, `x86_64`, or
+  `aarch64`; the runner must reject them instead of normalizing them to
+  canonical release markers. Colon-injected metadata values such as
+  `Windows: Linux`, `win-x64:linux-x64`, or `x64:arm64` must also remain
+  visible to the canonical-value checks and fail before release markers. The OS
+  marker must be exactly
   `SCCP .NET SDK OS: Windows`, the RID marker must be a
   canonical lower-case Windows RID (`win-x64`, `win-x86`, `win-arm64`, or
   `win-arm`), and the architecture marker must carry a canonical lower-case SDK
   architecture value (`x64`, `x86`, `arm64`, or `arm`) that agrees with the RID
-  architecture segment. The final `.NET test`
+  architecture segment. The production corridor runner must reject uppercase or
+  mixed-case architecture values from `dotnet --info` before native bridge
+  build, restore, or test execution instead of normalizing them into canonical
+  release markers. The final `.NET test`
   success marker must be a VSTest-style summary with `Failed: 0`, a non-zero
   passed-test count, `Skipped: 0`, `Total == Passed`, a numeric unit duration,
-  and the expected `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` assembly suffix;
-  the TRX marker must full-match the C# test project
-  `TestResults/sccp-dotnet-sdk.trx` path, and the TRX bytes marker must be a
-  positive integer.
-  TRX marker path components must be canonical named directories, so
-  `TestResults/../sccp-dotnet-sdk.trx` remains forged evidence even though it
-  appears under the expected project prefix.
+  visible label/value and number/unit separators, ordinary-space-only padding,
+  and the expected
+  `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` assembly suffix;
+  the TRX marker must full-match the direct C# test project
+  `TestResults/sccp-dotnet-sdk.trx` path, the TRX bytes marker must be a
+  positive integer, and named or traversal subdirectories before or after
+  `TestResults` remain forged evidence.
+  TRX marker path components must be direct and canonical, so
+  `TestResults/../sccp-dotnet-sdk.trx`,
+  `forged/TestResults/sccp-dotnet-sdk.trx`, and
+  `TestResults/forged/sccp-dotnet-sdk.trx` remain forged evidence even when the
+  basename is correct. The production corridor runner must reject nested
+  VSTest-created TRX files before emitting `SCCP .NET SDK TRX:` or TRX byte
+  markers, so runtime evidence and copied release transcripts enforce the same
+  direct-project `TestResults` boundary. Windows backslash-separated or drive-qualified TRX
+  marker paths remain forged evidence too; the release transcript must use the
+  canonical project-relative forward-slash marker. The runner must also inspect
+  the direct TRX XML before emitting release markers: the file must name
+  `Hyperledger.Iroha.Sdk.Tests.dll`, contain at least one passed SCCP
+  `UnitTestResult`, and contain no failed, skipped, timed-out, or aborted SCCP
+  test results. Empty placeholders, wrong-assembly TRX files, skipped-only
+  results, and failed-result TRX files remain forged evidence even when the
+  VSTest console summary looks successful.
+  All canonical `.NET` SCCP marker lines must use a single literal space after
+  the colon; VSTest summary label/value and number/unit separators must be
+  present, padding must use ordinary spaces only, and tab/control-whitespace
+  separators remain forged evidence.
   The native bridge path marker must match the traced `CARGO_TARGET_DIR` value
   followed by `debug/connect_norito_bridge.dll`, and the release
   phase-transcript source inventory must pin that helper plus the
@@ -5176,17 +5340,18 @@ and completed history lives in [`status.md`](./status.md).
   evidence.
 - SCCP all-lanes governed evidence blockers must stay schema-aware: destination
   rollout and route allowlist `blockers` fields must be empty lists of
-  non-empty canonical strings, and scalar, empty, padded, or non-string entries
-  must remain production blockers instead of being collapsed into generic
-  not-ready state. Release-readiness and bundle verification now pin that
+  non-empty canonical strings with no duplicate values, and scalar, empty,
+  padded, duplicate, or non-string entries must remain production blockers
+  instead of being collapsed into generic not-ready state.
+  Release-readiness and bundle verification now pin that
   governed blocker schema as a required source-inventory gate before governed
   evidence can pass; public sparse tests must keep destination-rollout and
   route-allowlist blocker-list hooks, empty-ready diagnostics, sensitive public
   blocker markers, and scalar/numeric/empty/padded/sensitive/Markdown-unsafe/
-  confusable/non-empty-ready adversarial blocker inputs pinned. Readiness and
-  strict-bundle sparse tests must remove every uniquely detectable governed
-  blocker marker across implementation, adversarial test, gate, and
-  self-inventory rows.
+  confusable/duplicate/non-empty-ready adversarial blocker inputs pinned.
+  Readiness and strict-bundle sparse tests must remove every uniquely
+  detectable governed blocker marker across implementation, adversarial test,
+  gate, and self-inventory rows.
   The governed-blocker schema inventory now also pins one malformed blocker
   sentinel for every active launch lane, including TON, with
   readiness/strict-bundle negative tests that remove a lane sentinel before the
@@ -5284,10 +5449,13 @@ and completed history lives in [`status.md`](./status.md).
   are schema blockers before the not-bound blocker is emitted; copied truthy
   strings, numeric values, false, and missing/null flags must remain
   live-route-canary blockers in readiness and strict bundle
-  recomputation.
-  Source-inventory tests must also keep the transaction hash, receipt-block
-  hash/root, message-id, positive block-number, finalized-block, and adversarial
-  block-receipts-root markers pinned.
+  recomputation. Readiness and strict-bundle recomputation tests must keep
+  present JSON `null` distinct from missing fields for evidence binding,
+  message-proof usage, receipt finality, and evidence-source validation.
+  Source-inventory tests must also keep the evidence-source, transaction hash,
+  receipt-block hash/root, message-id, positive block-number,
+  message-proof-used, finalized-block, and adversarial block-receipts-root
+  markers pinned.
 - SCCP release readiness now treats Ethereum noncanonical chain-id coverage as
   a production gate: public SDK and evidence-script regressions must continue
   rejecting padded, uppercase, numeric, and whitespace-wrapped `eth_chainId`
@@ -5450,6 +5618,9 @@ and completed history lives in [`status.md`](./status.md).
   Symlinked source-path and source-ancestor diagnostics must stay category-only
   for evidence inputs, phase logs, native prover manifests, and native prover
   payload sources.
+  Non-ASCII or secret-looking evidence and native-prover manifest filenames
+  must fail before bundle creation because those names otherwise become public
+  copied artifact paths.
   Markdown-unsafe copied source filename diagnostics must stay category-only
   before source copying.
   Percent-encoded traversal in copied source filenames must fail before source
@@ -5464,6 +5635,14 @@ and completed history lives in [`status.md`](./status.md).
   directory paths before bundle generation can create or overwrite release
   artifacts. Symlinked output-directory and output-ancestor diagnostics must
   stay category-only so local release target paths do not leak.
+  The readiness-report CLI must also reject malformed `--output` path text
+  before evidence parsing or writes, including surrounding whitespace, control
+  characters, non-ASCII text, Markdown-unsafe characters, secret-looking names,
+  and percent-encoded traversal segments.
+  New bundle output directories, and forced replacement of existing bundle
+  output directories, must reject the same unsafe path text before report
+  preflight, bundle creation, deletion, or success logs can expose the local
+  path.
   Forced-replacement containment diagnostics must also stay category-only so
   local output roots and protected evidence paths do not leak.
   Existing-output diagnostics without `--force` must stay category-only too.
@@ -5472,14 +5651,16 @@ and completed history lives in [`status.md`](./status.md).
   Control-character output-path diagnostics must likewise keep local release
   target paths out of stderr. Readiness and strict-bundle sparse tests must
   remove every uniquely detectable output-path marker across readiness wiring,
-  bundle output preflights, existing-output/force/dangerous-root/repo-containment
-  diagnostics, symlink/control-character adversarial tests, and the readiness
+  bundle and readiness output preflights,
+  existing-output/force/dangerous-root/repo-containment diagnostics,
+  symlink/control-character/malformed-path adversarial tests, and the readiness
   self-inventory.
 - SCCP release readiness now treats release artifact path text preflights as a
   production gate: bundle and readiness regressions must continue rejecting
-  Markdown-unsafe or surrounding-whitespace artifact paths, native prover
-  payload paths, copied filenames, readiness input paths, manifest paths, and
-  bundle filesystem entries before release notes can render artifact tables.
+  Markdown-unsafe, non-ASCII, secret-looking, surrounding-whitespace, or
+  percent-encoded artifact paths, native prover manifest-relative payload
+  paths, copied filenames, readiness input paths, manifest paths, and bundle
+  filesystem entries before release notes can render artifact tables.
   Generated release artifact path diagnostics must remain category-only and
   must not echo local artifact paths. Readiness and strict-bundle sparse tests
   must remove every uniquely detectable artifact-path text marker across
@@ -5488,7 +5669,8 @@ and completed history lives in [`status.md`](./status.md).
   self-inventories.
   Top-level all-lanes, release-readiness, and release-bundle CLI exception
   handlers must preserve structured validation categories while redacting
-  secret-looking, control-character, empty, and OS-error payloads before stderr.
+  secret-looking, standalone bearer/token, non-ASCII, control-character, empty,
+  and OS-error payloads before stderr.
   Native prover role-reuse diagnostics, copied artifact-integrity diagnostics,
   manifest/report artifact membership diagnostics, and release-notes attachment
   artifact-list diagnostics must stay category-only for untrusted artifact path
@@ -5500,13 +5682,13 @@ and completed history lives in [`status.md`](./status.md).
   escaping, layout, control-character, Markdown-unsafe, padded, and
   percent-encoded path drift so untrusted JSON path values are never echoed.
   Native EVM prover manifest-relative payload path diagnostics must also stay
-  category-only for control-character and Markdown-unsafe path drift in bundle,
-  readiness, and strict-verifier paths. Missing, non-regular, unreadable, or
-  forbidden-marker-scan-failed native prover payload diagnostics must not echo
-  the operator-supplied manifest-relative path or local exception text. Native
-  prover manifest, cross-SDK parity fixture, and native self-test fixture JSON
-  load/parse diagnostics must also stay category-only and avoid parser
-  exception payloads.
+  category-only for control-character, Markdown-unsafe, non-ASCII, and
+  secret-looking path drift in bundle, readiness, and strict-verifier paths.
+  Missing, non-regular, unreadable, or forbidden-marker-scan-failed native
+  prover payload diagnostics must not echo the operator-supplied
+  manifest-relative path or local exception text. Native prover manifest,
+  cross-SDK parity fixture, and native self-test fixture JSON load/parse
+  diagnostics must also stay category-only and avoid parser exception payloads.
 	  All-lanes source-record hash, source-gate/config hash, destination-binding
 	  hash, and route-allowlist recomputation failures must stay category-only in
 	  public all-lanes/release-readiness blockers and must not append helper
@@ -10951,9 +11133,10 @@ and completed history lives in [`status.md`](./status.md).
   post-finality progress-action quiescence,
   committed spec-step progress-gate quiescence, honest/fault roster-budgeted
   vote counters, RBC delivery stability, committed spec-step budgeted-RBC
-  evidence stability, fast
-  canonical frontier recovery, small exhaustive frontier recovery,
-  frontier committed source future-stage isolation,
+	  evidence stability, fast
+	  canonical frontier recovery, small exhaustive frontier recovery,
+	  frontier recovery correctness envelope aggregate,
+	  frontier committed source future-stage isolation,
   frontier view-bound drop future-stage isolation,
   frontier zero-evidence drop future-stage isolation,
   frontier zero-evidence staged-future expected-failure mutation,
@@ -11007,126 +11190,254 @@ and completed history lives in [`status.md`](./status.md).
   semantics, missing-QC timing derivation, idle backlog signal derivation,
   proposal-liveness state transitions, direct actionable vote-backed proposal
   evidence admission, direct slot proposal evidence no-bug lookup/fall-through,
-  direct round-liveness no-bug evidence aggregation, direct
-  roster-unavailability recovery FSM no-bug transitions, consensus-recovery
+  direct round-liveness no-bug evidence aggregation,
+  round-liveness correctness envelope aggregate, direct
+  roster-unavailability recovery FSM no-bug transitions,
+  roster recovery FSM correctness envelope aggregate, consensus-recovery
   clear/prune retention semantics,
-  direct frontier live-owner work preservation semantics, frontier live-owner
-  conflict-adapter expected-failure mutations, direct keep-frontier pending-active
-  preservation semantics, direct stale-view pending prune no-bug cleanup
-  semantics, direct superseded frontier payload retention semantics, direct stale
-  missing-block request prune no-bug semantics, direct stale missing commit-QC
-  request prune no-bug semantics, direct stale RBC session prune no-bug
-  semantics, direct highest-QC defer-marker prune semantics,
+  consensus recovery prune correctness envelope aggregate,
+  direct frontier live-owner work preservation semantics,
+  frontier live-owner work correctness envelope aggregate,
+  frontier live-owner conflict-adapter
+  expected-failure mutations, direct keep-frontier pending-active
+  preservation semantics,
+  keep-frontier pending-active correctness envelope aggregate,
+  direct stale-view pending prune no-bug cleanup
+  semantics, stale-view pending prune correctness envelope aggregate,
+  direct superseded frontier payload retention semantics,
+  superseded frontier payload retention correctness envelope aggregate,
+  direct stale missing-block request prune no-bug semantics,
+  stale missing-block request prune correctness envelope aggregate,
+  direct stale missing commit-QC
+  request prune no-bug semantics,
+  stale missing commit-QC request prune correctness envelope aggregate,
+  direct stale RBC session prune no-bug
+  semantics, stale RBC session prune correctness envelope aggregate,
+  direct highest-QC defer-marker prune semantics,
+  highest-QC defer-marker prune correctness envelope aggregate,
   fast-finality inline validation component/anchor semantics,
+  fast-finality inline validation correctness envelope aggregate,
   observer signature-mismatch recovery semantics,
+  observer signature-mismatch recovery correctness envelope aggregate,
   direct validation failure finalization semantics,
+  validation failure finalization correctness envelope aggregate,
   direct validation reject reason-label classification semantics,
+  validation reject reason-label correctness envelope aggregate,
   validation reject status accounting component/anchor semantics,
+  validation reject status correctness envelope aggregate,
   peer-key policy status accounting component/anchor semantics,
+  peer-key policy status correctness envelope aggregate,
   view-change cause status accounting component/anchor semantics,
+  view-change cause status correctness envelope aggregate,
   view-change proof status accounting component/anchor semantics,
+  view-change proof status correctness envelope aggregate,
   QC status projection component/anchor semantics,
+  QC status correctness envelope aggregate,
   commit-quorum status projection component/anchor semantics,
+  commit-quorum status correctness envelope aggregate,
   commit-inflight status projection component/anchor semantics,
+  commit-inflight status correctness envelope aggregate,
   history status projection component/anchor semantics,
+  history status correctness envelope aggregate,
   RBC abort status accounting component/anchor semantics,
+  RBC abort status correctness envelope aggregate,
   RBC mismatch status accounting component/anchor semantics,
+  RBC mismatch status correctness envelope aggregate,
   direct RBC progress-stage synchronization semantics,
+  direct RBC progress-stage correctness envelope aggregate,
   direct RBC hot-repair/backpressure semantics,
+  direct RBC hot-repair/backpressure correctness envelope aggregate,
   direct RBC repair request cooldown/targeting semantics,
+  direct RBC repair request correctness envelope aggregate,
   direct RBC targeted READY/DELIVER repair semantics,
+  direct RBC targeted READY/DELIVER correctness envelope aggregate,
   direct RBC outbound chunk flush semantics,
+  direct RBC outbound chunk flush correctness envelope aggregate,
   direct RBC chunk post scheduling/debug-mask semantics,
+  direct RBC chunk post scheduling/debug-mask correctness envelope aggregate,
   direct RBC READY/DELIVER deferral throttle semantics,
+  direct RBC READY/DELIVER deferral throttle correctness envelope aggregate,
   direct RBC missing-INIT broad rebroadcast semantics,
+  direct RBC missing-INIT broad rebroadcast correctness envelope aggregate,
   round-gap marker/snapshot/EMA status component/anchor semantics,
+  round-gap status correctness envelope aggregate,
   direct RBC missing BlockCreated recovery and authoritative-only
   materialization semantics,
-  direct RBC unverified-roster escape-hatch semantics,
-  RBC signing-preimage component/anchor binding semantics,
-  classic Vote/VRF signing-preimage aggregate exactness,
-  classic Vote/QC signature-verification component/anchor semantics,
-  direct invalid-signature telemetry label semantics,
+  direct RBC missing BlockCreated recovery correctness envelope aggregate,
+	  direct RBC unverified-roster escape-hatch semantics,
+	  direct RBC unverified-roster correctness envelope aggregate,
+	  RBC signing-preimage component/anchor binding semantics,
+	  RBC signing-preimage correctness envelope aggregate,
+	  classic Vote/VRF signing-preimage aggregate exactness,
+	  classic Vote/VRF signing-preimage correctness envelope aggregate,
+	  classic Vote/QC signature-verification component/anchor semantics,
+	  classic Vote/QC signature-verification correctness envelope aggregate,
+	  direct invalid-signature telemetry label semantics,
+	  invalid-signature telemetry label correctness envelope aggregate,
   invalid-signature throttle/penalty component/anchor semantics,
+  invalid-signature throttle/penalty correctness envelope aggregate,
   direct penalty offender-selection attribution semantics,
+  penalty offender-selection correctness envelope aggregate,
   consensus penalty-action derivation/application semantics,
+  consensus penalty-action correctness envelope aggregate,
   penalty status projection component/anchor semantics,
+  penalty status correctness envelope aggregate,
   local peer removed flag component/anchor semantics,
+  local peer removed flag correctness envelope aggregate,
   direct execution-witness root projection component/anchor semantics,
+  execution-witness root projection correctness envelope aggregate,
   direct RBC compact block-message exactness/component semantics,
+  RBC compact block-message correctness envelope aggregate,
   direct consensus block-message priority exactness/component semantics,
+  consensus block-message priority correctness envelope aggregate,
   direct block-message height/view exactness/component semantics,
+  block-message height/view correctness envelope aggregate,
   direct block-message log/status kind exactness/component semantics,
+  block-message log/status kind correctness envelope aggregate,
   direct consensus message projection semantics,
+  consensus message projection correctness envelope aggregate,
   pipeline event emission semantics,
+  pipeline event emission correctness envelope aggregate,
   direct cached block-message wire-frame component/anchor semantics,
+  cached block-message wire-frame correctness envelope aggregate,
   direct BlockCreated frontier metadata wire/rebuild component/anchor semantics,
+  BlockCreated frontier metadata wire/rebuild correctness envelope aggregate,
   direct BlockCreated payload admission aggregate exactness,
+  BlockCreated payload admission correctness envelope aggregate,
   direct cached proposal rebroadcast component/anchor semantics,
+  cached proposal rebroadcast correctness envelope aggregate,
   direct exact-slot frontier recovery activity semantics, exact-slot aggregate
   activity-source exactness,
+  exact-slot frontier recovery activity correctness envelope aggregate,
   direct frontier reassembly activity semantics, frontier reassembly aggregate
   activity-source exactness,
+  frontier reassembly activity correctness envelope aggregate,
   direct frontier quorum-owner cleanup preservation semantics, frontier
   quorum-owner aggregate cleanup exactness,
+  frontier quorum-owner cleanup correctness envelope aggregate,
   direct contiguous-frontier sidecar retarget semantics, contiguous-frontier
   sidecar retarget aggregate exactness,
+  contiguous-frontier sidecar retarget correctness envelope aggregate,
   direct contiguous-frontier sidecar expected-hash semantics,
   contiguous-frontier sidecar expected-hash aggregate exactness,
+  contiguous-frontier sidecar expected-hash correctness envelope aggregate,
   direct contiguous-frontier payload-hint selection semantics,
   contiguous-frontier payload-hint aggregate exactness,
+  contiguous-frontier payload-hint correctness envelope aggregate,
   direct contiguous-frontier parent-QC hint retarget semantics,
   contiguous-frontier parent-QC hint retarget aggregate exactness,
+  contiguous-frontier parent-QC hint retarget correctness envelope aggregate,
   direct vote-verification worker config derivation, direct vote-verification worker config
   aggregate exactness,
+  vote-verification worker config correctness envelope aggregate,
   QC aggregate-verification worker config derivation, QC aggregate-verification
   worker config aggregate exactness,
+  QC aggregate-verification worker config correctness envelope aggregate,
   voting-roster support counting, voting-roster support-count aggregate
-  exactness, collector retry/gossip plans, collector retry/gossip plan
-  aggregate exactness, direct collector fanout/selection semantics, plus
-  collector fanout/selection direct exactness,
+  exactness, voting-roster support-count correctness envelope aggregate,
+  collector retry/gossip plans, collector retry/gossip plan aggregate
+  exactness, collector retry/gossip plan correctness envelope aggregate,
+  direct collector fanout/selection semantics, plus collector fanout/selection
+  direct exactness, collector fanout/selection correctness envelope aggregate,
   direct topology ordered-roster mutation no-bug semantics, topology
-  ordered-roster aggregate exactness, PRF leader/shuffle topology semantics,
-  PRF leader/shuffle
-  aggregate exactness, direct topology fanout/redundant-send semantics,
-  direct topology fanout/redundant-send aggregate exactness, topology role-filter
-  semantics, topology role-filter aggregate exactness, active topology-selection
-  semantics, active topology-selection aggregate exactness, trusted-peer P2P
-  topology semantics, trusted-peer P2P topology aggregate exactness, P2P
-  topology refresh semantics, P2P topology refresh aggregate exactness, quorum
+  ordered-roster aggregate exactness, topology ordered-roster mutation
+  correctness envelope aggregate, PRF leader/shuffle topology semantics,
+  PRF leader/shuffle aggregate exactness, PRF leader/shuffle correctness
+  envelope aggregate, direct topology fanout/redundant-send semantics,
+  direct topology fanout/redundant-send aggregate exactness, topology
+  fanout/redundant-send correctness envelope aggregate, topology role-filter
+  semantics, topology role-filter aggregate exactness, topology role-filter
+  correctness envelope aggregate, active topology-selection semantics, active
+  topology-selection aggregate exactness, active topology-selection correctness
+  envelope aggregate, trusted-peer P2P topology semantics, trusted-peer P2P
+  topology aggregate exactness, trusted-peer P2P topology correctness envelope
+  aggregate, P2P
+  topology refresh semantics, P2P topology refresh aggregate exactness, P2P
+  topology refresh correctness envelope aggregate, quorum
   retransmit target semantics, direct quorum retransmit target aggregate exactness,
-  direct retransmit backpressure aggregate exactness, direct paced retransmit
-  target aggregate exactness, direct quorum reschedule backoff aggregate exactness,
-  direct RBC availability reschedule aggregate exactness, direct vote-backed reassembly stall
-  aggregate exactness, direct completed quorum view-advance component semantics,
-  direct quorum rebroadcast dispatch aggregate exactness, isolated vote-backed handoff
-  aggregate exactness, direct preemptive vote-backed retransmit aggregate
-  exactness, direct near-quorum preemptive escalation aggregate exactness, manifest-gate
-  reschedule aggregate exactness, QC signer-bitmap admission aggregate
-  exactness, direct raw QC signer-count aggregate exactness, QC signer-bitmap
-  construction aggregate exactness, direct signer-index normalization aggregate
-  exactness, commit-root consistency aggregate exactness, commit-pipeline
-  recovery aggregate exactness, direct known-block commit-QC recovery aggregate
-  exactness, stale-view commit-QC fetch aggregate exactness, direct commit-anchor QC
-  promotion aggregate exactness, committed-height QC admission aggregate
-  exactness, direct empty-block QC drop component semantics, pending-progress
-  accounting aggregate exactness, direct pending-block lifecycle no-bug exactness,
-  direct pending-block marker/cooldown no-bug exactness, pending-block Kura retry
-  aggregate exactness, commit-pipeline scheduling aggregate exactness,
-  commit-QC cache/history lookup aggregate exactness, cached-QC precommit
-  signer-record aggregate exactness, roster-validation memo cache aggregate
-  exactness, cached roster-validation wrapper aggregate exactness, core
-  roster-validation aggregate exactness, roster artifact selection aggregate
-  exactness, block roster cache aggregate exactness, block-sync roster evidence
-  aggregate exactness, block-sync history roster aggregate exactness,
-  persisted block-sync roster selection aggregate exactness, BlockSyncUpdate
-  roster hydration aggregate exactness, direct roster index projection no-bug
-  exactness, direct membership-view hash no-bug exactness, membership mismatch
-  status aggregate exactness, membership advert publication aggregate
-  exactness, membership mismatch ingress/fail-closed aggregate exactness,
-  consensus-params ingress aggregate exactness, prevalidated commit artifact
-  trust aggregate exactness, commit-job dispatch aggregate exactness,
-  commit-worker config aggregate exactness.
+  quorum retransmit target correctness envelope aggregate,
+  direct retransmit backpressure aggregate exactness, retransmit backpressure
+  correctness envelope aggregate, direct paced retransmit
+  target aggregate exactness, paced retransmit target correctness envelope
+  aggregate, direct quorum reschedule backoff aggregate exactness, quorum
+  reschedule backoff correctness envelope aggregate,
+  direct RBC availability reschedule aggregate exactness, RBC availability
+  reschedule correctness envelope aggregate, direct vote-backed reassembly stall
+  aggregate exactness, vote-backed reassembly stall correctness envelope
+  aggregate, direct completed quorum view-advance component semantics, completed
+  quorum view-advance correctness envelope aggregate,
+  direct quorum rebroadcast dispatch aggregate exactness, quorum rebroadcast
+  dispatch correctness envelope aggregate, isolated vote-backed handoff
+  aggregate exactness, isolated vote-backed handoff correctness envelope
+  aggregate, direct preemptive vote-backed retransmit aggregate exactness,
+  preemptive vote-backed retransmit correctness envelope aggregate,
+  direct near-quorum preemptive escalation aggregate exactness,
+  near-quorum preemptive escalation correctness envelope aggregate,
+  manifest-gate reschedule aggregate exactness, manifest-gate reschedule
+  correctness envelope aggregate, QC signer-bitmap admission aggregate
+  exactness, QC signer-bitmap admission correctness envelope aggregate,
+  direct raw QC signer-count aggregate exactness, raw QC signer-count
+  correctness envelope aggregate, QC signer-bitmap construction aggregate
+  exactness, QC signer-bitmap construction correctness envelope aggregate,
+  direct signer-index normalization aggregate exactness, signer-index
+  normalization correctness envelope aggregate, commit-root consistency aggregate
+  exactness, commit-root consistency correctness envelope aggregate,
+  commit-pipeline recovery aggregate exactness, commit-pipeline recovery
+  correctness envelope aggregate,
+  direct known-block commit-QC recovery aggregate
+  exactness, known-block commit-QC recovery correctness envelope aggregate,
+  stale-view commit-QC fetch aggregate exactness, stale-view commit-QC fetch
+  correctness envelope aggregate, direct commit-anchor QC promotion aggregate
+  exactness, commit-anchor QC promotion correctness envelope aggregate,
+  committed-height QC admission aggregate
+  exactness, committed-height QC admission correctness envelope aggregate,
+  direct empty-block QC drop component semantics, empty-block QC drop
+  correctness envelope aggregate, pending-progress accounting aggregate
+  exactness, pending-progress accounting correctness envelope aggregate,
+  direct pending-block lifecycle no-bug exactness, pending-block lifecycle
+  correctness envelope aggregate, direct pending-block marker/cooldown no-bug
+  exactness, pending-block marker/cooldown correctness envelope aggregate,
+  pending-block Kura retry aggregate exactness, pending-block Kura retry
+  correctness envelope aggregate, commit-pipeline scheduling aggregate
+  exactness, commit-pipeline scheduling correctness envelope aggregate,
+  commit-QC cache/history lookup aggregate exactness, commit-QC cache/history
+  lookup correctness envelope aggregate, cached-QC precommit signer-record
+  aggregate exactness, cached-QC precommit signer-record correctness envelope
+  aggregate, roster-validation memo cache aggregate exactness,
+  roster-validation memo cache correctness envelope aggregate, cached
+  roster-validation wrapper aggregate exactness, cached roster-validation
+  wrapper correctness envelope aggregate, core roster-validation aggregate
+  exactness, core roster-validation correctness envelope aggregate, roster
+  artifact selection aggregate exactness, roster artifact selection correctness
+  envelope aggregate, block roster cache aggregate exactness, block roster cache
+  correctness envelope aggregate, block-sync roster evidence aggregate
+  exactness, block-sync roster evidence correctness envelope aggregate,
+  block-sync history roster aggregate exactness, block-sync history roster
+  correctness envelope aggregate,
+  persisted block-sync roster selection aggregate exactness, persisted
+  block-sync roster selection correctness envelope aggregate, BlockSyncUpdate
+  roster hydration aggregate exactness, BlockSyncUpdate roster hydration
+  correctness envelope aggregate, direct roster index projection no-bug
+  exactness, roster index projection correctness envelope aggregate,
+  direct membership-view hash no-bug exactness, membership-view hash
+  correctness envelope aggregate, membership mismatch status aggregate
+  exactness, membership mismatch status correctness envelope aggregate,
+  membership advert publication aggregate exactness, membership advert
+  publication correctness envelope aggregate, membership mismatch
+  ingress/fail-closed aggregate exactness, membership mismatch ingress
+  correctness envelope aggregate, consensus-params ingress aggregate
+  exactness, consensus-params ingress correctness envelope aggregate,
+  prevalidated commit artifact trust aggregate exactness, prevalidated commit
+  artifact correctness envelope aggregate, commit-job dispatch aggregate
+  exactness, commit-job dispatch correctness envelope aggregate,
+  commit-worker config aggregate exactness, commit-worker config correctness
+  envelope aggregate, slow commit-stage timing threshold aggregate exactness,
+  slow commit-stage timing threshold correctness envelope aggregate,
+  commit-inflight timeout aggregate exactness, commit-inflight timeout
+  correctness envelope aggregate, post-commit pacemaker kick aggregate
+  exactness, post-commit pacemaker kick correctness envelope aggregate,
+  idle-view proposal budget aggregate exactness, idle-view proposal budget
+  correctness envelope aggregate, pacemaker core correctness envelope aggregate.
 - Sumeragi prepare-quorum phase-gating validation is closed for the current
   formal slice: the dedicated 2026-06-03 Apalache fast run reached `NoError`
   up to computation length `10` with `CommitPhasesNeverBypassPrepareQuorum`
@@ -11222,13 +11533,16 @@ and completed history lives in [`status.md`](./status.md).
   route-canary fields, including the receipt block number/hash/`receiptsRoot`,
   are also first-class config and ZK policy-hash material, keeping Core/Torii
   configured admission bound to the same calldata, payload, finality, and proof
-  transcript that `iroha_sccp` validates. The full SCCP production corridor
-  passes end to end with Rust SCCP verification, operator evidence scripts,
-  JS/Python/Swift/Kotlin/Java Android/.NET SDK prover surfaces, EVM/TRON
-  contract smoke, and core bridge-proof admission.
-  alongside the finalized head and runtime versions in public readiness JSON;
-  release-bundle verification rejects zero or governed-hash-reused
-  finalized-head/runtime-code canary fields before release notes can pass.
+  transcript that `iroha_sccp` validates. The local non-Windows SCCP
+  production-corridor phases are revalidated with Rust SCCP verification,
+  operator evidence scripts, JS/Python/Swift/Kotlin/Java Android SDK prover
+  surfaces, EVM/TRON contract smoke, and core bridge-proof admission. The
+  Windows `.NET 8` SDK TRX evidence remains the host-certification blocker for
+  a complete corridor, alongside governed/live deployment evidence.
+  Route-canary readback remains paired with the finalized head and runtime
+  versions in public readiness JSON; release-bundle verification rejects zero
+  or governed-hash-reused finalized-head/runtime-code canary fields before
+  release notes can pass.
 - The focused SCCP production corridor is now captured by
   `scripts/check_sccp_production_corridor.sh`, with phase selection for the
   Rust verifier crate, operator evidence scripts, web/Python/Swift/Kotlin/Java
@@ -15095,8 +15409,15 @@ every active launch lane. That regression now also mutates built-in placeholder
 IDs and hashes in the standalone deployment descriptor itself, proving shape,
 material/deployment matching, and readiness reject placeholder descriptor
 replay before deployment evidence can satisfy the source-material gate.
-Source-adapter verifier commitment coverage now also
-pins malformed source-verifier evidence after OpenVerify rebuilds, source-domain
+Cross-lane descriptor drift coverage now also mutates schema version, target
+domain, source-chain label, source proof plan, finality model, adapter proof
+family, adapter circuit, adapter verifier commitment, zero/replayed deployment
+receipt, foreign Solana/TON audit fields, and Solana/TON audit role reuse,
+proving standalone shape, material/deployment matching, and readiness all fail
+closed for every active SCCP launch lane, and the source-material role
+validation inventory pins that regression in release-readiness and strict-bundle
+verification. Source-adapter verifier commitment coverage now also pins
+malformed source-verifier evidence after OpenVerify rebuilds, source-domain
 profile drift, deployment-hash pairs without deployment-bound source roles,
 material-only lane-role drift, and the Solana deployment-bound source-state
 drift regression in the source-material role validation inventory. The detailed
@@ -15240,7 +15561,18 @@ Windows OS/RID/architecture, pass/fail counts, the strict
 `status.md` before clearing the SCCP .NET replay blocker. The release
 corridor and strict readiness/bundle verifiers now require those Windows
 `.NET 8` OS/RID/architecture markers plus the full `FullyQualifiedName~Sccp`
-test filter and TRX logger evidence before `dotnet-sdk` can pass, the SDK
+test filter and TRX logger evidence before `dotnet-sdk` can pass, the
+`dotnet --info` output must contain exactly one `OS Name:`, one `OS Platform:`,
+one `RID:`,
+and one `OS Architecture:` field, both OS fields must be exactly `Windows`, and
+duplicate or missing OS-name/platform fields, missing or duplicate RID fields,
+or missing or duplicate OS-architecture fields fail before any bridge build,
+restore, or test command can run; executable fake-Windows coverage now names
+missing `OS Name:`, duplicate `OS Name:`, missing `OS Platform:`, duplicate
+`OS Platform:`, missing `RID:`, duplicate `OS Architecture:`, uppercase RID,
+foreign-platform RID, alias-architecture RID, and architecture-alias value
+cases, plus colon-injected metadata values for OS name, OS platform, RID, and
+architecture. The SDK
 version must be a stable canonical `.NET 8.0.x` SDK version with a non-zero
 patch segment, no preview/prerelease suffix, and no zero-padded numeric
 segments, and the version marker must appear after `dotnet --version`. The OS
@@ -15252,12 +15584,19 @@ architecture marker must be one of the lower-case values `x64`, `x86`,
 report `Failed: 0`
 with a non-zero passed-test count, `Skipped: 0`, an internally consistent total
 (`Total == Passed`), a numeric unit duration, and the expected
-`Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` assembly suffix; the TRX marker must
-full-match the C# test project `TestResults/sccp-dotnet-sdk.trx` path, the TRX
-bytes marker must be a positive integer, and all test markers must appear after
+`Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` assembly suffix, with only ordinary
+spaces used for VSTest padding; the TRX marker must
+full-match the direct C# test project `TestResults/sccp-dotnet-sdk.trx` path,
+named subdirectories before or after `TestResults` remain forged evidence, the
+TRX XML must name `Hyperledger.Iroha.Sdk.Tests.dll`, contain at least one
+passed SCCP `UnitTestResult`, and contain no failed, skipped, timed-out, or
+aborted SCCP `UnitTestResult`; the TRX bytes marker must be a positive
+integer, all canonical `.NET` SCCP marker lines must use a single literal
+space after the colon, and all test markers must appear after
 the strict `dotnet test` command. A bare
 `Passed!` transcript line, forged count summary, skipped-test summary,
-wrong-assembly summary, malformed duration summary, the old ETH/BSC-mainnet-only
+wrong-assembly summary, placeholder or wrong-assembly TRX, malformed duration
+summary, the old ETH/BSC-mainnet-only
 `.NET` filter, uppercase or mixed-case RID/architecture marker, missing TRX
 marker, zero or malformed TRX byte marker, arbitrary TRX-looking path, host
 markers printed before `dotnet --info`,
@@ -16408,8 +16747,17 @@ or ABI behavior.
   fixture set covers the baseline identifier envelope plus Soracloud three-input
   Add and Multiply operand envelopes in JavaScript, Swift, Kotlin/JVM, and Java
   Android test surfaces, with deterministic `{0, t, -t}` error-polynomial
-  sampling instead of zero-error ciphertexts. Those SDK lanes now also validate
-  the shared operation fixture's component-level evaluation-key metadata so
+  sampling instead of zero-error ciphertexts, and exact/bounded seeded
+  encryption resamples inert all-zero ternary ephemeral masks before ciphertext
+  construction. Exact/bounded key generation and key-switch generation resample
+  inert all-zero public `a` limbs, and shared key-switch validators reject
+  all-zero public `b` or `a` entry components. Bounded keygen, encryption,
+  Galois keygen, bootstrap refresh-round seed derivation, and full-bootstrap
+  sample-extraction switch-key derivation now use exact/bounded mode-separated
+  deterministic RNG streams so same-seed artifacts do not reuse public limbs,
+  ephemeral masks, or refresh-round seeds across modes. Those SDK lanes now
+  also validate the shared operation fixture's component-level
+  evaluation-key metadata so
   missing, zeroed, duplicate, or count-drifted key-component vectors are caught
   outside Rust, while the Rust executor consumes the same fixture for
   operation-output digests and plaintext-slot checks. Crypto
@@ -16545,7 +16893,34 @@ or ABI behavior.
   bootstrap-key zero-refresh proof statement digests that bind parameters,
   public key, evaluation-key digest, refresh-transcript digest, bootstrap
   transcript seed/key id/round capacity, and every public refresh ciphertext
-  under mode-separated domains. `RunSoracloudFheJob` now carries an
+  under mode-separated domains. Crypto now also exposes exact-lift and
+  bounded-noise ciphertext proof statement digests that bind parameters,
+  public key material, public-key digest, ciphertext bytes, a non-inert
+  ciphertext digest, and the declared residual/noise bound under
+  mode-separated domains, rejecting all-zero ciphertext sentinels before a
+  verifier-facing statement hash can be emitted. Exact ciphertext statement
+  hashing now also runs the exact seeded-encryption residual headroom preflight,
+  matching exact public-key statement admission so structurally valid but
+  non-admissible exact profiles cannot emit verifier-facing ciphertext
+  statement hashes. Data-model refresh transcripts
+  now derive the exact-lift or bounded-noise ciphertext statement digest from
+  their public key, reject inert all-zero transcript public keys in the
+  public-key and ciphertext proof-statement wrappers, and the input-admission
+  public-input schema advertises the ciphertext statement digest
+  domains/material, including the exact seeded-encryption capacity preflight on
+  per-ciphertext statement hashes, under schema hash
+  `828907b1ebc7d05e38e8528109feff1c92a7761ff8dda725ba1486e513bb84ad`.
+  Portable validation now rejects inert all-zero proof public keys, and coverage
+  pins proof public-key presence, ciphertext digest-list arity/sentinel checks,
+  rejection of `fhe_public_key_digest` metadata on non-FHE state rows, and
+  all-zero `fhe_public_key_digest` placeholders on FHE rows.
+  Core input-admission verification now recomputes those per-slot statement
+  digests from the decoded payload and proof public key, persists the admitted
+  public-key digest beside proven FHE bound metadata, and rejects persisted FHE
+  job inputs whose public-key digest does not match the governed job key or
+  whose BFV-shaped payload is an all-zero ciphertext sentinel before evaluator
+  execution.
+  `RunSoracloudFheJob` now carries an
   optional bootstrap-key proof attachment, provenance signs it, and Core
   requires it for bootstrap execution while checking the policy-bound
   statement hash against an active Soracloud STARK verifier record or
@@ -16931,19 +17306,23 @@ or ABI behavior.
 								  verifier records use for input admission, bootstrap-key proof,
 								  full-bootstrap material proof, and full-bootstrap execution proof gates.
 								  The input-admission schema now advertises the exact-residual and
-								  bounded-noise bound modes plus capacity validation under schema hash
-								  `1cf3dd56010dc765bd671004b1c9262499666ac1c1313573fceb59bae26d6caf`.
+								  bounded-noise bound modes, capacity validation, and ciphertext
+								  proof-statement digest domains/material, including the exact
+								  seeded-encryption capacity preflight on per-ciphertext statement hashes,
+								  under schema hash
+								  `828907b1ebc7d05e38e8528109feff1c92a7761ff8dda725ba1486e513bb84ad`.
 									  The typed crypto schema and full-bootstrap execution schema now advertise
 										  artifact-bound release-prover input validation, stale
 										  Galois-key-set replay including embedded digest retargeting,
 										  stale proof-key artifact rejection,
 											  transcript-derived opening schedule/public-padding replay, native
-											  Merkle/FRI verifier replay, and AIR-root FRI query binding.
+											  Merkle/FRI verifier replay, AIR-root FRI query binding, and canonical
+											  base transcript-label plus suffixed-label alias rejection.
 											  Release-audit evidence now exposes those replay-policy guarantees in
-											  its proof-profile record with field count 42, native proof-circuit
-												  fingerprint material binds the same guarantees with field count 42,
-												  generated circuit bodies carry them with field count 43, and the current
-											  release-audit package schema advertises generated-body byte length/hex,
+											  its proof-profile record with field count 44, native proof-circuit
+												  fingerprint material binds the same guarantees with field count 45,
+												  generated circuit bodies carry them with field count 46, and the current
+												  release-audit package schema validates proof-profile field-count/label-obligation markers, generated-body byte length/hex,
 											  evaluator artifact hex for coefficient-to-slot, slot-to-coefficient,
 											  blind-rotation, sample-extraction, and accumulator artifacts, proof
 											  public-input schema and arithmetic AIR artifact hex, native
@@ -16954,17 +17333,21 @@ or ABI behavior.
 													  explicit value separators, standalone value tokens, and
 													  relabel/cross-field/punctuation/conflicting- or same-value duplicate replay
 													  rejection, plus byte-leading lowercase external-review report/archive
-													  markers, required marker-colon separators, reviewer-id-bound non-empty marker
-													  statements, missing-colon/empty/generic-statement rejection,
+													  markers, required marker-colon separators, printable-ASCII
+													  reviewer-id-labelled non-empty
+														  marker statements with bare reviewer-id prose, duplicate/conflicting
+														  reviewer-id label, lowercase/case-drifted/separator-alias reviewer-label
+														  rejection, and reviewer-id-only statement rejection,
+													  missing-colon/padded-colon-alias/empty/generic-statement rejection,
 													  raw-byte, colon-separator, uppercase signed-digest/label, and same-value duplicate signed-commitment rejection, and
 												  machine-generated or separator-obfuscated machine-generated audit-body rejection. Raw native
 											  prover/verifier proof-key payloads now reject
 											  binary-decorated placeholder text before Norito decoding or digest-catalog
 												  fallback. The current
-													  material/execution schema hashes are
-														  `0714f79d58f9bf837a4a912ba8c89753b138abf13e6c2a9569a71d414cf11e6d`
-														  and
-														  `cae74417a2348108d7daf8a016f6320a9eceae5ede7738c66189af5a725bd0c5`.
+														  material/execution schema hashes are
+															  `05890816bd1fb865e3836018316b01d07e3cff757446d1f8d30f68d156de5e0f`
+															  and
+															  `25506f98acc6cc99a363a8adf53ea83eaaf6ad15c081b98b6e2b16985db77421`.
 											  Registered bounded-noise compatibility wrappers for multiplication, Galois
 											  switching, outer-slot rotation, packed rotation, and bootstrap refresh now
 											  delegate to the registered target-limb basis-extension corridor, so older
@@ -17022,11 +17405,12 @@ or ABI behavior.
 								  fail before Core, Torii, or data-model fixtures admit the governed
 								  proof-key pair. The native proof-key envelope now also carries a
 								  deterministic full-bootstrap proof-circuit fingerprint. Its material has
-								  field count 36 and binds artifact-bound prover-input validation,
+								  field count 45 and binds artifact-bound prover-input validation,
 								  stale Galois-key-set/proof-key artifact replay rejection, and
-								  transcript-derived public-opening policy, so
+								  transcript-derived public-opening policy plus canonical base transcript-label enforcement and suffixed-label alias rejection, so
 								  circuit-shape or replay-policy drift fails before governed proof-key
-								  material admission, and generated pair validation rejects
+									  material admission, report/archive validation requires
+									  the proof-profile field count and transcript-label obligations, and generated pair validation rejects
 								  prover/verifier native-circuit mismatch before deriving or admitting a
 								  proof-key pair commitment. Native proof-key
 									  material now also rejects noncanonical native payload circuit ids
@@ -17138,7 +17522,7 @@ or ABI behavior.
 											  release-audit proof-profile record advertises those replay-policy
 											  and AIR evaluation material layout/digest/zero-composition terms,
 											  and the native proof-circuit fingerprint material binds the
-											  replay-policy terms with field count 36. The AIR constraint-system
+											  replay-policy terms with field count 45. The AIR constraint-system
 									  digest is also bound through the typed public schema, native
 									  prover/verifier payloads, proof-key material envelope, native
 									  proof-key material, and native proof-circuit fingerprint. The
@@ -17180,7 +17564,9 @@ or ABI behavior.
 									  challenge domain and binding policy with AIR material field count 33
 									  and refreshed stable schema hashes. The shared explicit STARK AIR
 									  builder now self-verifies generated row/composition envelopes before
-									  returning proof bytes to BFV native AIR callers, and the Soracloud
+									  returning proof bytes to BFV native AIR callers and rejects reserved
+									  BFV/ZK-ACE/IVM circuit aliases on the generic row/composition helper
+									  surface unless the caller uses an explicit reserved-circuit helper; the Soracloud
 									  release-prover handoff replays encoded envelope bytes against the exact
 									  typed trace rows and AIR evaluation composition values before returning
 									  proof bytes, while the lower-level BFV native AIR proof builder is
@@ -17191,8 +17577,8 @@ or ABI behavior.
 										  base-root/composition-root mismatch, and sampled governed-material
 										  opening row, next-row, and composition-value drift before wrapping
 										  material proof bytes. Core execution native-AIR replay now likewise
-											  uses the crypto-canonical execution AIR domain tag with bounded
-											  transcript-label attempts, and requires governed trace rows and AIR composition values at the lower
+											  uses the crypto-canonical execution AIR domain tag with the canonical
+											  base transcript label, and requires governed trace rows and AIR composition values at the lower
 											  BFV boundary before root reconstruction, sampled row-path
 											  shape/root, duplicate/truncated opening-set replay,
 											  first-layer FRI replay, or verifier fallback. Release-audit
@@ -17283,7 +17669,11 @@ or ABI behavior.
 										  `FullBootstrapV1` keys are now no-refresh keys as well:
 										  governed constructors and admission require `max_refresh_rounds = 0`
 										  with empty `zero_refresh`/`round_refreshes`, and encrypted-zero refresh
-										  material remains confined to `RefreshOnlyV1`.
+										  material remains confined to `RefreshOnlyV1`; crypto regressions now
+										  also mutate legacy `zero_refresh` and `round_refreshes` material
+										  independently while `max_refresh_rounds = 0`, confirming artifact-aware
+										  preflight plus exact/bounded direct execution and bound preflights fail
+										  before artifact fallback.
 										  Remaining work is the audited full-bootstrap arithmetic witness
 									  constraint/proof-producing backend plus release-grade generated
 										  proving/verifying artifacts for the actual BFV bootstrap circuit, not
@@ -18640,9 +19030,27 @@ gate (`rbc-progress-stage`), direct RBC hot-repair/backpressure helper gate
 (`rbc-hot-repair`), TLC-cross-checked direct RBC repair request helper gate (`rbc-repair-request`),
 TLC-cross-checked direct RBC targeted READY/DELIVER repair helper gate (`rbc-targeted-repair`),
 direct RBC outbound chunk flush helper gate (`rbc-outbound-flush`),
-TLC-cross-checked direct RBC chunk post scheduling/debug-mask helper gate (`rbc-chunk-post-debug`),
+direct RBC chunk post scheduling/debug-mask helper gate (`rbc-chunk-post-debug`),
 direct RBC READY/DELIVER deferral throttle helper gate (`rbc-deferral-throttle`),
-round-gap marker/snapshot/EMA status helper gate (`round-gap-status`),
+direct RBC missing-INIT broad rebroadcast helper gate (`rbc-missing-init-rebroadcast`),
+round-gap marker/snapshot/EMA status helper gate (`round-gap-status`) and
+correctness envelope aggregate,
+direct RBC missing BlockCreated recovery helper gate
+(`rbc-missing-block-recovery`) and correctness envelope aggregate,
+direct RBC unverified-roster escape-hatch helper gate (`rbc-unverified-roster`)
+and correctness envelope aggregate,
+RBC signing-preimage helper gate (`rbc-preimage`) and correctness envelope
+aggregate,
+classic Vote/VRF signing-preimage helper gate (`classic-preimage`) and
+correctness envelope aggregate,
+classic Vote/QC signature-verification helper gate (`classic-signature`) and
+correctness envelope aggregate,
+invalid-signature telemetry label helper gate (`invalid-signature-labels`) and
+correctness envelope aggregate,
+invalid-signature throttle/penalty helper gate (`invalid-signature-throttle`)
+and correctness envelope aggregate,
+penalty offender-selection helper gate (`penalty-offender-selection`) and
+correctness envelope aggregate,
 TLC-cross-checked direct contiguous-frontier repair view-change suppression helper gate
 (`frontier-repair-view-change`),
 TLC-cross-checked direct contiguous-frontier recovery advance state-machine helper gate
@@ -18827,13 +19235,17 @@ helper gate, TLC-cross-checked stale-view commit-QC fetch admission helper gate
 helper gate (`commit-anchor-qc`),
 TLC-cross-checked direct committed-height QC admission helper gate (`committed-height-qc`),
 TLC-cross-checked direct empty-block QC drop helper gate (`empty-block-qc-drop`) with
-component/anchor exactness,
-TLC-cross-checked direct pending-progress accounting helper gate with aggregate exactness,
-TLC-cross-checked direct pending-block lifecycle helper gate with no-bug exactness,
-TLC-cross-checked direct pending-block marker/cooldown helper gate with no-bug exactness,
+component/anchor exactness and a correctness envelope,
+TLC-cross-checked direct pending-progress accounting helper gate with aggregate
+exactness and a correctness envelope,
+TLC-cross-checked direct pending-block lifecycle helper gate with no-bug
+exactness and a correctness envelope,
+TLC-cross-checked direct pending-block marker/cooldown helper gate with no-bug
+exactness and a correctness envelope,
 TLC-cross-checked direct pending-block Kura retry no-bug helper gate
-(`kura-retry`) with aggregate exactness,
-TLC-cross-checked direct commit-pipeline scheduling gate with aggregate exactness,
+(`kura-retry`) with aggregate exactness and a correctness envelope,
+TLC-cross-checked direct commit-pipeline scheduling gate with aggregate exactness
+and a correctness envelope,
 TLC-cross-checked precommit vote-count helper gate (`precommit-vote-count`),
 TLC-cross-checked direct precommit vote lock filter gate
 (`drop-precommit-vote-for-lock`),
@@ -18869,57 +19281,66 @@ TLC-cross-checked direct commit-QC signer quorum helper gate
 TLC-cross-checked direct signature-index recovery helper gate
 (`signature-index-recovery`),
 TLC-cross-checked direct commit-QC cache/history lookup helper gate
-(`commit-qc-lookup`),
+(`commit-qc-lookup`) with aggregate exactness and correctness envelope,
 TLC-cross-checked direct embedded-QC roster bootstrap helper gate
 (`embedded-qc-roster`),
 TLC-cross-checked direct cached-QC precommit signer record helper gate
-(`precommit-signer-record`) with aggregate exactness,
+(`precommit-signer-record`) with aggregate exactness and correctness envelope,
 TLC-cross-checked roster-validation memo cache helper gate
-(`roster-validation-memo`) with aggregate exactness,
+(`roster-validation-memo`) with aggregate exactness and correctness envelope,
 TLC-cross-checked roster-validation cached wrapper helper gate
-(`roster-validation-cached`) with aggregate exactness, TLC-cross-checked core
-roster-validation helper gate (`roster-validation-core`) with aggregate
-exactness, TLC-cross-checked roster artifact selection helper gate
-(`roster-artifact-selection`) with aggregate exactness,
+(`roster-validation-cached`) with aggregate exactness and correctness envelope,
+TLC-cross-checked core roster-validation helper gate (`roster-validation-core`)
+with aggregate exactness and correctness envelope, TLC-cross-checked roster
+artifact selection helper gate (`roster-artifact-selection`) with aggregate
+exactness and correctness envelope,
 TLC-cross-checked block roster cache
-helper gate (`block-roster-caches`) with aggregate exactness,
+helper gate (`block-roster-caches`) with aggregate exactness and correctness
+envelope,
 TLC-cross-checked block-sync roster
-evidence helper gate (`block-sync-roster-evidence`) with aggregate exactness,
+evidence helper gate (`block-sync-roster-evidence`) with aggregate exactness
+and correctness envelope,
 TLC-cross-checked
 block-sync history roster helper gate (`block-sync-history-roster`) with
-aggregate exactness,
+aggregate exactness and correctness envelope,
 TLC-cross-checked persisted block-sync roster selection helper gate
-(`persisted-roster-selection`) with aggregate exactness,
+(`persisted-roster-selection`) with aggregate exactness and correctness
+envelope,
 TLC-cross-checked BlockSyncUpdate roster
-hydration helper gate (`block-sync-update-roster`) with aggregate exactness,
+hydration helper gate (`block-sync-update-roster`) with aggregate exactness and
+correctness envelope,
 TLC-cross-checked roster
 index projection helper gate (`roster-index-projection`) with aggregate
-exactness,
+exactness and correctness envelope,
 TLC-cross-checked
 membership-view hash helper gate (`membership-view-hash`) with direct no-bug
-exactness,
+exactness and correctness envelope,
 TLC-cross-checked
 membership mismatch status helper gate (`membership-mismatch-status`) with
-aggregate exactness,
+aggregate exactness and correctness envelope,
 TLC-cross-checked membership advert publication helper gate
-(`membership-advert`) with aggregate exactness,
+(`membership-advert`) with aggregate exactness and correctness envelope,
 TLC-cross-checked membership mismatch
 ingress/fail-closed helper gate (`membership-mismatch-ingress`) with aggregate
-exactness,
+exactness and correctness envelope,
 TLC-cross-checked consensus-params ingress helper gate
-(`consensus-params-ingress`) with aggregate exactness,
+(`consensus-params-ingress`) with aggregate exactness and correctness envelope,
 TLC-cross-checked direct prevalidated commit artifact
-trust helper gate (`prevalidated-commit-artifact`) with aggregate exactness,
+trust helper gate (`prevalidated-commit-artifact`) with aggregate exactness and
+correctness envelope,
 TLC-cross-checked
-commit-job dispatch gate with aggregate exactness,
-direct commit-worker channel capacity helper gate (`commit-worker-config`), slow
+commit-job dispatch gate with aggregate exactness and correctness envelope,
+direct commit-worker channel capacity helper gate (`commit-worker-config`) with
+correctness envelope, slow
 commit-stage timing threshold helper gate (`commit-stage-timing-threshold`) with
-aggregate exactness,
-commit-inflight timeout gate with aggregate exactness, post-commit pacemaker
-kick gate with aggregate exactness, idle-view proposal budget gate with
-aggregate exactness,
+aggregate exactness and correctness envelope,
+commit-inflight timeout gate with aggregate exactness and correctness envelope,
+post-commit pacemaker kick gate with aggregate exactness and correctness
+envelope, idle-view proposal budget gate with aggregate exactness and
+correctness envelope,
 TLC-cross-checked direct pacemaker core state-machine helper gate
-(`pacemaker-core`), TLC-cross-checked direct pacemaker evaluation component gate,
+(`pacemaker-core`) with correctness envelope, TLC-cross-checked direct
+pacemaker evaluation component gate,
 TLC-cross-checked direct pacing governor helper gate,
 cached proposal-slot timeout gate with aggregate exactness,
 pending fast-path timeout helper gate (`pending-fast-path-timeout`) with
@@ -19085,32 +19506,34 @@ TLC-cross-checked direct vote payload actionable no-bug gate,
 TLC-cross-checked direct actionable vote-backed proposal evidence helper gate,
 direct slot proposal evidence no-bug gate,
 direct round liveness no-bug gate,
-direct roster recovery FSM no-bug gate,
-direct consensus recovery prune helper gate,
-direct frontier live-owner work helper gate,
-direct keep-frontier-pending-active helper gate,
-direct stale-view pending prune no-bug gate,
+direct roster recovery FSM no-bug gate and correctness envelope aggregate,
+direct consensus recovery prune helper gate and correctness envelope aggregate,
+direct frontier live-owner work helper gate and correctness envelope aggregate,
+direct keep-frontier-pending-active helper gate and correctness envelope aggregate,
+direct stale-view pending prune no-bug gate and correctness envelope aggregate,
 direct superseded frontier payload retention helper gate
-(`superseded-frontier-payload-retention`),
-direct stale missing-block request prune no-bug gate,
-direct stale missing commit-QC request prune no-bug gate,
-direct stale RBC session prune no-bug gate,
-direct highest-QC defer marker prune helper gate,
-fast-finality inline validation helper gate,
-direct observer signature-mismatch recovery helper gate (`observer-signature-recovery`),
-direct validation failure finalization helper gate (`validation-failure-finalize`),
+(`superseded-frontier-payload-retention`) and correctness envelope aggregate,
+direct stale missing-block request prune no-bug gate and correctness envelope aggregate,
+direct stale missing commit-QC request prune no-bug gate and correctness envelope aggregate,
+direct stale RBC session prune no-bug gate and correctness envelope aggregate,
+direct highest-QC defer marker prune helper gate and correctness envelope aggregate,
+fast-finality inline validation helper gate and correctness envelope aggregate,
+direct observer signature-mismatch recovery helper gate
+(`observer-signature-recovery`) and correctness envelope aggregate,
+direct validation failure finalization helper gate
+(`validation-failure-finalize`) and correctness envelope aggregate,
 direct validation-reject reason label helper gate
-(`validation-reject-reason-label`),
+(`validation-reject-reason-label`) and correctness envelope aggregate,
 validation-reject status counter/snapshot component/anchor gate
-(`validation-reject-status`),
+(`validation-reject-status`) and correctness envelope aggregate,
 peer-key policy status counter/snapshot helper gate
-(`peer-key-policy-status`),
+(`peer-key-policy-status`) and correctness envelope aggregate,
 view-change cause status counter/snapshot component/anchor gate
-(`view-change-cause-status`),
+(`view-change-cause-status`) and correctness envelope aggregate,
 view-change proof/index status counter component/anchor gate
-(`view-change-proof-status`),
+(`view-change-proof-status`) and correctness envelope aggregate,
 leader/highest-QC/locked-QC status projection component/anchor gate
-(`qc-status`),
+(`qc-status`) and correctness envelope aggregate,
 TLC-cross-checked validation evidence QC selector helper gate (`validation-evidence-qc`),
 TLC-cross-checked pure engine prepare-QC gate,
 TLC-cross-checked pure engine direct exactness Prepare-QC lock/highest-QC record gate,

@@ -365,6 +365,10 @@ MissingBlockViewChangeExactness ==
   /\ MissingBlockViewChangeSchedulerExact
   /\ MissingBlockViewChangeDeferralExact
 
+MissingBlockViewChangeCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MissingBlockViewChangeExactness
+
 Safety ==
   MissingBlockViewChangeExactness
 

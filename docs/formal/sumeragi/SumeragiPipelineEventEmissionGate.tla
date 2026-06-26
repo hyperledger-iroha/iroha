@@ -317,4 +317,9 @@ SafetyFast ==
 
 Safety == PipelineEventEmissionSafetyAnchors
 
+PipelineEventEmissionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ PipelineEventEmissionSafetyAnchors
+
 ====

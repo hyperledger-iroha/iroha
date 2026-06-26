@@ -559,6 +559,7 @@ export function noritoEncodeMultisigProposeRequest(request) {
   if (!Array.isArray(request.instructions)) {
     throw new TypeError("MultisigProposeDto.instructions must be an array");
   }
+  const validationFeeMetadata = normalizeMultisigProposeValidationFeeMetadata(request);
   const payload = withNoritoCompactLengths(() =>
     encodeStructValue([
       ...encodeMultisigAccountSelectorFields(request, "MultisigProposeDto.selector"),
@@ -612,14 +613,14 @@ export function noritoEncodeMultisigProposeRequest(request) {
       ],
       [
         encodeOptionValue(
-          request.validation_fee_policy_version ?? request.validationFeePolicyVersion ?? null,
+          validationFeeMetadata.policyVersion,
           encodeNoritoStringValue,
           "MultisigProposeDto.validation_fee_policy_version",
         ),
       ],
       [
         encodeOptionValue(
-          request.validation_fee_policy_hash ?? request.validationFeePolicyHash ?? null,
+          validationFeeMetadata.policyHash,
           encodeNoritoStringValue,
           "MultisigProposeDto.validation_fee_policy_hash",
         ),
@@ -632,9 +633,67 @@ export function noritoEncodeMultisigProposeRequest(request) {
           ),
         ),
       ],
+      [
+        encodeOptionValue(
+          validationFeeMetadata.instructionIndex,
+          encodeNoritoStringValue,
+          "MultisigProposeDto.validation_fee_instruction_index",
+        ),
+      ],
     ]),
   );
   return frameNoritoPayload(payload, MULTISIG_PROPOSE_DTO_SCHEMA_HASH, COMPACT_LEN_FLAG);
+}
+
+function normalizeMultisigProposeValidationFeeMetadata(request) {
+  const policyVersion = request.validation_fee_policy_version ?? request.validationFeePolicyVersion ?? null;
+  const policyHash = request.validation_fee_policy_hash ?? request.validationFeePolicyHash ?? null;
+  const instructionIndex =
+    request.validation_fee_instruction_index ?? request.validationFeeInstructionIndex ?? null;
+  const hasPolicyVersion = policyVersion !== null && policyVersion !== undefined;
+  const hasPolicyHash = policyHash !== null && policyHash !== undefined;
+  const hasInstructionIndex = instructionIndex !== null && instructionIndex !== undefined;
+  if (hasPolicyVersion !== hasPolicyHash) {
+    throw new TypeError(
+      "MultisigProposeDto.validation_fee_policy_version and validation_fee_policy_hash must be provided together",
+    );
+  }
+  if (!hasPolicyVersion && hasInstructionIndex) {
+    throw new TypeError(
+      "MultisigProposeDto.validation_fee_instruction_index requires validation fee policy metadata",
+    );
+  }
+  if (!hasPolicyVersion) {
+    return { policyVersion: null, policyHash: null, instructionIndex: null };
+  }
+  return {
+    policyVersion: normalizeU64Input(
+      policyVersion,
+      "MultisigProposeDto.validation_fee_policy_version",
+    ).toString(),
+    policyHash: normalizeValidationFeePolicyHashString(
+      policyHash,
+      "MultisigProposeDto.validation_fee_policy_hash",
+    ),
+    instructionIndex: hasInstructionIndex
+      ? normalizeU64Input(
+          instructionIndex,
+          "MultisigProposeDto.validation_fee_instruction_index",
+        ).toString()
+      : null,
+  };
+}
+
+function normalizeValidationFeePolicyHashString(value, context) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a 32-byte hex string`);
+  }
+  const trimmed = value.trim().toLowerCase();
+  const normalized = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed;
+  if (!/^[0-9a-f]{64}$/.test(normalized)) {
+    throw new TypeError(`${context} must be a 32-byte hex string`);
+  }
+  return normalized;
 }
 
 /**

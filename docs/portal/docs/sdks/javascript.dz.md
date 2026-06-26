@@ -147,22 +147,22 @@ I18NF0000022X
 ## Offline readiness
 
 JavaScript integrations should use `GET /v1/offline/readiness` for offline feature discovery.
-Offline note issuance, redemption, and audit payloads are submitted as transaction instructions;
-legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
+Classic Offline Note issuance, redemption, and audit transaction paths are retired;
+Kagemusha readiness fields advertise the active offline payment implementation.
 
 ```js
 const readiness = await torii.getOfflineReadiness();
-console.log("offline notes", readiness.offline_note);
+console.log("kagemusha", readiness.offline_kagemusha_abi7);
 ```
 ## Offline readiness
 
 JavaScript integrations should use `GET /v1/offline/readiness` for offline feature discovery.
-Offline note issuance, redemption, and audit payloads are submitted as transaction instructions;
-legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
+Classic Offline Note issuance, redemption, and audit transaction paths are retired;
+Kagemusha readiness fields advertise the active offline payment implementation.
 
 ```ts
 const readiness = await torii.getOfflineReadiness();
-console.log("offline notes", readiness.offline_note);
+console.log("kagemusha", readiness.offline_kagemusha_abi7);
 ```
 ## Torii འདྲི་དཔྱད་དང་རྒྱུན་སྤེལ་ (ཝེབ་སོ་ཀེཊི་ཚུ།)
 

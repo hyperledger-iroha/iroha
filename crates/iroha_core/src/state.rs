@@ -23970,9 +23970,18 @@ impl State {
     }
 
     /// Update zero-knowledge verification settings using loaded configuration.
-    pub fn set_zk(&mut self, zk: iroha_config::parameters::actual::Zk) {
+    pub fn set_zk(&mut self, mut zk: iroha_config::parameters::actual::Zk) {
         crate::gas::configure_confidential_gas(zk.gas.into());
-        *self.sccp_route_manifests.write() = zk.sccp_route_manifests.clone();
+        let configured_route_manifests = core::mem::take(&mut zk.sccp_route_manifests);
+        let can_seed_from_config = self.committed_height() == 0;
+        let route_manifests = {
+            let mut route_manifests = self.sccp_route_manifests.write();
+            if can_seed_from_config {
+                *route_manifests = configured_route_manifests;
+            }
+            route_manifests.clone()
+        };
+        zk.sccp_route_manifests = route_manifests;
         self.zk = zk;
         self.confidential_digest_cache.bump();
     }
@@ -35904,6 +35913,8 @@ pub(crate) mod deserialize {
                 take_optional_default(&mut map, "public_lane_reward_claims")?;
             let space_directory_manifests: Vec<SnapshotSpaceDirectoryManifestSet> =
                 take_optional_default(&mut map, "space_directory_manifests")?;
+            let sccp_route_manifests: Vec<iroha_config::parameters::actual::SccpRouteManifest> =
+                take_optional_default(&mut map, "sccp_route_manifests")?;
 
             let chain_id: ChainId = take_required(&mut map, "chain_id")?;
             let block_hashes_vec: Vec<HashOf<BlockHeader>> =
@@ -36028,6 +36039,8 @@ pub(crate) mod deserialize {
                 telemetry: self.telemetry,
             });
             state.chain_id = chain_id;
+            *state.sccp_route_manifests.write() = sccp_route_manifests.clone();
+            state.zk.sccp_route_manifests = sccp_route_manifests;
             Ok(state)
         }
     }
@@ -37926,6 +37939,57 @@ mod tests {
             payload.extend_from_slice(part);
         }
         Hash::new(payload)
+    }
+
+    fn sccp_route_manifest_for_testing(
+        route_id: &str,
+    ) -> iroha_config::parameters::actual::SccpRouteManifest {
+        iroha_config::parameters::actual::SccpRouteManifest {
+            version: 1,
+            route_id: route_id.to_owned(),
+            asset_key: "xor".to_owned(),
+            tron_network: "nile".to_owned(),
+            chain: "tron-nile".to_owned(),
+            chain_id_hex: "0xcd8690dc".to_owned(),
+            counterparty_domain: iroha_sccp::SCCP_DOMAIN_TRON,
+            verifier_target: "TronContract".to_owned(),
+            production_ready: false,
+            disabled_reason: Some("testnet route".to_owned()),
+            network_id_hex: "0x00000000000000000000000000000000000000000000000000000000cd8690dc"
+                .to_owned(),
+            taira_xor_token_address: "TT1DaQcqzoJEzEaHDU8nsmiKtiyhXHaSKD".to_owned(),
+            taira_xor_bridge_address: "TWvqVD8cuSTqisoDrPKfwkkrpAsziL3XFh".to_owned(),
+            sccp_tron_source_bridge_address: "TJk5a8Y1bWkUxqLeBEKiyLEJD2ytoBrsa9".to_owned(),
+            tron_verifier_address: "TKJtY3UFssmhUSg1FPdXyxWcHKS9SWVtCJ".to_owned(),
+            verifier_code_hash: format!("0x{}", "11".repeat(32)),
+            verifier_key_hash: format!("0x{}", "22".repeat(32)),
+            proof_artifact_hash: None,
+            proving_key_hash: None,
+            native_evm_prover_bundle_hash: None,
+            destination_browser_prover: None,
+            source_browser_prover: None,
+            deployment_evidence_sha256: None,
+            destination_binding_key: "iroha:sccp:tron-destination-binding:v1:0:5:nile".to_owned(),
+            destination_binding_hash: format!("0x{}", "33".repeat(32)),
+            taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+                .to_owned(),
+            taira_burn_record_contract_artifact_b64: "Tm9yaXRvLXJvdXRlLWZpeHR1cmU=".to_owned(),
+            taira_burn_record_artifact_sha256: format!("0x{}", "44".repeat(32)),
+            taira_burn_record_code_hash: "55".repeat(32),
+            taira_burn_record_vk_backend: "halo2/ipa".to_owned(),
+            taira_burn_record_vk_name: "taira_xor_burn_record_v1".to_owned(),
+            taira_burn_record_gas_limit: 2_000_000,
+            settlement_contract_address: None,
+            settlement_contract_alias: Some("taira_xor_burn_record".to_owned()),
+            post_deploy_full_toml_ready: None,
+            post_deploy_source_bridge_config_hash: None,
+            post_deploy_source_event_transaction_id: None,
+            post_deploy_source_event_explorer_url: None,
+            post_deploy_route_canary_evidence_hash: None,
+            post_deploy_route_canary_transaction_id: None,
+            post_deploy_route_canary_explorer_url: None,
+            post_deploy_offline_full_toml_sha256: None,
+        }
     }
 
     fn axt_proof_blob_for(
@@ -40007,6 +40071,50 @@ mod tests {
         assert_eq!(
             snapshot.query_stored_min_gas_units,
             updated.query_stored_min_gas_units
+        );
+    }
+
+    #[test]
+    fn set_zk_preserves_committed_sccp_route_manifest_overlay() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        let configured = sccp_route_manifest_for_testing("configured_route");
+
+        let mut zk = state.zk_snapshot();
+        zk.sccp_route_manifests = vec![configured.clone()];
+        state.set_zk(zk);
+        assert_eq!(
+            state.zk_snapshot().sccp_route_manifests[0]
+                .route_id
+                .as_str(),
+            configured.route_id.as_str()
+        );
+
+        state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x5A; Hash::LENGTH]),
+        ));
+
+        *state.sccp_route_manifests.write() = Vec::new();
+        let mut zk = state.zk.clone();
+        zk.sccp_route_manifests = vec![configured.clone()];
+        state.set_zk(zk);
+        assert!(
+            state.zk_snapshot().sccp_route_manifests.is_empty(),
+            "config reapplication after committed state must preserve on-chain removals"
+        );
+
+        let committed = sccp_route_manifest_for_testing("committed_route");
+        *state.sccp_route_manifests.write() = vec![committed.clone()];
+        let mut zk = state.zk.clone();
+        zk.sccp_route_manifests = vec![configured];
+        state.set_zk(zk);
+        let routes = state.zk_snapshot().sccp_route_manifests;
+        assert_eq!(routes.len(), 1);
+        assert_eq!(
+            routes[0].route_id.as_str(),
+            committed.route_id.as_str(),
+            "config reapplication after committed state must preserve on-chain upserts"
         );
     }
 
@@ -61622,6 +61730,7 @@ mod tests {
                     payload: b"ciphertext".to_vec(),
                     payload_bytes: std::num::NonZeroU64::new(10).expect("nonzero"),
                     payload_commitment: Hash::new(b"ciphertext"),
+                    fhe_public_key_digest: None,
                     fhe_residual_multiple_bound: None,
                     fhe_bound_mode: None,
                     last_update_sequence: 4,

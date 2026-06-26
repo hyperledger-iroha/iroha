@@ -55,7 +55,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
             done; \
         fi; \
         if [ "${build_kagami}" = "1" ]; then \
-            CARGO_BUILD_JOBS="${effective_cargo_build_jobs}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" mold --run cargo ${CARGOFLAGS} build --profile "${PROFILE}" -p iroha_kagami --bin kagami; \
+            CARGO_BUILD_JOBS="${effective_cargo_build_jobs}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" mold --run cargo ${CARGOFLAGS} build --profile "${PROFILE}" --features "${FEATURES}" -p iroha_kagami --bin kagami; \
             cp "/app/target/${PROFILE}/kagami" "/outbin/kagami"; \
         fi; \
     fi

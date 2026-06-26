@@ -334,5 +334,10 @@ SafetyAnchors ==
   /\ StatusProjectionAnchors
   /\ ResetAfterRecordsClearsAllAnchors
 
+ValidationRejectStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ Safety
+  /\ SafetyAnchors
+
 =============================================================================
 ====

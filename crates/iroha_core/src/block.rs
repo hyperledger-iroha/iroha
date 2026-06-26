@@ -3738,6 +3738,7 @@ pub(crate) mod valid {
                         mutation.encryption,
                         None,
                         None,
+                        None,
                         runtime_receipt.receipt_id,
                         request.execution_sequence,
                     )

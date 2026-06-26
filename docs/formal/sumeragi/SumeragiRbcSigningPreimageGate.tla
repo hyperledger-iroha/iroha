@@ -249,4 +249,9 @@ RbcPreimageSafetyAnchors ==
   /\ EmptyDeliverEntryAnchors
   /\ BundledDeliverEntryAnchors
 
+RbcSigningPreimageCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ Safety
+  /\ RbcPreimageSafetyAnchors
+
 ====

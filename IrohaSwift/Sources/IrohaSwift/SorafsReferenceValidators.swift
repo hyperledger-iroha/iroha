@@ -489,7 +489,7 @@ public enum SorafsReferenceValidators {
         return json
     }
 
-    private static func currentEpochSeconds() -> UInt64 {
+    public static func currentEpochSeconds() -> UInt64 {
         let seconds = Date().timeIntervalSince1970
         return seconds > 0 ? UInt64(seconds) : 0
     }

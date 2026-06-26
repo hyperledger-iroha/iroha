@@ -63,6 +63,7 @@ const MAX_ENVELOPE_BYTES: usize = 1 << 20; // 1 MiB guard for decoded envelopes
 
 pub(crate) const STARK_FRI_QUERY_INDEX_REPEATED_ERROR: &str = "FRI query index repeated";
 const STARK_FRI_BOUNDED_QUERY_REJECTION_ATTEMPTS: usize = 8;
+#[cfg(test)]
 const BFV_FULL_BOOTSTRAP_STARK_AIR_TRANSCRIPT_LABEL_ATTEMPTS: u32 = 1024;
 const GENERIC_STARK_AIR_BFV_FULL_BOOTSTRAP_RESERVED_ERROR: &str = "generic STARK AIR prover cannot target the BFV full-bootstrap circuit; use the BFV full-bootstrap STARK prover";
 const GENERIC_STARK_AIR_ZK_ACE_RESERVED_ERROR: &str =
@@ -968,6 +969,8 @@ mod tests {
             domain_tag: "iroha:test:reserved-bfv-generic-air".to_owned(),
         };
         let rows = vec![vec![0]; 1_usize << usize::from(params.n_log2)];
+        let composition_values = vec![0; rows.len()];
+        let base_indices = [0_usize, 1];
         let canonical = iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1;
         let circuit_ids = [
             canonical.to_owned(),
@@ -1002,6 +1005,36 @@ mod tests {
             assert!(
                 err.contains("BFV full-bootstrap"),
                 "unexpected zero-composition AIR rejection for {circuit_id}: {err}"
+            );
+
+            let err = prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes(
+                params.clone(),
+                "IROHA-TEST-RESERVED-BFV-EXPLICIT-AIR".to_owned(),
+                circuit_id.clone(),
+                [0xB6; 32],
+                rows.clone(),
+                composition_values.clone(),
+            )
+            .expect_err("explicit row/composition AIR prover must reject BFV aliases");
+            assert!(
+                err.contains("BFV full-bootstrap"),
+                "unexpected explicit AIR rejection for {circuit_id}: {err}"
+            );
+
+            let err =
+                prove_stark_fri_air_envelope_from_rows_and_composition_values_with_base_indices_bytes(
+                    params.clone(),
+                    "IROHA-TEST-RESERVED-BFV-EXPLICIT-BASE-AIR".to_owned(),
+                    circuit_id.clone(),
+                    [0xB7; 32],
+                    rows.clone(),
+                    composition_values.clone(),
+                    &base_indices,
+                )
+                .expect_err("explicit-base AIR prover must reject BFV aliases");
+            assert!(
+                err.contains("BFV full-bootstrap"),
+                "unexpected explicit-base AIR rejection for {circuit_id}: {err}"
             );
         }
     }
@@ -2565,7 +2598,7 @@ mod tests {
         )
         .expect("derive BFV explicit public-padding base indices");
         let suffixed_label_bytes =
-            prove_stark_fri_air_envelope_from_rows_and_composition_values_with_base_indices_bytes(
+            prove_stark_fri_reserved_air_envelope_from_rows_and_composition_values_with_base_indices_bytes(
                 expected_params.clone(),
                 format!(
                     "{}:1",
@@ -3272,77 +3305,21 @@ mod tests {
             "artifact-bound BFV verifier must reject truncated sampled public openings"
         );
 
-        let mut unsafe_generic_air = None;
-        for attempt in 0..BFV_FULL_BOOTSTRAP_STARK_AIR_TRANSCRIPT_LABEL_ATTEMPTS {
-            let transcript_label = bfv_full_bootstrap_stark_air_transcript_label_v1(attempt);
-            let candidate_bytes =
-                match prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes(
-                    expected_params.clone(),
-                    transcript_label.clone(),
-                    iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
-                    public_digest,
-                    material.arithmetic_trace_material.rows.clone(),
-                    material
-                        .arithmetic_air_evaluation_material
-                        .composition_values
-                        .clone(),
-                ) {
-                    Ok(bytes) => bytes,
-                    Err(_) => continue,
-                };
-            let candidate_env: StarkVerifyEnvelopeV1 =
-                norito::decode_from_bytes(&candidate_bytes).expect("decode candidate BFV AIR");
-            let candidate_air = candidate_env
-                .proof
-                .air
-                .as_ref()
-                .expect("candidate AIR section");
-            let candidate_indices = candidate_air
-                .openings
-                .iter()
-                .map(|opening| opening.index)
-                .collect::<Vec<_>>();
-            let Err(opening_err) =
-                iroha_crypto::validate_bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_v1(
-                    &candidate_indices,
-                )
-            else {
-                continue;
-            };
-            unsafe_generic_air = Some((candidate_bytes, candidate_indices, opening_err));
-            break;
-        }
-        let (unsafe_bytes, unsafe_indices, opening_err) = unsafe_generic_air
-            .expect("find allowed BFV transcript label with private-row AIR openings");
+        let generic_bfv_err = prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes(
+            expected_params.clone(),
+            "IROHA-TEST-BFV-GENERIC-AIR-REJECTED".to_owned(),
+            iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
+            public_digest,
+            material.arithmetic_trace_material.rows.clone(),
+            material
+                .arithmetic_air_evaluation_material
+                .composition_values
+                .clone(),
+        )
+        .expect_err("generic explicit AIR builder must reject BFV circuit ids");
         assert!(
-            opening_err.to_string().contains("unmasked private row"),
-            "unsafe generic AIR rejection must be privacy-related: {opening_err}"
-        );
-        assert!(
-            verify_stark_fri_air_envelope_from_rows_and_composition_values(
-                &unsafe_bytes,
-                iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
-                &public_digest,
-                &material.arithmetic_trace_material.rows,
-                &material
-                    .arithmetic_air_evaluation_material
-                    .composition_values,
-            ),
-            "unsafe candidate must remain a structurally valid generic AIR proof"
-        );
-        assert!(
-            !verify_stark_fri_bfv_full_bootstrap_air_envelope(&unsafe_bytes, &material),
-            "BFV native AIR verifier must reject generic proofs that open private rows: {unsafe_indices:?}"
-        );
-        assert!(
-            !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
-                &unsafe_bytes,
-                material.proof_input_material.statement_hash,
-                material.arithmetic_trace_material_digest,
-                witness.slot_index,
-                witness.bound_mode,
-            ),
-            "public-padding BFV verifier must reject generic proofs that open private rows: {unsafe_indices:?}"
+            generic_bfv_err.contains("BFV full-bootstrap"),
+            "generic BFV AIR rejection must name the reserved family: {generic_bfv_err}"
         );
 
         let mut stale_domain = env.clone();
@@ -6160,17 +6137,8 @@ pub(crate) fn prove_stark_fri_air_envelope_from_rows_and_composition_values_byte
     rows: Vec<Vec<u64>>,
     composition_values: Vec<u64>,
 ) -> Result<Vec<u8>, String> {
-    validate_stark_circuit_id(&circuit_id)
-        .map_err(|err| format!("invalid STARK AIR circuit_id: {err}"))?;
-    let composition_values = composition_values
-        .into_iter()
-        .map(|value| {
-            Fq::from_canonical_u64(value).ok_or_else(|| {
-                "STARK AIR composition contains non-canonical field element".to_owned()
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    prove_stark_fri_air_envelope_from_rows_and_composition_values_fq_bytes(
+    validate_generic_stark_air_circuit_id(&circuit_id)?;
+    prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes_for_validated_circuit(
         params,
         transcript_label,
         circuit_id,
@@ -6181,7 +6149,30 @@ pub(crate) fn prove_stark_fri_air_envelope_from_rows_and_composition_values_byte
     )
 }
 
+#[cfg(test)]
 pub(crate) fn prove_stark_fri_air_envelope_from_rows_and_composition_values_with_base_indices_bytes(
+    params: StarkFriParamsV1,
+    transcript_label: String,
+    circuit_id: String,
+    public_digest: [u8; 32],
+    rows: Vec<Vec<u64>>,
+    composition_values: Vec<u64>,
+    base_indices: &[usize],
+) -> Result<Vec<u8>, String> {
+    validate_generic_stark_air_circuit_id(&circuit_id)?;
+    prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes_for_validated_circuit(
+        params,
+        transcript_label,
+        circuit_id,
+        public_digest,
+        rows,
+        composition_values,
+        Some(base_indices),
+    )
+}
+
+/// Build a reserved-circuit AIR envelope with an explicit query schedule.
+pub(crate) fn prove_stark_fri_reserved_air_envelope_from_rows_and_composition_values_with_base_indices_bytes(
     params: StarkFriParamsV1,
     transcript_label: String,
     circuit_id: String,
@@ -6192,6 +6183,26 @@ pub(crate) fn prove_stark_fri_air_envelope_from_rows_and_composition_values_with
 ) -> Result<Vec<u8>, String> {
     validate_stark_circuit_id(&circuit_id)
         .map_err(|err| format!("invalid STARK AIR circuit_id: {err}"))?;
+    prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes_for_validated_circuit(
+        params,
+        transcript_label,
+        circuit_id,
+        public_digest,
+        rows,
+        composition_values,
+        Some(base_indices),
+    )
+}
+
+fn prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes_for_validated_circuit(
+    params: StarkFriParamsV1,
+    transcript_label: String,
+    circuit_id: String,
+    public_digest: [u8; 32],
+    rows: Vec<Vec<u64>>,
+    composition_values: Vec<u64>,
+    base_indices: Option<&[usize]>,
+) -> Result<Vec<u8>, String> {
     let composition_values = composition_values
         .into_iter()
         .map(|value| {
@@ -6207,7 +6218,7 @@ pub(crate) fn prove_stark_fri_air_envelope_from_rows_and_composition_values_with
         public_digest,
         rows,
         composition_values,
-        Some(base_indices),
+        base_indices,
     )
 }
 
@@ -6430,7 +6441,7 @@ fn prove_stark_fri_air_envelope_bytes_for_validated_circuit(
             .ok_or_else(|| "failed to evaluate STARK AIR composition".to_owned())
         })
         .collect::<Result<Vec<_>, _>>()?;
-    prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes(
+    prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes_for_validated_circuit(
         params,
         transcript_label,
         circuit_id,
@@ -6440,6 +6451,7 @@ fn prove_stark_fri_air_envelope_bytes_for_validated_circuit(
             .into_iter()
             .map(|value| value.0)
             .collect::<Vec<_>>(),
+        None,
     )
 }
 
@@ -6512,7 +6524,7 @@ pub(crate) fn prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(
     )
     .map_err(|err| format!("BFV full-bootstrap opening schedule invalid: {err}"))?;
     let bytes =
-        prove_stark_fri_air_envelope_from_rows_and_composition_values_with_base_indices_bytes(
+        prove_stark_fri_reserved_air_envelope_from_rows_and_composition_values_with_base_indices_bytes(
             params,
             bfv_full_bootstrap_stark_air_transcript_label_v1(0),
             iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),

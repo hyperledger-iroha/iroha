@@ -2,6 +2,44 @@ import XCTest
 @testable import IrohaSwift
 
 final class OfflineNoteTests: XCTestCase {
+    private final class RecordingPipelineClient: ToriiTransactionSubmitting {
+        var submitted: [Data] = []
+
+        func submitTransaction(data: Data,
+                               mode: PipelineEndpointMode,
+                               idempotencyKey: String?) async throws -> ToriiSubmitTransactionResponse? {
+            submitted.append(data)
+            return nil
+        }
+    }
+
+    private func assertRetiredOfflineNotePayment(
+        _ expression: @autoclosure () throws -> SignedTransactionEnvelope,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertThrowsError(try expression(), file: file, line: line) { error in
+            guard case SwiftTransactionEncoderError.retiredOfflineNotePayment = error else {
+                return XCTFail("expected retiredOfflineNotePayment, got \(error)", file: file, line: line)
+            }
+        }
+    }
+
+    private func assertRetiredOfflineNotePayment(
+        _ operation: () async throws -> Void,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        do {
+            try await operation()
+            XCTFail("expected retiredOfflineNotePayment", file: file, line: line)
+        } catch {
+            guard case SwiftTransactionEncoderError.retiredOfflineNotePayment = error else {
+                return XCTFail("expected retiredOfflineNotePayment, got \(error)", file: file, line: line)
+            }
+        }
+    }
+
     func testCertificateSigningBytesMatchRustVector() throws {
         let fixture = try Self.loadFixture()
         let sender = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
@@ -3808,7 +3846,7 @@ final class OfflineNoteTests: XCTestCase {
         )
     }
 
-    func testToriiIssuerClientBodySignsRefillAndIssuesWalletCommitment() async throws {
+    func testToriiIssuerClientBodySignsRefillAndRetiresNoteIssue() async throws {
         let fixture = try Self.loadFixture()
         let certificate = fixture.paymentToken.senderKeyCertificate
         let accountId = certificate.accountId
@@ -3841,22 +3879,8 @@ final class OfflineNoteTests: XCTestCase {
                     "key_certificates": [Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000)],
                 ]
             case "/v1/offline/v2/notes/issue":
-                response = [
-                    "operation_id": try Self.string(body, "operation_id"),
-                    "settlement": ["entry_hash": "settlement-entry-hash"],
-                    "lineage_state": Self.lineageState(
-                        revision: 1,
-                        balance: "5",
-                        serverStateHash: " lineage-state-hash "
-                    ),
-                    "local_balance": "5",
-                    "locked_balance": "0",
-                    "local_revision": 1,
-                    "local_state_hash": "lineage-state-hash",
-                    "issued_note_commitment": try Self.string(body, "note_commitment"),
-                    "key_certificate": Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000),
-                    "key_certificates": [Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000)],
-                ]
+                XCTFail("retired Offline Note issue must not POST to Torii")
+                response = ["unexpected": "issue"]
             default:
                 throw ToriiOfflineNoteIssuerClientError.invalidURL(request.url?.path ?? "")
             }
@@ -3878,7 +3902,6 @@ final class OfflineNoteTests: XCTestCase {
             nonceGenerator: SequenceIdGenerator(ids: [
                 "operation-refill-1",
                 "auth-refill-1",
-                "auth-issue-1",
                 "operation-refill-2",
                 "auth-refill-2",
             ])
@@ -3895,22 +3918,24 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertEqual(context.localRevision, 1)
 
         let commitment = Data((1...32).map(UInt8.init))
-        let response = try await client.issueNote(OfflineNoteIssueRequest(
-            chainId: "chain-1",
-            accountId: accountId,
-            assetDefinitionId: assetDefinitionId,
-            assetId: "\(assetDefinitionId)#\(accountId)",
-            amount: "5",
-            loadContext: context,
-            noteCommitment: commitment
-        ))
+        do {
+            _ = try await client.issueNote(OfflineNoteIssueRequest(
+                chainId: "chain-1",
+                accountId: accountId,
+                assetDefinitionId: assetDefinitionId,
+                assetId: "\(assetDefinitionId)#\(accountId)",
+                amount: "5",
+                loadContext: context,
+                noteCommitment: commitment
+            ))
+            XCTFail("classic Offline Note issue must be retired")
+        } catch let error as ToriiOfflineNoteIssuerClientError {
+            XCTAssertEqual(error, .retiredOfflineNoteIssue)
+        }
 
-        XCTAssertEqual(response.noteCommitment, commitment)
-        XCTAssertEqual(response.settlementEntryHashHex, "settlement-entry-hash")
         let requests = OfflineIssuerURLProtocol.requests
-        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests.count, 1)
         XCTAssertEqual(requests[0].url?.path, "/v1/offline/v2/keys/refill")
-        XCTAssertEqual(requests[1].url?.path, "/v1/offline/v2/notes/issue")
         for request in requests {
             XCTAssertFalse((request.allHTTPHeaderFields ?? [:]).keys.contains { $0.lowercased().hasPrefix("x-iroha-") })
         }
@@ -3927,13 +3952,6 @@ final class OfflineNoteTests: XCTestCase {
             "nested-device-signature-is-not-body-auth"
         )
 
-        let issueBody = try Self.requestBody(requests[1])
-        XCTAssertEqual(try Self.string(issueBody, "note_commitment"), commitment.hexLowercased())
-        XCTAssertEqual(try Self.uint64(issueBody, "local_revision"), 0)
-        XCTAssertEqual(try Self.string(issueBody, "local_balance"), "0")
-        XCTAssertEqual(try Self.string(issueBody, "nonce"), "auth-issue-1")
-        _ = try Self.object(issueBody, "lineage_state")
-
         nowMs = 1_700_000_060_001
         let refillContext = try await client.prepareLoad(
             chainId: "chain-1",
@@ -3943,9 +3961,9 @@ final class OfflineNoteTests: XCTestCase {
         )
         XCTAssertEqual(refillContext.operationId, "operation-refill-2")
         let refreshedRequests = OfflineIssuerURLProtocol.requests
-        XCTAssertEqual(refreshedRequests.count, 3)
-        let secondRefillBody = try Self.requestBody(refreshedRequests[2])
-        XCTAssertEqual(try Self.string(secondRefillBody, "local_state_hash"), " lineage-state-hash ")
+        XCTAssertEqual(refreshedRequests.count, 2)
+        let secondRefillBody = try Self.requestBody(refreshedRequests[1])
+        XCTAssertEqual(try Self.string(secondRefillBody, "local_state_hash"), "")
     }
 
     func testToriiIssuerClientStripsLegacyCanonicalAuthHeadersFromV2Requests() async throws {
@@ -5239,16 +5257,14 @@ final class OfflineNoteTests: XCTestCase {
         ))
     }
 
-    func testOfflineNoteTransactionBuildersProduceSignedEnvelopes() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.isAvailable, "Native transaction encoder unavailable")
-
+    func testOfflineNoteTransactionBuildersAreRetired() throws {
         let fixture = try Self.loadFixture()
         let keypair = try Keypair(privateKeyBytes: Data(0..<32))
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let chainId = "00000000-0000-0000-0000-000000000000"
         let creationTimeMs: UInt64 = 1_706_000_000_000
 
-        let issue = try SwiftTransactionEncoder.encodeIssueOfflineNote(
+        assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeIssueOfflineNote(
             request: IssueOfflineNoteRequest(
                 chainId: chainId,
                 authority: authority,
@@ -5257,8 +5273,8 @@ final class OfflineNoteTests: XCTestCase {
             ),
             keypair: keypair,
             creationTimeMs: creationTimeMs
-        )
-        let audit = try SwiftTransactionEncoder.encodeAuditOfflineNote(
+        ))
+        assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeAuditOfflineNote(
             request: AuditOfflineNoteRequest(
                 chainId: chainId,
                 authority: authority,
@@ -5267,8 +5283,8 @@ final class OfflineNoteTests: XCTestCase {
             ),
             keypair: keypair,
             creationTimeMs: creationTimeMs
-        )
-        let redeem = try SwiftTransactionEncoder.encodeRedeemOfflineNote(
+        ))
+        assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeRedeemOfflineNote(
             request: RedeemOfflineNoteRequest(
                 chainId: chainId,
                 authority: authority,
@@ -5277,8 +5293,8 @@ final class OfflineNoteTests: XCTestCase {
             ),
             keypair: keypair,
             creationTimeMs: creationTimeMs
-        )
-        let defund = try SwiftTransactionEncoder.encodeDefundOfflineNote(
+        ))
+        assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeDefundOfflineNote(
             request: DefundOfflineNoteRequest(
                 chainId: chainId,
                 authority: authority,
@@ -5288,21 +5304,7 @@ final class OfflineNoteTests: XCTestCase {
             ),
             keypair: keypair,
             creationTimeMs: creationTimeMs
-        )
-
-        for envelope in [issue, audit, redeem, defund] {
-            XCTAssertEqual(envelope.norito.first, 1)
-            XCTAssertEqual(Data(envelope.norito.dropFirst()), envelope.signedTransaction)
-            XCTAssertEqual(envelope.transactionHash.count, 32)
-            XCTAssertNil(envelope.payload)
-        }
-        XCTAssertEqual(try Self.instructionCount(in: issue), 1)
-        XCTAssertEqual(try Self.instructionCount(in: audit), 1)
-        XCTAssertEqual(try Self.instructionCount(in: redeem), 1)
-        XCTAssertEqual(try Self.instructionCount(in: defund), 2)
-        XCTAssertNotEqual(issue.transactionHash, audit.transactionHash)
-        XCTAssertNotEqual(audit.transactionHash, redeem.transactionHash)
-        XCTAssertNotEqual(redeem.transactionHash, defund.transactionHash)
+        ))
     }
 
     func testOfflineNoteTransactionSubmitterFeeMetadataHelper() {
@@ -5319,6 +5321,37 @@ final class OfflineNoteTests: XCTestCase {
             metadata[IrohaOfflineNoteTransactionSubmitter.feeSponsorMetadataKey],
             .string("sponsor-i105")
         )
+    }
+
+    func testIrohaOfflineNoteTransactionSubmitterIsRetiredBeforeSdkSubmission() async throws {
+        let fixture = try Self.loadFixture()
+        let keypair = try Keypair(privateKeyBytes: Data(0..<32))
+        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
+        let pipelineClient = RecordingPipelineClient()
+        let sdk = IrohaSDK(
+            toriiClient: pipelineClient,
+            baseURL: URL(string: "https://torii.example")!
+        )
+        let submitter = IrohaOfflineNoteTransactionSubmitter(
+            sdk: sdk,
+            signingKey: signingKey,
+            chainId: "00000000-0000-0000-0000-000000000000",
+            authority: AccountId.make(publicKey: keypair.publicKey),
+            transactionMetadata: IrohaOfflineNoteTransactionSubmitter.gasAssetMetadata(" xor#universal ")
+        )
+        let audit = try Self.audit(fixture)
+        let redemption = try Self.redeem(fixture)
+
+        await assertRetiredOfflineNotePayment {
+            try await submitter.submitAudit(audit)
+        }
+        await assertRetiredOfflineNotePayment {
+            try await submitter.submitRedeem(redemption)
+        }
+        await assertRetiredOfflineNotePayment {
+            try await submitter.submitDefund(redemption, bearerAuditTrail: [audit])
+        }
+        XCTAssertEqual(pipelineClient.submitted.count, 0)
     }
 
     func testRedeemBuilderRejectsMismatchedProofBinding() throws {
@@ -5750,14 +5783,12 @@ final class OfflineNoteTests: XCTestCase {
             )
         }
 
-        try XCTSkipIf(!NoritoNativeBridge.shared.isAvailable, "Native transaction encoder unavailable")
-
-        let defaultEnvelope = try SwiftTransactionEncoder.encodeIssueOfflineNote(
+        assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeIssueOfflineNote(
             request: IssueOfflineNoteRequest(chainId: chainId, authority: authority, issue: issue),
             keypair: keypair,
             creationTimeMs: 1_706_000_000_000
-        )
-        let nonceEnvelope = try SwiftTransactionEncoder.encodeIssueOfflineNote(
+        ))
+        assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeIssueOfflineNote(
             request: IssueOfflineNoteRequest(
                 chainId: chainId,
                 authority: authority,
@@ -5767,10 +5798,7 @@ final class OfflineNoteTests: XCTestCase {
             ),
             keypair: keypair,
             creationTimeMs: 1_706_000_000_000
-        )
-
-        XCTAssertNotEqual(defaultEnvelope.signedTransaction, nonceEnvelope.signedTransaction)
-        XCTAssertNotEqual(defaultEnvelope.transactionHash, nonceEnvelope.transactionHash)
+        ))
     }
 
     func testOfflineNoteRecursiveProofCoversCustomVerifierAndVerifierValidation() throws {

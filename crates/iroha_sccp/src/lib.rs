@@ -65839,6 +65839,24 @@ mod tests {
         }
     }
 
+    fn different_source_proof_plan(current: SccpSourceProofPlanV1) -> SccpSourceProofPlanV1 {
+        match current {
+            SccpSourceProofPlanV1::EthereumBeaconReceiptProof => {
+                SccpSourceProofPlanV1::BscValidatorSetReceiptProof
+            }
+            _ => SccpSourceProofPlanV1::EthereumBeaconReceiptProof,
+        }
+    }
+
+    fn different_finality_model(current: SccpProofFinalityModelV1) -> SccpProofFinalityModelV1 {
+        match current {
+            SccpProofFinalityModelV1::EthereumBeaconExecution => {
+                SccpProofFinalityModelV1::BscValidatorSet
+            }
+            _ => SccpProofFinalityModelV1::EthereumBeaconExecution,
+        }
+    }
+
     #[test]
     fn source_verifier_material_production_gate_rejects_builtin_placeholder_role_replay() {
         for source_domain in [
@@ -66111,6 +66129,107 @@ mod tests {
                         &replayed_deployment,
                     ),
                     "domain {source_domain} readiness must reject built-in placeholder {label} replay"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn source_adapter_deployment_descriptors_reject_cross_lane_control_field_drift() {
+        for source_domain in SCCP_CORE_REMOTE_DOMAINS {
+            let material = sample_production_source_verifier_material(source_domain);
+            let deployment = sample_production_source_adapter_deployment(&material);
+            assert!(
+                source_adapter_deployment_has_standalone_valid_shape(&deployment),
+                "domain {source_domain} fixture must start standalone-valid"
+            );
+            assert!(
+                sccp_source_adapter_engine_deployment_matches_material(&material, &deployment),
+                "domain {source_domain} fixture must match governed material"
+            );
+            assert!(
+                sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                    source_domain,
+                    &material,
+                    &deployment,
+                ),
+                "domain {source_domain} fixture must open the source-adapter gate"
+            );
+
+            let mut drift_cases: Vec<(&str, SccpSourceAdapterEngineDeploymentV1)> = Vec::new();
+            let mut drift = deployment.clone();
+            drift.version = 2;
+            drift_cases.push(("version", drift));
+            let mut drift = deployment.clone();
+            drift.target_domain = source_domain;
+            drift_cases.push(("target_domain", drift));
+            let mut drift = deployment.clone();
+            drift.source_chain.push_str("-fork");
+            drift_cases.push(("source_chain", drift));
+            let mut drift = deployment.clone();
+            drift.source_proof_plan = different_source_proof_plan(deployment.source_proof_plan);
+            drift_cases.push(("source_proof_plan", drift));
+            let mut drift = deployment.clone();
+            drift.finality_model = different_finality_model(deployment.finality_model);
+            drift_cases.push(("finality_model", drift));
+            let mut drift = deployment.clone();
+            drift.adapter_proof_family = "debug-proof-family".to_owned();
+            drift_cases.push(("adapter_proof_family", drift));
+            let mut drift = deployment.clone();
+            drift.adapter_circuit_id.push_str("-fork");
+            drift_cases.push(("adapter_circuit_id", drift));
+            let mut drift = deployment.clone();
+            drift.adapter_verifier_vk_hash = [0u8; 32];
+            drift_cases.push(("adapter_verifier_vk_hash", drift));
+            let mut drift = deployment.clone();
+            drift.deployment_receipt_hash = [0u8; 32];
+            drift_cases.push(("deployment_receipt_hash_zero", drift));
+            let mut drift = deployment.clone();
+            drift.deployment_receipt_hash = deployment.source_trust_anchor_hash;
+            drift_cases.push(("deployment_receipt_hash_role_replay", drift));
+
+            if source_domain != SCCP_DOMAIN_SOL {
+                let mut drift = deployment.clone();
+                drift.solana_tower_replay_verifier_hash = [0xA7; 32];
+                drift_cases.push(("foreign_solana_audit_hash", drift));
+            }
+            if source_domain != SCCP_DOMAIN_TON {
+                let mut drift = deployment.clone();
+                drift.ton_masterchain_config_verifier_hash = [0xB8; 32];
+                drift_cases.push(("foreign_ton_audit_hash", drift));
+            }
+            if source_domain == SCCP_DOMAIN_SOL {
+                let mut drift = deployment.clone();
+                drift.solana_bank_fork_choice_verifier_hash =
+                    drift.solana_tower_replay_verifier_hash;
+                drift_cases.push(("solana_audit_hash_replay", drift));
+            }
+            if source_domain == SCCP_DOMAIN_TON {
+                let mut drift = deployment.clone();
+                drift.ton_shard_accounts_dictionary_verifier_hash =
+                    drift.ton_masterchain_config_verifier_hash;
+                drift_cases.push(("ton_audit_hash_replay", drift));
+            }
+
+            for (label, drifted_deployment) in drift_cases {
+                assert!(
+                    !source_adapter_deployment_has_standalone_valid_shape(&drifted_deployment),
+                    "domain {source_domain} standalone descriptor shape must reject {label} drift"
+                );
+                assert!(
+                    !sccp_source_adapter_engine_deployment_matches_material(
+                        &material,
+                        &drifted_deployment,
+                    ),
+                    "domain {source_domain} material/deployment match must reject {label} drift"
+                );
+                assert!(
+                    !sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                        source_domain,
+                        &material,
+                        &drifted_deployment,
+                    ),
+                    "domain {source_domain} readiness must reject {label} drift"
                 );
             }
         }

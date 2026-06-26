@@ -508,6 +508,9 @@ export interface MultisigProposeRequest extends MultisigAccountSelector {
   publicKeyHex?: string | null;
   signatureB64?: string | null;
   creationTimeMs?: number | string | bigint | null;
+  validationFeePolicyVersion?: number | string | bigint | null;
+  validationFeePolicyHash?: string | null;
+  validationFeeInstructionIndex?: number | string | bigint | null;
   privateKey?: string | BinaryLike | null;
   privateKeyHex?: string | null;
   privateKeyMultihash?: string | null;
@@ -520,6 +523,9 @@ export interface MultisigProposeRequest extends MultisigAccountSelector {
   public_key_hex?: string | null;
   signature_b64?: string | null;
   creation_time_ms?: number | string | bigint | null;
+  validation_fee_policy_version?: number | string | bigint | null;
+  validation_fee_policy_hash?: string | null;
+  validation_fee_instruction_index?: number | string | bigint | null;
   private_key?: string | BinaryLike | null;
   private_key_hex?: string | null;
   private_key_multihash?: string | null;
@@ -536,6 +542,9 @@ export interface MultisigProposePayload {
   public_key_hex?: string;
   signature_b64?: string;
   creation_time_ms?: number;
+  validation_fee_policy_version?: string;
+  validation_fee_policy_hash?: string;
+  validation_fee_instruction_index?: string;
   private_key?: string | BinaryLike;
 }
 
@@ -13251,12 +13260,22 @@ export interface SubscriptionActionResponse {
 }
 
 export interface ToriiOfflineReadinessResponse {
-  offline_note: boolean;
-  offline_one_use_keys: boolean;
-  offline_recursive_note_proof: boolean;
-  offline_fountain_qr: boolean;
-  offline_sync_optional: boolean;
+  offline_kagemusha_abi7: boolean;
+  offline_kagemusha_abi7_mode: string;
+  offline_kagemusha_abi7_bridge_abi_version: number;
+  offline_kagemusha_abi7_circuit_id: string;
+  offline_kagemusha_abi7_artifacts: boolean;
+  offline_kagemusha_recursive_compact_available: boolean;
+  offline_kagemusha_recursive_compact_mode: string;
+  offline_kagemusha_recursive_compact_required_native_bridge_abi_version: number;
+  offline_kagemusha_recursive_compact_circuit_id: string;
+  offline_kagemusha_recursive_compact_artifacts_available: boolean;
   offline_telemetry: boolean;
+  offline_note?: boolean;
+  offline_one_use_keys?: boolean;
+  offline_recursive_note_proof?: boolean;
+  offline_fountain_qr?: boolean;
+  offline_sync_optional?: boolean;
   [key: string]: unknown;
 }
 
@@ -19660,6 +19679,8 @@ export interface MultisigProposeNoritoRequest {
   validationFeePolicyVersion?: string | null;
   validation_fee_policy_hash?: string | null;
   validationFeePolicyHash?: string | null;
+  validation_fee_instruction_index?: string | null;
+  validationFeeInstructionIndex?: string | null;
   instructions: Array<object | string | ArrayBufferView | ArrayBuffer | Buffer>;
 }
 export function noritoEncodeMultisigProposeRequest(

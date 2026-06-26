@@ -21545,6 +21545,9 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
     instructions: [instruction],
     feeSponsor: FIXTURE_BOB_ID,
     creationTimeMs: 123456,
+    validationFeePolicyVersion: 7,
+    validationFeePolicyHash: "AB".repeat(32),
+    validationFeeInstructionIndex: 1,
   });
   assert.equal(captured.url, `${BASE_URL}/v1/multisig/propose`);
   assert.equal(captured.init.headers["Content-Type"], "application/x-norito");
@@ -21564,12 +21567,18 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
       signerAccountId: FIXTURE_ALICE_ID,
       instructions: [instruction],
       feeSponsor: "sponsor@sbp",
+      validationFeePolicyVersion: 7,
+      validationFeePolicyHash: "AB".repeat(32),
+      validationFeeInstructionIndex: 1,
     }),
     {
       multisig_account_alias: "cbdc@banka",
       signer_account_id: FIXTURE_ALICE_ID,
       instructions: [instruction],
       fee_sponsor: "sponsor@sbp",
+      validation_fee_policy_version: "7",
+      validation_fee_policy_hash: "ab".repeat(32),
+      validation_fee_instruction_index: "1",
     },
   );
 });
@@ -21640,6 +21649,32 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
     /non-negative integer/,
   );
   await assert.rejects(
+    () =>
+      client.proposeMultisig({
+        ...request,
+        validationFeeInstructionIndex: 1,
+      }),
+    /requires policy metadata/,
+  );
+  await assert.rejects(
+    () =>
+      client.proposeMultisig({
+        ...request,
+        validationFeePolicyVersion: 7,
+      }),
+    /provided together/,
+  );
+  await assert.rejects(
+    () =>
+      client.proposeMultisig({
+        ...request,
+        validationFeePolicyVersion: 7,
+        validationFeePolicyHash: "ab".repeat(32),
+        validationFeeInstructionIndex: -1,
+      }),
+    /non-negative integer/,
+  );
+  await assert.rejects(
     () => client.proposeMultisig({ ...request, instructions: [Buffer.from("NRT0")] }),
     /overran payload/,
   );
@@ -21650,6 +21685,24 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
   assert.throws(
     () => buildMultisigProposeRequest({ ...request, instructions: [null] }),
     /multisigPropose\.instructions\[0\]/,
+  );
+  assert.throws(
+    () => buildMultisigProposeRequest({ ...request, validationFeeInstructionIndex: 1 }),
+    /requires policy metadata/,
+  );
+  assert.throws(
+    () => buildMultisigProposeRequest({ ...request, validationFeePolicyVersion: 7 }),
+    /provided together/,
+  );
+  assert.throws(
+    () =>
+      buildMultisigProposeRequest({
+        ...request,
+        validationFeePolicyVersion: 7,
+        validationFeePolicyHash: "ab".repeat(32),
+        validationFeeInstructionIndex: -1,
+      }),
+    /non-negative integer/,
   );
 });
 
@@ -22464,12 +22517,17 @@ test("queryTriggers rejects unsupported option keys", async () => {
 test("getOfflineReadiness fetches canonical readiness payload", async () => {
   let capturedRequest = null;
   const readiness = {
-    offline_note: true,
-    offline_one_use_keys: true,
-    offline_recursive_note_proof: false,
-    offline_fountain_qr: true,
-    offline_sync_optional: true,
     offline_telemetry: true,
+    offline_kagemusha_abi7: true,
+    offline_kagemusha_abi7_mode: "recursive_compact_v1",
+    offline_kagemusha_abi7_bridge_abi_version: 7,
+    offline_kagemusha_abi7_circuit_id: "kagemusha-recursive-compact-v1",
+    offline_kagemusha_abi7_artifacts: true,
+    offline_kagemusha_recursive_compact_available: true,
+    offline_kagemusha_recursive_compact_mode: "recursive_compact_v1",
+    offline_kagemusha_recursive_compact_required_native_bridge_abi_version: 7,
+    offline_kagemusha_recursive_compact_circuit_id: "kagemusha-recursive-compact-v1",
+    offline_kagemusha_recursive_compact_artifacts_available: true,
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async (url, init = {}) => {
@@ -22489,6 +22547,32 @@ test("getOfflineReadiness fetches canonical readiness payload", async () => {
   assert.equal(capturedRequest.init.method, "GET");
   assert.equal(capturedRequest.init.headers.Accept, "application/json");
   assert.deepEqual(response, readiness);
+  assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_note"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_one_use_keys"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_recursive_note_proof"), false);
+});
+
+test("getOfflineReadiness rejects legacy-only readiness payload", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          offline_note: true,
+          offline_one_use_keys: true,
+          offline_recursive_note_proof: true,
+          offline_fountain_qr: true,
+          offline_sync_optional: true,
+          offline_telemetry: true,
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+
+  await assert.rejects(
+    () => client.getOfflineReadiness(),
+    /offline readiness response\.offline_kagemusha_abi7 must be boolean/,
+  );
 });
 
 test("deleteTrigger tolerates missing records", async () => {

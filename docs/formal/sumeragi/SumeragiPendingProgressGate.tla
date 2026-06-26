@@ -242,8 +242,12 @@ PendingProgressAccountingExactness ==
   /\ PendingProgressTipActivationExact
   /\ PendingProgressRecentWindowExact
 
+PendingProgressAccountingCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PendingProgressAccountingExactness
+
 SafetyFast ==
-  PendingProgressAccountingExactness
+  PendingProgressAccountingCorrectnessEnvelope
 
 BugTouchSkipsMapMatch ==
   ActualTouchOutput("map_match") = SpecTouchOutput("map_match")

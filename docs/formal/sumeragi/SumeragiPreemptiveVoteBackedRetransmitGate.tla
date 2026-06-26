@@ -355,4 +355,8 @@ PreemptiveVoteBackedRetransmitExactness ==
   /\ PreemptivePendingRetentionExact
   /\ PreemptiveNearQuorumFlagExact
 
+PreemptiveVoteBackedRetransmitCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PreemptiveVoteBackedRetransmitExactness
+
 ====

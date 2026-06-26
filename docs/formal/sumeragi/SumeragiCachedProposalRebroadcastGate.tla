@@ -239,6 +239,11 @@ CachedProposalRebroadcastSafetyAnchors ==
   /\ RebuildSourceAnchors
   /\ ReplayFanoutAnchors
 
+CachedProposalRebroadcastCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ CachedProposalRebroadcastSafetyAnchors
+
 Safety == CachedProposalRebroadcastSafetyAnchors
 
 ====

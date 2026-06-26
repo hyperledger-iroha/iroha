@@ -3203,15 +3203,14 @@ They are normalised via the same unsigned-integer validators before any request 
 exactly like `25` while still surfacing a `TypeError` when the value is negative,
 fractional, NaN, or otherwise invalid.
 
-The supported first-release offline HTTP surface is Offline readiness. Offline note
-issuance, redemption, and audit payloads are submitted as transaction instructions; legacy
-legacy offline HTTP
-helpers are no longer exposed by this SDK because Torii now returns 404 for those routes.
+The supported first-release offline HTTP surface is Offline readiness. Classic
+Offline Note issuance, redemption, and audit transaction paths are retired; use
+Kagemusha readiness fields and payment flows for offline payments.
 
 ```js
 const readiness = await torii.getOfflineReadiness();
-console.log("one-use notes ready", readiness.offline_note);
-console.log("Fountain QR ready", readiness.offline_fountain_qr);
+console.log("Kagemusha ready", readiness.offline_kagemusha_abi7);
+console.log("recursive compact ready", readiness.offline_kagemusha_recursive_compact_available);
 ```
 
 for await (const assetDef of torii.iterateAssetDefinitions({

@@ -348,6 +348,10 @@ BlockSyncUpdateRosterHydrationExactness ==
   /\ BlockSyncUpdateRosterApplicationExact
   /\ BlockSyncUpdateRosterStakeFillExact
 
+BlockSyncUpdateRosterHydrationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncUpdateRosterHydrationExactness
+
 BugBuildsEmptyUpdate ==
   ImplementationActions(BuildUpdateFromBlock) = SpecActions(BuildUpdateFromBlock)
 

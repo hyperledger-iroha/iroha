@@ -143,4 +143,9 @@ Safety == BlockMessagePriorityExactness
 
 SafetyFast == Safety
 
+BlockMessagePriorityCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ BlockMessagePrioritySafetyAnchors
+
 ====

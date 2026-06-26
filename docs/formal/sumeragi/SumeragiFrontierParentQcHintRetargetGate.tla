@@ -321,6 +321,11 @@ FrontierParentQcHintRetargetSafetyAnchors ==
   /\ RequestBranchAnchors
   /\ RewriteStableAnchors
 
+FrontierParentQcHintRetargetCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ FrontierParentQcHintRetargetSafetyAnchors
+
 Safety == FrontierParentQcHintRetargetSafetyAnchors
 
 ====

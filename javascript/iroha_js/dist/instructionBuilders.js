@@ -11031,6 +11031,52 @@ export function buildMultisigProposeRequest(options) {
   if (privateKey !== null) {
     payload.private_key = privateKey;
   }
+  const validationFeePolicyVersion =
+    source.validationFeePolicyVersion ?? source.validation_fee_policy_version;
+  const validationFeePolicyHash =
+    source.validationFeePolicyHash ?? source.validation_fee_policy_hash;
+  const validationFeeInstructionIndex =
+    source.validationFeeInstructionIndex ?? source.validation_fee_instruction_index;
+  const hasValidationFeePolicyVersion =
+    validationFeePolicyVersion !== undefined && validationFeePolicyVersion !== null;
+  const hasValidationFeePolicyHash =
+    validationFeePolicyHash !== undefined && validationFeePolicyHash !== null;
+  const hasValidationFeeInstructionIndex =
+    validationFeeInstructionIndex !== undefined && validationFeeInstructionIndex !== null;
+  if (hasValidationFeePolicyVersion !== hasValidationFeePolicyHash) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "multisigPropose validation fee policy version and hash must be provided together",
+      "multisigPropose.validationFeePolicy",
+    );
+  }
+  if (!hasValidationFeePolicyVersion && hasValidationFeeInstructionIndex) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "multisigPropose validation fee instruction index requires policy metadata",
+      "multisigPropose.validationFeeInstructionIndex",
+    );
+  }
+  if (hasValidationFeePolicyVersion) {
+    payload.validation_fee_policy_version = String(
+      asNonNegativeInteger(
+        validationFeePolicyVersion,
+        "multisigPropose.validationFeePolicyVersion",
+      ),
+    );
+    payload.validation_fee_policy_hash = normalizeOptionalHexString(
+      validationFeePolicyHash,
+      "multisigPropose.validationFeePolicyHash",
+    );
+    if (hasValidationFeeInstructionIndex) {
+      payload.validation_fee_instruction_index = String(
+        asNonNegativeInteger(
+          validationFeeInstructionIndex,
+          "multisigPropose.validationFeeInstructionIndex",
+        ),
+      );
+    }
+  }
   return payload;
 }
 

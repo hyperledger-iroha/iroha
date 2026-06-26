@@ -306,4 +306,8 @@ ValidationRejectReasonLabelCoreSafety ==
 SafetyFast ==
   ValidationRejectReasonLabelCoreSafety
 
+ValidationRejectReasonLabelCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+
 ====

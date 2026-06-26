@@ -193,6 +193,10 @@ QcVerifyWorkerConfigFastSafety ==
 SafetyFast ==
   QcVerifyWorkerConfigFastSafety
 
+QcVerifyWorkerConfigCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+
 BugAutoThreadsUseAvailable ==
   ActualAutoHigh = SpecAutoHigh
 

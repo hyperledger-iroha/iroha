@@ -620,4 +620,9 @@ SafetyAnchors ==
   /\ InitRepairAnchors
   /\ ChunkRepairAnchors
 
+RbcRepairRequestCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ SafetyAnchors
+
 ====

@@ -227,6 +227,10 @@ BlockMessageWireExactness ==
   /\ WireDecodeExactness
   /\ BlockMessageWireSafetyAnchors
 
+BlockMessageWireCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockMessageWireExactness
+
 Safety == BlockMessageWireExactness
 
 ====

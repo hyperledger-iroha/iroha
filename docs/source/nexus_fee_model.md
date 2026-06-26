@@ -30,6 +30,10 @@ assets.
   fee schedule inputs needed to recompute the amount. Lane-relay-burn mode
   embeds versioned Nexus fee receipts in lane commitments; direct mode mutates
   public XOR in the universal fee context.
+- Offline payment fees follow the online boundary. Pure offline-offline
+  `KagemushaTransfer` batches are fee-exempt, while online-to-offline shield
+  top-ups and offline-to-online `RedeemKagemushaRecursive` redemptions use the
+  normal Nexus fee admission and receipt paths.
 - Block execution aggregates receipts per lane/dataspace and publishes them
   via `lane_settlement_commitments` in `/v1/sumeragi/status`.  The totals
   expose XOR fee receipt totals for nightly reconciliation exports.

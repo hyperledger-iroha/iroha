@@ -369,6 +369,10 @@ MembershipAdvertBridgeExactness ==
   /\ MembershipAdvertCollectorPlanExact
   /\ MembershipAdvertPayloadExact
 
+MembershipAdvertBridgeCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MembershipAdvertBridgeExactness
+
 BridgeMatchesSpec ==
   MembershipAdvertBridgeExactness
 

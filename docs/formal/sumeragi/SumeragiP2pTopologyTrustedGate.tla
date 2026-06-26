@@ -176,6 +176,10 @@ TrustedP2pTopologyExactness ==
   /\ TrustedObserverNonStrayExact
   /\ OnlineStrayOrderDuplicateExact
 
+TrustedP2pTopologyCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ TrustedP2pTopologyExactness
+
 BugIncludesLocal ==
   ActualCase("local_absent_world") = SpecCase("local_absent_world")
 

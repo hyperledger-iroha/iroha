@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 from importlib.util import module_from_spec, spec_from_file_location
@@ -738,14 +739,23 @@ def test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades() -> No
 
     script = SCRIPT.read_text(encoding="utf-8")
     assert "stable canonical .NET 8.0.x SDK version" in script
+    assert "exactly one canonical SDK version line" in script
     assert "non-zero patch" in script
     assert r"^8\.0\.[1-9][0-9]*$" in script
     assert r"^8\.[0-9]+\.[0-9]+(-[A-Za-z0-9][A-Za-z0-9_.-]*)?$" not in script
-    assert "OS Architecture:" in script
+    assert 'dotnet_info_field_count "OS Architecture"' in script
+    assert "exactly one OS Name and one OS Platform" in script
+    assert "exactly one canonical Windows RID" in script
+    assert "exactly one OS Architecture" in script
+    assert "dotnet_info_field_value" in script
+    assert "substr(line, length(label) + 2)" in script
+    assert "awk -F:" not in script
     assert "canonical Windows RID" in script
     assert "SCCP .NET SDK Architecture:" in script
     assert "canonical architecture" in script
     assert "^(x64|x86|arm64|arm)$" in script
+    assert "tr '[:upper:]' '[:lower:]'" not in script
+    assert 'tr "[:upper:]" "[:lower:]"' not in script
     assert "requires the Windows RID architecture to match" in script
     assert "connect_norito_bridge.dll" in script
     assert "connect_norito_bridge native bridge:" in script
@@ -756,11 +766,25 @@ def test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades() -> No
     assert "empty TRX result" in script
     assert "SCCP .NET SDK TRX:" in script
     assert "SCCP .NET SDK TRX bytes:" in script
+    assert "validate_dotnet_trx_content" in script
+    assert "Hyperledger.Iroha.Sdk.Tests.dll" in script
+    assert 'outcome="Passed"' in script
+    assert 'outcome="(Failed|NotExecuted|Error|Timeout|Aborted)"' in script
     assert r"^[1-9][0-9]*$" in script
-    assert (
+    direct_trx_path = (
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TestResults/"
+        "sccp-dotnet-sdk.trx"
+    )
+    nested_trx_path_pattern = (
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/*/TestResults/"
         "sccp-dotnet-sdk.trx"
-    ) in script
+    )
+    assert (
+        direct_trx_path in script
+    ), "direct .NET TRX TestResults path must remain the only accepted path"
+    assert nested_trx_path_pattern not in script, (
+        "nested .NET TRX TestResults paths must remain rejected"
+    )
     assert "*sccp-dotnet-sdk.trx" not in script
 
 
@@ -824,6 +848,981 @@ esac
     assert "cargo build -p connect_norito_bridge" not in completed.stdout
     assert "dotnet restore Hyperledger.Iroha.Sdk.sln" not in completed.stdout
     assert "dotnet test tests/Hyperledger.Iroha.Sdk.Tests" not in completed.stdout
+
+
+def test_sccp_production_corridor_dotnet_phase_rejects_multiline_version(
+    tmp_path: Path,
+) -> None:
+    """Windows .NET evidence must not normalize multi-line version output."""
+
+    dotnet_root = tmp_path / "dotnet-root"
+    dotnet_root.mkdir()
+    fake_dotnet = dotnet_root / "dotnet"
+    fake_dotnet.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  --version)
+    printf '8.0.101\\n8.0.102\\n'
+    ;;
+  *)
+    printf 'unexpected fake dotnet invocation: %s\\n' "$*" >&2
+    exit 99
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_dotnet.chmod(0o755)
+    env = os.environ.copy()
+    env["DOTNET_ROOT"] = str(dotnet_root)
+
+    completed = subprocess.run(
+        ["bash", str(SCRIPT), "--phase", "dotnet-sdk"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+
+    assert completed.returncode == 1
+    assert "dotnet --version to emit exactly one canonical SDK version line" in (
+        completed.stderr
+    )
+    assert "SCCP .NET SDK version:" not in completed.stdout
+    assert "dotnet --info" not in completed.stdout
+    assert "cargo build -p connect_norito_bridge" not in completed.stdout
+    assert "dotnet restore Hyperledger.Iroha.Sdk.sln" not in completed.stdout
+    assert "dotnet test tests/Hyperledger.Iroha.Sdk.Tests" not in completed.stdout
+
+
+def test_sccp_production_corridor_dotnet_phase_rejects_contradictory_os_markers(
+    tmp_path: Path,
+) -> None:
+    """Windows .NET evidence must require both OS fields to be Windows."""
+
+    dotnet_root = tmp_path / "dotnet-root"
+    dotnet_root.mkdir()
+    fake_dotnet = dotnet_root / "dotnet"
+    fake_dotnet.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  --version)
+    printf '8.0.101\\n'
+    ;;
+  --info)
+    cat <<'EOF'
+.NET SDK:
+ Version:           8.0.101
+
+Host:
+  Version:      8.0.1
+  Architecture: x64
+
+Runtime Environment:
+  OS Name:     Linux
+  OS Platform: Windows
+  OS Architecture: x64
+  RID:         win-x64
+EOF
+    ;;
+  *)
+    printf 'unexpected fake dotnet invocation: %s\\n' "$*" >&2
+    exit 99
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_dotnet.chmod(0o755)
+    env = os.environ.copy()
+    env["DOTNET_ROOT"] = str(dotnet_root)
+
+    completed = subprocess.run(
+        ["bash", str(SCRIPT), "--phase", "dotnet-sdk"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+
+    assert completed.returncode == 1
+    assert "SCCP .NET SDK validation must be captured on Windows" in (
+        completed.stderr
+    )
+    assert "OS Name: Linux" in completed.stderr
+    assert "OS Platform: Windows" in completed.stderr
+    assert "SCCP .NET SDK OS: Windows" not in completed.stdout
+    assert "cargo build -p connect_norito_bridge" not in completed.stdout
+    assert "dotnet restore Hyperledger.Iroha.Sdk.sln" not in completed.stdout
+    assert "dotnet test tests/Hyperledger.Iroha.Sdk.Tests" not in completed.stdout
+
+
+def test_sccp_production_corridor_dotnet_phase_rejects_ambiguous_os_metadata(
+    tmp_path: Path,
+) -> None:
+    """Windows .NET evidence must reject duplicate or missing OS metadata."""
+
+    cases = {
+        "missing-os-name": """Runtime Environment:
+  OS Platform: Windows
+  OS Architecture: x64
+  RID:         win-x64
+""",
+        "duplicate-os-name": """Runtime Environment:
+  OS Name:     Windows
+  OS Name:     Windows
+  OS Platform: Windows
+  OS Architecture: x64
+  RID:         win-x64
+""",
+        "missing-os-platform": """Runtime Environment:
+  OS Name:     Windows
+  OS Architecture: x64
+  RID:         win-x64
+""",
+        "duplicate-os-platform": """Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  OS Platform: Windows
+  OS Architecture: x64
+  RID:         win-x64
+""",
+    }
+    for case_name, runtime_environment in cases.items():
+        dotnet_root = tmp_path / case_name / "dotnet-root"
+        dotnet_root.mkdir(parents=True)
+        fake_dotnet = dotnet_root / "dotnet"
+        fake_dotnet.write_text(
+            f"""#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  --version)
+    printf '8.0.101\\n'
+    ;;
+  --info)
+    cat <<'EOF'
+.NET SDK:
+ Version:           8.0.101
+
+Host:
+  Version:      8.0.1
+  Architecture: x64
+
+{runtime_environment}EOF
+    ;;
+  *)
+    printf 'unexpected fake dotnet invocation: %s\\n' "$*" >&2
+    exit 99
+    ;;
+esac
+""",
+            encoding="utf-8",
+        )
+        fake_dotnet.chmod(0o755)
+        env = os.environ.copy()
+        env["DOTNET_ROOT"] = str(dotnet_root)
+
+        completed = subprocess.run(
+            ["bash", str(SCRIPT), "--phase", "dotnet-sdk"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+
+        assert completed.returncode == 1, case_name
+        assert "exactly one OS Name and one OS Platform from dotnet --info" in (
+            completed.stderr
+        ), case_name
+        assert "SCCP .NET SDK OS: Windows" not in completed.stdout, case_name
+        assert "SCCP .NET SDK RID:" not in completed.stdout, case_name
+        assert (
+            "cargo build -p connect_norito_bridge" not in completed.stdout
+        ), case_name
+        assert (
+            "dotnet restore Hyperledger.Iroha.Sdk.sln" not in completed.stdout
+        ), case_name
+        assert (
+            "dotnet test tests/Hyperledger.Iroha.Sdk.Tests"
+            not in completed.stdout
+        ), case_name
+
+
+def test_sccp_production_corridor_dotnet_phase_rejects_duplicate_rid(
+    tmp_path: Path,
+) -> None:
+    """Windows .NET evidence must not choose one RID from duplicate metadata."""
+
+    dotnet_root = tmp_path / "dotnet-root"
+    dotnet_root.mkdir()
+    fake_dotnet = dotnet_root / "dotnet"
+    fake_dotnet.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  --version)
+    printf '8.0.101\\n'
+    ;;
+  --info)
+    cat <<'EOF'
+.NET SDK:
+ Version:           8.0.101
+
+Host:
+  Version:      8.0.1
+  Architecture: x64
+
+Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  OS Architecture: x64
+  RID:         win-x64
+  RID:         linux-x64
+EOF
+    ;;
+  *)
+    printf 'unexpected fake dotnet invocation: %s\\n' "$*" >&2
+    exit 99
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_dotnet.chmod(0o755)
+    env = os.environ.copy()
+    env["DOTNET_ROOT"] = str(dotnet_root)
+
+    completed = subprocess.run(
+        ["bash", str(SCRIPT), "--phase", "dotnet-sdk"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+
+    assert completed.returncode == 1
+    assert "exactly one canonical Windows RID from dotnet --info" in (
+        completed.stderr
+    )
+    assert "found: 2" in completed.stderr
+    assert "SCCP .NET SDK RID:" not in completed.stdout
+    assert "cargo build -p connect_norito_bridge" not in completed.stdout
+    assert "dotnet restore Hyperledger.Iroha.Sdk.sln" not in completed.stdout
+    assert "dotnet test tests/Hyperledger.Iroha.Sdk.Tests" not in completed.stdout
+
+
+def test_sccp_production_corridor_dotnet_phase_rejects_ambiguous_rid_or_architecture_metadata(
+    tmp_path: Path,
+) -> None:
+    """Windows .NET evidence must reject missing RID and duplicate OS architecture."""
+
+    cases = {
+        "missing-rid": (
+            """Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  OS Architecture: x64
+""",
+            "exactly one canonical Windows RID from dotnet --info",
+            "found: 0",
+        ),
+        "duplicate-os-architecture": (
+            """Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  OS Architecture: x64
+  OS Architecture: x64
+  RID:         win-x64
+""",
+            "exactly one OS Architecture from dotnet --info",
+            "found: 2",
+        ),
+    }
+    for case_name, (runtime_environment, expected_error, expected_count) in (
+        cases.items()
+    ):
+        dotnet_root = tmp_path / case_name / "dotnet-root"
+        dotnet_root.mkdir(parents=True)
+        fake_dotnet = dotnet_root / "dotnet"
+        fake_dotnet.write_text(
+            f"""#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  --version)
+    printf '8.0.101\\n'
+    ;;
+  --info)
+    cat <<'EOF'
+.NET SDK:
+ Version:           8.0.101
+
+Host:
+  Version:      8.0.1
+  Architecture: x64
+
+{runtime_environment}EOF
+    ;;
+  *)
+    printf 'unexpected fake dotnet invocation: %s\\n' "$*" >&2
+    exit 99
+    ;;
+esac
+""",
+            encoding="utf-8",
+        )
+        fake_dotnet.chmod(0o755)
+        env = os.environ.copy()
+        env["DOTNET_ROOT"] = str(dotnet_root)
+
+        completed = subprocess.run(
+            ["bash", str(SCRIPT), "--phase", "dotnet-sdk"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+
+        assert completed.returncode == 1, case_name
+        assert expected_error in completed.stderr, case_name
+        assert expected_count in completed.stderr, case_name
+        assert "SCCP .NET SDK RID:" not in completed.stdout, case_name
+        assert "SCCP .NET SDK Architecture:" not in completed.stdout, case_name
+        assert (
+            "cargo build -p connect_norito_bridge" not in completed.stdout
+        ), case_name
+        assert (
+            "dotnet restore Hyperledger.Iroha.Sdk.sln" not in completed.stdout
+        ), case_name
+        assert (
+            "dotnet test tests/Hyperledger.Iroha.Sdk.Tests"
+            not in completed.stdout
+        ), case_name
+
+
+def test_sccp_production_corridor_dotnet_phase_rejects_noncanonical_rid_values(
+    tmp_path: Path,
+) -> None:
+    """Windows .NET evidence must reject noncanonical single RID values."""
+
+    cases = {
+        "uppercase-win-rid": "WIN-x64",
+        "foreign-linux-rid": "linux-x64",
+        "alias-amd64-rid": "win-amd64",
+    }
+    for case_name, rid in cases.items():
+        dotnet_root = tmp_path / case_name / "dotnet-root"
+        dotnet_root.mkdir(parents=True)
+        fake_dotnet = dotnet_root / "dotnet"
+        fake_dotnet.write_text(
+            f"""#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  --version)
+    printf '8.0.101\\n'
+    ;;
+  --info)
+    cat <<'EOF'
+.NET SDK:
+ Version:           8.0.101
+
+Host:
+  Version:      8.0.1
+  Architecture: x64
+
+Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  OS Architecture: x64
+  RID:         {rid}
+EOF
+    ;;
+  *)
+    printf 'unexpected fake dotnet invocation: %s\\n' "$*" >&2
+    exit 99
+    ;;
+esac
+""",
+            encoding="utf-8",
+        )
+        fake_dotnet.chmod(0o755)
+        env = os.environ.copy()
+        env["DOTNET_ROOT"] = str(dotnet_root)
+
+        completed = subprocess.run(
+            ["bash", str(SCRIPT), "--phase", "dotnet-sdk"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+
+        assert completed.returncode == 1, case_name
+        assert "requires a canonical Windows RID" in completed.stderr, case_name
+        assert f"found: {rid}" in completed.stderr, case_name
+        assert "SCCP .NET SDK RID:" not in completed.stdout, case_name
+        assert "SCCP .NET SDK Architecture:" not in completed.stdout, case_name
+        assert (
+            "cargo build -p connect_norito_bridge" not in completed.stdout
+        ), case_name
+        assert (
+            "dotnet restore Hyperledger.Iroha.Sdk.sln" not in completed.stdout
+        ), case_name
+        assert (
+            "dotnet test tests/Hyperledger.Iroha.Sdk.Tests"
+            not in completed.stdout
+        ), case_name
+
+
+def test_sccp_production_corridor_dotnet_phase_rejects_missing_os_architecture(
+    tmp_path: Path,
+) -> None:
+    """Windows .NET evidence must use OS Architecture, not Host fallback text."""
+
+    dotnet_root = tmp_path / "dotnet-root"
+    dotnet_root.mkdir()
+    fake_dotnet = dotnet_root / "dotnet"
+    fake_dotnet.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  --version)
+    printf '8.0.101\\n'
+    ;;
+  --info)
+    cat <<'EOF'
+.NET SDK:
+ Version:           8.0.101
+
+Host:
+  Version:      8.0.1
+  Architecture: x64
+
+Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  RID:         win-x64
+EOF
+    ;;
+  *)
+    printf 'unexpected fake dotnet invocation: %s\\n' "$*" >&2
+    exit 99
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_dotnet.chmod(0o755)
+    env = os.environ.copy()
+    env["DOTNET_ROOT"] = str(dotnet_root)
+
+    completed = subprocess.run(
+        ["bash", str(SCRIPT), "--phase", "dotnet-sdk"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+
+    assert completed.returncode == 1
+    assert "exactly one OS Architecture from dotnet --info" in completed.stderr
+    assert "found: 0" in completed.stderr
+    assert "SCCP .NET SDK Architecture:" not in completed.stdout
+    assert "cargo build -p connect_norito_bridge" not in completed.stdout
+    assert "dotnet restore Hyperledger.Iroha.Sdk.sln" not in completed.stdout
+    assert "dotnet test tests/Hyperledger.Iroha.Sdk.Tests" not in completed.stdout
+
+
+def test_sccp_production_corridor_dotnet_phase_rejects_noncanonical_architecture_values(
+    tmp_path: Path,
+) -> None:
+    """Windows .NET evidence must reject noncanonical architecture aliases."""
+
+    cases = {
+        "alias-amd64-architecture": "amd64",
+        "alias-x86_64-architecture": "x86_64",
+        "alias-aarch64-architecture": "aarch64",
+    }
+    for case_name, architecture in cases.items():
+        dotnet_root = tmp_path / case_name / "dotnet-root"
+        dotnet_root.mkdir(parents=True)
+        fake_dotnet = dotnet_root / "dotnet"
+        fake_dotnet.write_text(
+            f"""#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  --version)
+    printf '8.0.101\\n'
+    ;;
+  --info)
+    cat <<'EOF'
+.NET SDK:
+ Version:           8.0.101
+
+Host:
+  Version:      8.0.1
+  Architecture: {architecture}
+
+Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  OS Architecture: {architecture}
+  RID:         win-x64
+EOF
+    ;;
+  *)
+    printf 'unexpected fake dotnet invocation: %s\\n' "$*" >&2
+    exit 99
+    ;;
+esac
+""",
+            encoding="utf-8",
+        )
+        fake_dotnet.chmod(0o755)
+        env = os.environ.copy()
+        env["DOTNET_ROOT"] = str(dotnet_root)
+
+        completed = subprocess.run(
+            ["bash", str(SCRIPT), "--phase", "dotnet-sdk"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+
+        assert completed.returncode == 1, case_name
+        assert "requires a canonical architecture" in completed.stderr, case_name
+        assert f"found: {architecture}" in completed.stderr, case_name
+        assert "SCCP .NET SDK Architecture:" not in completed.stdout, case_name
+        assert (
+            "cargo build -p connect_norito_bridge" not in completed.stdout
+        ), case_name
+        assert (
+            "dotnet restore Hyperledger.Iroha.Sdk.sln" not in completed.stdout
+        ), case_name
+        assert (
+            "dotnet test tests/Hyperledger.Iroha.Sdk.Tests"
+            not in completed.stdout
+        ), case_name
+
+
+def test_sccp_production_corridor_dotnet_phase_rejects_colon_injected_info_values(
+    tmp_path: Path,
+) -> None:
+    """Windows .NET evidence must reject colon-injected dotnet --info fields."""
+
+    cases = {
+        "colon-injected-os-name": (
+            """Runtime Environment:
+  OS Name:     Windows: Linux
+  OS Platform: Windows
+  OS Architecture: x64
+  RID:         win-x64
+""",
+            "must be captured on Windows",
+            "OS Name: Windows: Linux",
+        ),
+        "colon-injected-os-platform": (
+            """Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows: Linux
+  OS Architecture: x64
+  RID:         win-x64
+""",
+            "must be captured on Windows",
+            "OS Platform: Windows: Linux",
+        ),
+        "colon-injected-rid": (
+            """Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  OS Architecture: x64
+  RID:         win-x64:linux-x64
+""",
+            "requires a canonical Windows RID",
+            "found: win-x64:linux-x64",
+        ),
+        "colon-injected-architecture": (
+            """Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  OS Architecture: x64:arm64
+  RID:         win-x64
+""",
+            "requires a canonical architecture",
+            "found: x64:arm64",
+        ),
+    }
+    for case_name, (runtime_environment, expected_error, expected_value) in (
+        cases.items()
+    ):
+        dotnet_root = tmp_path / case_name / "dotnet-root"
+        dotnet_root.mkdir(parents=True)
+        fake_dotnet = dotnet_root / "dotnet"
+        fake_dotnet.write_text(
+            f"""#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  --version)
+    printf '8.0.101\\n'
+    ;;
+  --info)
+    cat <<'EOF'
+.NET SDK:
+ Version:           8.0.101
+
+Host:
+  Version:      8.0.1
+  Architecture: x64
+
+{runtime_environment}EOF
+    ;;
+  *)
+    printf 'unexpected fake dotnet invocation: %s\\n' "$*" >&2
+    exit 99
+    ;;
+esac
+""",
+            encoding="utf-8",
+        )
+        fake_dotnet.chmod(0o755)
+        env = os.environ.copy()
+        env["DOTNET_ROOT"] = str(dotnet_root)
+
+        completed = subprocess.run(
+            ["bash", str(SCRIPT), "--phase", "dotnet-sdk"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+
+        assert completed.returncode == 1, case_name
+        assert expected_error in completed.stderr, case_name
+        assert expected_value in completed.stderr, case_name
+        assert "SCCP .NET SDK RID:" not in completed.stdout, case_name
+        assert "SCCP .NET SDK Architecture:" not in completed.stdout, case_name
+        assert (
+            "cargo build -p connect_norito_bridge" not in completed.stdout
+        ), case_name
+        assert (
+            "dotnet restore Hyperledger.Iroha.Sdk.sln" not in completed.stdout
+        ), case_name
+        assert (
+            "dotnet test tests/Hyperledger.Iroha.Sdk.Tests"
+            not in completed.stdout
+        ), case_name
+
+
+def test_sccp_production_corridor_dotnet_phase_rejects_uppercase_architecture(
+    tmp_path: Path,
+) -> None:
+    """Windows .NET evidence must not normalize noncanonical architecture text."""
+
+    dotnet_root = tmp_path / "dotnet-root"
+    dotnet_root.mkdir()
+    fake_dotnet = dotnet_root / "dotnet"
+    fake_dotnet.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  --version)
+    printf '8.0.101\\n'
+    ;;
+  --info)
+    cat <<'EOF'
+.NET SDK:
+ Version:           8.0.101
+
+Host:
+  Version:      8.0.1
+  Architecture: X64
+
+Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  OS Architecture: X64
+  RID:         win-x64
+EOF
+    ;;
+  *)
+    printf 'unexpected fake dotnet invocation: %s\\n' "$*" >&2
+    exit 99
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_dotnet.chmod(0o755)
+    env = os.environ.copy()
+    env["DOTNET_ROOT"] = str(dotnet_root)
+
+    completed = subprocess.run(
+        ["bash", str(SCRIPT), "--phase", "dotnet-sdk"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+
+    assert completed.returncode == 1
+    assert "SCCP .NET SDK validation requires a canonical architecture" in (
+        completed.stderr
+    )
+    assert "found: X64" in completed.stderr
+    assert "SCCP .NET SDK Architecture:" not in completed.stdout
+    assert "cargo build -p connect_norito_bridge" not in completed.stdout
+    assert "dotnet restore Hyperledger.Iroha.Sdk.sln" not in completed.stdout
+    assert "dotnet test tests/Hyperledger.Iroha.Sdk.Tests" not in completed.stdout
+
+
+def test_sccp_production_corridor_dotnet_phase_rejects_nested_trx_path(
+    tmp_path: Path,
+) -> None:
+    """Windows .NET evidence must fail if VSTest writes a nested TRX path."""
+
+    tool_dir = tmp_path / "tools"
+    dotnet_root = tmp_path / "dotnet-root"
+    bridge_target_dir = tmp_path / "bridge-target"
+    forged_trx_parent = (
+        ROOT
+        / "csharp"
+        / "tests"
+        / "Hyperledger.Iroha.Sdk.Tests"
+        / "codex-forged-nested-trx"
+    )
+    tool_dir.mkdir()
+    dotnet_root.mkdir()
+    fake_cargo = tool_dir / "cargo"
+    fake_cargo.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" != "build -p connect_norito_bridge" ]]; then
+  printf 'unexpected fake cargo invocation: %s\\n' "$*" >&2
+  exit 99
+fi
+mkdir -p "$CARGO_TARGET_DIR/debug"
+printf 'fake bridge dll\\n' > "$CARGO_TARGET_DIR/debug/connect_norito_bridge.dll"
+""",
+        encoding="utf-8",
+    )
+    fake_cargo.chmod(0o755)
+    fake_dotnet = dotnet_root / "dotnet"
+    fake_dotnet.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  --version)
+    printf '8.0.101\\n'
+    ;;
+  --info)
+    cat <<'EOF'
+.NET SDK:
+ Version:           8.0.101
+
+Host:
+  Version:      8.0.1
+  Architecture: x64
+
+Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  OS Architecture: x64
+  RID:         win-x64
+EOF
+    ;;
+  restore)
+    exit 0
+    ;;
+  test)
+    mkdir -p tests/Hyperledger.Iroha.Sdk.Tests/codex-forged-nested-trx/TestResults
+    printf '<TestRun />\\n' > tests/Hyperledger.Iroha.Sdk.Tests/codex-forged-nested-trx/TestResults/sccp-dotnet-sdk.trx
+    printf 'Passed!  - Failed: 0, Passed: 1, Skipped: 0, Total: 1, Duration: 1 ms - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)\\n'
+    ;;
+  *)
+    printf 'unexpected fake dotnet invocation: %s\\n' "$*" >&2
+    exit 99
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_dotnet.chmod(0o755)
+    env = os.environ.copy()
+    env["DOTNET_ROOT"] = str(dotnet_root)
+    env["SCCP_DOTNET_BRIDGE_TARGET_DIR"] = str(bridge_target_dir)
+    env["PATH"] = f"{tool_dir}{os.pathsep}{env['PATH']}"
+
+    try:
+        completed = subprocess.run(
+            ["bash", str(SCRIPT), "--phase", "dotnet-sdk"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+    finally:
+        shutil.rmtree(forged_trx_parent, ignore_errors=True)
+
+    assert completed.returncode == 1
+    assert (
+        "SCCP .NET SDK validation produced an unexpected TRX path"
+        in completed.stderr
+    )
+    assert "codex-forged-nested-trx/TestResults/sccp-dotnet-sdk.trx" in (
+        completed.stderr
+    )
+    assert "SCCP .NET SDK TRX:" not in completed.stdout
+    assert "SCCP .NET SDK TRX bytes:" not in completed.stdout
+
+
+@pytest.mark.parametrize(
+    ("case_name", "trx_payload", "expected_error"),
+    (
+        (
+            "placeholder",
+            "<TestRun />\n",
+            "requires TRX result to name Hyperledger.Iroha.Sdk.Tests.dll",
+        ),
+        (
+            "wrong-assembly",
+            (
+                '<TestRun><Results><UnitTestResult outcome="Passed" />'
+                '</Results><TestDefinitions><UnitTest><TestMethod '
+                'codeBase="Other.Tests.dll" /></UnitTest></TestDefinitions></TestRun>\n'
+            ),
+            "requires TRX result to name Hyperledger.Iroha.Sdk.Tests.dll",
+        ),
+        (
+            "no-passed-result",
+            (
+                '<TestRun><TestDefinitions><UnitTest><TestMethod '
+                'codeBase="Hyperledger.Iroha.Sdk.Tests.dll" /></UnitTest>'
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires TRX result to contain at least one passed SCCP test result",
+        ),
+        (
+            "skipped-result",
+            (
+                '<TestRun><Results><UnitTestResult outcome="NotExecuted" />'
+                '</Results><TestDefinitions><UnitTest><TestMethod '
+                'codeBase="Hyperledger.Iroha.Sdk.Tests.dll" /></UnitTest>'
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires TRX result to contain no failed, skipped, timed-out, or aborted SCCP test results",
+        ),
+        (
+            "failed-result",
+            (
+                '<TestRun><Results><UnitTestResult outcome="Failed" />'
+                '</Results><TestDefinitions><UnitTest><TestMethod '
+                'codeBase="Hyperledger.Iroha.Sdk.Tests.dll" /></UnitTest>'
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires TRX result to contain no failed, skipped, timed-out, or aborted SCCP test results",
+        ),
+    ),
+)
+def test_sccp_production_corridor_dotnet_phase_rejects_malformed_trx_content(
+    tmp_path: Path,
+    case_name: str,
+    trx_payload: str,
+    expected_error: str,
+) -> None:
+    """Windows .NET evidence must inspect direct TRX content before publishing."""
+
+    tool_dir = tmp_path / case_name / "tools"
+    dotnet_root = tmp_path / case_name / "dotnet-root"
+    bridge_target_dir = tmp_path / case_name / "bridge-target"
+    direct_trx_path = (
+        ROOT
+        / "csharp"
+        / "tests"
+        / "Hyperledger.Iroha.Sdk.Tests"
+        / "TestResults"
+        / "sccp-dotnet-sdk.trx"
+    )
+    tool_dir.mkdir(parents=True)
+    dotnet_root.mkdir()
+    fake_cargo = tool_dir / "cargo"
+    fake_cargo.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" != "build -p connect_norito_bridge" ]]; then
+  printf 'unexpected fake cargo invocation: %s\\n' "$*" >&2
+  exit 99
+fi
+mkdir -p "$CARGO_TARGET_DIR/debug"
+printf 'fake bridge dll\\n' > "$CARGO_TARGET_DIR/debug/connect_norito_bridge.dll"
+""",
+        encoding="utf-8",
+    )
+    fake_cargo.chmod(0o755)
+    fake_dotnet = dotnet_root / "dotnet"
+    fake_dotnet.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  --version)
+    printf '8.0.101\\n'
+    ;;
+  --info)
+    cat <<'EOF'
+.NET SDK:
+ Version:           8.0.101
+
+Host:
+  Version:      8.0.1
+  Architecture: x64
+
+Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  OS Architecture: x64
+  RID:         win-x64
+EOF
+    ;;
+  restore)
+    exit 0
+    ;;
+  test)
+    mkdir -p tests/Hyperledger.Iroha.Sdk.Tests/TestResults
+    cat > tests/Hyperledger.Iroha.Sdk.Tests/TestResults/sccp-dotnet-sdk.trx <<'EOF'
+{trx_payload}EOF
+    printf 'Passed!  - Failed: 0, Passed: 1, Skipped: 0, Total: 1, Duration: 1 ms - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)\\n'
+    ;;
+  *)
+    printf 'unexpected fake dotnet invocation: %s\\n' "$*" >&2
+    exit 99
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_dotnet.chmod(0o755)
+    env = os.environ.copy()
+    env["DOTNET_ROOT"] = str(dotnet_root)
+    env["SCCP_DOTNET_BRIDGE_TARGET_DIR"] = str(bridge_target_dir)
+    env["PATH"] = f"{tool_dir}{os.pathsep}{env['PATH']}"
+
+    try:
+        completed = subprocess.run(
+            ["bash", str(SCRIPT), "--phase", "dotnet-sdk"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+    finally:
+        direct_trx_path.unlink(missing_ok=True)
+
+    assert completed.returncode == 1, case_name
+    assert expected_error in completed.stderr, case_name
+    assert str(direct_trx_path) in completed.stderr, case_name
+    assert "SCCP .NET SDK TRX:" not in completed.stdout, case_name
+    assert "SCCP .NET SDK TRX bytes:" not in completed.stdout, case_name
 
 
 def test_sccp_production_corridor_java_home_resolver_handles_homebrew_jdk() -> None:
