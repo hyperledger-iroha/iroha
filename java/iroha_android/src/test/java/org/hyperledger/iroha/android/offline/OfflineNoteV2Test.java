@@ -1769,9 +1769,9 @@ public final class OfflineNoteV2Test {
     assertEquals(schema, wire.wireName(), "instruction payload wire name");
     final NoritoHeader.DecodeResult outerFrame = NoritoHeader.decode(wire.payloadBytes(), null);
     assertEquals(
-        NoritoHeader.COMPACT_LEN,
+        0,
         outerFrame.header().flags(),
-        "instruction wrapper and bare model payload flags");
+        "instruction wrapper frame flags");
     assertTrue(isNoritoFrame(modelPayload), "public model encoder still returns a framed archive");
     final byte[] wrapperPayload = decodeInstructionWrapper(schema, wire.payloadBytes());
     assertTrue(!isNoritoFrame(wrapperPayload), "instruction wrapper must contain a bare model payload");

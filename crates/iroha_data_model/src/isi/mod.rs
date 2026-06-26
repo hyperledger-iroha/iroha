@@ -225,6 +225,16 @@ impl From<crate::isi::bridge::RecordSccpMessage> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::bridge::UpsertSccpRouteManifest> for InstructionBox {
+    fn from(i: crate::isi::bridge::UpsertSccpRouteManifest) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::bridge::RemoveSccpRouteManifest> for InstructionBox {
+    fn from(i: crate::isi::bridge::RemoveSccpRouteManifest) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::asset_alias::SetAssetDefinitionAlias> for InstructionBox {
     fn from(i: crate::isi::asset_alias::SetAssetDefinitionAlias) -> Self {
         InstructionBox(Box::new(i))
@@ -3796,7 +3806,10 @@ pub mod prelude {
         asset_transfer_control::{
             SetAssetTransferBlacklist, SetAssetTransferControl, SetAssetTransferFreeze,
         },
-        bridge::{RecordBridgeReceipt, RecordSccpMessage, SubmitBridgeProof},
+        bridge::{
+            RecordBridgeReceipt, RecordSccpMessage, RemoveSccpRouteManifest, SubmitBridgeProof,
+            UpsertSccpRouteManifest,
+        },
         confidential::{
             PublishPedersenParams, PublishPoseidonParams, SetPedersenParamsLifecycle,
             SetPoseidonParamsLifecycle,

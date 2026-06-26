@@ -20,6 +20,8 @@ mod queue_regressions;
 mod queue_stress;
 #[path = "../runtime_upgrade_admission.rs"]
 mod runtime_upgrade_admission;
+#[path = "../sccp_route_manifest_isi.rs"]
+mod sccp_route_manifest_isi;
 #[path = "../scheduler_gpu_key_bucket_parity.rs"]
 mod scheduler_gpu_key_bucket_parity;
 #[path = "../scheduler_ready_queue_heap_parity.rs"]

@@ -3739,25 +3739,46 @@ class SolanaSccpProverTest {
                 destinationBindingHash = canonicalProofResult.proofContext.destinationBindingHash.uppercase(),
             ),
         )
-        val normalizedMetadataSubmission = SccpSolana.buildSubmission(
-            SolanaSccpSubmissionInput(
-                publicInputs = canonicalPublicInputs.copy(
-                    messageId = canonicalPublicInputs.messageId.uppercase(),
-                    payloadHash = canonicalPublicInputs.payloadHash.uppercase(),
-                    commitmentRoot = canonicalPublicInputs.commitmentRoot.uppercase(),
-                    finalityBlockHash = canonicalPublicInputs.finalityBlockHash.uppercase(),
+        val uppercaseMetadata = assertFailsWith<IllegalArgumentException> {
+            SccpSolana.buildSubmission(
+                SolanaSccpSubmissionInput(
+                    publicInputs = canonicalPublicInputs.copy(
+                        messageId = canonicalPublicInputs.messageId.uppercase(),
+                        payloadHash = canonicalPublicInputs.payloadHash.uppercase(),
+                        commitmentRoot = canonicalPublicInputs.commitmentRoot.uppercase(),
+                        finalityBlockHash = canonicalPublicInputs.finalityBlockHash.uppercase(),
+                    ),
+                    proofBytes = canonicalProofResult.proofBytes,
+                    bundleBytes = byteArrayOf(5, 6, 7),
+                    statementHash = canonicalProofResult.proofContext.statementHash,
+                    destinationBindingHash = solanaDestinationBindingHash,
+                    proofContextHash = canonicalProofResult.proofContextHash,
+                    proofResult = canonicalProofResult,
                 ),
-                proofBytes = uppercaseProofResult.proofBytes,
-                bundleBytes = byteArrayOf(5, 6, 7),
-                statementHash = canonicalProofResult.proofContext.statementHash.uppercase(),
-                destinationBindingHash = solanaDestinationBindingHash.uppercase(),
-                proofContextHash = canonicalProofResult.proofContextHash.uppercase(),
-                proofResult = uppercaseProofResult,
-            ),
+            )
+        }
+        assertTrue(uppercaseMetadata.message?.contains("publicInputs.messageId must be canonical hex") == true)
+        val uppercaseProofResultError = assertFailsWith<IllegalArgumentException> {
+            SccpSolana.buildSubmission(
+                SolanaSccpSubmissionInput(
+                    publicInputs = canonicalPublicInputs,
+                    proofBytes = uppercaseProofResult.proofBytes,
+                    bundleBytes = byteArrayOf(5, 6, 7),
+                    statementHash = canonicalProofResult.proofContext.statementHash,
+                    destinationBindingHash = solanaDestinationBindingHash,
+                    proofContextHash = canonicalProofResult.proofContextHash,
+                    proofResult = uppercaseProofResult,
+                ),
+            )
+        }
+        assertTrue(
+            uppercaseProofResultError.message?.contains(
+                "proofResult.proofContext.statementHash must be canonical hex",
+            ) == true || uppercaseProofResultError.message?.contains(
+                "statementHash must be canonical hex",
+            ) == true,
+            "actual error: ${uppercaseProofResultError.message}",
         )
-        assertEquals(canonicalProofResult.proofContextHash, normalizedMetadataSubmission.proofContextHash)
-        assertEquals(canonicalProofResult.proofContext.statementHash, normalizedMetadataSubmission.statementHash)
-        assertEquals(solanaDestinationBindingHash, normalizedMetadataSubmission.destinationBindingHash)
         val missingEnvelope = assertFailsWith<IllegalArgumentException> {
             SolanaSccpSubmissionInput(
                 publicInputs = canonicalPublicInputs,

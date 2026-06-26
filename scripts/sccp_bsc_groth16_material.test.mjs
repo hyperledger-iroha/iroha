@@ -984,6 +984,14 @@ async function writePreflightCandidate(root, options = {}) {
   );
   await writeJson(snarkjsVerificationKey, snarkjsKey);
   await writeJson(bscVerifierKey, bscVerifierMaterial);
+  const circuitSourceSha256 = sha256Hex(await readFile(circuitSource));
+  const r1csSha256 = sha256Hex(await readFile(r1cs));
+  const ptauSha256 = sha256Hex(await readFile(ptau));
+  const provingKeySha256 = sha256Hex(await readFile(zkey));
+  const snarkjsVerificationKeySha256 = sha256Hex(
+    await readFile(snarkjsVerificationKey),
+  );
+  const bscVerifierKeySha256 = sha256Hex(await readFile(bscVerifierKey));
   await writeJson(manifest, {
     schema: BSC_GROTH16_MATERIAL_MANIFEST_SCHEMA,
     routeId: "taira_bsc_xor",
@@ -998,30 +1006,32 @@ async function writePreflightCandidate(root, options = {}) {
     publicInputCount: 9,
     publicSignalNames: [...BSC_GROTH16_PUBLIC_SIGNAL_NAMES],
     verifierKeyHash: bscVerifierMaterial.verifierKeyHash,
+    proofArtifactHash: r1csSha256,
+    provingKeyHash: provingKeySha256,
     artifacts: {
       circuitSource: {
         path: circuitSource,
-        sha256: sha256Hex(await readFile(circuitSource)),
+        sha256: circuitSourceSha256,
       },
       r1cs: {
         path: r1cs,
-        sha256: sha256Hex(await readFile(r1cs)),
+        sha256: r1csSha256,
       },
       powersOfTau: {
         path: ptau,
-        sha256: sha256Hex(await readFile(ptau)),
+        sha256: ptauSha256,
       },
       provingKey: {
         path: zkey,
-        sha256: sha256Hex(await readFile(zkey)),
+        sha256: provingKeySha256,
       },
       snarkjsVerificationKey: {
         path: snarkjsVerificationKey,
-        sha256: sha256Hex(await readFile(snarkjsVerificationKey)),
+        sha256: snarkjsVerificationKeySha256,
       },
       bscVerifierKey: {
         path: bscVerifierKey,
-        sha256: sha256Hex(await readFile(bscVerifierKey)),
+        sha256: bscVerifierKeySha256,
       },
     },
     selfChecks: {
@@ -1061,6 +1071,8 @@ async function writePreflightCandidate(root, options = {}) {
     bscVerifierKey,
     manifest,
     verifierKeyHash: bscVerifierMaterial.verifierKeyHash,
+    proofArtifactHash: r1csSha256,
+    provingKeyHash: provingKeySha256,
   };
 }
 
@@ -2694,6 +2706,26 @@ test("materialize refuses unsafe source build transcript references", async () =
       pattern: /sourceBuildTranscript path must be a safe relative path/u,
     },
     {
+      name: "double-encoded-parent",
+      sourcePath: () => "%252e%252e/source-build.json",
+      pattern: /sourceBuildTranscript path must be a safe relative path/u,
+    },
+    {
+      name: "encoded-separator",
+      sourcePath: () => "source%2fbuild.json",
+      pattern: /sourceBuildTranscript path must be a safe relative path/u,
+    },
+    {
+      name: "backslash",
+      sourcePath: () => "source\\build.json",
+      pattern: /sourceBuildTranscript path must be a safe relative path/u,
+    },
+    {
+      name: "current-segment",
+      sourcePath: () => "./source-build.json",
+      pattern: /sourceBuildTranscript path must be a safe relative path/u,
+    },
+    {
       name: "unknown-field",
       prepare: async ({ inputs }) => ({
         path: basename(inputs.circuitSource),
@@ -3751,6 +3783,13 @@ test("evidence-template writes manifest-bound drafts that remain unsigned blocke
     );
     assert.equal(semanticEvidence.reviewResult, "pending");
     assert.equal(semanticEvidence.fullSccpMessageSemantics, false);
+    assert.equal(manifest.proofArtifactHash, manifest.artifacts.r1cs.sha256);
+    assert.equal(
+      manifest.provingKeyHash,
+      manifest.artifacts.provingKey.sha256,
+    );
+    assert.equal(result.proofArtifactHash, manifest.proofArtifactHash);
+    assert.equal(result.provingKeyHash, manifest.provingKeyHash);
     assert.equal(semanticEvidence.r1csSha256, manifest.artifacts.r1cs.sha256);
     assert.equal(
       semanticEvidence.provingKeySha256,
@@ -4607,6 +4646,109 @@ test("attestation-request blocks malformed and adversarial review evidence", asy
   }
 });
 
+test("attestation-request rejects unsafe review evidence artifact option paths", async () => {
+  const unsafePaths = [
+    {
+      name: "uri",
+      path: "https://reviews.example.invalid/semantic-review-evidence.json",
+    },
+    {
+      name: "query",
+      path: "semantic-review-evidence.json?sha256=abc",
+    },
+    {
+      name: "fragment",
+      path: "semantic-review-evidence.json#approved",
+    },
+    {
+      name: "backslash",
+      path: "review\\semantic-review-evidence.json",
+    },
+    {
+      name: "encoded-parent",
+      path: "%2e%2e/semantic-review-evidence.json",
+    },
+    {
+      name: "encoded-separator",
+      path: "review%2fsemantic-review-evidence.json",
+    },
+    {
+      name: "current-segment",
+      path: "./semantic-review-evidence.json",
+    },
+    {
+      name: "empty-segment",
+      path: "review//semantic-review-evidence.json",
+    },
+    {
+      name: "nul-byte",
+      path: "semantic-review-evidence.json\0shadow",
+    },
+  ];
+  const roles = [
+    {
+      flag: "--semantic-review-evidence",
+      role: "semanticSccpCircuit",
+      evidenceKey: "semanticReview",
+      label: "semantic SCCP circuit review",
+    },
+    {
+      flag: "--circuit-security-audit-evidence",
+      role: "circuitSecurity",
+      evidenceKey: "circuitSecurityAudit",
+      label: "circuit security audit",
+    },
+  ];
+
+  for (const roleCase of roles) {
+    for (const pathCase of unsafePaths) {
+      const root = await mkdtemp(
+        join(
+          tmpdir(),
+          `iroha-bsc-groth16-evidence-path-${roleCase.role}-${pathCase.name}-`,
+        ),
+      );
+      try {
+        const candidate = await writeAttestationRequestCandidate(root);
+        const args = [...candidate.result.attestationRequestEvidenceArgs];
+        const flagIndex = args.indexOf(roleCase.flag);
+        assert.notEqual(flagIndex, -1, roleCase.flag);
+        args[flagIndex + 1] = pathCase.path;
+        const requestPath = join(root, "request.json");
+
+        const result = await main([
+          "attestation-request",
+          "--manifest",
+          candidate.result.manifest,
+          ...args,
+          "--toolchain-sha256",
+          `0x${"ef".repeat(32)}`,
+          "--out",
+          requestPath,
+        ]);
+        const request = JSON.parse(await readFile(requestPath, "utf8"));
+
+        assert.equal(
+          result.readyForSignature[roleCase.role],
+          false,
+          `${roleCase.role} ${pathCase.name}`,
+        );
+        assert.equal(request.evidence[roleCase.evidenceKey], null);
+        assert.match(
+          request.roles[roleCase.role].blockers.join("\n"),
+          new RegExp(
+            `${roleCase.label} evidence artifact path must be a safe local artifact path`,
+            "u",
+          ),
+          `${roleCase.role} ${pathCase.name}`,
+        );
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  }
+});
+
 test("sign-attestation refuses tampered evidence references even when role hashes are refreshed", async () => {
   const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-evidence-tamper-"));
   try {
@@ -4740,6 +4882,79 @@ test("attestation-request refuses manifest public signal drift", async () => {
   }
 });
 
+test("attestation-request refuses unsafe material manifest artifact paths", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-request-artifact-paths-"));
+  try {
+    const { result } = await writeAttestationRequestCandidate(root);
+    const baseline = JSON.parse(await readFile(result.manifest, "utf8"));
+    const cases = [
+      {
+        name: "url",
+        path: "https://example.invalid/sccp-bsc-full-message-v1.r1cs",
+      },
+      {
+        name: "query",
+        path: "sccp-bsc-full-message-v1.r1cs?sha256=abc",
+      },
+      {
+        name: "backslash",
+        path: "material\\sccp-bsc-full-message-v1.r1cs",
+      },
+      {
+        name: "encoded-parent",
+        path: "%2e%2e/sccp-bsc-full-message-v1.r1cs",
+      },
+      {
+        name: "double-encoded-parent",
+        path: "%252e%252e/sccp-bsc-full-message-v1.r1cs",
+      },
+      {
+        name: "encoded-separator",
+        path: "material%2fsccp-bsc-full-message-v1.r1cs",
+      },
+      {
+        name: "current-segment",
+        path: "./sccp-bsc-full-message-v1.r1cs",
+      },
+      {
+        name: "empty-segment",
+        path: "material//sccp-bsc-full-message-v1.r1cs",
+      },
+    ];
+
+    for (const testCase of cases) {
+      await writeJson(result.manifest, {
+        ...baseline,
+        artifacts: {
+          ...baseline.artifacts,
+          r1cs: {
+            ...baseline.artifacts.r1cs,
+            path: testCase.path,
+          },
+        },
+      });
+
+      await assert.rejects(
+        () =>
+          main([
+            "attestation-request",
+            "--manifest",
+            result.manifest,
+            ...result.attestationRequestEvidenceArgs,
+            "--toolchain-sha256",
+            `0x${"ef".repeat(32)}`,
+            "--out",
+            join(root, `request.${testCase.name}.json`),
+          ]),
+        /material manifest artifacts\.r1cs\.path must be a safe artifact path/u,
+        testCase.name,
+      );
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("attestation-request refuses material manifest shadow fields and aliases", async () => {
   const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-request-shape-"));
   try {
@@ -4809,6 +5024,8 @@ test("attestation-request refuses material manifest shadow fields and aliases", 
       ...baseline,
       route_id: baseline.routeId,
       public_signal_names: baseline.publicSignalNames,
+      proof_artifact_hash: baseline.proofArtifactHash,
+      proving_key_hash: baseline.provingKeyHash,
       production_ready: baseline.productionReady,
       artifacts: {
         ...baseline.artifacts,
@@ -4847,6 +5064,14 @@ test("attestation-request refuses material manifest shadow fields and aliases", 
         );
         assert.match(
           message,
+          /material manifest proofArtifactHash must not use multiple aliases: proofArtifactHash, proof_artifact_hash/u,
+        );
+        assert.match(
+          message,
+          /material manifest provingKeyHash must not use multiple aliases: provingKeyHash, proving_key_hash/u,
+        );
+        assert.match(
+          message,
           /material manifest artifacts powersOfTau must not use multiple aliases: powersOfTau, powers_of_tau/u,
         );
         assert.match(
@@ -4860,6 +5085,46 @@ test("attestation-request refuses material manifest shadow fields and aliases", 
         );
         return true;
       },
+    );
+
+    await writeJson(result.manifest, {
+      ...baseline,
+      proofArtifactHash: `0x${"33".repeat(32)}`,
+    });
+
+    await assert.rejects(
+      () =>
+        main([
+          "attestation-request",
+          "--manifest",
+          result.manifest,
+          ...result.attestationRequestEvidenceArgs,
+          "--toolchain-sha256",
+          `0x${"ef".repeat(32)}`,
+          "--out",
+          join(root, "request.proof-hash-drift.json"),
+        ]),
+      /material manifest proofArtifactHash must match artifacts\.r1cs\.sha256/u,
+    );
+
+    await writeJson(result.manifest, {
+      ...baseline,
+      provingKeyHash: `0x${"44".repeat(32)}`,
+    });
+
+    await assert.rejects(
+      () =>
+        main([
+          "attestation-request",
+          "--manifest",
+          result.manifest,
+          ...result.attestationRequestEvidenceArgs,
+          "--toolchain-sha256",
+          `0x${"ef".repeat(32)}`,
+          "--out",
+          join(root, "request.proving-hash-drift.json"),
+        ]),
+      /material manifest provingKeyHash must match artifacts\.provingKey\.sha256/u,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -6624,6 +6889,117 @@ test("preflight discovers configured local Groth16 toolchain binaries", async ()
     assert.equal(
       result.commands.r1csInfo.startsWith(`${snarkjsTool} r1cs info `),
       true,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("preflight fails closed when a present attestation request has blocked roles", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-preflight-blocked-request-"));
+  try {
+    const { inputs, result } = await writeAttestationRequestCandidate(root);
+    const canonical = {
+      circuitSource: join(result.outDir, `${BSC_FULL_SCCP_CIRCUIT_PROFILE}.circom`),
+      r1cs: join(result.outDir, `${BSC_FULL_SCCP_CIRCUIT_PROFILE}.r1cs`),
+      witnessWasm: join(
+        result.outDir,
+        `${BSC_FULL_SCCP_CIRCUIT_PROFILE}_js`,
+        `${BSC_FULL_SCCP_CIRCUIT_PROFILE}.wasm`,
+      ),
+      symbols: join(result.outDir, `${BSC_FULL_SCCP_CIRCUIT_PROFILE}.sym`),
+      provingKey: join(result.outDir, `${BSC_FULL_SCCP_CIRCUIT_PROFILE}.final.zkey`),
+      snarkjsVerificationKey: join(
+        result.outDir,
+        `${BSC_FULL_SCCP_CIRCUIT_PROFILE}.snarkjs-verification-key.json`,
+      ),
+    };
+    await mkdir(dirname(canonical.witnessWasm), { recursive: true });
+    await writeFile(canonical.circuitSource, await readFile(inputs.circuitSource));
+    await writeFile(canonical.r1cs, await readFile(inputs.r1cs));
+    await writeFile(canonical.witnessWasm, await readFile(inputs.witnessWasm));
+    await writeFile(canonical.symbols, "1,1,0,main.publicSignals[0]\n");
+    await writeFile(canonical.provingKey, await readFile(inputs.zkey));
+    await writeFile(
+      canonical.snarkjsVerificationKey,
+      await readFile(inputs.verificationKeyPath),
+    );
+
+    const manifest = JSON.parse(await readFile(result.manifest, "utf8"));
+    manifest.artifacts.circuitSource.path = canonical.circuitSource;
+    manifest.artifacts.circuitSource.sha256 = sha256Hex(
+      await readFile(canonical.circuitSource),
+    );
+    manifest.artifacts.r1cs.path = canonical.r1cs;
+    manifest.artifacts.r1cs.sha256 = sha256Hex(await readFile(canonical.r1cs));
+    manifest.artifacts.provingKey.path = canonical.provingKey;
+    manifest.artifacts.provingKey.sha256 = sha256Hex(
+      await readFile(canonical.provingKey),
+    );
+    manifest.artifacts.snarkjsVerificationKey.path =
+      canonical.snarkjsVerificationKey;
+    manifest.artifacts.snarkjsVerificationKey.sha256 = sha256Hex(
+      await readFile(canonical.snarkjsVerificationKey),
+    );
+    if (manifest.artifacts.witnessWasm) {
+      manifest.artifacts.witnessWasm.path = canonical.witnessWasm;
+      manifest.artifacts.witnessWasm.sha256 = sha256Hex(
+        await readFile(canonical.witnessWasm),
+      );
+    }
+    manifest.productionReady = true;
+    manifest.productionBlockers = [];
+    await writeJson(result.manifest, manifest);
+
+    const requestPath = join(result.outDir, "testnet-bsc-groth16-attestation-request.json");
+    await main([
+      "attestation-request",
+      "--manifest",
+      result.manifest,
+      ...result.attestationRequestEvidenceArgs,
+      "--toolchain-sha256",
+      result.reproducibleBuildToolchainSha256,
+      "--out",
+      requestPath,
+    ]);
+    const request = JSON.parse(await readFile(requestPath, "utf8"));
+    request.roles.trustedSetup.readyForSignature = false;
+    request.roles.trustedSetup.blockers = [
+      "ceremony transcript has not passed independent production review",
+    ];
+    await writeJson(requestPath, request);
+
+    const snarkjsStub = await writeSnarkjsStub(root, inputs.verificationKeyPath, {
+      supportProofSelfTest: true,
+    });
+    await main([
+      "proof-self-test",
+      "--manifest",
+      result.manifest,
+      "--witness-wasm",
+      canonical.witnessWasm,
+      "--snarkjs-bin",
+      snarkjsStub,
+      "--out",
+      join(result.outDir, "testnet-bsc-groth16-proof-self-test.json"),
+    ]);
+
+    const preflight = await preflightBscGroth16Material({
+      "bsc-network": "testnet",
+      "out-dir": result.outDir,
+      "circom-bin": await writeCircomStub(root),
+      "snarkjs-bin": snarkjsStub,
+    });
+
+    assert.equal(preflight.ready, false);
+    assert.equal(preflight.artifactReady, false);
+    assert.match(
+      preflight.problems.join("\n"),
+      /attestation request roles are not ready for signature: trustedSetup/u,
+    );
+    assert.match(
+      preflight.problems.join("\n"),
+      /ceremony transcript has not passed independent production review/u,
     );
   } finally {
     await rm(root, { recursive: true, force: true });

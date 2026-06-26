@@ -71,6 +71,8 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<nexus::SetLaneRelayEmergencyValidators>,
     InstructionRegistry::register_slice::<nexus::RegisterVerifiedLaneRelay>,
     InstructionRegistry::register_slice::<nexus::RegisterVerifiedNexusFeeBudget>,
+    InstructionRegistry::register_slice::<bridge::UpsertSccpRouteManifest>,
+    InstructionRegistry::register_slice::<bridge::RemoveSccpRouteManifest>,
     InstructionRegistry::register_slice::<oracle::RegisterOracleFeed>,
     InstructionRegistry::register_slice::<oracle::SubmitOracleObservation>,
     InstructionRegistry::register_slice::<oracle::AggregateOracleFeed>,

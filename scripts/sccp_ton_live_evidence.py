@@ -85,20 +85,28 @@ def _decode_hash_text(value: Any, *, label: str) -> bytes:
     text = value
     if not text:
         raise RuntimeError(f"{label} must be non-empty")
-    has_hex_prefix = text.lower().startswith("0x")
+    if text.startswith("0X"):
+        raise RuntimeError(f"{label} must use lowercase 0x prefix")
+    has_hex_prefix = text.startswith("0x")
     hex_text = text[2:] if has_hex_prefix else text
     if has_hex_prefix and (
         len(hex_text) != 64
         or any(symbol not in "0123456789abcdefABCDEF" for symbol in hex_text)
     ):
         raise RuntimeError(f"{label} must be 32-byte hex")
-    if len(hex_text) == 64 and all(symbol in "0123456789abcdefABCDEF" for symbol in hex_text):
+    if has_hex_prefix and hex_text != hex_text.lower():
+        raise RuntimeError(f"{label} must use lowercase hex")
+    if len(hex_text) == 64 and all(symbol in "0123456789abcdef" for symbol in hex_text):
         raw = bytes.fromhex(hex_text)
+    elif len(hex_text) == 64 and all(
+        symbol in "0123456789abcdefABCDEF" for symbol in hex_text
+    ):
+        raise RuntimeError(f"{label} must use lowercase hex")
     else:
         padded = text + "=" * ((4 - len(text) % 4) % 4)
         try:
             raw = base64.b64decode(padded, altchars=b"-_", validate=True)
-        except (TypeError, binascii.Error, ValueError):
+        except (SystemExit, RuntimeError, TypeError, binascii.Error, ValueError):
             raise RuntimeError(f"{label} must be 32-byte hex or base64") from None
         canonical_base64 = base64.b64encode(raw).decode("ascii")
         canonical_base64url = base64.urlsafe_b64encode(raw).decode("ascii")
@@ -285,7 +293,7 @@ def collect_live_evidence(
             account_address,
             label="accountStates account address",
         )
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise RuntimeError(
             "TON accountStates account address must be a canonical raw address"
         ) from None
@@ -313,7 +321,7 @@ def collect_live_evidence(
     try:
         code_boc_bytes = evidence.parse_code_boc_base64(code_boc, label="code_boc")
         code_boc_hash = evidence.ton_boc_single_root_hash(code_boc_bytes)
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise RuntimeError("TON verifier account code_boc is invalid") from None
     if code_boc_hash != code_hash:
         raise RuntimeError(
@@ -345,14 +353,14 @@ def _validate_live_evidence(
             str(live.get("verifier_contract_address", "")),
             label="verifier contract address",
         )
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError("TON live verifier address metadata is invalid") from None
     try:
         account_address = evidence.normalize_ton_raw_address(
             str(live.get("account_address", "")),
             label="account address",
         )
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError("TON live account address metadata is invalid") from None
     if account_address != verifier:
         raise ValueError("TON live account address must match verifier contract")
@@ -376,7 +384,7 @@ def _validate_live_evidence(
             live.get("last_transaction_lt"),
             label="last_transaction_lt",
         )
-    except RuntimeError:
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError("TON live last_transaction_lt metadata is invalid") from None
     verifier_code_hash = _parse_hex32(
         str(live.get("verifier_code_hash", "")),
@@ -399,7 +407,7 @@ def _validate_live_evidence(
             label="code_boc_base64",
         )
         derived_code_boc_root_hash = evidence.ton_boc_single_root_hash(code_boc_bytes)
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError("TON live code BoC base64 metadata is invalid") from None
     if derived_code_boc_root_hash != code_boc_root_hash:
         raise ValueError("TON live code BoC bytes must match code_boc_root_hash")

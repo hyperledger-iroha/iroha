@@ -4182,6 +4182,41 @@ test("EthereumMainnetSccp binds custom outbound proof results to the requested p
   );
 });
 
+test("EthereumMainnetSccp rejects noncanonical-case hex in EVM-family proof requests", () => {
+  const sdk = new EthereumMainnetSccp();
+  const input = sampleOutboundInput();
+
+  for (const proofArtifactHash of [
+    `0X${"22".repeat(32)}`,
+    `0x${"AA".repeat(32)}`,
+  ]) {
+    assert.throws(
+      () =>
+        sdk.buildOutboundProofRequest({
+          ...input,
+          proofArtifactHash,
+          provingKeyHash: hex32("92"),
+        }),
+      /proof request\.proofArtifactHash/u,
+    );
+  }
+
+  for (const provingKeyHash of [
+    `0X${"22".repeat(32)}`,
+    `0x${"AA".repeat(32)}`,
+  ]) {
+    assert.throws(
+      () =>
+        sdk.buildOutboundProofRequest({
+          ...input,
+          proofArtifactHash: hex32("91"),
+          provingKeyHash,
+        }),
+      /proof request\.provingKeyHash/u,
+    );
+  }
+});
+
 test("EthereumMainnetSccp validates native prover bundle and binds artifact hashes", () => {
   const input = sampleOutboundInput();
   const referenceSdk = new EthereumMainnetSccp();
@@ -4742,7 +4777,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
         },
         { destinationBinding: input.destinationBinding },
       ),
-    /crossSdkParityBytes resolver returned no bytes/u,
+    /crossSdkFixtureParityBytes resolver returned no bytes/u,
   );
   let preflightHookCalls = 0;
   const preflightSdk = new EthereumMainnetSccp({
@@ -4999,7 +5034,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
         },
         { destinationBinding: input.destinationBinding },
       ),
-    /crossSdkParityBytes is required/u,
+    /crossSdkFixtureParityBytes is required/u,
   );
   assert.throws(
     () =>
@@ -5121,7 +5156,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
         },
         { destinationBinding: input.destinationBinding },
       ),
-    /crossSdkParityBytes must be at least 128 bytes/u,
+    /crossSdkFixtureParityBytes must be at least 128 bytes/u,
   );
   const tinySelfTestSupportFixtureBytes = Buffer.from("{}", "utf8");
   const tinySelfTestSupportBundle = hashConsistentNativeEvmProverBundle({
@@ -5186,7 +5221,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
         },
         { destinationBinding: input.destinationBinding },
       ),
-    /crossSdkParityBytes sha256/u,
+    /crossSdkFixtureParityBytes sha256/u,
   );
   const flaggedArtifactBytes = nativeEvmSnarkjsArtifactBytes(
     "native proof artifact imports local prover code",
@@ -5212,22 +5247,45 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
       })),
     },
   );
+  assert.doesNotThrow(() =>
+    verifyEthereumMainnetNativeEvmProverArtifacts(
+      {
+        nativeProverBundle: flaggedBundle,
+        proofArtifactBytes: flaggedArtifactBytes,
+        provingKeyBytes,
+        verifierKeyBytes,
+        crossSdkFixtureParityBytes: flaggedParityFixtureBytes,
+        nativeProverSelfTestBytes: flaggedSelfTestFixtureBytes,
+        sdk: "javascript",
+        implementationBytes,
+      },
+      { destinationBinding: input.destinationBinding },
+    ),
+  );
+  const remoteSelfTestFixtureBytes = sampleNativeEvmProverSelfTestFixtureBytes(
+    bundle,
+    { schema: "remote_prover" },
+  );
+  const remoteSelfTestBundle = hashConsistentNativeEvmProverBundle({
+    nativeProverSelfTestBytes: remoteSelfTestFixtureBytes,
+  });
   assert.throws(
     () =>
       verifyEthereumMainnetNativeEvmProverArtifacts(
         {
-          nativeProverBundle: flaggedBundle,
-          proofArtifactBytes: flaggedArtifactBytes,
+          nativeProverBundle: remoteSelfTestBundle.bundle,
+          proofArtifactBytes,
           provingKeyBytes,
           verifierKeyBytes,
-          crossSdkFixtureParityBytes: flaggedParityFixtureBytes,
-          nativeProverSelfTestBytes: flaggedSelfTestFixtureBytes,
+          crossSdkFixtureParityBytes:
+            remoteSelfTestBundle.parityFixtureBytes,
+          nativeProverSelfTestBytes: remoteSelfTestFixtureBytes,
           sdk: "javascript",
           implementationBytes,
         },
         { destinationBinding: input.destinationBinding },
       ),
-    /proofArtifactBytes contains forbidden prover dependency marker/u,
+    /nativeProverSelfTestBytes contains forbidden prover dependency marker: remote_prover/u,
   );
 });
 

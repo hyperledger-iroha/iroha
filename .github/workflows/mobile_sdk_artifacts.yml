@@ -1,0 +1,190 @@
+name: Mobile SDK Artifacts
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/mobile_sdk_artifacts.yml"
+      - "scripts/build_norito_xcframework.sh"
+      - "scripts/check_mobile_sdk_artifacts.sh"
+      - "scripts/check_mobile_sdk_artifacts_test.sh"
+      - "scripts/package_mobile_sdk_artifacts.sh"
+      - "IrohaSwift/**"
+      - "kotlin/**"
+      - "crates/connect_norito_bridge/**"
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Artifact version override; defaults to tag, PR number, or commit."
+        required: false
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  ANDROID_PLATFORM_PACKAGE: platforms;android-35
+  ANDROID_BUILD_TOOLS_PACKAGE: build-tools;35.0.0
+  ANDROID_NDK_VERSION: 28.0.12674087
+
+jobs:
+  checker-self-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax
+        run: bash -n scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/package_mobile_sdk_artifacts.sh
+      - name: Artifact checker fixture tests
+        run: bash scripts/check_mobile_sdk_artifacts_test.sh
+
+  apple-mobile-sdk:
+    needs: checker-self-test
+    runs-on: macos-14
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+      - name: Resolve artifact version
+        run: |
+          input_version="${{ github.event.inputs.version }}"
+          if [[ -n "$input_version" ]]; then
+            version="$input_version"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME}"
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            version="pr-${{ github.event.pull_request.number }}-${GITHUB_SHA:0:12}"
+          else
+            version="${GITHUB_REF_NAME}-${GITHUB_SHA:0:12}"
+          fi
+          version="${version//\//-}"
+          echo "MOBILE_SDK_VERSION=$version" >> "$GITHUB_ENV"
+      - name: Install Apple Rust targets
+        run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin
+      - name: Build NoritoBridge XCFramework
+        run: NORITO_BRIDGE_PRESERVE_CARGO_TARGETS=1 scripts/build_norito_xcframework.sh
+      - name: Validate Apple mobile SDK artifact
+        run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only
+      - name: Package Apple mobile SDK artifact
+        run: bash scripts/package_mobile_sdk_artifacts.sh --apple --version "$MOBILE_SDK_VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-sdk-apple-${{ env.MOBILE_SDK_VERSION }}
+          path: dist/mobile-sdk/*
+          if-no-files-found: error
+          retention-days: 14
+
+  android-mobile-sdk:
+    needs: checker-self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+      - name: Resolve artifact version
+        run: |
+          input_version="${{ github.event.inputs.version }}"
+          if [[ -n "$input_version" ]]; then
+            version="$input_version"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME}"
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            version="pr-${{ github.event.pull_request.number }}-${GITHUB_SHA:0:12}"
+          else
+            version="${GITHUB_REF_NAME}-${GITHUB_SHA:0:12}"
+          fi
+          version="${version//\//-}"
+          maven_version="${version#v}"
+          echo "MOBILE_SDK_VERSION=$version" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_MAVEN_VERSION=$maven_version" >> "$GITHUB_ENV"
+      - name: Install Android SDK and NDK packages
+        run: |
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [[ -z "$sdk_root" ]]; then
+            echo "ANDROID_HOME or ANDROID_SDK_ROOT must be set by the runner" >&2
+            exit 1
+          fi
+          sdkmanager="$sdk_root/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "$sdkmanager" ]]; then
+            echo "sdkmanager not found at $sdkmanager" >&2
+            exit 1
+          fi
+          yes | "$sdkmanager" --licenses >/dev/null || true
+          "$sdkmanager" "$ANDROID_PLATFORM_PACKAGE" "$ANDROID_BUILD_TOOLS_PACKAGE" "ndk;$ANDROID_NDK_VERSION"
+          echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$sdk_root/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+      - name: Install Android Rust targets and cargo-ndk
+        run: |
+          rustup target add aarch64-linux-android x86_64-linux-android
+          cargo install cargo-ndk --locked
+      - name: Build Android native bridge libraries
+        working-directory: kotlin
+        run: ./gradlew :client-android:buildNativeLibs
+      - name: Test, lint, publish, and build Android SDK artifacts
+        working-directory: kotlin
+        run: |
+          rm -rf ../dist/mobile-sdk-maven
+          ./gradlew \
+            -PirohaSdkVersion="$MOBILE_SDK_MAVEN_VERSION" \
+            -PirohaSdkRepoDir="$PWD/../dist/mobile-sdk-maven" \
+            :core-jvm:test \
+            :client-android:testDebugUnitTest \
+            :client-android:lintRelease \
+            :offline-wallet-android:testDebugUnitTest \
+            :offline-wallet-android:lintRelease \
+            :core-jvm:publishReleasePublicationToMavenLocal \
+            :client-android:publishReleasePublicationToMavenLocal \
+            :offline-wallet-android:publishReleasePublicationToMavenLocal \
+            :core-jvm:publishReleasePublicationToMobileSdkRepository \
+            :client-android:publishReleasePublicationToMobileSdkRepository \
+            :offline-wallet-android:publishReleasePublicationToMobileSdkRepository
+      - name: Validate Android mobile SDK artifact
+        run: bash scripts/check_mobile_sdk_artifacts.sh --android-only --require-built-android
+      - name: Package Android mobile SDK artifact
+        run: bash scripts/package_mobile_sdk_artifacts.sh --android --version "$MOBILE_SDK_VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-sdk-android-${{ env.MOBILE_SDK_VERSION }}
+          path: dist/mobile-sdk/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-release-assets:
+    if: github.ref_type == 'tag'
+    needs: [apple-mobile-sdk, android-mobile-sdk]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mobile-sdk-*
+          path: release-assets
+          merge-multiple: true
+      - name: Publish mobile SDK release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          find release-assets -maxdepth 1 -type f -print | sort
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes "Mobile SDK artifacts for $GITHUB_REF_NAME"
+          fi
+          gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber

@@ -149,8 +149,22 @@ const ISO_STATUS_VALUES = new Map([
 ]);
 const PACS002_STATUS_CODES = new Set(["ACTC", "ACSP", "ACSC", "ACWC", "PDNG", "RJCT"]);
 
-function resolveNativeBinding() {
-  return globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
+function resolveNativeBinding(nativeBinding) {
+  return nativeBinding ?? globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
+}
+
+function resolveOptionalNativeBinding(nativeBinding) {
+  if (nativeBinding !== undefined) {
+    return nativeBinding;
+  }
+  if (globalThis.__IROHA_NATIVE_BINDING__ !== undefined) {
+    return globalThis.__IROHA_NATIVE_BINDING__;
+  }
+  try {
+    return getNativeBinding();
+  } catch {
+    return null;
+  }
 }
 
 function decodeTransactionReceiptPayload(payload) {
@@ -305,8 +319,32 @@ function unwrapNrt0NoritoFrame(payload) {
   return payload.subarray(payloadStart);
 }
 
-function toVersionedTransactionPayload(payload) {
+function toVersionedTransactionPayload(payload, nativeBinding) {
   const rawPayload = unwrapNrt0NoritoFrame(payload);
+  const native = resolveOptionalNativeBinding(nativeBinding);
+  if (
+    native &&
+    typeof native.encodeSignedTransactionNorito === "function"
+  ) {
+    try {
+      return Buffer.concat([
+        Buffer.from([VERSIONED_TRANSACTION_PAYLOAD_VERSION]),
+        Buffer.from(native.encodeSignedTransactionNorito(rawPayload)),
+      ]);
+    } catch {
+      // Preserve the pre-native path for opaque or foreign signed payload bytes.
+    }
+  }
+  if (
+    native &&
+    typeof native.encodeSignedTransactionVersioned === "function"
+  ) {
+    try {
+      return Buffer.from(native.encodeSignedTransactionVersioned(rawPayload));
+    } catch {
+      // Preserve the pre-native path for opaque or foreign signed payload bytes.
+    }
+  }
   return Buffer.concat([
     Buffer.from([VERSIONED_TRANSACTION_PAYLOAD_VERSION]),
     rawPayload,
@@ -1056,6 +1094,7 @@ export class ToriiClient {
  * @param {object} [options.sorafsAliasPolicy] Override SoraFS alias cache TTLs (seconds).
  * @param {(warning: {alias: string | null, evaluation: {state: string | null, statusLabel: string | null, rotationDue: boolean, ageSeconds: number | null, generatedAtUnix: number | null, expiresAtUnix: number | null, expiresInSeconds: number | null, servable: boolean}}) => void} [options.onSorafsAliasWarning]
  * @param {(manifest: Buffer, payload: Buffer, options: Record<string, unknown>) => unknown} [options.generateDaProofSummary] Custom proof summary generator (tests).
+ * @param {object} [options.__nativeBinding] Custom native binding (tests).
  */
   constructor(baseUrl, options = {}) {
     if (!baseUrl) {
@@ -1070,6 +1109,17 @@ export class ToriiClient {
     if (typeof this._fetch !== "function") {
       throw new Error("fetch implementation is required");
     }
+    if (
+      opts.__nativeBinding !== undefined &&
+      (opts.__nativeBinding === null || typeof opts.__nativeBinding !== "object")
+    ) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        "ToriiClient options.__nativeBinding must be an object when provided",
+        "ToriiClient.options.__nativeBinding",
+      );
+    }
+    this._nativeBinding = opts.__nativeBinding;
     if (
       opts.sorafsGatewayFetch !== undefined &&
       typeof opts.sorafsGatewayFetch !== "function"
@@ -1111,6 +1161,7 @@ export class ToriiClient {
     delete overrides.onSorafsAliasWarning;
     delete overrides.sorafsGatewayFetch;
     delete overrides.generateDaProofSummary;
+    delete overrides.__nativeBinding;
     this._config = resolveToriiClientConfig({
       config: opts.config,
       overrides,
@@ -4415,7 +4466,7 @@ export class ToriiClient {
   async submitTransaction(payload) {
     await this._ensureDataModelValidation();
     const rawPayload = toBuffer(payload);
-    const pipelinePayload = toVersionedTransactionPayload(rawPayload);
+    const pipelinePayload = toVersionedTransactionPayload(rawPayload, this._nativeBinding);
     const requestOptions = {
       headers: {
         "Content-Type": "application/x-norito",

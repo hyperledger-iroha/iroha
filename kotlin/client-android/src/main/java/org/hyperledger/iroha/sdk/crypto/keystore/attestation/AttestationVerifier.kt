@@ -13,6 +13,8 @@ import java.security.cert.X509Certificate
 import org.hyperledger.iroha.sdk.crypto.keystore.KeyAttestation
 
 private const val ATTESTATION_OID = "1.3.6.1.4.1.11129.2.1.17"
+private val INT_MIN_BIG_INTEGER = BigInteger.valueOf(Int.MIN_VALUE.toLong())
+private val INT_MAX_BIG_INTEGER = BigInteger.valueOf(Int.MAX_VALUE.toLong())
 
 /**
  * Validates Android key attestation certificate chains and extracts metadata required by higher
@@ -262,11 +264,11 @@ class AttestationVerifier private constructor(
 
         private fun readIntegerWithTag(expectedTag: Int): Int {
             val value = readWithExpectedTag(expectedTag)
-            try {
-                return BigInteger(value).intValueExact()
-            } catch (ex: ArithmeticException) {
-                throw AttestationVerificationException("Integer value out of range", ex)
+            val integer = BigInteger(value)
+            if (integer < INT_MIN_BIG_INTEGER || integer > INT_MAX_BIG_INTEGER) {
+                throw AttestationVerificationException("Integer value out of range")
             }
+            return integer.toInt()
         }
 
         private fun readWithExpectedTag(expectedTag: Int): ByteArray {

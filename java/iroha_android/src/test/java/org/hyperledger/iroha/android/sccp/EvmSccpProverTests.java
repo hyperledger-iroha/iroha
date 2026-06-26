@@ -156,6 +156,7 @@ public final class EvmSccpProverTests {
     assert threw : "EVM proof requests must reject source proof bytes for SORA bundles";
 
     threw = false;
+    String error = "";
     final SampleBundleFixture nonSoraBundle =
         sampleBundleFixture(SourceSccpProofs.DOMAIN_BSC, EvmSccpProver.DOMAIN_ETH, 327L);
     try {
@@ -169,11 +170,15 @@ public final class EvmSccpProverTests {
               EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
               SolanaSccpProver.DOMAIN_SORA));
     } catch (final IllegalArgumentException ex) {
+      error = ex.getMessage();
       threw = ex.getMessage().contains("sourceProofBytes must match bundleBytes finality proof");
     }
-    assert threw : "EVM proof requests must bind non-SORA source proofs to bundle finality proofs";
+    assert threw
+        : "EVM proof requests must bind non-SORA source proofs to bundle finality proofs, actual error: "
+            + error;
 
     threw = false;
+    error = "";
     final SampleBundleFixture replaySourceFixture =
         sampleBundleFixture(SourceSccpProofs.DOMAIN_BSC, EvmSccpProver.DOMAIN_ETH, 328L);
     final SampleBundleFixture replayBoundSourceFixture =
@@ -194,11 +199,13 @@ public final class EvmSccpProverTests {
               EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
               SolanaSccpProver.DOMAIN_SORA));
     } catch (final IllegalArgumentException ex) {
+      error = ex.getMessage();
       threw = ex.getMessage().contains("sourceProofBytes must match bundleBytes finality proof");
     }
-    assert threw : "EVM proof requests must reject replayed canonical source proof bytes";
+    assert threw : "EVM proof requests must reject replayed canonical source proof bytes, actual error: " + error;
 
     threw = false;
+    error = "";
     try {
       EvmSccpProver.buildProofRequest(
           new EvmSccpProver.ProofRequestInput(
@@ -210,9 +217,10 @@ public final class EvmSccpProverTests {
               EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
               SolanaSccpProver.DOMAIN_SORA));
     } catch (final IllegalArgumentException ex) {
+      error = ex.getMessage();
       threw = ex.getMessage().contains("sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1");
     }
-    assert threw : "EVM proof requests must reject undecodable non-SORA source proof bytes";
+    assert threw : "EVM proof requests must reject undecodable non-SORA source proof bytes, actual error: " + error;
 
     threw = false;
     final EvmSccpProver.ProofRequest artifactRequest =
@@ -315,6 +323,25 @@ public final class EvmSccpProverTests {
     try {
       EvmSccpProver.buildProofRequest(
           sampleProofRequestInput(
+              new EvmSccpProver.PublicInputsInput(
+                  1,
+                  repeat("11", 32),
+                  "0x" + repeat("AA", 32),
+                  EvmSccpProver.DOMAIN_ETH,
+                  repeat("33", 32),
+                  "19",
+                  repeat("44", 32)),
+              new byte[0],
+              repeat("56", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("payloadHash") && ex.getMessage().contains("canonical hex");
+    }
+    assert threw : "uppercase EVM payload hash must be rejected";
+
+    threw = false;
+    try {
+      EvmSccpProver.buildProofRequest(
+          sampleProofRequestInput(
               samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
               new byte[0],
               repeat("56", 32) + " "));
@@ -323,6 +350,19 @@ public final class EvmSccpProverTests {
           ex.getMessage().contains("statementHash") && ex.getMessage().contains("canonical hex");
     }
     assert threw : "padded EVM statement hash must be rejected";
+
+    threw = false;
+    try {
+      EvmSccpProver.buildProofRequest(
+          sampleProofRequestInput(
+              samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
+              new byte[0],
+              "0X" + repeat("56", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw =
+          ex.getMessage().contains("statementHash") && ex.getMessage().contains("canonical hex");
+    }
+    assert threw : "uppercase EVM statement hash must be rejected";
 
     for (final String finalityHeight : new String[] {"019", "0x13", "+19", " 19", "19 "}) {
       threw = false;
@@ -1937,7 +1977,8 @@ public final class EvmSccpProverTests {
     } catch (final IllegalArgumentException ex) {
       threw =
           ex.getMessage().contains("auditHashes.circuit_security_audit")
-              && ex.getMessage().contains("canonical lowercase");
+              && (ex.getMessage().contains("canonical lowercase")
+                  || ex.getMessage().contains("canonical hex"));
     }
     assert threw : "Ethereum native prover bundle parser must reject noncanonical audit hashes";
     threw = false;

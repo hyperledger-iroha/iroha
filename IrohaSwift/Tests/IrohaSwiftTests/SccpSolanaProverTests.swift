@@ -5092,6 +5092,25 @@ final class SccpSolanaProverTests: XCTestCase {
         }
         XCTAssertThrowsError(
             try canonicalSccpSourceVerifierMaterialBytes(
+                sourceDomain: sccpDomainTron,
+                sourceTrustAnchorHash: "0x" + String(repeating: "44", count: 32),
+                consensusVerifierHash: "0x" + String(repeating: "55", count: 32),
+                messageInclusionVerifierHash: "0x" + String(repeating: "66", count: 32),
+                finalityPolicyHash: "0x" + String(repeating: "88", count: 32),
+                bridgeAddress: "0x" + String(repeating: "11", count: 20),
+                sourceBridgeEmitterCodeHash: "0x" + String(repeating: "77", count: 32),
+                networkId: "0x" + String(repeating: "33", count: 32),
+                ownerAddress: "0x" + String(repeating: "11", count: 20),
+                configHash: "0x3af0eb31468e605a2781906d8475d2778cccfd4b5d1dd47c31f44d7933396adc"
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SccpSourceProofHashError,
+                .invalidSourceMaterial("sourceBridgeOwnerAddress")
+            )
+        }
+        XCTAssertThrowsError(
+            try canonicalSccpSourceVerifierMaterialBytes(
                 sourceDomain: sccpDomainEthereum,
                 sourceTrustAnchorHash: "0x" + String(repeating: "44", count: 32),
                 consensusVerifierHash: "0x" + String(repeating: "44", count: 32),
@@ -5372,7 +5391,7 @@ final class SccpSolanaProverTests: XCTestCase {
             sourceAdapterDeploymentBinding: proofResult.sourceAdapterDeploymentBinding,
             envelopeHash: proofResult.envelopeHash
         )
-        let normalizedMetadataSubmission = try buildSolanaSccpSubmission(SolanaSccpSubmissionInput(
+        XCTAssertThrowsError(try buildSolanaSccpSubmission(SolanaSccpSubmissionInput(
             publicInputs: SolanaSccpSubmissionPublicInputs(
                 messageId: submissionPublicInputs.messageId.uppercased(),
                 payloadHash: submissionPublicInputs.payloadHash.uppercased(),
@@ -5381,16 +5400,33 @@ final class SccpSolanaProverTests: XCTestCase {
                 finalityHeight: submissionPublicInputs.finalityHeight,
                 finalityBlockHash: submissionPublicInputs.finalityBlockHash.uppercased()
             ),
+            proofBytes: proofResult.proofBytes,
+            bundleBytes: Data([5, 6, 7]),
+            statementHash: proofResult.proofContext.statementHash,
+            destinationBindingHash: solanaDestinationBindingHash,
+            proofContextHash: proofResult.proofContextHash,
+            proofResult: proofResult
+        ))) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidHex32("publicInputs.messageId"))
+        }
+        XCTAssertThrowsError(try buildSolanaSccpSubmission(SolanaSccpSubmissionInput(
+            publicInputs: submissionPublicInputs,
             proofBytes: uppercaseProofResult.proofBytes,
             bundleBytes: Data([5, 6, 7]),
-            statementHash: proofResult.proofContext.statementHash.uppercased(),
-            destinationBindingHash: solanaDestinationBindingHash.uppercased(),
-            proofContextHash: proofResult.proofContextHash.uppercased(),
+            statementHash: proofResult.proofContext.statementHash,
+            destinationBindingHash: solanaDestinationBindingHash,
+            proofContextHash: proofResult.proofContextHash,
             proofResult: uppercaseProofResult
-        ))
-        XCTAssertEqual(normalizedMetadataSubmission.proofContextHash, proofResult.proofContextHash)
-        XCTAssertEqual(normalizedMetadataSubmission.statementHash, proofResult.proofContext.statementHash)
-        XCTAssertEqual(normalizedMetadataSubmission.destinationBindingHash, solanaDestinationBindingHash)
+        ))) { error in
+            let acceptedErrors: [SolanaSccpProverError] = [
+                .invalidHex32("statementHash"),
+                .invalidHex32("proofResult.proofContext.statementHash"),
+            ]
+            guard let proverError = error as? SolanaSccpProverError else {
+                return XCTFail("Expected SolanaSccpProverError")
+            }
+            XCTAssertTrue(acceptedErrors.contains(proverError))
+        }
         let missingEnvelopeProofResult = SolanaSccpProofResult(
             version: proofResult.version,
             backend: proofResult.backend,
@@ -8157,6 +8193,65 @@ final class SccpSolanaProverTests: XCTestCase {
             sourceAdapterDeploymentBinding: deploymentBinding
         ))
         XCTAssertEqual(bindingRequest.requestHash, request.requestHash)
+        let auditedTonDeployment = Self.sampleAuditedTonDeployment()
+        let derivedBinding = try sccpTonSourceAdapterDeploymentBindingFromDeployment(auditedTonDeployment)
+        XCTAssertEqual(derivedBinding.sourceDomain, sccpDomainTon)
+        XCTAssertEqual(derivedBinding.targetDomain, sccpDomainSora)
+        XCTAssertEqual(
+            derivedBinding.sourceAdapterDeploymentHash,
+            "0x61e5d710ccbc902be00a38a5a80d05c19de97105605a3f93d4f8067862d81f07"
+        )
+        XCTAssertEqual(
+            derivedBinding.sourceAdapterDeploymentReceiptHash,
+            "0x" + String(repeating: "aa", count: 32)
+        )
+        let descriptorRequest = try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            sourceStateVerifierHash: auditedTonDeployment.sourceStateVerifierHash,
+            sourceAdapterDeploymentHash: sccpZeroHashV1,
+            sourceAdapterDeploymentReceiptHash: sccpZeroHashV1,
+            sourceAdapterDeployment: auditedTonDeployment
+        ))
+        XCTAssertEqual(descriptorRequest.sourceAdapterDeploymentBinding, derivedBinding)
+        XCTAssertEqual(
+            descriptorRequest.sourceAdapterDeploymentBindingHash,
+            try sccpSourceAdapterDeploymentBindingHash(derivedBinding)
+        )
+        XCTAssertThrowsError(try sccpTonSourceAdapterDeploymentBindingFromDeployment(
+            Self.sampleAuditedTonDeployment(tonMasterchainConfigVerifierHash: sccpZeroHashV1)
+        )) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("tonAuditVerifierHash"))
+        }
+        let adapterVerifierVkHash = try sccpSourceAdapterVerifierVkHash(sourceDomain: sccpDomainTon)
+        XCTAssertThrowsError(try sccpTonSourceAdapterDeploymentBindingFromDeployment(
+            Self.sampleAuditedTonDeployment(deploymentReceiptHash: adapterVerifierVkHash)
+        )) { error in
+            XCTAssertEqual(
+                error as? SccpSourceProofHashError,
+                .invalidSourceMaterial("sourceAdapterDeploymentRoleHash:deploymentReceiptHash:adapterVerifierVkHash")
+            )
+        }
+        XCTAssertThrowsError(try sccpTonSourceAdapterDeploymentBindingFromDeployment(
+            Self.sampleAuditedTonDeployment(adapterVerifierVkHash: "0x" + String(repeating: "99", count: 32))
+        )) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("adapterVerifierVkHash"))
+        }
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            sourceAdapterDeploymentHash: sccpZeroHashV1,
+            sourceAdapterDeploymentReceiptHash: sccpZeroHashV1,
+            sourceAdapterDeployment: auditedTonDeployment
+        ))) { error in
+            XCTAssertEqual(
+                error as? TonSccpProverError,
+                .invalidField("sourceAdapterDeployment.sourceStateVerifierHash")
+            )
+        }
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            sourceStateVerifierHash: auditedTonDeployment.sourceStateVerifierHash,
+            sourceAdapterDeploymentHash: String(repeating: "dd", count: 32),
+            sourceAdapterDeployment: auditedTonDeployment
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .sourceAdapterDeploymentBindingMismatch)
+        }
         XCTAssertThrowsError(try TonSccpProofRequestInput(
             publicInputs: Self.sampleTonPublicInputs(),
             bundleBytes: Self.sampleTonBundleBytes(),
@@ -14936,6 +15031,7 @@ final class SccpSolanaProverTests: XCTestCase {
         sourceStateVerifierHash: String = String(repeating: "cc", count: 32),
         sourceAdapterDeploymentHash: String = String(repeating: "aa", count: 32),
         sourceAdapterDeploymentReceiptHash: String = String(repeating: "bb", count: 32),
+        sourceAdapterDeployment: TonSccpSourceAdapterDeploymentInput? = nil,
         backend: String = sccpTonContractProofBackendV1,
         sourceDomain: UInt32 = sccpDomainTon
     ) -> TonSccpProofRequestInput {
@@ -14949,8 +15045,35 @@ final class SccpSolanaProverTests: XCTestCase {
             sourceStateVerifierHash: sourceStateVerifierHash,
             sourceAdapterDeploymentHash: sourceAdapterDeploymentHash,
             sourceAdapterDeploymentReceiptHash: sourceAdapterDeploymentReceiptHash,
+            sourceAdapterDeployment: sourceAdapterDeployment,
             backend: backend,
             sourceDomain: sourceDomain
+        )
+    }
+
+    private static func sampleAuditedTonDeployment(
+        sourceStateVerifierHash: String = "0x" + String(repeating: "77", count: 32),
+        deploymentReceiptHash: String = "0x" + String(repeating: "aa", count: 32),
+        adapterVerifierVkHash: String? = nil,
+        tonMasterchainConfigVerifierHash: String = "0x" + String(repeating: "bb", count: 32),
+        tonValidatorSetTransitionVerifierHash: String = "0x" + String(repeating: "cc", count: 32),
+        tonShardAccountsDictionaryVerifierHash: String = "0x" + String(repeating: "dd", count: 32),
+        sourceDomain: UInt32 = sccpDomainTon,
+        targetDomain: UInt32 = sccpDomainSora
+    ) -> TonSccpSourceAdapterDeploymentInput {
+        TonSccpSourceAdapterDeploymentInput(
+            sourceTrustAnchorHash: "0x" + String(repeating: "44", count: 32),
+            consensusVerifierHash: "0x" + String(repeating: "55", count: 32),
+            messageInclusionVerifierHash: "0x" + String(repeating: "66", count: 32),
+            finalityPolicyHash: "0x" + String(repeating: "88", count: 32),
+            sourceStateVerifierHash: sourceStateVerifierHash,
+            deploymentReceiptHash: deploymentReceiptHash,
+            tonMasterchainConfigVerifierHash: tonMasterchainConfigVerifierHash,
+            tonValidatorSetTransitionVerifierHash: tonValidatorSetTransitionVerifierHash,
+            tonShardAccountsDictionaryVerifierHash: tonShardAccountsDictionaryVerifierHash,
+            sourceDomain: sourceDomain,
+            targetDomain: targetDomain,
+            adapterVerifierVkHash: adapterVerifierVkHash
         )
     }
 

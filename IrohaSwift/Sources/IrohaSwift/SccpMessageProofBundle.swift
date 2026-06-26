@@ -1014,18 +1014,23 @@ private func normalizeSccpBundleHex32(_ value: String, field: String) throws -> 
     guard value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
         throw SccpMessageProofBundleError.invalid(field)
     }
-    var hex = value
-    if hex.lowercased().hasPrefix("0x") {
-        hex.removeFirst(2)
-    }
+    let hex = value.hasPrefix("0x") ? String(value.dropFirst(2)) : value
     guard hex.unicodeScalars.allSatisfy({ !CharacterSet.whitespacesAndNewlines.contains($0) }) else {
         throw SccpMessageProofBundleError.invalid(field)
     }
-    hex = hex.lowercased()
-    guard hex.count == 64, let bytes = Data(hexString: hex), bytes.count == 32 else {
+    guard hex.count == 64,
+          sccpBundleIsLowercaseHexBody(hex),
+          let bytes = Data(hexString: hex),
+          bytes.count == 32 else {
         throw SccpMessageProofBundleError.invalid(field)
     }
     return "0x" + bytes.hexEncodedString()
+}
+
+private func sccpBundleIsLowercaseHexBody(_ value: String) -> Bool {
+    value.utf8.allSatisfy { byte in
+        (byte >= 0x30 && byte <= 0x39) || (byte >= 0x61 && byte <= 0x66)
+    }
 }
 
 private func requireSccpBundleNonZeroHex32(_ value: String, field: String) throws -> String {

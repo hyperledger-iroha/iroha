@@ -7645,19 +7645,35 @@ pub mod isi {
         validate_sccp_finality_against_state(&finality, state_transaction)
     }
 
-    fn parse_sccp_source_material_h256(raw: &str, field: &str) -> Result<[u8; 32], Error> {
-        let bytes = hex::decode(raw.trim_start_matches("0x")).map_err(|_| {
-            invalid_bridge_proof(format!(
-                "SCCP source verifier material `{field}` must be 32-byte hex"
-            ))
-        })?;
-        if bytes.len() != 32 {
+    fn canonical_sccp_hex_body<'a>(
+        raw: &'a str,
+        expected_hex_len: usize,
+        context: &str,
+        field: &str,
+    ) -> Result<&'a str, Error> {
+        let body = raw.strip_prefix("0x").unwrap_or(raw);
+        if body.len() != expected_hex_len
+            || !body
+                .as_bytes()
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || matches!(*byte, b'a'..=b'f'))
+        {
             return Err(invalid_bridge_proof(format!(
-                "SCCP source verifier material `{field}` must be 32-byte hex"
+                "{context} `{field}` must be canonical lowercase {}-byte hex",
+                expected_hex_len / 2
             )));
         }
+        Ok(body)
+    }
+
+    fn parse_sccp_source_material_h256(raw: &str, field: &str) -> Result<[u8; 32], Error> {
+        let body = canonical_sccp_hex_body(raw, 64, "SCCP source verifier material", field)?;
         let mut out = [0u8; 32];
-        out.copy_from_slice(&bytes);
+        hex::decode_to_slice(body, &mut out).map_err(|_| {
+            invalid_bridge_proof(format!(
+                "SCCP source verifier material `{field}` must be canonical lowercase 32-byte hex"
+            ))
+        })?;
         Ok(out)
     }
 
@@ -7676,15 +7692,17 @@ pub mod isi {
         if raw.is_empty() {
             return Ok(Vec::new());
         }
-        let bytes = hex::decode(raw.trim_start_matches("0x")).map_err(|_| {
-            invalid_bridge_proof(format!("{context} `{field}` must be 20-byte hex"))
-        })?;
-        if bytes.len() != iroha_sccp::SCCP_EVM_SOURCE_BRIDGE_EMITTER_ADDRESS_BYTES {
-            return Err(invalid_bridge_proof(format!(
-                "{context} `{field}` must be 20-byte hex"
-            )));
-        }
-        Ok(bytes)
+        let body = canonical_sccp_hex_body(
+            raw,
+            iroha_sccp::SCCP_EVM_SOURCE_BRIDGE_EMITTER_ADDRESS_BYTES * 2,
+            context,
+            field,
+        )?;
+        hex::decode(body).map_err(|_| {
+            invalid_bridge_proof(format!(
+                "{context} `{field}` must be canonical lowercase 20-byte hex"
+            ))
+        })
     }
 
     fn configured_sccp_source_verifier_material_for_domain(
@@ -7789,18 +7807,14 @@ pub mod isi {
         raw: &str,
         field: &str,
     ) -> Result<[u8; 32], Error> {
-        let bytes = hex::decode(raw.trim_start_matches("0x")).map_err(|_| {
+        let body =
+            canonical_sccp_hex_body(raw, 64, "SCCP source adapter engine deployment", field)?;
+        let mut out = [0u8; 32];
+        hex::decode_to_slice(body, &mut out).map_err(|_| {
             invalid_bridge_proof(format!(
-                "SCCP source adapter engine deployment `{field}` must be 32-byte hex"
+                "SCCP source adapter engine deployment `{field}` must be canonical lowercase 32-byte hex"
             ))
         })?;
-        if bytes.len() != 32 {
-            return Err(invalid_bridge_proof(format!(
-                "SCCP source adapter engine deployment `{field}` must be 32-byte hex"
-            )));
-        }
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&bytes);
         Ok(out)
     }
 
@@ -8548,6 +8562,36 @@ pub mod isi {
         Ok(())
     }
 
+    fn configured_sccp_single_lane_launch_policy_v1() -> Option<(u32, &'static str, &'static str)> {
+        match iroha_sccp::sccp_production_policy_v1().launch_mode {
+            iroha_sccp::SccpLaunchModeV1::AllLanesAtOnce => None,
+            iroha_sccp::SccpLaunchModeV1::EthereumMainnetLane => Some((
+                iroha_sccp::SCCP_DOMAIN_ETH,
+                "SCCP Ethereum mainnet lane launch policy",
+                "Ethereum mainnet",
+            )),
+            iroha_sccp::SccpLaunchModeV1::BscMainnetLane => Some((
+                iroha_sccp::SCCP_DOMAIN_BSC,
+                "SCCP BSC mainnet lane launch policy",
+                "BSC mainnet",
+            )),
+        }
+    }
+
+    fn validate_configured_sccp_single_lane_launch_scope(domain: u32) -> Result<(), Error> {
+        let Some((launch_domain, launch_policy_label, launch_source_label)) =
+            configured_sccp_single_lane_launch_policy_v1()
+        else {
+            return Ok(());
+        };
+        if domain != launch_domain {
+            return Err(invalid_bridge_proof(format!(
+                "{launch_policy_label} only admits {launch_source_label} source proofs before domain {domain} is enabled"
+            )));
+        }
+        Ok(())
+    }
+
     fn validate_configured_sccp_lane_launch_ready(
         zk_config: &iroha_config::parameters::actual::Zk,
         domain: u32,
@@ -8556,27 +8600,11 @@ pub mod isi {
         destination_rollout: &iroha_sccp::SccpDestinationRolloutV1,
         route_allowlist: &iroha_sccp::SccpRouteAllowlistReadinessV1,
     ) -> Result<(), Error> {
-        let (launch_domain, launch_policy_label, launch_source_label) =
-            match iroha_sccp::sccp_production_policy_v1().launch_mode {
-                iroha_sccp::SccpLaunchModeV1::AllLanesAtOnce => {
-                    return validate_configured_sccp_all_lanes_launch_ready(zk_config);
-                }
-                iroha_sccp::SccpLaunchModeV1::EthereumMainnetLane => (
-                    iroha_sccp::SCCP_DOMAIN_ETH,
-                    "SCCP Ethereum mainnet lane launch policy",
-                    "Ethereum mainnet",
-                ),
-                iroha_sccp::SccpLaunchModeV1::BscMainnetLane => (
-                    iroha_sccp::SCCP_DOMAIN_BSC,
-                    "SCCP BSC mainnet lane launch policy",
-                    "BSC mainnet",
-                ),
-            };
-        if domain != launch_domain {
-            return Err(invalid_bridge_proof(format!(
-                "{launch_policy_label} only admits {launch_source_label} source proofs before domain {domain} is enabled"
-            )));
-        }
+        let Some((_, launch_policy_label, _)) = configured_sccp_single_lane_launch_policy_v1()
+        else {
+            return validate_configured_sccp_all_lanes_launch_ready(zk_config);
+        };
+        validate_configured_sccp_single_lane_launch_scope(domain)?;
 
         let readiness =
             iroha_sccp::sccp_lane_production_readiness_with_deployment_materials_for_domain(
@@ -8676,6 +8704,7 @@ pub mod isi {
             configured_source_material.as_ref(),
             configured_source_deployment.as_ref(),
         ) {
+            validate_configured_sccp_single_lane_launch_scope(source_domain)?;
             let destination_rollout = configured_sccp_destination_rollout_for_domain(
                 &state_transaction.zk,
                 source_domain,
@@ -9307,6 +9336,234 @@ pub mod isi {
                 authority,
             });
             state_transaction.world.emit_events(events);
+            Ok(())
+        }
+    }
+
+    const CAN_MANAGE_SCCP_ROUTE_MANIFESTS: &str = "CanManageSccpRouteManifests";
+
+    fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+        if let Some(message) = payload.downcast_ref::<&str>() {
+            (*message).to_owned()
+        } else if let Some(message) = payload.downcast_ref::<String>() {
+            message.clone()
+        } else {
+            "unknown panic while validating SCCP route manifest".to_owned()
+        }
+    }
+
+    fn ensure_can_manage_sccp_route_manifests(
+        authority: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if has_permission(
+            &state_transaction.world,
+            authority,
+            CAN_MANAGE_SCCP_ROUTE_MANIFESTS,
+        ) {
+            Ok(())
+        } else {
+            Err(InstructionExecutionError::InvariantViolation(
+                format!("not permitted: {CAN_MANAGE_SCCP_ROUTE_MANIFESTS}").into(),
+            ))
+        }
+    }
+
+    fn sccp_route_browser_prover_ref_to_user(
+        reference: bridge::SccpRouteBrowserProverManifestRef,
+    ) -> iroha_config::parameters::user::SccpRouteBrowserProverManifestRef {
+        iroha_config::parameters::user::SccpRouteBrowserProverManifestRef {
+            module_url: reference.module_url,
+            module_specifier: reference.module_specifier,
+            module_hash: reference.module_hash,
+            manifest_hash: reference.manifest_hash,
+            expected_exports: reference.expected_exports,
+            bound_route_hash: reference.bound_route_hash,
+            bound_proof_hash: reference.bound_proof_hash,
+        }
+    }
+
+    fn sccp_route_manifest_key(
+        manifest: &iroha_config::parameters::actual::SccpRouteManifest,
+    ) -> (String, String, u32, String) {
+        (
+            manifest.route_id.clone(),
+            manifest.asset_key.clone(),
+            manifest.counterparty_domain,
+            manifest.chain_id_hex.trim().to_ascii_lowercase(),
+        )
+    }
+
+    fn sccp_route_manifest_removal_key(
+        route_id: String,
+        asset_key: String,
+        counterparty_domain: u32,
+        chain_id_hex: String,
+    ) -> Result<(String, String, u32, String), Error> {
+        let route_id = route_id.trim().to_owned();
+        let asset_key = asset_key.trim().to_owned();
+        let chain_id_hex = chain_id_hex.trim().to_ascii_lowercase();
+        if route_id.is_empty() || asset_key.is_empty() || chain_id_hex.is_empty() {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "SCCP route manifest removal key fields must not be empty".into(),
+                ),
+            ));
+        }
+        Ok((route_id, asset_key, counterparty_domain, chain_id_hex))
+    }
+
+    fn sccp_route_manifest_to_actual(
+        manifest: bridge::SccpRouteManifest,
+    ) -> Result<iroha_config::parameters::actual::SccpRouteManifest, Error> {
+        let is_bsc = manifest.counterparty_domain == iroha_sccp::SCCP_DOMAIN_BSC;
+        let source_bridge_address = manifest.sccp_tron_source_bridge_address;
+        let verifier_address = manifest.tron_verifier_address;
+        let user_manifest = iroha_config::parameters::user::SccpRouteManifest {
+            version: manifest.version,
+            route_id: manifest.route_id,
+            asset_key: manifest.asset_key,
+            tron_network: manifest.tron_network,
+            chain: manifest.chain,
+            chain_id_hex: manifest.chain_id_hex,
+            explorer_url: manifest.explorer_url,
+            explorer_host: manifest.explorer_host,
+            counterparty_account_codec: manifest.counterparty_account_codec,
+            counterparty_account_codec_key: manifest.counterparty_account_codec_key,
+            counterparty_domain: manifest.counterparty_domain,
+            verifier_target: manifest.verifier_target,
+            production_ready: manifest.production_ready,
+            disabled_reason: manifest.disabled_reason,
+            network_id_hex: manifest.network_id_hex,
+            taira_xor_token_address: manifest.taira_xor_token_address,
+            taira_xor_bridge_address: manifest.taira_xor_bridge_address,
+            source_bridge_address: None,
+            sccp_bsc_source_bridge_address: is_bsc.then(|| source_bridge_address.clone()),
+            bsc_source_bridge_address: None,
+            sccp_tron_source_bridge_address: (!is_bsc).then_some(source_bridge_address),
+            destination_verifier_address: None,
+            verifier_address: None,
+            sccp_bsc_destination_verifier_address: is_bsc.then(|| verifier_address.clone()),
+            bsc_verifier_address: None,
+            evm_verifier_address: None,
+            tron_verifier_address: (!is_bsc).then_some(verifier_address),
+            verifier_code_hash: manifest.verifier_code_hash,
+            verifier_key_hash: manifest.verifier_key_hash,
+            proof_artifact_hash: manifest.proof_artifact_hash,
+            prover_artifact_hash: None,
+            circuit_artifact_hash: None,
+            proving_key_hash: manifest.proving_key_hash,
+            native_evm_prover_bundle_hash: manifest.native_evm_prover_bundle_hash,
+            native_evm_prover_bundle: manifest.native_evm_prover_bundle,
+            destination_browser_prover: manifest
+                .destination_browser_prover
+                .map(sccp_route_browser_prover_ref_to_user),
+            source_browser_prover: manifest
+                .source_browser_prover
+                .map(sccp_route_browser_prover_ref_to_user),
+            deployment_evidence_sha256: manifest.deployment_evidence_sha256,
+            destination_binding_key: manifest.destination_binding_key,
+            destination_binding_hash: manifest.destination_binding_hash,
+            taira_burn_record_settlement_asset_definition_id: manifest
+                .taira_burn_record_settlement_asset_definition_id,
+            taira_burn_record_contract_artifact_b64: manifest
+                .taira_burn_record_contract_artifact_b64,
+            taira_burn_record_artifact_sha256: manifest.taira_burn_record_artifact_sha256,
+            taira_burn_record_code_hash: manifest.taira_burn_record_code_hash,
+            taira_burn_record_vk_backend: manifest.taira_burn_record_vk_backend,
+            taira_burn_record_vk_name: manifest.taira_burn_record_vk_name,
+            taira_burn_record_gas_limit: manifest.taira_burn_record_gas_limit,
+            settlement_contract_address: manifest.settlement_contract_address,
+            settlement_contract_alias: manifest.settlement_contract_alias,
+            post_deploy_full_toml_ready: manifest.post_deploy_full_toml_ready,
+            post_deploy_source_bridge_config_hash: manifest.post_deploy_source_bridge_config_hash,
+            post_deploy_source_event_transaction_id: manifest
+                .post_deploy_source_event_transaction_id,
+            post_deploy_source_event_explorer_url: manifest.post_deploy_source_event_explorer_url,
+            post_deploy_route_canary_evidence_hash: manifest.post_deploy_route_canary_evidence_hash,
+            post_deploy_route_canary_transaction_id: manifest
+                .post_deploy_route_canary_transaction_id,
+            post_deploy_route_canary_explorer_url: manifest.post_deploy_route_canary_explorer_url,
+            post_deploy_offline_full_toml_sha256: manifest.post_deploy_offline_full_toml_sha256,
+        };
+        let actual =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| user_manifest.parse()))
+                .map_err(|payload| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "invalid SCCP route manifest: {}",
+                            panic_payload_message(payload)
+                        )),
+                    )
+                })?;
+        if actual.production_ready && actual.counterparty_domain == iroha_sccp::SCCP_DOMAIN_BSC {
+            if actual.route_id != "taira_bsc_xor" || actual.asset_key != "xor" {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "production BSC SCCP route manifest must target taira_bsc_xor/xor".into(),
+                    ),
+                ));
+            }
+            if actual.verifier_target != "EvmContract" {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "production BSC SCCP route manifest verifier_target must be EvmContract"
+                            .into(),
+                    ),
+                ));
+            }
+        }
+        Ok(actual)
+    }
+
+    impl Execute for bridge::UpsertSccpRouteManifest {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            ensure_can_manage_sccp_route_manifests(authority, state_transaction)?;
+            let manifest = sccp_route_manifest_to_actual(self.manifest)?;
+            let key = sccp_route_manifest_key(&manifest);
+            if let Some(existing) = state_transaction
+                .zk
+                .sccp_route_manifests
+                .iter_mut()
+                .find(|candidate| sccp_route_manifest_key(candidate) == key)
+            {
+                *existing = manifest;
+            } else {
+                state_transaction.zk.sccp_route_manifests.push(manifest);
+            }
+            Ok(())
+        }
+    }
+
+    impl Execute for bridge::RemoveSccpRouteManifest {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            ensure_can_manage_sccp_route_manifests(authority, state_transaction)?;
+            let key = sccp_route_manifest_removal_key(
+                self.route_id,
+                self.asset_key,
+                self.counterparty_domain,
+                self.chain_id_hex,
+            )?;
+            let before = state_transaction.zk.sccp_route_manifests.len();
+            state_transaction
+                .zk
+                .sccp_route_manifests
+                .retain(|manifest| sccp_route_manifest_key(manifest) != key);
+            if state_transaction.zk.sccp_route_manifests.len() == before {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP route manifest removal target was not found".into(),
+                    ),
+                ));
+            }
             Ok(())
         }
     }
@@ -16611,6 +16868,95 @@ pub mod isi {
             }
 
             zk
+        }
+
+        #[test]
+        fn configured_sccp_source_verifier_material_rejects_noncanonical_hex() {
+            let domain = iroha_sccp::SCCP_DOMAIN_SOL;
+            let material = test_sccp_source_verifier_material_for_domain(domain, 0xa0);
+            let canonical_hash = hex::encode(material.source_trust_anchor_hash);
+            let forged_hashes = [
+                ("uppercase", canonical_hash.to_ascii_uppercase()),
+                (
+                    "prefixed uppercase",
+                    format!("0x{}", canonical_hash.to_ascii_uppercase()),
+                ),
+                ("repeated prefix", format!("0x0x{canonical_hash}")),
+            ];
+
+            for (label, forged_hash) in forged_hashes {
+                let mut zk = crate::state::default_zk_config();
+                zk.sccp_source_verifier_materials.clear();
+                let mut actual = test_actual_sccp_source_verifier_material(&material);
+                actual.source_trust_anchor_hash = forged_hash;
+                zk.sccp_source_verifier_materials.push(actual);
+
+                let err = super::configured_sccp_source_verifier_material_for_domain(&zk, domain)
+                    .expect_err("noncanonical source verifier material hex must fail");
+                let err = format!("{err:?}");
+                assert!(
+                    err.contains("source_trust_anchor_hash")
+                        && err.contains("canonical lowercase 32-byte hex"),
+                    "unexpected error for {label}: {err}",
+                );
+            }
+        }
+
+        #[test]
+        fn configured_sccp_source_adapter_deployment_rejects_noncanonical_hex() {
+            let domain = iroha_sccp::SCCP_DOMAIN_ETH;
+            let material = test_sccp_source_verifier_material_for_domain(domain, 0xa0);
+            let deployment =
+                test_sccp_source_adapter_deployment_for_domain(domain, &material, 0xa0);
+            let canonical_vk_hash = hex::encode(deployment.adapter_verifier_vk_hash);
+            let canonical_emitter = hex::encode(&deployment.source_bridge_emitter_address);
+            let cases = [
+                (
+                    "uppercase verifier hash",
+                    "adapter_verifier_vk_hash",
+                    canonical_vk_hash.to_ascii_uppercase(),
+                ),
+                (
+                    "repeated verifier hash prefix",
+                    "adapter_verifier_vk_hash",
+                    format!("0x0x{canonical_vk_hash}"),
+                ),
+                (
+                    "uppercase emitter address",
+                    "source_bridge_emitter_address",
+                    format!("0x{}", canonical_emitter.to_ascii_uppercase()),
+                ),
+            ];
+
+            for (label, field, forged_value) in cases {
+                let mut zk = crate::state::default_zk_config();
+                zk.sccp_source_verifier_materials.clear();
+                zk.sccp_source_adapter_engine_deployments.clear();
+                zk.sccp_source_verifier_materials
+                    .push(test_actual_sccp_source_verifier_material(&material));
+                let mut actual_deployment =
+                    test_actual_sccp_source_adapter_deployment(&material, &deployment);
+                match field {
+                    "adapter_verifier_vk_hash" => {
+                        actual_deployment.adapter_verifier_vk_hash = forged_value;
+                    }
+                    "source_bridge_emitter_address" => {
+                        actual_deployment.source_bridge_emitter_address = forged_value;
+                    }
+                    _ => unreachable!("unknown SCCP deployment test field"),
+                }
+                zk.sccp_source_adapter_engine_deployments
+                    .push(actual_deployment);
+
+                let err =
+                    super::configured_sccp_source_adapter_engine_deployment_for_domain(&zk, domain)
+                        .expect_err("noncanonical source adapter deployment hex must fail");
+                let err = format!("{err:?}");
+                assert!(
+                    err.contains(field) && err.contains("canonical lowercase"),
+                    "unexpected error for {label}: {err}",
+                );
+            }
         }
 
         #[test]

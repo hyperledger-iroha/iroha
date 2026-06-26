@@ -318,6 +318,22 @@ class SourceSccpProofHashesTest {
                 configHash = "0x" + "99".repeat(32),
             )
         }
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                SccpSourceProofs.canonicalSourceVerifierMaterialBytes(
+                    sourceDomain = SccpSourceProofs.DOMAIN_TRON,
+                    sourceTrustAnchorHash = "0x" + "44".repeat(32),
+                    consensusVerifierHash = "0x" + "55".repeat(32),
+                    messageInclusionVerifierHash = "0x" + "66".repeat(32),
+                    finalityPolicyHash = "0x" + "88".repeat(32),
+                    bridgeAddress = "0x" + "11".repeat(20),
+                    sourceBridgeEmitterCodeHash = "0x" + "77".repeat(32),
+                    networkId = "0x" + "33".repeat(32),
+                    ownerAddress = "0x" + "11".repeat(20),
+                    configHash = "0x3af0eb31468e605a2781906d8475d2778cccfd4b5d1dd47c31f44d7933396adc",
+                )
+            }.message.orEmpty().contains("sourceBridgeOwnerAddress"),
+        )
         assertFailsWith<IllegalArgumentException> {
             SccpSourceProofs.canonicalSourceVerifierMaterialBytes(
                 sourceDomain = SccpSourceProofs.DOMAIN_ETH,

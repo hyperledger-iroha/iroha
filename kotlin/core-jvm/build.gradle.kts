@@ -7,7 +7,13 @@ plugins {
 }
 
 group = "org.hyperledger.iroha.sdk"
-version = "0.1-SNAPSHOT"
+version = providers.gradleProperty("irohaSdkVersion")
+    .orElse(providers.environmentVariable("IROHA_SDK_VERSION"))
+    .orElse("0.1-SNAPSHOT")
+    .get()
+
+val mobileSdkRepoDir = providers.gradleProperty("irohaSdkRepoDir")
+    .orElse(rootProject.layout.buildDirectory.dir("mobile-sdk-maven").map { it.asFile.absolutePath })
 
 repositories {
     mavenCentral()
@@ -46,6 +52,13 @@ tasks.test {
 }
 
 publishing {
+    repositories {
+        maven {
+            name = "mobileSdk"
+            url = uri(mobileSdkRepoDir.get())
+        }
+    }
+
     publications {
         create<MavenPublication>("release") {
             from(components["java"])

@@ -7373,6 +7373,9 @@ pub struct State {
     pub fraud_monitoring: iroha_config::parameters::actual::FraudMonitoring,
     /// Zero-knowledge verification configuration (Halo2 backend limits, etc.).
     pub zk: iroha_config::parameters::actual::Zk,
+    /// On-chain SCCP route manifest registry overlaid onto the loaded ZK config.
+    pub sccp_route_manifests:
+        parking_lot::RwLock<Vec<iroha_config::parameters::actual::SccpRouteManifest>>,
     /// Governance configuration (voting keys, policies).
     pub gov: iroha_config::parameters::actual::Governance,
     /// Content lane configuration (bundle caps, chunk size).
@@ -7818,6 +7821,8 @@ pub struct StateTransaction<'block, 'state> {
     pub fraud_monitoring: iroha_config::parameters::actual::FraudMonitoring,
     /// Zero-knowledge configuration snapshot for this transaction.
     pub zk: iroha_config::parameters::actual::Zk,
+    /// Parent block ZK configuration snapshot updated when the transaction commits.
+    block_zk: &'block mut iroha_config::parameters::actual::Zk,
     /// Governance configuration snapshot for this transaction.
     pub gov: iroha_config::parameters::actual::Governance,
     /// Content lane configuration snapshot for this transaction.
@@ -20190,6 +20195,7 @@ impl State {
                         iroha_config::parameters::defaults::confidential::gas::PER_COMMITMENT,
                 },
             },
+            sccp_route_manifests: parking_lot::RwLock::new(Vec::new()),
             gov: iroha_config::parameters::actual::Governance {
                 vk_ballot: None,
                 vk_tally: None,
@@ -20666,7 +20672,7 @@ impl State {
             lane_privacy_registry: self.lane_privacy_registry.read().clone(),
             lane_compliance: self.lane_compliance.read().clone(),
             fraud_monitoring: self.fraud_monitoring.clone(),
-            zk: self.zk.clone(),
+            zk: self.zk_snapshot(),
             gov: self.gov.clone(),
             content: self.content.clone(),
             settlement: self.settlement.clone(),
@@ -21163,7 +21169,7 @@ impl State {
             lane_privacy_registry: self.lane_privacy_registry.read().clone(),
             lane_compliance: self.lane_compliance.read().clone(),
             fraud_monitoring: self.fraud_monitoring.clone(),
-            zk: self.zk.clone(),
+            zk: self.zk_snapshot(),
             gov: self.gov.clone(),
             content: self.content.clone(),
             settlement: self.settlement.clone(),
@@ -21312,7 +21318,7 @@ impl State {
             oracle: self.oracle.clone(),
             crypto: self.crypto(),
             nexus: self.nexus_snapshot(),
-            zk: self.zk.clone(),
+            zk: self.zk_snapshot(),
             content: self.content.clone(),
             chain_id: self.chain_id.clone(),
         }
@@ -21666,7 +21672,9 @@ impl State {
     /// This avoids acquiring a full [`StateView`] when only verifier settings are needed.
     #[must_use]
     pub fn zk_snapshot(&self) -> iroha_config::parameters::actual::Zk {
-        self.zk.clone()
+        let mut zk = self.zk.clone();
+        zk.sccp_route_manifests = self.sccp_route_manifests.read().clone();
+        zk
     }
 
     /// Snapshot the current pipeline configuration.
@@ -21837,7 +21845,7 @@ impl State {
                 crypto: self.crypto(),
                 nexus,
                 fraud_monitoring: self.fraud_monitoring.clone(),
-                zk: self.zk.clone(),
+                zk: self.zk_snapshot(),
                 gov: self.gov.clone(),
                 content: self.content.clone(),
                 settlement: self.settlement.clone(),
@@ -23938,6 +23946,7 @@ impl State {
     /// Update zero-knowledge verification settings using loaded configuration.
     pub fn set_zk(&mut self, zk: iroha_config::parameters::actual::Zk) {
         crate::gas::configure_confidential_gas(zk.gas.into());
+        *self.sccp_route_manifests.write() = zk.sccp_route_manifests.clone();
         self.zk = zk;
         self.confidential_digest_cache.bump();
     }
@@ -27621,6 +27630,7 @@ impl<'state> StateBlock<'state> {
             axt_current_slot,
         );
         world.dataspace_catalog = self.nexus.dataspace_catalog.clone();
+        let zk = self.zk.clone();
         StateTransaction {
             committed_fragments: &mut self.committed_fragments,
             touched_lanes: &mut self.touched_lanes,
@@ -27651,7 +27661,8 @@ impl<'state> StateBlock<'state> {
             lane_privacy_registry: self.lane_privacy_registry.clone(),
             lane_compliance: self.lane_compliance.clone(),
             fraud_monitoring: self.fraud_monitoring.clone(),
-            zk: self.zk.clone(),
+            zk,
+            block_zk: &mut self.zk,
             gov: self.gov.clone(),
             content: self.content.clone(),
             settlement: self.settlement.clone(),
@@ -27731,6 +27742,7 @@ impl<'state> StateBlock<'state> {
             state_write_lock,
             tiered_backend,
             verified_lane_relay_records,
+            zk,
             _curr_block,
             #[cfg(feature = "zk-preverify")]
                 zk_dedup: _,
@@ -27768,6 +27780,7 @@ impl<'state> StateBlock<'state> {
             }
             let world_hold = if commit_error.is_none() {
                 let world_start = Instant::now();
+                *state_ref.sccp_route_manifests.write() = zk.sccp_route_manifests.clone();
                 // Commit world storage before taking the block-hashes write lock.
                 // Validation workers build `StateBlock`s by acquiring block-hash read snapshots
                 // first and then world storage transactions; committing block hashes first can
@@ -34325,6 +34338,8 @@ impl StateTransaction<'_, '_> {
             commit_topology: committed_topology,
             prev_commit_topology: prev_committed_topology,
             nexus,
+            zk,
+            block_zk,
             tx_call_hash,
             #[cfg(feature = "telemetry")]
             gas_used_in_block_so_far,
@@ -34353,6 +34368,7 @@ impl StateTransaction<'_, '_> {
             telemetry,
             ..
         } = self;
+        *block_zk = zk;
         if mode_cutover_next_set_in_tx {
             *mode_cutover_next_set_in_block = true;
         }
@@ -37317,6 +37333,7 @@ pub(crate) mod deserialize {
             tiered_snapshot_worker,
             fraud_monitoring: default_fraud_monitoring_cfg(),
             zk: default_zk(),
+            sccp_route_manifests: parking_lot::RwLock::new(Vec::new()),
             gov: default_governance(),
             content: default_content_cfg(),
             settlement: iroha_config::parameters::actual::Settlement::default(),
@@ -54403,6 +54420,10 @@ mod tests {
             tron_network: "nile".to_owned(),
             chain: "tron-nile".to_owned(),
             chain_id_hex: "0xcd8690dc".to_owned(),
+            explorer_url: None,
+            explorer_host: None,
+            counterparty_account_codec: None,
+            counterparty_account_codec_key: None,
             counterparty_domain: iroha_sccp::SCCP_DOMAIN_TRON,
             verifier_target: "TronContract".to_owned(),
             production_ready: false,
@@ -54414,9 +54435,13 @@ mod tests {
             tron_verifier_address: "TT4444444444444444444444444444444444".to_owned(),
             verifier_code_hash: format!("0x{}", hex::encode([0x52; 32])),
             verifier_key_hash: format!("0x{}", hex::encode([0x53; 32])),
+            deployment_evidence_sha256: None,
             proof_artifact_hash: None,
             proving_key_hash: None,
-            deployment_evidence_sha256: None,
+            native_evm_prover_bundle_hash: None,
+            native_evm_prover_bundle: None,
+            destination_browser_prover: None,
+            source_browser_prover: None,
             destination_binding_key: "iroha:sccp:tron-destination-binding:v1:0:5:nile".to_owned(),
             destination_binding_hash: format!("0x{}", hex::encode([0x54; 32])),
             taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"

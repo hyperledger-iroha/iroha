@@ -660,7 +660,8 @@ internal object SccpMessageProofBundles {
 
     private fun hex32Bytes(value: String, field: String): ByteArray {
         var body = value
-        if (body.startsWith("0x", ignoreCase = true)) body = body.substring(2)
+        require(!body.startsWith("0X")) { "$field must be canonical hex" }
+        if (body.startsWith("0x")) body = body.substring(2)
         require(body.length == 64) { "$field must be 32 bytes" }
         return hexBytes(body, field)
     }
@@ -681,7 +682,6 @@ internal object SccpMessageProofBundles {
         when (char) {
             in '0'..'9' -> char - '0'
             in 'a'..'f' -> char - 'a' + 10
-            in 'A'..'F' -> char - 'A' + 10
             else -> -1
         }
 

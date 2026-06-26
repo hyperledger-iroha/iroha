@@ -124,8 +124,15 @@ SOLANA_FINALIZED_VOTE_PREFIX = b"sccp:solana:finalized-vote:v1"
 SOLANA_FULL_LIGHT_CLIENT_GATE_PREFIX = b"sccp:solana:full-light-client-gate:v1"
 
 
-def _strip_0x(value: str) -> str:
-    return value[2:] if value.lower().startswith("0x") else value
+def _strip_lower_0x_hex(value: str, *, label: str) -> str:
+    if value.startswith("0X"):
+        raise argparse.ArgumentTypeError(f"{label} must use lowercase 0x prefix")
+    if not value.startswith("0x"):
+        raise argparse.ArgumentTypeError(f"{label} must be canonical lowercase 0x hex")
+    text = value[2:]
+    if text != text.lower():
+        raise argparse.ArgumentTypeError(f"{label} must use lowercase hex")
+    return text
 
 
 def parse_hex_bytes(
@@ -139,12 +146,12 @@ def parse_hex_bytes(
 
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
-    text = _strip_0x(value)
+    text = _strip_lower_0x_hex(value, label=label)
     if len(text) != byte_length * 2:
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except (TypeError, ValueError):
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")

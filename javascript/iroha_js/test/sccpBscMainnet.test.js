@@ -701,6 +701,20 @@ const swapNativeEvmSnarkjsSectionIds = (bytes, leftIndex, rightIndex) => {
   bytes.writeUInt32LE(leftSectionId, rightOffset);
 };
 
+const setNativeEvmSnarkjsSectionId = (bytes, sectionIndex, sectionId) => {
+  const sectionCount = bytes.readUInt32LE(8);
+  let offset = 12;
+  for (let index = 0; index < sectionCount; index += 1) {
+    if (index === sectionIndex) {
+      bytes.writeUInt32LE(sectionId, offset);
+      return;
+    }
+    const sectionSize = Number(bytes.readBigUInt64LE(offset + 4));
+    offset += 12 + sectionSize;
+  }
+  throw new Error("native EVM SnarkJS fixture section index is out of range");
+};
+
 const sampleVerifiedBscTestnetNativeEvmProverFixture = () => {
   const proofArtifactBytes = nativeEvmSnarkjsArtifactBytes(
     "sccp bsc testnet proof artifact v1",
@@ -2522,6 +2536,45 @@ test("BscTestnetSccp rejects percent-encoded native prover artifact paths", () =
   );
 });
 
+test("BscTestnetSccp rejects query and fragment native prover artifact paths", () => {
+  const fixture = sampleVerifiedBscTestnetNativeEvmProverFixture();
+
+  for (const suffix of ["?sha256=abc", "#sha256"]) {
+    assert.throws(
+      () =>
+        validateBscTestnetNativeEvmProverBundle(
+          {
+            ...fixture.bundle,
+            proof_artifact: `artifacts/bsc-testnet/proof-artifact.r1cs${suffix}`,
+          },
+          { destinationBinding: fixture.destinationBinding },
+        ),
+      /proofArtifact must not contain query strings or fragments/u,
+    );
+
+    assert.throws(
+      () =>
+        validateBscTestnetNativeEvmProverBundle(
+          {
+            ...fixture.bundle,
+            native_sdk_artifacts: fixture.bundle.native_sdk_artifacts.map(
+              (artifact) =>
+                artifact.sdk === "javascript"
+                  ? {
+                      ...artifact,
+                      implementation_artifact:
+                        `artifacts/bsc-testnet/javascript-implementation.bin${suffix}`,
+                    }
+                  : artifact,
+            ),
+          },
+          { destinationBinding: fixture.destinationBinding },
+        ),
+      /nativeSdkArtifacts\[0\]\.implementationArtifact must not contain query strings or fragments/u,
+    );
+  }
+});
+
 test("BscTestnetSccp rejects accessor-backed native prover evidence without invoking accessors", () => {
   const fixture = sampleVerifiedBscTestnetNativeEvmProverFixture();
 
@@ -2733,8 +2786,11 @@ test("BscTestnetSccp rejects tiny native prover material even when hashes are se
     sampleBscTestnetNativeEvmProverParityFixtureBytes(draftBundle);
   const selfTestFixtureBytes =
     sampleBscTestnetNativeEvmProverSelfTestFixtureBytes(draftBundle);
+  const groth16ProofSelfTestBytes =
+    sampleBscGroth16ProofSelfTestBytes(draftBundle);
   const bundle = {
     ...draftBundle,
+    groth16_proof_self_test_hash: sha256Hex(groth16ProofSelfTestBytes),
     audit_hashes: {
       ...draftBundle.audit_hashes,
       cross_sdk_parity: sha256Hex(parityFixtureBytes),
@@ -2752,7 +2808,7 @@ test("BscTestnetSccp rejects tiny native prover material even when hashes are se
           verifierKeyBytes: fixture.verifierKeyBytes,
           crossSdkParityBytes: parityFixtureBytes,
           nativeProverSelfTestBytes: selfTestFixtureBytes,
-          groth16ProofSelfTestBytes: fixture.groth16ProofSelfTestBytes,
+          groth16ProofSelfTestBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
         },
@@ -2781,8 +2837,11 @@ test("BscTestnetSccp rejects hash-consistent malformed native proof artifacts", 
     sampleBscTestnetNativeEvmProverParityFixtureBytes(draftBundle);
   const selfTestFixtureBytes =
     sampleBscTestnetNativeEvmProverSelfTestFixtureBytes(draftBundle);
+  const groth16ProofSelfTestBytes =
+    sampleBscGroth16ProofSelfTestBytes(draftBundle);
   const bundle = {
     ...draftBundle,
+    groth16_proof_self_test_hash: sha256Hex(groth16ProofSelfTestBytes),
     audit_hashes: {
       ...draftBundle.audit_hashes,
       cross_sdk_parity: sha256Hex(parityFixtureBytes),
@@ -2800,7 +2859,7 @@ test("BscTestnetSccp rejects hash-consistent malformed native proof artifacts", 
           verifierKeyBytes: fixture.verifierKeyBytes,
           crossSdkParityBytes: parityFixtureBytes,
           nativeProverSelfTestBytes: selfTestFixtureBytes,
-          groth16ProofSelfTestBytes: fixture.groth16ProofSelfTestBytes,
+          groth16ProofSelfTestBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
         },
@@ -2829,8 +2888,11 @@ test("BscTestnetSccp rejects hash-consistent native proof artifacts with unsuppo
     sampleBscTestnetNativeEvmProverParityFixtureBytes(draftBundle);
   const selfTestFixtureBytes =
     sampleBscTestnetNativeEvmProverSelfTestFixtureBytes(draftBundle);
+  const groth16ProofSelfTestBytes =
+    sampleBscGroth16ProofSelfTestBytes(draftBundle);
   const bundle = {
     ...draftBundle,
+    groth16_proof_self_test_hash: sha256Hex(groth16ProofSelfTestBytes),
     audit_hashes: {
       ...draftBundle.audit_hashes,
       cross_sdk_parity: sha256Hex(parityFixtureBytes),
@@ -2848,7 +2910,7 @@ test("BscTestnetSccp rejects hash-consistent native proof artifacts with unsuppo
           verifierKeyBytes: fixture.verifierKeyBytes,
           crossSdkParityBytes: parityFixtureBytes,
           nativeProverSelfTestBytes: selfTestFixtureBytes,
-          groth16ProofSelfTestBytes: fixture.groth16ProofSelfTestBytes,
+          groth16ProofSelfTestBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
         },
@@ -2858,11 +2920,11 @@ test("BscTestnetSccp rejects hash-consistent native proof artifacts with unsuppo
   );
 });
 
-test("BscTestnetSccp rejects hash-consistent native proof artifacts with out-of-order r1cs sections", () => {
+test("BscTestnetSccp accepts hash-consistent native proof artifacts with valid out-of-order r1cs sections", () => {
   const fixture = sampleVerifiedBscTestnetNativeEvmProverFixture();
-  const badProofArtifactBytes = Buffer.from(fixture.proofArtifactBytes);
-  swapNativeEvmSnarkjsSectionIds(badProofArtifactBytes, 0, 2);
-  const proofArtifactHash = sha256Hex(badProofArtifactBytes);
+  const outOfOrderProofArtifactBytes = Buffer.from(fixture.proofArtifactBytes);
+  swapNativeEvmSnarkjsSectionIds(outOfOrderProofArtifactBytes, 0, 2);
+  const proofArtifactHash = sha256Hex(outOfOrderProofArtifactBytes);
   const draftBundle = {
     ...fixture.bundle,
     proof_artifact_hash: proofArtifactHash,
@@ -2877,8 +2939,61 @@ test("BscTestnetSccp rejects hash-consistent native proof artifacts with out-of-
     sampleBscTestnetNativeEvmProverParityFixtureBytes(draftBundle);
   const selfTestFixtureBytes =
     sampleBscTestnetNativeEvmProverSelfTestFixtureBytes(draftBundle);
+  const groth16ProofSelfTestBytes =
+    sampleBscGroth16ProofSelfTestBytes(draftBundle);
   const bundle = {
     ...draftBundle,
+    groth16_proof_self_test_hash: sha256Hex(groth16ProofSelfTestBytes),
+    audit_hashes: {
+      ...draftBundle.audit_hashes,
+      cross_sdk_parity: sha256Hex(parityFixtureBytes),
+      native_prover_self_test: sha256Hex(selfTestFixtureBytes),
+    },
+  };
+
+  assert.doesNotThrow(
+    () =>
+      verifyBscTestnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: bundle,
+          proofArtifactBytes: outOfOrderProofArtifactBytes,
+          provingKeyBytes: fixture.provingKeyBytes,
+          verifierKeyBytes: fixture.verifierKeyBytes,
+          crossSdkParityBytes: parityFixtureBytes,
+          nativeProverSelfTestBytes: selfTestFixtureBytes,
+          groth16ProofSelfTestBytes,
+          sdk: "javascript",
+          implementationBytes: fixture.implementationBytes,
+        },
+        { destinationBinding: fixture.destinationBinding },
+      ),
+  );
+});
+
+test("BscTestnetSccp rejects hash-consistent native proof artifacts with duplicate r1cs sections", () => {
+  const fixture = sampleVerifiedBscTestnetNativeEvmProverFixture();
+  const duplicateProofArtifactBytes = Buffer.from(fixture.proofArtifactBytes);
+  setNativeEvmSnarkjsSectionId(duplicateProofArtifactBytes, 1, 1);
+  const proofArtifactHash = sha256Hex(duplicateProofArtifactBytes);
+  const draftBundle = {
+    ...fixture.bundle,
+    proof_artifact_hash: proofArtifactHash,
+    native_sdk_artifacts: fixture.bundle.native_sdk_artifacts.map(
+      (artifact) => ({
+        ...artifact,
+        prover_artifact_hash: proofArtifactHash,
+      }),
+    ),
+  };
+  const parityFixtureBytes =
+    sampleBscTestnetNativeEvmProverParityFixtureBytes(draftBundle);
+  const selfTestFixtureBytes =
+    sampleBscTestnetNativeEvmProverSelfTestFixtureBytes(draftBundle);
+  const groth16ProofSelfTestBytes =
+    sampleBscGroth16ProofSelfTestBytes(draftBundle);
+  const bundle = {
+    ...draftBundle,
+    groth16_proof_self_test_hash: sha256Hex(groth16ProofSelfTestBytes),
     audit_hashes: {
       ...draftBundle.audit_hashes,
       cross_sdk_parity: sha256Hex(parityFixtureBytes),
@@ -2891,18 +3006,18 @@ test("BscTestnetSccp rejects hash-consistent native proof artifacts with out-of-
       verifyBscTestnetNativeEvmProverArtifacts(
         {
           nativeProverBundle: bundle,
-          proofArtifactBytes: badProofArtifactBytes,
+          proofArtifactBytes: duplicateProofArtifactBytes,
           provingKeyBytes: fixture.provingKeyBytes,
           verifierKeyBytes: fixture.verifierKeyBytes,
           crossSdkParityBytes: parityFixtureBytes,
           nativeProverSelfTestBytes: selfTestFixtureBytes,
-          groth16ProofSelfTestBytes: fixture.groth16ProofSelfTestBytes,
+          groth16ProofSelfTestBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
         },
         { destinationBinding: fixture.destinationBinding },
       ),
-    /proofArtifactBytes \.r1cs section ids must be in canonical order: 1, 2, 3/u,
+    /proofArtifactBytes \.r1cs section ids must be unique/u,
   );
 });
 
@@ -2925,8 +3040,11 @@ test("BscTestnetSccp rejects hash-consistent malformed native proving keys", () 
     sampleBscTestnetNativeEvmProverParityFixtureBytes(draftBundle);
   const selfTestFixtureBytes =
     sampleBscTestnetNativeEvmProverSelfTestFixtureBytes(draftBundle);
+  const groth16ProofSelfTestBytes =
+    sampleBscGroth16ProofSelfTestBytes(draftBundle);
   const bundle = {
     ...draftBundle,
+    groth16_proof_self_test_hash: sha256Hex(groth16ProofSelfTestBytes),
     audit_hashes: {
       ...draftBundle.audit_hashes,
       cross_sdk_parity: sha256Hex(parityFixtureBytes),
@@ -2944,7 +3062,7 @@ test("BscTestnetSccp rejects hash-consistent malformed native proving keys", () 
           verifierKeyBytes: fixture.verifierKeyBytes,
           crossSdkParityBytes: parityFixtureBytes,
           nativeProverSelfTestBytes: selfTestFixtureBytes,
-          groth16ProofSelfTestBytes: fixture.groth16ProofSelfTestBytes,
+          groth16ProofSelfTestBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
         },
@@ -3002,11 +3120,11 @@ test("BscTestnetSccp rejects hash-consistent native proving keys with unsupporte
   );
 });
 
-test("BscTestnetSccp rejects hash-consistent native proving keys with out-of-order zkey sections", () => {
+test("BscTestnetSccp accepts hash-consistent native proving keys with valid out-of-order zkey sections", () => {
   const fixture = sampleVerifiedBscTestnetNativeEvmProverFixture();
-  const badProvingKeyBytes = Buffer.from(fixture.provingKeyBytes);
-  swapNativeEvmSnarkjsSectionIds(badProvingKeyBytes, 0, 9);
-  const provingKeyHash = sha256Hex(badProvingKeyBytes);
+  const outOfOrderProvingKeyBytes = Buffer.from(fixture.provingKeyBytes);
+  swapNativeEvmSnarkjsSectionIds(outOfOrderProvingKeyBytes, 0, 9);
+  const provingKeyHash = sha256Hex(outOfOrderProvingKeyBytes);
   const draftBundle = {
     ...fixture.bundle,
     proving_key_hash: provingKeyHash,
@@ -3021,8 +3139,61 @@ test("BscTestnetSccp rejects hash-consistent native proving keys with out-of-ord
     sampleBscTestnetNativeEvmProverParityFixtureBytes(draftBundle);
   const selfTestFixtureBytes =
     sampleBscTestnetNativeEvmProverSelfTestFixtureBytes(draftBundle);
+  const groth16ProofSelfTestBytes =
+    sampleBscGroth16ProofSelfTestBytes(draftBundle);
   const bundle = {
     ...draftBundle,
+    groth16_proof_self_test_hash: sha256Hex(groth16ProofSelfTestBytes),
+    audit_hashes: {
+      ...draftBundle.audit_hashes,
+      cross_sdk_parity: sha256Hex(parityFixtureBytes),
+      native_prover_self_test: sha256Hex(selfTestFixtureBytes),
+    },
+  };
+
+  assert.doesNotThrow(
+    () =>
+      verifyBscTestnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: bundle,
+          proofArtifactBytes: fixture.proofArtifactBytes,
+          provingKeyBytes: outOfOrderProvingKeyBytes,
+          verifierKeyBytes: fixture.verifierKeyBytes,
+          crossSdkParityBytes: parityFixtureBytes,
+          nativeProverSelfTestBytes: selfTestFixtureBytes,
+          groth16ProofSelfTestBytes,
+          sdk: "javascript",
+          implementationBytes: fixture.implementationBytes,
+        },
+        { destinationBinding: fixture.destinationBinding },
+      ),
+  );
+});
+
+test("BscTestnetSccp rejects hash-consistent native proving keys with duplicate zkey sections", () => {
+  const fixture = sampleVerifiedBscTestnetNativeEvmProverFixture();
+  const duplicateProvingKeyBytes = Buffer.from(fixture.provingKeyBytes);
+  setNativeEvmSnarkjsSectionId(duplicateProvingKeyBytes, 1, 1);
+  const provingKeyHash = sha256Hex(duplicateProvingKeyBytes);
+  const draftBundle = {
+    ...fixture.bundle,
+    proving_key_hash: provingKeyHash,
+    native_sdk_artifacts: fixture.bundle.native_sdk_artifacts.map(
+      (artifact) => ({
+        ...artifact,
+        proving_key_hash: provingKeyHash,
+      }),
+    ),
+  };
+  const parityFixtureBytes =
+    sampleBscTestnetNativeEvmProverParityFixtureBytes(draftBundle);
+  const selfTestFixtureBytes =
+    sampleBscTestnetNativeEvmProverSelfTestFixtureBytes(draftBundle);
+  const groth16ProofSelfTestBytes =
+    sampleBscGroth16ProofSelfTestBytes(draftBundle);
+  const bundle = {
+    ...draftBundle,
+    groth16_proof_self_test_hash: sha256Hex(groth16ProofSelfTestBytes),
     audit_hashes: {
       ...draftBundle.audit_hashes,
       cross_sdk_parity: sha256Hex(parityFixtureBytes),
@@ -3036,17 +3207,17 @@ test("BscTestnetSccp rejects hash-consistent native proving keys with out-of-ord
         {
           nativeProverBundle: bundle,
           proofArtifactBytes: fixture.proofArtifactBytes,
-          provingKeyBytes: badProvingKeyBytes,
+          provingKeyBytes: duplicateProvingKeyBytes,
           verifierKeyBytes: fixture.verifierKeyBytes,
           crossSdkParityBytes: parityFixtureBytes,
           nativeProverSelfTestBytes: selfTestFixtureBytes,
-          groth16ProofSelfTestBytes: fixture.groth16ProofSelfTestBytes,
+          groth16ProofSelfTestBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
         },
         { destinationBinding: fixture.destinationBinding },
       ),
-    /provingKeyBytes \.zkey section ids must be in canonical order: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10/u,
+    /provingKeyBytes \.zkey section ids must be unique/u,
   );
 });
 
