@@ -1983,7 +1983,8 @@ fn normalize_hex32_lower(value: &str, context: &str) -> Result<String> {
 }
 
 fn normalize_hex_lower<const N: usize>(value: &str, context: &str) -> Result<String> {
-    let hex_value = value.trim().strip_prefix("0x").unwrap_or(value.trim());
+    let value = value.trim();
+    let hex_value = value.strip_prefix("0x").unwrap_or(value);
     let bytes = hex::decode(hex_value)
         .wrap_err_with(|| format!("{context} must be a {N}-byte hex string"))?;
     if bytes.len() != N {
@@ -2117,7 +2118,7 @@ pub struct SorafsModerationQuarantineFilter {
 }
 
 impl SorafsModerationQuarantineFilter {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+    fn apply(self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
         if let Some(limit) = self.limit {
             req = req.param("limit", &limit);
         }
@@ -2133,7 +2134,7 @@ pub struct SorafsModerationModelRegistryFilter {
 }
 
 impl SorafsModerationModelRegistryFilter {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+    fn apply(self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
         if let Some(limit) = self.limit {
             req = req.param("limit", &limit);
         }
@@ -2149,7 +2150,7 @@ pub struct SorafsModerationBallotsFilter {
 }
 
 impl SorafsModerationBallotsFilter {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+    fn apply(self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
         if let Some(limit) = self.limit {
             req = req.param("limit", &limit);
         }
@@ -2167,7 +2168,7 @@ pub struct SorafsModerationBallotEventsFilter {
 }
 
 impl SorafsModerationBallotEventsFilter {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+    fn apply(self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
         if let Some(since) = self.since {
             req = req.param("since", &since);
         }
@@ -2178,7 +2179,7 @@ impl SorafsModerationBallotEventsFilter {
     }
 }
 
-/// Filters for SoraFS transparency readback endpoints.
+/// Filters for `SoraFS` transparency readback endpoints.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SorafsTransparencyReadbackFilter {
     /// Maximum number of records to return.
@@ -2186,7 +2187,7 @@ pub struct SorafsTransparencyReadbackFilter {
 }
 
 impl SorafsTransparencyReadbackFilter {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+    fn apply(self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
         if let Some(limit) = self.limit {
             req = req.param("limit", &limit);
         }
@@ -2194,7 +2195,7 @@ impl SorafsTransparencyReadbackFilter {
     }
 }
 
-/// Filters for SoraFS appeal finance readback endpoints.
+/// Filters for `SoraFS` appeal finance readback endpoints.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SorafsAppealFinanceReadbackFilter {
     /// Maximum number of records to return.
@@ -2202,7 +2203,7 @@ pub struct SorafsAppealFinanceReadbackFilter {
 }
 
 impl SorafsAppealFinanceReadbackFilter {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+    fn apply(self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
         if let Some(limit) = self.limit {
             req = req.param("limit", &limit);
         }
@@ -2218,7 +2219,7 @@ pub struct SorafsModerationScreeningResultsFilter {
 }
 
 impl SorafsModerationScreeningResultsFilter {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+    fn apply(self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
         if let Some(limit) = self.limit {
             req = req.param("limit", &limit);
         }
@@ -12803,6 +12804,57 @@ impl Client {
         norito::json::Value::from(alias_map)
     }
 
+    fn sorafs_pin_register_manifest_bytes(
+        manifest: &sorafs_manifest::ManifestV1,
+        manifest_bytes: Option<&[u8]>,
+        include_encoded_manifest: bool,
+    ) -> Result<Option<Vec<u8>>> {
+        if let Some(bytes) = manifest_bytes {
+            let decoded: sorafs_manifest::ManifestV1 = norito::decode_from_bytes(bytes)
+                .wrap_err("failed to decode manifest_bytes for pin registration")?;
+            if &decoded != manifest {
+                return Err(eyre!(
+                    "manifest_bytes payload does not match manifest for pin registration"
+                ));
+            }
+            return Ok(Some(bytes.to_vec()));
+        }
+        if include_encoded_manifest {
+            return manifest
+                .encode()
+                .map(Some)
+                .wrap_err("failed to encode manifest for pin registration");
+        }
+        Ok(None)
+    }
+
+    fn insert_sorafs_pin_chunker_fields(
+        map: &mut norito::json::Map,
+        manifest: &sorafs_manifest::ManifestV1,
+    ) {
+        let chunker = &manifest.chunking;
+        map.insert(
+            "chunker_profile_id".into(),
+            norito::json::Value::from(u64::from(chunker.profile_id.0)),
+        );
+        map.insert(
+            "chunker_namespace".into(),
+            norito::json::Value::from(chunker.namespace.as_str()),
+        );
+        map.insert(
+            "chunker_name".into(),
+            norito::json::Value::from(chunker.name.as_str()),
+        );
+        map.insert(
+            "chunker_semver".into(),
+            norito::json::Value::from(chunker.semver.as_str()),
+        );
+        map.insert(
+            "chunker_multihash_code".into(),
+            norito::json::Value::from(chunker.multihash_code),
+        );
+    }
+
     fn build_sorafs_pin_register_payload(
         params: SorafsPinRegisterArgs<'_>,
         manifest_digest_override: Option<[u8; 32]>,
@@ -12824,25 +12876,11 @@ impl Client {
                 .wrap_err("failed to compute manifest digest for pin registration")?
                 .as_bytes(),
         };
-        let encoded_manifest;
-        let manifest_bytes = if let Some(bytes) = manifest_bytes {
-            let decoded: sorafs_manifest::ManifestV1 = norito::decode_from_bytes(bytes)
-                .wrap_err("failed to decode manifest_bytes for pin registration")?;
-            if &decoded != manifest {
-                return Err(eyre!(
-                    "manifest_bytes payload does not match manifest for pin registration"
-                ));
-            }
-            Some(bytes)
-        } else if manifest_digest_override.is_none() {
-            encoded_manifest = manifest
-                .encode()
-                .wrap_err("failed to encode manifest for pin registration")?;
-            Some(encoded_manifest.as_slice())
-        } else {
-            None
-        };
-        let chunker = &manifest.chunking;
+        let manifest_bytes = Self::sorafs_pin_register_manifest_bytes(
+            manifest,
+            manifest_bytes,
+            manifest_digest_override.is_none(),
+        )?;
         let mut map = norito::json::Map::new();
         map.insert(
             "authority".into(),
@@ -12854,26 +12892,7 @@ impl Client {
                 private_key.clone(),
             ))?,
         );
-        map.insert(
-            "chunker_profile_id".into(),
-            norito::json::Value::from(u64::from(chunker.profile_id.0)),
-        );
-        map.insert(
-            "chunker_namespace".into(),
-            norito::json::Value::from(chunker.namespace.as_str()),
-        );
-        map.insert(
-            "chunker_name".into(),
-            norito::json::Value::from(chunker.name.as_str()),
-        );
-        map.insert(
-            "chunker_semver".into(),
-            norito::json::Value::from(chunker.semver.as_str()),
-        );
-        map.insert(
-            "chunker_multihash_code".into(),
-            norito::json::Value::from(chunker.multihash_code),
-        );
+        Self::insert_sorafs_pin_chunker_fields(&mut map, manifest);
         map.insert(
             "pin_policy".into(),
             Self::sorafs_pin_policy_value(&manifest.pin_policy),
@@ -12886,7 +12905,7 @@ impl Client {
             map.insert(
                 "manifest_b64".into(),
                 norito::json::Value::from(
-                    base64::engine::general_purpose::STANDARD.encode(manifest_bytes),
+                    base64::engine::general_purpose::STANDARD.encode(&manifest_bytes),
                 ),
             );
         }
@@ -13066,7 +13085,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_moderation_quarantine(
         &self,
-        filter: &SorafsModerationQuarantineFilter,
+        filter: SorafsModerationQuarantineFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/quarantine");
         filter
@@ -13082,7 +13101,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_moderation_model_registry(
         &self,
-        filter: &SorafsModerationModelRegistryFilter,
+        filter: SorafsModerationModelRegistryFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/model-registry");
         filter
@@ -13144,7 +13163,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_moderation_ballots(
         &self,
-        filter: &SorafsModerationBallotsFilter,
+        filter: SorafsModerationBallotsFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/ballots");
         filter
@@ -13162,7 +13181,7 @@ impl Client {
         &self,
         case_id: &str,
         round_id: &str,
-        filter: &SorafsModerationBallotsFilter,
+        filter: SorafsModerationBallotsFilter,
     ) -> Result<Response<Vec<u8>>> {
         let case_id = require_non_empty_path_segment(case_id, "case_id")?;
         let round_id = require_non_empty_path_segment(round_id, "round_id")?;
@@ -13184,7 +13203,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_moderation_ballot_events(
         &self,
-        filter: &SorafsModerationBallotEventsFilter,
+        filter: SorafsModerationBallotEventsFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/ballots/events");
         filter
@@ -13254,7 +13273,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_transparency_cycles(
         &self,
-        filter: &SorafsTransparencyReadbackFilter,
+        filter: SorafsTransparencyReadbackFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/transparency/cycles");
         filter
@@ -13272,7 +13291,7 @@ impl Client {
     pub fn get_sorafs_transparency_cycle(
         &self,
         cycle_id_hex: &str,
-        filter: &SorafsTransparencyReadbackFilter,
+        filter: SorafsTransparencyReadbackFilter,
     ) -> Result<Response<Vec<u8>>> {
         let cycle_id_hex = normalize_hex_lower::<16>(cycle_id_hex, "cycle_id_hex")?;
         let path = format!("v1/sorafs/transparency/cycles/{cycle_id_hex}");
@@ -13310,7 +13329,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_transparency_explorer(
         &self,
-        filter: &SorafsTransparencyReadbackFilter,
+        filter: SorafsTransparencyReadbackFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/transparency/explorer");
         filter
@@ -13326,7 +13345,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_transparency_token_issuances(
         &self,
-        filter: &SorafsTransparencyReadbackFilter,
+        filter: SorafsTransparencyReadbackFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/transparency/tokens");
         filter
@@ -13555,7 +13574,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_appeal_finance_reports(
         &self,
-        filter: &SorafsAppealFinanceReadbackFilter,
+        filter: SorafsAppealFinanceReadbackFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/appeals/finance/reports");
         filter
@@ -13571,7 +13590,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_appeal_finance_weekly_rollups(
         &self,
-        filter: &SorafsAppealFinanceReadbackFilter,
+        filter: SorafsAppealFinanceReadbackFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/appeals/finance/weekly-rollups");
         filter
@@ -13587,7 +13606,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_appeal_finance_settlement_receipts(
         &self,
-        filter: &SorafsAppealFinanceReadbackFilter,
+        filter: SorafsAppealFinanceReadbackFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(
             &self.torii_url,
@@ -13606,7 +13625,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_moderation_screening_results(
         &self,
-        filter: &SorafsModerationScreeningResultsFilter,
+        filter: SorafsModerationScreeningResultsFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/screening-results");
         filter
@@ -13728,13 +13747,19 @@ impl Client {
     pub fn get_sorafs_moderation_quarantine_operator_panel(
         &self,
         quarantine_id_hex: &str,
-        filter: &SorafsModerationQuarantineFilter,
+        filter: SorafsModerationQuarantineFilter,
     ) -> Result<Response<Vec<u8>>> {
         let quarantine_id_hex = normalize_hex_lower::<16>(quarantine_id_hex, "quarantine_id_hex")?;
         let path = format!("v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel");
-        let url = join_torii_url(&self.torii_url, &path);
-        let request = self.account_signed_request(HttpMethod::GET, url, Vec::new())?;
-        self.send_builder(filter.apply(request).header("Accept", APPLICATION_JSON))
+        let mut url = join_torii_url(&self.torii_url, &path);
+        if let Some(limit) = filter.limit {
+            url.query_pairs_mut()
+                .append_pair("limit", &limit.to_string());
+        }
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )
     }
 
     /// Convenience: signed POST `/v1/sorafs/moderation/quarantine/{id}/object`.
@@ -24468,7 +24493,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_moderation_quarantine(&filter)
+                .get_sorafs_moderation_quarantine(filter)
                 .expect("moderation quarantine list request");
         });
 
@@ -24500,7 +24525,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_moderation_model_registry(&filter)
+                .get_sorafs_moderation_model_registry(filter)
                 .expect("moderation model registry list request");
         });
 
@@ -24669,7 +24694,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_moderation_ballots(&filter)
+                .get_sorafs_moderation_ballots(filter)
                 .expect("moderation ballots list request");
         });
 
@@ -24689,7 +24714,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_moderation_ballot("case/401", "round 7", &filter)
+                .get_sorafs_moderation_ballot("case/401", "round 7", filter)
                 .expect("moderation ballot get request");
         });
 
@@ -24715,7 +24740,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_moderation_ballot_events(&filter)
+                .get_sorafs_moderation_ballot_events(filter)
                 .expect("moderation ballot events request");
         });
 
@@ -24880,7 +24905,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_transparency_cycles(&filter)
+                .get_sorafs_transparency_cycles(filter)
                 .expect("transparency cycles list request");
         });
 
@@ -24901,7 +24926,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_transparency_cycle(&cycle_id, &filter)
+                .get_sorafs_transparency_cycle(&cycle_id, filter)
                 .expect("transparency cycle get request");
         });
 
@@ -24952,7 +24977,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_transparency_explorer(&filter)
+                .get_sorafs_transparency_explorer(filter)
                 .expect("transparency explorer request");
         });
 
@@ -24972,7 +24997,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_transparency_token_issuances(&filter)
+                .get_sorafs_transparency_token_issuances(filter)
                 .expect("transparency token issuance request");
         });
 
@@ -25494,7 +25519,7 @@ mod tests {
             respond_with(&reports_store, json_response(StatusCode::OK, "{}")),
             || {
                 client
-                    .get_sorafs_appeal_finance_reports(&filter)
+                    .get_sorafs_appeal_finance_reports(filter)
                     .expect("appeal finance reports request");
             },
         );
@@ -25502,7 +25527,7 @@ mod tests {
             respond_with(&rollups_store, json_response(StatusCode::OK, "{}")),
             || {
                 client
-                    .get_sorafs_appeal_finance_weekly_rollups(&filter)
+                    .get_sorafs_appeal_finance_weekly_rollups(filter)
                     .expect("appeal finance weekly rollups request");
             },
         );
@@ -25510,7 +25535,7 @@ mod tests {
             respond_with(&receipts_store, json_response(StatusCode::OK, "{}")),
             || {
                 client
-                    .get_sorafs_appeal_finance_settlement_receipts(&filter)
+                    .get_sorafs_appeal_finance_settlement_receipts(filter)
                     .expect("appeal finance settlement receipts request");
             },
         );
@@ -25577,7 +25602,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_moderation_screening_results(&filter)
+                .get_sorafs_moderation_screening_results(filter)
                 .expect("moderation screening list request");
         });
 
@@ -25942,7 +25967,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_moderation_quarantine_operator_panel(&quarantine_id, &filter)
+                .get_sorafs_moderation_quarantine_operator_panel(&quarantine_id, filter)
                 .expect("moderation quarantine operator panel request");
         });
 
@@ -25964,6 +25989,31 @@ mod tests {
         assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
         assert!(headers.contains_key(HEADER_NONCE));
         assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+        let timestamp_ms = headers
+            .get(HEADER_TIMESTAMP_MS)
+            .expect("timestamp header")
+            .parse::<u64>()
+            .expect("timestamp header should parse");
+        let nonce = headers.get(HEADER_NONCE).expect("nonce header");
+        let signature_bytes = base64::engine::general_purpose::STANDARD
+            .decode(
+                headers
+                    .get(HEADER_SIGNATURE)
+                    .expect("signature header")
+                    .as_bytes(),
+            )
+            .expect("signature header should decode");
+        let signature = Signature::from_bytes(&signature_bytes);
+        let signed_message = Client::operator_request_message(
+            &HttpMethod::GET,
+            &snapshot.url,
+            &[],
+            timestamp_ms,
+            nonce,
+        );
+        signature
+            .verify(client.key_pair.public_key(), &signed_message)
+            .expect("signature must cover filtered operator-panel URL");
     }
 
     #[test]

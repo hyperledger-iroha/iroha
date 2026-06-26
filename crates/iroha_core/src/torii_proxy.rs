@@ -1,5 +1,7 @@
 //! Peer-to-peer proxy envelopes for Torii ingress routing.
 
+use std::fmt;
+
 use iroha_crypto::Hash;
 use iroha_data_model::{
     nexus::{DataSpaceId, LaneId},
@@ -90,6 +92,125 @@ impl From<ToriiRouteLegHintV1> for crate::queue::RouteLeg {
     }
 }
 
+/// Kind of validation failure in a Torii routing-plan hint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToriiRoutingPlanHintErrorKind {
+    /// A coordinator leg was encoded with a non-coordinator role.
+    UnexpectedCoordinatorRole,
+    /// A participant leg was encoded with a non-participant role.
+    UnexpectedParticipantRole,
+    /// A Native AMX hint advertised a digest that does not match its route legs.
+    NativeAmxPlanDigestMismatch,
+}
+
+/// Error returned when a Torii routing-plan hint is not internally canonical.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ToriiRoutingPlanHintError {
+    kind: ToriiRoutingPlanHintErrorKind,
+    leg_index: Option<usize>,
+    actual_role: Option<ToriiRouteLegRoleV1>,
+    advertised_digest: Option<Hash>,
+    computed_digest: Option<Hash>,
+}
+
+impl ToriiRoutingPlanHintError {
+    /// Construct an error for a malformed coordinator leg role.
+    #[must_use]
+    pub const fn unexpected_coordinator_role(actual: ToriiRouteLegRoleV1) -> Self {
+        Self {
+            kind: ToriiRoutingPlanHintErrorKind::UnexpectedCoordinatorRole,
+            leg_index: None,
+            actual_role: Some(actual),
+            advertised_digest: None,
+            computed_digest: None,
+        }
+    }
+
+    /// Construct an error for a malformed participant leg role.
+    #[must_use]
+    pub const fn unexpected_participant_role(index: usize, actual: ToriiRouteLegRoleV1) -> Self {
+        Self {
+            kind: ToriiRoutingPlanHintErrorKind::UnexpectedParticipantRole,
+            leg_index: Some(index),
+            actual_role: Some(actual),
+            advertised_digest: None,
+            computed_digest: None,
+        }
+    }
+
+    /// Construct an error for a Native AMX digest that does not match the route legs.
+    #[must_use]
+    pub const fn native_amx_plan_digest_mismatch(advertised: Hash, computed: Hash) -> Self {
+        Self {
+            kind: ToriiRoutingPlanHintErrorKind::NativeAmxPlanDigestMismatch,
+            leg_index: None,
+            actual_role: None,
+            advertised_digest: Some(advertised),
+            computed_digest: Some(computed),
+        }
+    }
+
+    /// Return the failure kind.
+    #[must_use]
+    pub const fn kind(&self) -> ToriiRoutingPlanHintErrorKind {
+        self.kind
+    }
+
+    /// Return the malformed leg role, when this error is role-related.
+    #[must_use]
+    pub const fn actual_role(&self) -> Option<ToriiRouteLegRoleV1> {
+        self.actual_role
+    }
+
+    /// Return the malformed participant index, when this error is participant-role related.
+    #[must_use]
+    pub const fn leg_index(&self) -> Option<usize> {
+        self.leg_index
+    }
+
+    /// Return the advertised Native AMX plan digest, when this error is digest-related.
+    #[must_use]
+    pub const fn advertised_digest(&self) -> Option<Hash> {
+        self.advertised_digest
+    }
+
+    /// Return the recomputed Native AMX plan digest, when this error is digest-related.
+    #[must_use]
+    pub const fn computed_digest(&self) -> Option<Hash> {
+        self.computed_digest
+    }
+}
+
+impl fmt::Display for ToriiRoutingPlanHintError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.kind {
+            ToriiRoutingPlanHintErrorKind::UnexpectedCoordinatorRole => match self.actual_role {
+                Some(actual) => write!(f, "unexpected coordinator role {actual:?}"),
+                None => f.write_str("unexpected coordinator role"),
+            },
+            ToriiRoutingPlanHintErrorKind::UnexpectedParticipantRole => {
+                match (self.leg_index, self.actual_role) {
+                    (Some(index), Some(actual)) => {
+                        write!(f, "unexpected participant role {actual:?} at index {index}")
+                    }
+                    _ => f.write_str("unexpected participant role"),
+                }
+            }
+            ToriiRoutingPlanHintErrorKind::NativeAmxPlanDigestMismatch => {
+                match (self.advertised_digest, self.computed_digest) {
+                    (Some(advertised), Some(computed)) => write!(
+                        f,
+                        "native AMX plan digest mismatch: advertised {advertised}, computed {computed}"
+                    ),
+                    _ => f.write_str("native AMX plan digest mismatch"),
+                }
+            }
+        }
+    }
+}
+
+impl std::error::Error for ToriiRoutingPlanHintError {}
+
 /// Stable full routing plan determined at ingress.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ToriiRoutingPlanHintV1 {
@@ -113,6 +234,62 @@ impl ToriiRoutingPlanHintV1 {
         match self {
             Self::Single(leg) => leg.route,
             Self::NativeAmx { coordinator, .. } => coordinator.route,
+        }
+    }
+
+    /// Convert this hint to a full routing plan after validating redundant wire fields.
+    ///
+    /// # Errors
+    /// Returns an error when leg roles are not canonical or a Native AMX hint's advertised digest
+    /// does not match the digest recomputed from its route legs.
+    pub fn try_into_routing_plan(
+        self,
+    ) -> Result<crate::queue::RoutingPlan, ToriiRoutingPlanHintError> {
+        match self {
+            Self::Single(leg) => {
+                if leg.role != ToriiRouteLegRoleV1::Coordinator {
+                    return Err(ToriiRoutingPlanHintError::unexpected_coordinator_role(
+                        leg.role,
+                    ));
+                }
+                Ok(crate::queue::RoutingPlan::single(
+                    crate::queue::RouteLeg::from(leg).route,
+                ))
+            }
+            Self::NativeAmx {
+                plan_digest,
+                coordinator,
+                participants,
+            } => {
+                if coordinator.role != ToriiRouteLegRoleV1::Coordinator {
+                    return Err(ToriiRoutingPlanHintError::unexpected_coordinator_role(
+                        coordinator.role,
+                    ));
+                }
+
+                let mut participant_legs = Vec::with_capacity(participants.len());
+                for (index, leg) in participants.into_iter().enumerate() {
+                    if leg.role != ToriiRouteLegRoleV1::Participant {
+                        return Err(ToriiRoutingPlanHintError::unexpected_participant_role(
+                            index, leg.role,
+                        ));
+                    }
+                    participant_legs.push(crate::queue::RouteLeg::from(leg));
+                }
+
+                let plan = crate::queue::RoutingPlan::native_amx(
+                    crate::queue::RouteLeg::from(coordinator).route,
+                    participant_legs,
+                );
+                let computed = plan.digest();
+                if computed != plan_digest {
+                    return Err(ToriiRoutingPlanHintError::native_amx_plan_digest_mismatch(
+                        plan_digest,
+                        computed,
+                    ));
+                }
+                Ok(plan)
+            }
         }
     }
 }
@@ -462,6 +639,13 @@ mod tests {
             }
         );
         assert_eq!(
+            single_hint
+                .clone()
+                .try_into_routing_plan()
+                .expect("canonical single-route hint should validate"),
+            RoutingPlan::single(single_route)
+        );
+        assert_eq!(
             RoutingPlan::from(single_hint),
             RoutingPlan::single(single_route)
         );
@@ -503,6 +687,70 @@ mod tests {
                 .iter()
                 .all(|leg| leg.role == ToriiRouteLegRoleV1::Participant)
         );
+        assert_eq!(
+            native_hint
+                .clone()
+                .try_into_routing_plan()
+                .expect("canonical native AMX hint should validate"),
+            native_plan
+        );
         assert_eq!(RoutingPlan::from(native_hint), native_plan);
+    }
+
+    #[test]
+    fn torii_routing_plan_hint_rejects_forged_digest_and_roles() {
+        let coordinator = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(7));
+        let native_plan = RoutingPlan::native_amx(
+            coordinator,
+            vec![
+                RouteLeg::new(
+                    RoutingDecision::new(LaneId::new(2), DataSpaceId::new(8)),
+                    RouteLegRole::Participant,
+                ),
+                RouteLeg::new(
+                    RoutingDecision::new(LaneId::new(3), DataSpaceId::new(9)),
+                    RouteLegRole::Participant,
+                ),
+            ],
+        );
+
+        let mut forged_digest = ToriiRoutingPlanHintV1::from(native_plan.clone());
+        let advertised = Hash::new(b"forged-native-amx-plan-digest");
+        let ToriiRoutingPlanHintV1::NativeAmx { plan_digest, .. } = &mut forged_digest else {
+            panic!("expected native AMX hint");
+        };
+        *plan_digest = advertised;
+        assert_eq!(
+            forged_digest.try_into_routing_plan(),
+            Err(ToriiRoutingPlanHintError::native_amx_plan_digest_mismatch(
+                advertised,
+                native_plan.digest()
+            ))
+        );
+
+        let wrong_single_role = ToriiRoutingPlanHintV1::Single(ToriiRouteLegHintV1 {
+            route: ToriiRouteHintV1::from(coordinator),
+            role: ToriiRouteLegRoleV1::Participant,
+        });
+        assert_eq!(
+            wrong_single_role.try_into_routing_plan(),
+            Err(ToriiRoutingPlanHintError::unexpected_coordinator_role(
+                ToriiRouteLegRoleV1::Participant
+            ))
+        );
+
+        let mut wrong_participant_role = ToriiRoutingPlanHintV1::from(native_plan);
+        let ToriiRoutingPlanHintV1::NativeAmx { participants, .. } = &mut wrong_participant_role
+        else {
+            panic!("expected native AMX hint");
+        };
+        participants[1].role = ToriiRouteLegRoleV1::Coordinator;
+        assert_eq!(
+            wrong_participant_role.try_into_routing_plan(),
+            Err(ToriiRoutingPlanHintError::unexpected_participant_role(
+                1,
+                ToriiRouteLegRoleV1::Coordinator
+            ))
+        );
     }
 }

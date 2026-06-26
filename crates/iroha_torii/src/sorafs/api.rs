@@ -41,7 +41,9 @@ use blake3::hash as blake3_hash;
 use ed25519_dalek::VerifyingKey as Ed25519VerifyingKey;
 use futures::{SinkExt, StreamExt, stream};
 use hex::{ToHex, encode};
-use http::header::{AGE, CACHE_CONTROL, ETAG, HeaderName, IF_NONE_MATCH, RETRY_AFTER, WARNING};
+use http::header::{
+    AGE, CACHE_CONTROL, ETAG, HeaderName, IF_NONE_MATCH, RETRY_AFTER, VARY, WARNING,
+};
 use hyper::body::Body as HyperBody;
 use iroha_core::{
     smartcontracts::isi::sorafs::manifest_pin_policy_constraints_from_config,
@@ -217,6 +219,8 @@ const HEADER_SORA_POTR_RECEIPT: &str = "sora-potr-receipt";
 const HEADER_SORA_POTR_STATUS: &str = "sora-potr-status";
 const HEADER_SORA_PERCEPTUAL_HASH: &str = "x-sorafs-perceptual-hash";
 const HEADER_SORA_PERCEPTUAL_EMBEDDING: &str = "x-sorafs-perceptual-embedding";
+const MODERATION_QUARANTINE_OBJECT_PAYLOAD_VARY: &str =
+    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness";
 const APP_STATIC_SITE_CONFIG_NAME: &str = "soracloud/app_static_site";
 const APP_STATIC_SITE_BINDING_SCHEMA_VERSION_V1: u16 = 1;
 const MIME_CAR: &str = "application/vnd.ipld.car";
@@ -8664,7 +8668,15 @@ pub(crate) async fn handle_get_sorafs_moderation_quarantine_object(
         .read_moderation_quarantine_object(quarantine_id)
     {
         Ok(payload) => {
-            JsonBody(moderation_quarantine_object_payload_json(&payload)).into_response()
+            let mut response =
+                JsonBody(moderation_quarantine_object_payload_json(&payload)).into_response();
+            let headers = response.headers_mut();
+            headers.insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+            headers.insert(
+                VARY,
+                HeaderValue::from_static(MODERATION_QUARANTINE_OBJECT_PAYLOAD_VARY),
+            );
+            response
         }
         Err(err) => moderation_quarantine_object_error_response(err),
     }
@@ -22128,6 +22140,20 @@ pub(crate) async fn handle_post_sorafs_storage_por_challenge(
 }
 
 #[cfg(feature = "app_api")]
+pub(crate) fn manual_por_trigger_retired_response() -> Response {
+    let response = json_object(vec![
+        json_entry("error", "manual_por_trigger_retired"),
+        json_entry("route_state", "retired"),
+        json_entry("replacement", "/v1/sorafs/capacity/por-challenge"),
+        json_entry(
+            "message",
+            "manual PoR trigger requests are retired; submit governed PorChallengeV1 payloads through the capacity PoR challenge route or scheduler runtime",
+        ),
+    ]);
+    (StatusCode::GONE, JsonBody(response)).into_response()
+}
+
+#[cfg(feature = "app_api")]
 pub(crate) async fn handle_post_sorafs_storage_por_proof(
     State(state): State<SharedAppState>,
     JsonOnly(req): JsonOnly<StoragePorProofDto>,
@@ -32285,6 +32311,21 @@ mod advert_tests {
         let response =
             get_moderation_quarantine_object(app.clone(), &auth.provider, &quarantine_id_hex).await;
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("private, no-store")
+        );
+        let vary = response
+            .headers()
+            .get(VARY)
+            .and_then(|value| value.to_str().ok())
+            .expect("object read response should set Vary");
+        assert!(vary.contains("X-Iroha-Account"));
+        assert!(vary.contains("X-Iroha-Signature"));
+        assert!(vary.contains("X-Iroha-Witness"));
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("collect object read body");
@@ -39339,6 +39380,30 @@ mod advert_tests {
         assert!(
             message.contains("count must be at most"),
             "unexpected error message: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_por_trigger_route_is_explicitly_retired() {
+        let response = manual_por_trigger_retired_response();
+        assert_eq!(response.status(), StatusCode::GONE);
+
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode retirement response");
+        assert_eq!(
+            value.get("error").and_then(Value::as_str),
+            Some("manual_por_trigger_retired")
+        );
+        assert_eq!(
+            value.get("route_state").and_then(Value::as_str),
+            Some("retired")
+        );
+        assert_eq!(
+            value.get("replacement").and_then(Value::as_str),
+            Some("/v1/sorafs/capacity/por-challenge")
         );
     }
 

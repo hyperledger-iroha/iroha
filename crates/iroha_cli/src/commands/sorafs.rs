@@ -69,7 +69,7 @@ use norito::{
 };
 use rand::{
     CryptoRng, RngCore, SeedableRng,
-    rand_core::TryCryptoRng,
+    rand_core::{TryCryptoRng, TryRngCore},
     rngs::{OsRng, StdRng},
 };
 use reqwest::blocking::Client as BlockingHttpClient;
@@ -132,7 +132,8 @@ use iroha_data_model::{
         },
         pin_registry::StorageClass,
         reserve::{
-            ReserveDuration, ReserveLedgerProjection, ReservePolicyV1, ReserveQuote, ReserveTier,
+            ReserveDuration, ReserveLedgerProjection, ReserveLifecycleProjection,
+            ReserveLifecycleStage, ReservePolicyV1, ReserveQuote, ReserveTier,
         },
     },
     soranet::{
@@ -487,6 +488,8 @@ pub enum ReserveCommand {
     Quote(ReserveQuoteArgs),
     /// Convert a reserve quote into rent/reserve transfer instructions.
     Ledger(ReserveLedgerArgs),
+    /// Project reserve lifecycle stage and automatic credit draw state.
+    Lifecycle(ReserveLifecycleArgs),
 }
 
 impl Run for ReserveCommand {
@@ -494,6 +497,7 @@ impl Run for ReserveCommand {
         match self {
             Self::Quote(args) => args.run(context),
             Self::Ledger(args) => args.run(context),
+            Self::Lifecycle(args) => args.run(context),
         }
     }
 }
@@ -836,11 +840,11 @@ impl AppealsFinanceReportsArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsAppealFinanceReadbackFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsAppealFinanceReadbackFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsAppealFinanceReadbackFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = list(&client, &filter)?;
+        let response = list(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -862,11 +866,11 @@ impl AppealsFinanceWeeklyRollupsArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsAppealFinanceReadbackFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsAppealFinanceReadbackFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsAppealFinanceReadbackFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = list(&client, &filter)?;
+        let response = list(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -891,11 +895,11 @@ impl AppealsFinanceSettlementReceiptsArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsAppealFinanceReadbackFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsAppealFinanceReadbackFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsAppealFinanceReadbackFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = list(&client, &filter)?;
+        let response = list(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -1013,11 +1017,11 @@ impl TransparencyCyclesListArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsTransparencyReadbackFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = list(&client, &filter)?;
+        let response = list(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -1042,12 +1046,12 @@ impl TransparencyCyclesGetArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &str, &SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, &str, SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
     {
         let cycle_id = required_trimmed_text(&self.cycle_id, "--cycle-id")?;
         let filter = SorafsTransparencyReadbackFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = get(&client, &cycle_id, &filter)?;
+        let response = get(&client, &cycle_id, filter)?;
         render_json_response(context, response)
     }
 }
@@ -1099,11 +1103,11 @@ impl TransparencyExplorerArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsTransparencyReadbackFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = get(&client, &filter)?;
+        let response = get(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -1253,11 +1257,11 @@ impl TransparencyTokensArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsTransparencyReadbackFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = get(&client, &filter)?;
+        let response = get(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -1817,11 +1821,11 @@ impl ModerationBallotsListArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsModerationBallotsFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsModerationBallotsFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsModerationBallotsFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = list(&client, &filter)?;
+        let response = list(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -1849,13 +1853,13 @@ impl ModerationBallotsGetArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &str, &str, &SorafsModerationBallotsFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, &str, &str, SorafsModerationBallotsFilter) -> Result<Response<Vec<u8>>>,
     {
         let case_id = required_trimmed_text(&self.case_id, "--case-id")?;
         let round_id = required_trimmed_text(&self.round_id, "--round-id")?;
         let filter = SorafsModerationBallotsFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = get(&client, &case_id, &round_id, &filter)?;
+        let response = get(&client, &case_id, &round_id, filter)?;
         render_json_response(context, response)
     }
 }
@@ -1880,14 +1884,14 @@ impl ModerationBallotsEventsArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsModerationBallotEventsFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsModerationBallotEventsFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsModerationBallotEventsFilter {
             since: self.since,
             limit: self.limit,
         };
         let client = context.client_from_config();
-        let response = list(&client, &filter)?;
+        let response = list(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -2256,11 +2260,11 @@ impl ModerationRegistryListArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsModerationModelRegistryFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsModerationModelRegistryFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsModerationModelRegistryFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = list(&client, &filter)?;
+        let response = list(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -2365,11 +2369,11 @@ impl ModerationScreeningListArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsModerationScreeningResultsFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsModerationScreeningResultsFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsModerationScreeningResultsFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = list(&client, &filter)?;
+        let response = list(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -2498,11 +2502,11 @@ impl ModerationQuarantineListArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsModerationQuarantineFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsModerationQuarantineFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsModerationQuarantineFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = list(&client, &filter)?;
+        let response = list(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -3066,12 +3070,12 @@ impl ModerationQuarantineOperatorPanelArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &str, &SorafsModerationQuarantineFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, &str, SorafsModerationQuarantineFilter) -> Result<Response<Vec<u8>>>,
     {
         let quarantine_id = normalize_hex_digest::<16>(&self.quarantine_id, "--quarantine-id")?;
         let filter = SorafsModerationQuarantineFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = get(&client, &quarantine_id, &filter)?;
+        let response = get(&client, &quarantine_id, filter)?;
         render_json_response(context, response)
     }
 }
@@ -3097,6 +3101,7 @@ impl Run for ModerationQuarantineBridgePlanArgs {
 
 const MODERATION_OPERATOR_SERVICE_DEFAULT_LISTEN: &str = "127.0.0.1:9201";
 const MODERATION_OPERATOR_SERVICE_DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
+const MODERATION_OPERATOR_CSRF_HEADER: &str = "X-SoraFS-Operator-CSRF";
 
 #[derive(clap::Args, Debug)]
 pub struct ModerationQuarantineOperatorServeArgs {
@@ -3223,12 +3228,14 @@ impl ModerationQuarantineOperatorServeArgs {
         if self.max_body_bytes == 0 {
             return Err(eyre!("--max-body-bytes must be greater than zero"));
         }
+        let csrf_token = generate_moderation_operator_csrf_token()?;
         Ok(ModerationOperatorService {
             listen: self.listen.trim().to_string(),
             default_limit: self.limit,
             max_body_bytes: self.max_body_bytes,
             upstream,
             default_actor,
+            csrf_token,
             workflow_source,
         })
     }
@@ -3238,12 +3245,12 @@ impl ModerationQuarantineBridgePlanArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &str, &SorafsModerationQuarantineFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, &str, SorafsModerationQuarantineFilter) -> Result<Response<Vec<u8>>>,
     {
         let quarantine_id = normalize_hex_digest::<16>(&self.quarantine_id, "--quarantine-id")?;
         let filter = SorafsModerationQuarantineFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = get(&client, &quarantine_id, &filter)?;
+        let response = get(&client, &quarantine_id, filter)?;
         render_moderation_quarantine_bridge_plan_response(context, response, &quarantine_id)
     }
 }
@@ -4002,6 +4009,45 @@ impl ReserveLedgerArgs {
             &asset_definition,
         )?;
         context.print_data(&plan)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ReserveLifecycleArgs {
+    /// Path to the reserve quote JSON (output of `sorafs reserve quote`).
+    #[arg(long = "quote", value_name = "PATH")]
+    pub quote_path: PathBuf,
+    /// Days since rent became due.
+    #[arg(long = "days-past-due", value_name = "DAYS", default_value_t = 0)]
+    pub days_past_due: u16,
+    /// Grace window before delinquency.
+    #[arg(long = "grace-days", value_name = "DAYS", default_value_t = 7)]
+    pub grace_period_days: u16,
+    /// Default threshold after the due date.
+    #[arg(long = "default-after-days", value_name = "DAYS", default_value_t = 30)]
+    pub default_after_days: u16,
+}
+
+impl ReserveLifecycleArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let quote_contents = fs::read_to_string(&self.quote_path).wrap_err_with(|| {
+            format!(
+                "failed to read reserve quote `{}`",
+                self.quote_path.display()
+            )
+        })?;
+        let quote_value: Value =
+            norito::json::from_str(&quote_contents).wrap_err("failed to parse reserve quote")?;
+        let quote = extract_reserve_quote(&quote_value)?;
+        let lifecycle = quote
+            .lifecycle_projection(
+                self.days_past_due,
+                self.grace_period_days,
+                self.default_after_days,
+            )
+            .wrap_err("failed to compute reserve lifecycle projection")?;
+        let value = build_reserve_lifecycle_value(&self.quote_path, &lifecycle)?;
+        context.print_data(&value)
     }
 }
 
@@ -17149,6 +17195,14 @@ fn generate_nonce_hex(bytes: usize) -> Result<String> {
     generate_nonce_hex_with_rng(bytes, &mut OsRng)
 }
 
+fn generate_moderation_operator_csrf_token() -> Result<String> {
+    let mut token = [0_u8; 32];
+    OsRng
+        .try_fill_bytes(&mut token)
+        .map_err(|error| eyre!("SoraFS moderation operator CSRF token OS RNG failed: {error}"))?;
+    Ok(URL_SAFE_NO_PAD.encode(token))
+}
+
 fn generate_nonce_hex_with_rng<R: TryCryptoRng>(bytes: usize, rng: &mut R) -> Result<String> {
     let mut data = vec![0u8; bytes];
     rng.try_fill_bytes(&mut data)
@@ -18266,7 +18320,7 @@ trait ModerationOperatorWorkflowSource: Send + Sync {
     fn get_operator_panel(
         &self,
         quarantine_id_hex: &str,
-        filter: &SorafsModerationQuarantineFilter,
+        filter: SorafsModerationQuarantineFilter,
     ) -> Result<Response<Vec<u8>>>;
 
     fn post_review(
@@ -18323,7 +18377,7 @@ impl ModerationOperatorWorkflowSource for Client {
     fn get_operator_panel(
         &self,
         quarantine_id_hex: &str,
-        filter: &SorafsModerationQuarantineFilter,
+        filter: SorafsModerationQuarantineFilter,
     ) -> Result<Response<Vec<u8>>> {
         self.get_sorafs_moderation_quarantine_operator_panel(quarantine_id_hex, filter)
     }
@@ -18374,6 +18428,7 @@ struct ModerationOperatorService {
     max_body_bytes: usize,
     upstream: String,
     default_actor: String,
+    csrf_token: String,
     workflow_source: Arc<dyn ModerationOperatorWorkflowSource>,
 }
 
@@ -18403,6 +18458,11 @@ impl ModerationOperatorService {
             "max_body_bytes".into(),
             Value::from(u64::try_from(self.max_body_bytes).unwrap_or(u64::MAX)),
         );
+        fields.insert(
+            "csrf_header".into(),
+            Value::from(MODERATION_OPERATOR_CSRF_HEADER),
+        );
+        fields.insert("csrf_token".into(), Value::from(self.csrf_token.clone()));
         fields.insert("payload_bytes_included".into(), Value::Bool(false));
         fields.insert(
             "routes".into(),
@@ -18509,6 +18569,7 @@ impl ModerationOperatorService {
             ModerationOperatorRoute::Review { quarantine_id_hex } => {
                 if let Err(err) = moderation_operator_expect_method(request, "POST", true)
                     .and_then(|_| moderation_operator_reject_query(request.query))
+                    .and_then(|_| self.require_csrf_token(request))
                 {
                     return err.into_response();
                 }
@@ -18517,6 +18578,7 @@ impl ModerationOperatorService {
             ModerationOperatorRoute::Release { quarantine_id_hex } => {
                 if let Err(err) = moderation_operator_expect_method(request, "POST", true)
                     .and_then(|_| moderation_operator_reject_query(request.query))
+                    .and_then(|_| self.require_csrf_token(request))
                 {
                     return err.into_response();
                 }
@@ -18525,6 +18587,7 @@ impl ModerationOperatorService {
             ModerationOperatorRoute::AppealHandoff { quarantine_id_hex } => {
                 if let Err(err) = moderation_operator_expect_method(request, "POST", true)
                     .and_then(|_| moderation_operator_reject_query(request.query))
+                    .and_then(|_| self.require_csrf_token(request))
                 {
                     return err.into_response();
                 }
@@ -18533,6 +18596,7 @@ impl ModerationOperatorService {
             ModerationOperatorRoute::AppealBallot { quarantine_id_hex } => {
                 if let Err(err) = moderation_operator_expect_method(request, "POST", true)
                     .and_then(|_| moderation_operator_reject_query(request.query))
+                    .and_then(|_| self.require_csrf_token(request))
                 {
                     return err.into_response();
                 }
@@ -18541,12 +18605,47 @@ impl ModerationOperatorService {
             ModerationOperatorRoute::BallotTally { quarantine_id_hex } => {
                 if let Err(err) = moderation_operator_expect_method(request, "POST", true)
                     .and_then(|_| moderation_operator_reject_query(request.query))
+                    .and_then(|_| self.require_csrf_token(request))
                 {
                     return err.into_response();
                 }
                 self.ballot_tally_response(&quarantine_id_hex, request.body)
             }
         }
+    }
+
+    fn require_csrf_token(
+        &self,
+        request: &ModerationOperatorHttpRequest<'_>,
+    ) -> Result<(), ModerationOperatorRequestError> {
+        let mut values = request
+            .headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case(MODERATION_OPERATOR_CSRF_HEADER))
+            .map(|(_, value)| *value);
+        let Some(value) = values.next() else {
+            return Err(ModerationOperatorRequestError::new(
+                StatusCode::FORBIDDEN,
+                format!(
+                    "SoraFS moderation operator service mutation routes require `{MODERATION_OPERATOR_CSRF_HEADER}`"
+                ),
+            ));
+        };
+        if values.next().is_some() {
+            return Err(ModerationOperatorRequestError::new(
+                StatusCode::FORBIDDEN,
+                format!(
+                    "SoraFS moderation operator service request must include only one `{MODERATION_OPERATOR_CSRF_HEADER}`"
+                ),
+            ));
+        }
+        if value != self.csrf_token {
+            return Err(ModerationOperatorRequestError::new(
+                StatusCode::FORBIDDEN,
+                "invalid SoraFS moderation operator service CSRF token",
+            ));
+        }
+        Ok(())
     }
 
     fn operator_panel_response(
@@ -18556,7 +18655,7 @@ impl ModerationOperatorService {
     ) -> ModerationOperatorHttpResponse {
         let response = match self.workflow_source.get_operator_panel(
             quarantine_id_hex,
-            &SorafsModerationQuarantineFilter { limit },
+            SorafsModerationQuarantineFilter { limit },
         ) {
             Ok(response) => response,
             Err(err) => {
@@ -18587,7 +18686,7 @@ impl ModerationOperatorService {
     ) -> ModerationOperatorHttpResponse {
         let response = match self.workflow_source.get_operator_panel(
             quarantine_id_hex,
-            &SorafsModerationQuarantineFilter { limit },
+            SorafsModerationQuarantineFilter { limit },
         ) {
             Ok(response) => response,
             Err(err) => {
@@ -18620,7 +18719,7 @@ impl ModerationOperatorService {
     ) -> ModerationOperatorHttpResponse {
         let response = match self.workflow_source.get_operator_panel(
             quarantine_id_hex,
-            &SorafsModerationQuarantineFilter { limit },
+            SorafsModerationQuarantineFilter { limit },
         ) {
             Ok(response) => response,
             Err(err) => {
@@ -18653,7 +18752,7 @@ impl ModerationOperatorService {
     ) -> ModerationOperatorHttpResponse {
         let response = match self.workflow_source.get_operator_panel(
             quarantine_id_hex,
-            &SorafsModerationQuarantineFilter { limit },
+            SorafsModerationQuarantineFilter { limit },
         ) {
             Ok(response) => response,
             Err(err) => {
@@ -18686,7 +18785,7 @@ impl ModerationOperatorService {
     ) -> ModerationOperatorHttpResponse {
         let response = match self.workflow_source.get_operator_panel(
             quarantine_id_hex,
-            &SorafsModerationQuarantineFilter { limit },
+            SorafsModerationQuarantineFilter { limit },
         ) {
             Ok(response) => response,
             Err(err) => {
@@ -18851,7 +18950,7 @@ impl ModerationOperatorService {
     ) -> Result<ModerationOperatorBallotTallyReference> {
         let response = self.workflow_source.get_operator_panel(
             quarantine_id_hex,
-            &SorafsModerationQuarantineFilter {
+            SorafsModerationQuarantineFilter {
                 limit: self.default_limit,
             },
         )?;
@@ -18865,10 +18964,16 @@ impl ModerationOperatorService {
     }
 
     fn browser_ui_response(&self) -> ModerationOperatorHttpResponse {
+        let html = MODERATION_OPERATOR_BROWSER_UI_HTML
+            .replace(
+                "__SORAFS_OPERATOR_CSRF_HEADER__",
+                MODERATION_OPERATOR_CSRF_HEADER,
+            )
+            .replace("__SORAFS_OPERATOR_CSRF_TOKEN__", &self.csrf_token);
         ModerationOperatorHttpResponse {
             status: StatusCode::OK,
             content_type: Self::HTML_CONTENT_TYPE,
-            body: MODERATION_OPERATOR_BROWSER_UI_HTML.as_bytes().to_vec(),
+            body: html.into_bytes(),
         }
     }
 }
@@ -19150,6 +19255,8 @@ pre {
 <script>
 const $ = (id) => document.getElementById(id);
 const buttons = Array.from(document.querySelectorAll("button"));
+const csrfHeader = "__SORAFS_OPERATOR_CSRF_HEADER__";
+const csrfToken = "__SORAFS_OPERATOR_CSRF_TOKEN__";
 
 function setStatus(text, kind) {
   const el = $("status");
@@ -19185,12 +19292,17 @@ function parsePayload(id) {
 }
 
 async function requestJson(path, options = {}) {
+  const method = (options.method || "GET").toUpperCase();
+  const headers = {
+    "Accept": "application/json",
+    ...(options.body ? {"Content-Type": "application/json"} : {})
+  };
+  if (method !== "GET") {
+    headers[csrfHeader] = csrfToken;
+  }
   const response = await fetch(path, {
     ...options,
-    headers: {
-      "Accept": "application/json",
-      ...(options.body ? {"Content-Type": "application/json"} : {})
-    },
+    headers,
     cache: "no-store"
   });
   const text = await response.text();
@@ -19285,6 +19397,7 @@ struct ModerationOperatorHttpRequest<'a> {
     method: &'a str,
     path: &'a str,
     query: Option<&'a str>,
+    headers: Vec<(&'a str, &'a str)>,
     body: &'a [u8],
 }
 
@@ -19496,11 +19609,13 @@ fn moderation_operator_parse_http_request(
             "SoraFS moderation operator service request body is incomplete",
         ));
     }
+    let headers = moderation_operator_headers(header_text);
     let (path, query) = moderation_operator_split_target(target)?;
     Ok(ModerationOperatorHttpRequest {
         method,
         path,
         query,
+        headers,
         body: &raw[header_end..body_end],
     })
 }
@@ -19548,6 +19663,17 @@ fn moderation_operator_content_length(
         }
     }
     Ok(content_length.unwrap_or_default())
+}
+
+fn moderation_operator_headers(header_text: &str) -> Vec<(&str, &str)> {
+    header_text
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            Some((name.trim(), value.trim()))
+        })
+        .collect()
 }
 
 fn moderation_operator_split_target(
@@ -20182,6 +20308,17 @@ fn extract_ledger_projection(value: &Value) -> Result<LedgerProjectionAmounts> {
     })
 }
 
+fn extract_reserve_quote(value: &Value) -> Result<ReserveQuote> {
+    let root = value
+        .as_object()
+        .ok_or_else(|| eyre!("reserve quote must be a JSON object"))?;
+    let quote_value = root
+        .get("quote")
+        .ok_or_else(|| eyre!("reserve quote missing `quote` block"))?;
+    norito::json::from_value(quote_value.clone())
+        .wrap_err("failed to parse reserve quote from quote artifact")
+}
+
 fn parse_optional_micro_amount(map: &Map, key: &str) -> Result<Option<XorAmount>> {
     map.get(key).map_or_else(
         || Ok(None),
@@ -20253,6 +20390,82 @@ fn build_reserve_ledger_plan(
     Ok(Value::Object(root))
 }
 
+fn build_reserve_lifecycle_value(
+    quote_path: &Path,
+    lifecycle: &ReserveLifecycleProjection,
+) -> Result<Value> {
+    let mut root = Map::new();
+    root.insert(
+        "quote_path".into(),
+        Value::from(quote_path.display().to_string()),
+    );
+    root.insert(
+        "stage".into(),
+        Value::from(reserve_lifecycle_stage_label(lifecycle.stage)),
+    );
+    root.insert(
+        "days_past_due".into(),
+        Value::Number(Number::from(u64::from(lifecycle.days_past_due))),
+    );
+    root.insert(
+        "grace_period_days".into(),
+        Value::Number(Number::from(u64::from(lifecycle.grace_period_days))),
+    );
+    root.insert(
+        "default_after_days".into(),
+        Value::Number(Number::from(u64::from(lifecycle.default_after_days))),
+    );
+    root.insert(
+        "rent_due_micro_xor".into(),
+        ledger_micro_value(lifecycle.rent_due),
+    );
+    root.insert(
+        "reserve_shortfall_micro_xor".into(),
+        ledger_micro_value(lifecycle.reserve_shortfall),
+    );
+    root.insert(
+        "top_up_shortfall_micro_xor".into(),
+        ledger_micro_value(lifecycle.top_up_shortfall),
+    );
+    root.insert(
+        "credit_draw_micro_xor".into(),
+        ledger_micro_value(lifecycle.credit_draw),
+    );
+    let available = lifecycle
+        .credit_available_after_draw
+        .map_or(Value::Null, ledger_micro_value);
+    root.insert("credit_available_after_draw_micro_xor".into(), available);
+    root.insert(
+        "credit_shortfall_micro_xor".into(),
+        ledger_micro_value(lifecycle.credit_shortfall),
+    );
+    root.insert(
+        "accrued_interest_micro_xor".into(),
+        ledger_micro_value(lifecycle.accrued_interest),
+    );
+    root.insert(
+        "total_due_after_credit_micro_xor".into(),
+        ledger_micro_value(lifecycle.total_due_after_credit),
+    );
+    root.insert(
+        "restrict_new_manifests".into(),
+        Value::from(lifecycle.restrict_new_manifests),
+    );
+    root.insert("disable_adverts".into(), Value::from(lifecycle.disable_adverts));
+    root.insert(
+        "requires_governance_notification".into(),
+        Value::from(lifecycle.requires_governance_notification),
+    );
+    root.insert(
+        "requires_manual_credit_approval".into(),
+        Value::from(lifecycle.requires_manual_credit_approval),
+    );
+    let projection = norito::json::to_value(lifecycle)
+        .wrap_err("failed to serialize reserve lifecycle projection")?;
+    root.insert("lifecycle_projection".into(), projection);
+    Ok(Value::Object(root))
+}
+
 fn append_transfer_instruction(
     instructions: &mut Vec<Value>,
     source_account: &AccountId,
@@ -20310,6 +20523,16 @@ const fn reserve_duration_label(duration: ReserveDuration) -> &'static str {
         ReserveDuration::Monthly => "monthly",
         ReserveDuration::Quarterly => "quarterly",
         ReserveDuration::Annual => "annual",
+    }
+}
+
+const fn reserve_lifecycle_stage_label(stage: ReserveLifecycleStage) -> &'static str {
+    match stage {
+        ReserveLifecycleStage::Active => "active",
+        ReserveLifecycleStage::Warning => "warning",
+        ReserveLifecycleStage::Grace => "grace",
+        ReserveLifecycleStage::Delinquent => "delinquent",
+        ReserveLifecycleStage::Default => "default",
     }
 }
 
@@ -20535,6 +20758,42 @@ mod tests {
         assert!(
             ledger_projection.contains_key("rent_due"),
             "ledger projection exposes rent_due amount: {ledger_projection:?}"
+        );
+    }
+
+    #[test]
+    fn reserve_lifecycle_builder_renders_stage_and_credit_fields() {
+        let policy = ReservePolicyV1::default();
+        let quote = policy
+            .quote(
+                super::StorageClass::Hot,
+                10,
+                ReserveDuration::Monthly,
+                ReserveTier::TierA,
+                XorAmount::zero(),
+            )
+            .expect("quote");
+        let lifecycle = quote
+            .lifecycle_projection(3, 7, 30)
+            .expect("lifecycle projection");
+        let value = build_reserve_lifecycle_value(Path::new("quote.json"), &lifecycle)
+            .expect("build lifecycle JSON");
+        let root = value
+            .as_object()
+            .expect("lifecycle payload should be a JSON object");
+
+        assert_eq!(root.get("stage").and_then(Value::as_str), Some("grace"));
+        assert_eq!(
+            root.get("credit_draw_micro_xor").and_then(Value::as_u64),
+            Some(120_000_000)
+        );
+        assert_eq!(
+            root.get("disable_adverts").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            root.get("lifecycle_projection").is_some(),
+            "full projection should be embedded"
         );
     }
 
@@ -24950,7 +25209,7 @@ mod tests {
         fn get_operator_panel(
             &self,
             quarantine_id_hex: &str,
-            filter: &SorafsModerationQuarantineFilter,
+            filter: SorafsModerationQuarantineFilter,
         ) -> Result<Response<Vec<u8>>> {
             assert_eq!(quarantine_id_hex, self.expected_quarantine_id_hex);
             assert_eq!(filter.limit, self.expected_limit);
@@ -25006,7 +25265,7 @@ mod tests {
         fn get_operator_panel(
             &self,
             _quarantine_id_hex: &str,
-            _filter: &SorafsModerationQuarantineFilter,
+            _filter: SorafsModerationQuarantineFilter,
         ) -> Result<Response<Vec<u8>>> {
             unreachable!("mutation fixture does not serve operator-panel reads")
         }
@@ -25102,7 +25361,7 @@ mod tests {
         fn get_operator_panel(
             &self,
             quarantine_id_hex: &str,
-            filter: &SorafsModerationQuarantineFilter,
+            filter: SorafsModerationQuarantineFilter,
         ) -> Result<Response<Vec<u8>>> {
             assert_eq!(quarantine_id_hex, self.expected_quarantine_id_hex);
             assert_eq!(filter.limit, self.expected_limit);
@@ -25168,6 +25427,31 @@ mod tests {
         service: &ModerationOperatorService,
         raw: String,
     ) -> ModerationOperatorHttpResponse {
+        handle_moderation_operator_raw_request_with_csrf(service, raw, true)
+    }
+
+    fn handle_moderation_operator_raw_request_without_csrf(
+        service: &ModerationOperatorService,
+        raw: String,
+    ) -> ModerationOperatorHttpResponse {
+        handle_moderation_operator_raw_request_with_csrf(service, raw, false)
+    }
+
+    fn handle_moderation_operator_raw_request_with_csrf(
+        service: &ModerationOperatorService,
+        mut raw: String,
+        include_csrf: bool,
+    ) -> ModerationOperatorHttpResponse {
+        if include_csrf && raw.starts_with("POST ") {
+            raw = raw.replacen(
+                "\r\n\r\n",
+                &format!(
+                    "\r\n{MODERATION_OPERATOR_CSRF_HEADER}: {}\r\n\r\n",
+                    service.csrf_token
+                ),
+                1,
+            );
+        }
         let raw = raw.into_bytes();
         let request = moderation_operator_parse_http_request(&raw, 1024).expect("HTTP request");
         service.handle_request(&request)
@@ -25813,6 +26097,8 @@ mod tests {
         assert!(body.contains("juror-notifications"));
         assert!(body.contains("commit-reveal-status"));
         assert!(body.contains("ballot-tally"));
+        assert!(body.contains(MODERATION_OPERATOR_CSRF_HEADER));
+        assert!(body.contains(&service.csrf_token));
         let http = String::from_utf8(response.to_http_bytes()).expect("HTTP response UTF-8");
         assert!(http.contains("Content-Type: text/html; charset=utf-8"));
         assert!(http.contains("X-Content-Type-Options: nosniff"));
@@ -25835,6 +26121,14 @@ mod tests {
             .get("routes")
             .and_then(Value::as_array)
             .expect("status routes");
+        assert_eq!(
+            value.get("csrf_header").and_then(Value::as_str),
+            Some(MODERATION_OPERATOR_CSRF_HEADER)
+        );
+        assert_eq!(
+            value.get("csrf_token").and_then(Value::as_str),
+            Some(service.csrf_token.as_str())
+        );
         assert!(
             routes
                 .iter()
@@ -25870,6 +26164,54 @@ mod tests {
             response.content_type,
             ModerationOperatorService::JSON_CONTENT_TYPE
         );
+    }
+
+    #[test]
+    fn moderation_operator_service_rejects_mutation_without_csrf_token() {
+        let quarantine_id = [0xA9_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_mutation_service(
+            quarantine_id,
+            "review",
+            StatusCode::ACCEPTED,
+            norito::json!({ "status": "must_not_be_called" }),
+        );
+        let body = r#"{"notes":"missing token"}"#;
+        let response = handle_moderation_operator_raw_request_without_csrf(
+            &service,
+            format!(
+                "POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review HTTP/1.1\r\nHost: local\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::FORBIDDEN);
+        let body = String::from_utf8(response.body).expect("error body UTF-8");
+        assert!(body.contains(MODERATION_OPERATOR_CSRF_HEADER));
+    }
+
+    #[test]
+    fn moderation_operator_service_rejects_mutation_with_wrong_csrf_token() {
+        let quarantine_id = [0xAA_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_mutation_service(
+            quarantine_id,
+            "review",
+            StatusCode::ACCEPTED,
+            norito::json!({ "status": "must_not_be_called" }),
+        );
+        let body = r#"{"notes":"wrong token"}"#;
+        let response = handle_moderation_operator_raw_request_without_csrf(
+            &service,
+            format!(
+                "POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review HTTP/1.1\r\nHost: local\r\n{MODERATION_OPERATOR_CSRF_HEADER}: wrong\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::FORBIDDEN);
+        let body = String::from_utf8(response.body).expect("error body UTF-8");
+        assert!(body.contains("CSRF"));
     }
 
     #[test]

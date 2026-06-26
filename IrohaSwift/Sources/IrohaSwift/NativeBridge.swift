@@ -91,7 +91,7 @@ enum NoritoBridgeLoader {
     }
 
     static func expectedBridgeAbiVersion(for identifier: String) -> UInt32 {
-        return 10
+        return 12
     }
 
     static func isSupportedBridgeAbiVersion(_ actual: UInt32?, for identifier: String = currentIdentifier()) -> Bool {
@@ -2104,6 +2104,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var sorafsReferenceBuildOrderbookOrderRequestFn: SorafsReferenceOrderbookOrderRequestBuilderFn? = nil
     private var sorafsReferenceBuildOrderbookOrderCancelFn: SorafsReferenceOrderbookCancelBuilderFn? = nil
     private var sorafsReferenceBuildOrderbookSettlementReceiptFn: SorafsReferenceOrderbookSettlementReceiptBuilderFn? = nil
+    private var sorafsReferenceValidatePopPayloadFn: SorafsReferencePayloadFn? = nil
+    private var sorafsReferenceValidateHedgingPayloadFn: SorafsReferencePayloadFn? = nil
     private var sorafsReferenceValidatePdpPayloadFn: SorafsReferencePayloadFn? = nil
     private var sorafsReferenceValidatePdpCommitmentChallengeFn: SorafsReferencePdpPairFn? = nil
     private var sorafsReferenceValidatePdpChallengeProofFn: SorafsReferencePdpPairFn? = nil
@@ -2255,6 +2257,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let sorafsReferenceBuildOrderbookOrderRequestFn: Any? = nil
     private let sorafsReferenceBuildOrderbookOrderCancelFn: Any? = nil
     private let sorafsReferenceBuildOrderbookSettlementReceiptFn: Any? = nil
+    private let sorafsReferenceValidatePopPayloadFn: Any? = nil
+    private let sorafsReferenceValidateHedgingPayloadFn: Any? = nil
     private let sorafsReferenceValidatePdpPayloadFn: Any? = nil
     private let sorafsReferenceValidatePdpCommitmentChallengeFn: Any? = nil
     private let sorafsReferenceValidatePdpChallengeProofFn: Any? = nil
@@ -3130,6 +3134,16 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.sorafsReferenceValidateOrderbookFn = nil
             }
+            if let symbol = dlsym(handle, "connect_norito_sorafs_reference_validate_pop_json") {
+                self.sorafsReferenceValidatePopPayloadFn = unsafeBitCast(symbol, to: SorafsReferencePayloadFn.self)
+            } else {
+                self.sorafsReferenceValidatePopPayloadFn = nil
+            }
+            if let symbol = dlsym(handle, "connect_norito_sorafs_reference_validate_hedging_json") {
+                self.sorafsReferenceValidateHedgingPayloadFn = unsafeBitCast(symbol, to: SorafsReferencePayloadFn.self)
+            } else {
+                self.sorafsReferenceValidateHedgingPayloadFn = nil
+            }
             if let symbol = dlsym(handle, "connect_norito_sorafs_reference_sign_orderbook_payload") {
                 self.sorafsReferenceSignOrderbookFn = unsafeBitCast(symbol, to: SorafsReferenceOrderbookSignFn.self)
             } else {
@@ -3524,6 +3538,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.sorafsReferenceBuildOrderbookOrderRequestFn = nil
             self.sorafsReferenceBuildOrderbookOrderCancelFn = nil
             self.sorafsReferenceBuildOrderbookSettlementReceiptFn = nil
+            self.sorafsReferenceValidatePopPayloadFn = nil
+            self.sorafsReferenceValidateHedgingPayloadFn = nil
             self.sorafsReferenceValidatePdpPayloadFn = nil
             self.sorafsReferenceValidatePdpCommitmentChallengeFn = nil
             self.sorafsReferenceValidatePdpChallengeProofFn = nil
@@ -4102,11 +4118,31 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         return sorafsReferenceValidateOrderbookFn != nil
+            && sorafsReferenceValidatePopPayloadFn != nil
+            && sorafsReferenceValidateHedgingPayloadFn != nil
             && sorafsReferenceValidatePdpPayloadFn != nil
             && sorafsReferenceValidatePdpCommitmentChallengeFn != nil
             && sorafsReferenceValidatePdpChallengeProofFn != nil
             && sorafsReferenceValidatePdpBundleFn != nil
             && freeFn != nil
+        #else
+        return false
+        #endif
+    }
+
+    public var isSorafsReferencePopValidationAvailable: Bool {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime else { return false }
+        return sorafsReferenceValidatePopPayloadFn != nil && freeFn != nil
+        #else
+        return false
+        #endif
+    }
+
+    public var isSorafsReferenceHedgingValidationAvailable: Bool {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime else { return false }
+        return sorafsReferenceValidateHedgingPayloadFn != nil && freeFn != nil
         #else
         return false
         #endif
@@ -8934,6 +8970,58 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                           generatedAtUnix: UInt64) -> String? {
         #if canImport(Darwin)
         guard let function = sorafsReferenceValidateOrderbookFn,
+              let labelData = label.data(using: .utf8) else { return nil }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = withDataPointer(payload) { payloadPtr, payloadLen in
+            withDataPointer(labelData) { labelPtr, labelLen in
+                function(kind, payloadPtr, payloadLen, labelPtr, labelLen, generatedAtUnix, &outPtr, &outLen)
+            }
+        }
+        guard status == 0 else {
+            if let outPtr {
+                if let freeFn { freeFn(outPtr) } else { Darwin.free(outPtr) }
+            }
+            return nil
+        }
+        return takeString(pointer: outPtr, length: UInt(outLen))
+        #else
+        return nil
+        #endif
+    }
+
+    func sorafsReferenceValidatePopPayload(kind: UInt32,
+                                           payload: Data,
+                                           label: String,
+                                           generatedAtUnix: UInt64) -> String? {
+        #if canImport(Darwin)
+        guard let function = sorafsReferenceValidatePopPayloadFn,
+              let labelData = label.data(using: .utf8) else { return nil }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = withDataPointer(payload) { payloadPtr, payloadLen in
+            withDataPointer(labelData) { labelPtr, labelLen in
+                function(kind, payloadPtr, payloadLen, labelPtr, labelLen, generatedAtUnix, &outPtr, &outLen)
+            }
+        }
+        guard status == 0 else {
+            if let outPtr {
+                if let freeFn { freeFn(outPtr) } else { Darwin.free(outPtr) }
+            }
+            return nil
+        }
+        return takeString(pointer: outPtr, length: UInt(outLen))
+        #else
+        return nil
+        #endif
+    }
+
+    func sorafsReferenceValidateHedgingPayload(kind: UInt32,
+                                               payload: Data,
+                                               label: String,
+                                               generatedAtUnix: UInt64) -> String? {
+        #if canImport(Darwin)
+        guard let function = sorafsReferenceValidateHedgingPayloadFn,
               let labelData = label.data(using: .utf8) else { return nil }
         var outPtr: UnsafeMutablePointer<UInt8>? = nil
         var outLen: CUnsignedLong = 0

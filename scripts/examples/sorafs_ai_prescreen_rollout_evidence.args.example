@@ -1,0 +1,12 @@
+# Example:
+#   python3 scripts/check_sorafs_ai_prescreen_rollout_evidence.py \
+#     @scripts/examples/sorafs_ai_prescreen_rollout_evidence.args.example
+#
+# Review only payload-free rollout summaries. Keep runner payloads, bearer
+# tokens, signing keys, raw manifest bytes, and operator secrets in
+# runtime-only locations.
+
+--evidence-dir
+dist/sorafs-ai-prescreen-rollout-evidence
+--summary-out
+dist/sorafs-ai-prescreen-rollout-evidence/summary.json

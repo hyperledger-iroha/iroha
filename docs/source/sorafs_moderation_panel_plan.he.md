@@ -4,9 +4,9 @@ direction: rtl
 source: docs/source/sorafs_moderation_panel_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b6f5f6a4fad906e35d140daa391deba56cece043d34cc762d3f24df7f3b7d7bc
-source_last_modified: 2026-06-24T08:22:33.535741Z
-translation_last_reviewed: 2026-01-30
+source_hash: 6ed9dd98ec5242a63398b0786e5c39ffdf97101eef1d8943668300c51d766d16
+source_last_modified: "2026-06-25T17:11:06+00:00"
+translation_last_reviewed: 2026-06-25
 ---
 
 # Moderation Appeals & Sortition Panels
@@ -22,6 +22,19 @@ The local ballot list readback now keeps the full local total visible while
 bounding the returned `ballots` array through a `limit` query parameter
 (default 50, max 500), matching the production dashboard-readiness pattern used
 by adjacent SoraFS event/readback APIs.
+`scripts/check_sorafs_moderation_panel_rollout_evidence.py` now provides the
+fail-closed SFM-4b rollout evidence gate for deployed moderation-panel
+promotion packets, and
+`scripts/run_sorafs_moderation_panel_rollout_evidence.py` provides the matching
+reviewed evidence collection planner/runner.
+The gate also rejects mixed promotion packets: sortition, viewer, operator,
+notification, voting, publication, settlement, transparency/reputation,
+metrics, end-to-end, and governance artifacts must bind back to the appeal
+intake `case_digest_hex`; viewer/operator/notification/voting and downstream
+artifacts must bind back to a case-bound sortition `roster_hash_hex`; and
+publication, settlement, transparency/reputation, metrics, end-to-end, and
+governance artifacts must bind back to a roster-bound commit/reveal
+`tally_digest_hex`.
 It does not yet ship the full moderation appeal service, SoraFS juror panel
 engine, secure evidence viewer, durable voting orchestrator, or portal workflow
 described in the original plan.
@@ -130,6 +143,67 @@ corresponding service and CLI handlers exist.
   contract-backed and public IPFS/IPNS decision trail.
 - Add end-to-end tests for appeal submission, juror selection, evidence access,
   commit/reveal voting, decision publication, and settlement.
+- Capture reviewed, payload-free deployed evidence for appeal intake, sortition
+  roster, evidence viewer, operator workflow, juror notification, commit/reveal,
+  decision publication, settlement integration, transparency/reputation handoff,
+  panel metrics, end-to-end panel simulation, and governance approval that
+  passes the SFM-4b rollout evidence gate.
+
+## Rollout Evidence Gate
+
+Use the rollout gate after the deployed moderation appeal service, panel
+sortition, evidence viewer, operator workflow, juror notification transport,
+commit/reveal voting path, decision publication, settlement handoff,
+transparency/reputation handoff, metrics, end-to-end panel simulation, and
+governance packet have produced reviewed, payload-free JSON evidence:
+
+```sh
+python3 scripts/check_sorafs_moderation_panel_rollout_evidence.py \
+  @scripts/examples/sorafs_moderation_panel_rollout_evidence.args.example
+```
+
+For staged collections with reviewed evidence paths, prefer the planner so the
+verifier command and summary path are reproducible:
+
+```sh
+python3 scripts/run_sorafs_moderation_panel_rollout_evidence.py \
+  @scripts/examples/sorafs_moderation_panel_rollout_collection.args.example \
+  --dry-run
+```
+
+The checker recognizes `sorafs.moderation_panel.*` SFM-4b rollout schemas for
+appeal intake, sortition roster, evidence viewer, operator workflow, juror
+notifications, commit/reveal, decision publication, settlement integration,
+transparency/reputation handoff, end-to-end panel runs, metrics/alerts, and
+governance approval. It reports `ready` only when every required kind is
+present, every recognized artifact is valid, raw evidence payloads, private
+commit/reveal payloads, message bodies, response bodies, signed transactions,
+secrets, and raw ledgers are absent, route latency and event lag stay under
+configured thresholds, panel size and end-to-end peer count meet the configured
+minimums, governance is bound to `iroha_config`, every case-bound artifact
+shares the valid appeal-intake `case_digest_hex`, every roster-bound artifact
+shares a valid case-bound sortition `case_digest_hex`/`roster_hash_hex` pair,
+and every tally-bound artifact shares a valid roster-bound commit/reveal
+`case_digest_hex`/`roster_hash_hex`/`tally_digest_hex` tuple. Sortition rosters
+that fail appeal-intake binding and commit/reveal runs that fail roster binding
+do not anchor downstream rollout evidence. The
+evidence-viewer canary
+also requires role-scoped manifests, short-lived segment URLs, attested and
+logged sessions, strict CSP and disabled offline mode, watermark overlay and
+metadata hashing, append-only access logging, anomaly events, legal-hold
+binding, Governance DAG and transparency-ledger export coverage, daily digest
+publication, session-manifest, watermark-metadata, access-log,
+legal-hold-receipt, transparency-report, and audit digest hashes, and full
+coverage for view/seek/pause, screenshot-attempt, download-attempt, and
+annotation event classes without including signed URLs, session tokens,
+watermark secrets, raw evidence, raw access logs, legal-hold receipt payloads,
+transparency report payloads, or response bodies. The commit/reveal canary also
+requires commit digest
+recomputation, duplicate-commit rejection, mismatched-reveal rejection, late
+commit/reveal rejection, missed-quorum detection, no-show failover, juror
+penalty planning, deterministic tally replay, contested challenge coverage,
+governance event digest binding, event-lag bounds, and absence of raw
+commit/reveal payloads.
 
 ## Validation
 
@@ -148,3 +222,8 @@ cargo test -p iroha_torii generated_spec_includes_documented_paths --features ap
 
 Run the broader SoraFS moderation and gateway suites when the panel service
 starts mutating runtime state.
+
+The rollout evidence scripts have focused Python coverage in:
+
+- `scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py`
+- `scripts/tests/run_sorafs_moderation_panel_rollout_evidence_test.py`

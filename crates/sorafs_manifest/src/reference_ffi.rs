@@ -13,17 +13,18 @@ use std::{panic, slice};
 use norito::json;
 
 use crate::{
-    FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, OrderbookValidationPayloadKindV1,
-    ProofStreamTier, RepairValidationPayloadKindV1, ValidationContextFieldV1, ValidationInputV1,
+    FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, HedgingValidationPayloadKindV1,
+    OrderbookValidationPayloadKindV1, PopValidationPayloadKindV1, ProofStreamTier,
+    RepairValidationPayloadKindV1, ValidationContextFieldV1, ValidationInputV1,
     ValidationOutcomeV1, validate_fixture_bundle_payloads, validate_governance_log_node_bytes,
-    validate_orderbook_payload_bytes, validate_pdp_challenge_bytes,
+    validate_hedging_payload_bytes, validate_orderbook_payload_bytes, validate_pdp_challenge_bytes,
     validate_pdp_challenge_proof_bytes, validate_pdp_commitment_bytes,
     validate_pdp_commitment_challenge_bytes, validate_pdp_commitment_challenge_proof_bytes,
-    validate_pdp_proof_bytes, validate_por_challenge_proof_bytes, validate_potr_receipt_bytes,
-    validate_provider_admission_envelope_bytes, validate_provider_admission_renewal_bytes,
-    validate_provider_admission_revocation_bytes, validate_provider_advert_bytes,
-    validate_repair_payload_bytes, validate_replication_order_bytes,
-    validate_signed_replication_order_bytes,
+    validate_pdp_proof_bytes, validate_pop_payload_bytes, validate_por_challenge_proof_bytes,
+    validate_potr_receipt_bytes, validate_provider_admission_envelope_bytes,
+    validate_provider_admission_renewal_bytes, validate_provider_admission_revocation_bytes,
+    validate_provider_advert_bytes, validate_repair_payload_bytes,
+    validate_replication_order_bytes, validate_signed_replication_order_bytes,
 };
 
 /// FFI repair payload kind selector for `RepairEvidenceV1`.
@@ -59,6 +60,30 @@ pub const SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_CHANNEL: u32 = 4;
 pub const SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_RECEIPT: u32 = 5;
 /// FFI orderbook payload kind selector for `OrderbookRuntimeSnapshotV1`.
 pub const SORAFS_REFERENCE_ORDERBOOK_KIND_RUNTIME_SNAPSHOT: u32 = 6;
+
+/// FFI PoP payload kind selector for `PopCredentialV1`.
+pub const SORAFS_REFERENCE_POP_KIND_CREDENTIAL: u32 = 1;
+/// FFI PoP payload kind selector for `PopCommitmentRootV1`.
+pub const SORAFS_REFERENCE_POP_KIND_COMMITMENT_ROOT: u32 = 2;
+/// FFI PoP payload kind selector for `PopRevocationListV1`.
+pub const SORAFS_REFERENCE_POP_KIND_REVOCATION_LIST: u32 = 3;
+/// FFI PoP payload kind selector for `PopEnrollmentRequestV1`.
+pub const SORAFS_REFERENCE_POP_KIND_ENROLLMENT_REQUEST: u32 = 4;
+/// FFI PoP payload kind selector for `PopRenewalRequestV1`.
+pub const SORAFS_REFERENCE_POP_KIND_RENEWAL_REQUEST: u32 = 5;
+/// FFI PoP payload kind selector for `PopMembershipProofV1`.
+pub const SORAFS_REFERENCE_POP_KIND_MEMBERSHIP_PROOF: u32 = 6;
+/// FFI PoP payload kind selector for `PopIssuedCredentialBundleV1`.
+pub const SORAFS_REFERENCE_POP_KIND_ISSUED_CREDENTIAL_BUNDLE: u32 = 7;
+
+/// FFI hedging payload kind selector for `HedgingPriceFeedV1`.
+pub const SORAFS_REFERENCE_HEDGING_KIND_PRICE_FEED: u32 = 1;
+/// FFI hedging payload kind selector for `HedgingReferencePriceDecisionV1`.
+pub const SORAFS_REFERENCE_HEDGING_KIND_REFERENCE_PRICE_DECISION: u32 = 2;
+/// FFI hedging payload kind selector for `BillingLineItemV1`.
+pub const SORAFS_REFERENCE_HEDGING_KIND_BILLING_LINE_ITEM: u32 = 3;
+/// FFI hedging payload kind selector for `BillingStatementV1`.
+pub const SORAFS_REFERENCE_HEDGING_KIND_BILLING_STATEMENT: u32 = 4;
 
 /// FFI bundle payload kind selector for `ProviderAdvertV1`.
 pub const SORAFS_REFERENCE_BUNDLE_KIND_PROVIDER_ADVERT: u32 = 1;
@@ -459,6 +484,69 @@ pub unsafe extern "C" fn sorafs_reference_validate_orderbook_json(
         )?;
         let label = read_label(&scope, label_ptr, label_len, "orderbook.to", generated_at)?;
         Ok(validate_orderbook_payload_bytes(
+            kind,
+            input,
+            label,
+            generated_at,
+        ))
+    })
+}
+
+/// Validate a Norito-encoded PoP payload and return outcome JSON.
+///
+/// `kind` must be one of the `SORAFS_REFERENCE_POP_KIND_*` constants.
+///
+/// # Safety
+/// Non-null pointers must be valid for their corresponding lengths until the
+/// function returns. The returned buffer must be freed with
+/// [`sorafs_reference_free_buffer`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sorafs_reference_validate_pop_json(
+    kind: u32,
+    bytes_ptr: *const u8,
+    bytes_len: usize,
+    label_ptr: *const u8,
+    label_len: usize,
+    generated_at: u64,
+) -> SorafsReferenceFfiBuffer {
+    run_ffi(generated_at, || {
+        let scope = FfiInputScope;
+        let kind = pop_kind_from_ffi(kind, generated_at)?;
+        let input = read_input(&scope, bytes_ptr, bytes_len, "pop_payload", generated_at)?;
+        let label = read_label(&scope, label_ptr, label_len, "pop.to", generated_at)?;
+        Ok(validate_pop_payload_bytes(kind, input, label, generated_at))
+    })
+}
+
+/// Validate a Norito-encoded hedging/billing payload and return outcome JSON.
+///
+/// `kind` must be one of the `SORAFS_REFERENCE_HEDGING_KIND_*` constants.
+///
+/// # Safety
+/// Non-null pointers must be valid for their corresponding lengths until the
+/// function returns. The returned buffer must be freed with
+/// [`sorafs_reference_free_buffer`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sorafs_reference_validate_hedging_json(
+    kind: u32,
+    bytes_ptr: *const u8,
+    bytes_len: usize,
+    label_ptr: *const u8,
+    label_len: usize,
+    generated_at: u64,
+) -> SorafsReferenceFfiBuffer {
+    run_ffi(generated_at, || {
+        let scope = FfiInputScope;
+        let kind = hedging_kind_from_ffi(kind, generated_at)?;
+        let input = read_input(
+            &scope,
+            bytes_ptr,
+            bytes_len,
+            "hedging_payload",
+            generated_at,
+        )?;
+        let label = read_label(&scope, label_ptr, label_len, "hedging.to", generated_at)?;
+        Ok(validate_hedging_payload_bytes(
             kind,
             input,
             label,
@@ -1088,6 +1176,51 @@ fn orderbook_kind_from_ffi(
     }
 }
 
+fn pop_kind_from_ffi(
+    kind: u32,
+    generated_at: u64,
+) -> Result<PopValidationPayloadKindV1, ValidationOutcomeV1> {
+    match kind {
+        SORAFS_REFERENCE_POP_KIND_CREDENTIAL => Ok(PopValidationPayloadKindV1::Credential),
+        SORAFS_REFERENCE_POP_KIND_COMMITMENT_ROOT => Ok(PopValidationPayloadKindV1::CommitmentRoot),
+        SORAFS_REFERENCE_POP_KIND_REVOCATION_LIST => Ok(PopValidationPayloadKindV1::RevocationList),
+        SORAFS_REFERENCE_POP_KIND_ISSUED_CREDENTIAL_BUNDLE => {
+            Ok(PopValidationPayloadKindV1::IssuedCredentialBundle)
+        }
+        SORAFS_REFERENCE_POP_KIND_ENROLLMENT_REQUEST => {
+            Ok(PopValidationPayloadKindV1::EnrollmentRequest)
+        }
+        SORAFS_REFERENCE_POP_KIND_RENEWAL_REQUEST => Ok(PopValidationPayloadKindV1::RenewalRequest),
+        SORAFS_REFERENCE_POP_KIND_MEMBERSHIP_PROOF => {
+            Ok(PopValidationPayloadKindV1::MembershipProof)
+        }
+        other => Err(unsupported_selector_error("pop_kind", other, generated_at)),
+    }
+}
+
+fn hedging_kind_from_ffi(
+    kind: u32,
+    generated_at: u64,
+) -> Result<HedgingValidationPayloadKindV1, ValidationOutcomeV1> {
+    match kind {
+        SORAFS_REFERENCE_HEDGING_KIND_PRICE_FEED => Ok(HedgingValidationPayloadKindV1::PriceFeed),
+        SORAFS_REFERENCE_HEDGING_KIND_REFERENCE_PRICE_DECISION => {
+            Ok(HedgingValidationPayloadKindV1::ReferencePriceDecision)
+        }
+        SORAFS_REFERENCE_HEDGING_KIND_BILLING_LINE_ITEM => {
+            Ok(HedgingValidationPayloadKindV1::BillingLineItem)
+        }
+        SORAFS_REFERENCE_HEDGING_KIND_BILLING_STATEMENT => {
+            Ok(HedgingValidationPayloadKindV1::BillingStatement)
+        }
+        other => Err(unsupported_selector_error(
+            "hedging_kind",
+            other,
+            generated_at,
+        )),
+    }
+}
+
 fn bundle_kind_from_ffi(
     kind: u32,
     generated_at: u64,
@@ -1207,12 +1340,18 @@ mod tests {
     use norito::json::Value;
 
     use crate::{
-        ByteRangeV1, ORDERBOOK_ORDER_VERSION_V1, ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
+        BillingLineDirectionV1, BillingLineItemKindV1, BillingStatementV1, ByteRangeV1,
+        HEDGING_PRICE_FEED_VERSION_V1, HedgingFeedStatusV1, HedgingPriceFeedV1, MICRO_XOR_PER_XOR,
+        ORDERBOOK_ORDER_VERSION_V1, ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
         ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderBookEntryV1, OrderRequestV1, OrderSideV1,
-        OrderTierV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1, ReplicationOrderSignatureV1,
-        ReplicationOrderV1, SETTLEMENT_CHANNEL_VERSION_V1, SETTLEMENT_RECEIPT_VERSION_V1,
+        OrderTierV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1, POP_CREDENTIAL_VERSION_V1,
+        PopCredentialAttributeV1, PopCredentialV1, PopEligibilityClassV1, PopSignatureAlgorithmV1,
+        PopSignatureV1, ReplicationOrderSignatureV1, ReplicationOrderV1,
+        SETTLEMENT_CHANNEL_VERSION_V1, SETTLEMENT_RECEIPT_VERSION_V1,
         SIGNED_REPLICATION_ORDER_VERSION_V1, SettlementChannelStatusV1, SettlementChannelV1,
         SettlementReceiptV1, SignatureAlgorithm, SignedReplicationOrderV1, TradeEventV1, XorAmount,
+        build_billing_line_item_v1, build_billing_statement_v1, derive_reference_price_decision_v1,
+        sign_pop_credential_ed25519_v1,
     };
 
     use super::*;
@@ -1338,6 +1477,99 @@ mod tests {
             settlement_channels: vec![channel],
             settlement_receipts: vec![receipt],
             expired_order_ids: vec![[0x74; 32]],
+        }
+    }
+
+    fn hedging_digest(label: &str) -> [u8; 32] {
+        let hash = blake3::hash(label.as_bytes());
+        let mut out = [0_u8; 32];
+        out.copy_from_slice(hash.as_bytes());
+        out
+    }
+
+    fn hedging_feed(feed_id: &str, price: u64, observed_at_unix: u64) -> HedgingPriceFeedV1 {
+        HedgingPriceFeedV1 {
+            version: HEDGING_PRICE_FEED_VERSION_V1,
+            feed_id: feed_id.to_owned(),
+            source: format!("{feed_id}-source"),
+            observed_at_unix,
+            xor_usd_micros: price,
+            weight_bps: 5_000,
+            evidence_digest: hedging_digest(feed_id),
+            status: HedgingFeedStatusV1::Ok,
+        }
+    }
+
+    fn billing_statement() -> BillingStatementV1 {
+        let reference_price = derive_reference_price_decision_v1(
+            1_800,
+            vec![
+                hedging_feed("primary", 2_000_000, 1_790),
+                hedging_feed("secondary", 2_000_000, 1_785),
+            ],
+            120,
+            500,
+        )
+        .expect("reference decision");
+        let storage = build_billing_line_item_v1(
+            BillingLineItemKindV1::Storage,
+            BillingLineDirectionV1::Debit,
+            "deal-storage",
+            XorAmount::from_micro(10 * MICRO_XOR_PER_XOR),
+            reference_price.xor_usd_micros,
+            86_400,
+            Some("weekly storage".to_owned()),
+        )
+        .expect("storage line");
+        let credit = build_billing_line_item_v1(
+            BillingLineItemKindV1::IncentiveCredit,
+            BillingLineDirectionV1::Credit,
+            "provider-credit",
+            XorAmount::from_micro(MICRO_XOR_PER_XOR),
+            reference_price.xor_usd_micros,
+            1,
+            None,
+        )
+        .expect("credit line");
+        build_billing_statement_v1(
+            b"buyer-account".to_vec(),
+            1_000,
+            1_700,
+            2_000,
+            reference_price,
+            vec![storage, credit],
+            None,
+        )
+        .expect("billing statement")
+    }
+
+    fn pop_digest(seed: u8) -> [u8; 32] {
+        [seed; 32]
+    }
+
+    fn unsigned_pop_credential(signing_key: &SigningKey) -> PopCredentialV1 {
+        PopCredentialV1 {
+            version: POP_CREDENTIAL_VERSION_V1,
+            credential_id: pop_digest(0x11),
+            holder_commitment: pop_digest(0x12),
+            eligibility_class: PopEligibilityClassV1::General,
+            attributes: vec![PopCredentialAttributeV1 {
+                key: "residency".to_owned(),
+                value_commitment: pop_digest(0x13),
+            }],
+            issuer_id: "issuer.sorafs".to_owned(),
+            issued_at_epoch: 100,
+            expires_at_epoch: 1_000,
+            renewal_at_epoch: 800,
+            revocation_nonce: pop_digest(0x14),
+            commitment_root: pop_digest(0x15),
+            commitment_tree_version: 7,
+            revocation_list_version: 3,
+            issuer_signature: PopSignatureV1 {
+                algorithm: PopSignatureAlgorithmV1::Ed25519,
+                public_key: signing_key.verifying_key().to_bytes().to_vec(),
+                signature: vec![0; SIGNATURE_LENGTH],
+            },
         }
     }
 
@@ -1557,6 +1789,82 @@ mod tests {
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-OK-000")
+        );
+    }
+
+    #[test]
+    fn ffi_pop_validator_returns_json_outcome() {
+        let signing_key = SigningKey::from_bytes(&[0x55; 32]);
+        let credential =
+            sign_pop_credential_ed25519_v1(unsigned_pop_credential(&signing_key), &signing_key)
+                .expect("sign PoP credential");
+        let bytes = norito::to_bytes(&credential).expect("encode PoP credential");
+        let label = b"pop-credential.to";
+
+        // SAFETY: the pointers reference live test vectors for the duration of the call.
+        let outcome = outcome_from_buffer(unsafe {
+            sorafs_reference_validate_pop_json(
+                SORAFS_REFERENCE_POP_KIND_CREDENTIAL,
+                bytes.as_ptr(),
+                bytes.len(),
+                label.as_ptr(),
+                label.len(),
+                123,
+            )
+        });
+
+        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
+        assert_eq!(
+            outcome.get("code").and_then(Value::as_str),
+            Some("SFS-OK-000")
+        );
+    }
+
+    #[test]
+    fn ffi_hedging_validator_returns_json_outcome() {
+        let statement = billing_statement();
+        let bytes = norito::to_bytes(&statement).expect("encode billing statement");
+        let label = b"billing-statement.to";
+
+        // SAFETY: the pointers reference live test vectors for the duration of the call.
+        let outcome = outcome_from_buffer(unsafe {
+            sorafs_reference_validate_hedging_json(
+                SORAFS_REFERENCE_HEDGING_KIND_BILLING_STATEMENT,
+                bytes.as_ptr(),
+                bytes.len(),
+                label.as_ptr(),
+                label.len(),
+                123,
+            )
+        });
+
+        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
+        assert_eq!(
+            outcome.get("code").and_then(Value::as_str),
+            Some("SFS-OK-000")
+        );
+    }
+
+    #[test]
+    fn ffi_rejects_unknown_hedging_kind() {
+        let bytes = b"not norito";
+
+        // SAFETY: the pointers reference live test vectors for the duration of the call.
+        let outcome = outcome_from_buffer(unsafe {
+            sorafs_reference_validate_hedging_json(
+                999,
+                bytes.as_ptr(),
+                bytes.len(),
+                std::ptr::null(),
+                0,
+                123,
+            )
+        });
+
+        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
+        assert_eq!(
+            outcome.get("code").and_then(Value::as_str),
+            Some("SFS-FFI-001")
         );
     }
 
@@ -1951,6 +2259,29 @@ mod tests {
         // SAFETY: the pointer references live test bytes for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_orderbook_json(
+                999,
+                bytes.as_ptr(),
+                bytes.len(),
+                std::ptr::null(),
+                0,
+                123,
+            )
+        });
+
+        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
+        assert_eq!(
+            outcome.get("code").and_then(Value::as_str),
+            Some("SFS-FFI-001")
+        );
+    }
+
+    #[test]
+    fn ffi_rejects_unknown_pop_kind() {
+        let bytes = b"not norito";
+
+        // SAFETY: the pointer references live test bytes for the duration of the call.
+        let outcome = outcome_from_buffer(unsafe {
+            sorafs_reference_validate_pop_json(
                 999,
                 bytes.as_ptr(),
                 bytes.len(),

@@ -342,7 +342,9 @@ fn autoscale_transition_committed_at(
     nexus: &iroha_config::parameters::actual::Nexus,
     committed_height: u64,
 ) -> bool {
-    nexus.autoscale.enabled && nexus.autoscale.last_transition_height == committed_height
+    nexus.enabled
+        && nexus.autoscale.enabled
+        && nexus.autoscale.last_transition_height == committed_height
 }
 
 #[derive(Debug)]
@@ -842,9 +844,14 @@ pub(super) fn execute_commit_work(
                 let world = state_block.world();
                 let world_peers = world.peers().iter().cloned().collect::<Vec<_>>();
                 let stake_snapshot = if matches!(consensus_mode, ConsensusMode::Npos) {
-                    crate::sumeragi::stake_snapshot::CommitStakeSnapshot::from_roster(
+                    let active_lane_ids = state_block
+                        .nexus
+                        .enabled
+                        .then(|| crate::state::nexus_active_lane_ids(&state_block.nexus));
+                    crate::sumeragi::stake_snapshot::CommitStakeSnapshot::from_roster_with_active_lanes(
                         world,
                         &stake_snapshot_roster,
+                        active_lane_ids.as_ref(),
                     )
                 } else {
                     None
@@ -1166,8 +1173,16 @@ fn validate_block_sync_update_commit_qc(
         ConsensusMode::Npos => super::NPOS_TAG,
     };
     let world = state.world_view();
-    let roster_cache =
-        super::RosterValidationCache::from_world(&world, super::EPOCH_LENGTH_BLOCKS, None);
+    let nexus = state.nexus_snapshot();
+    let active_lane_ids = nexus
+        .enabled
+        .then(|| crate::state::nexus_active_lane_ids(&nexus));
+    let roster_cache = super::RosterValidationCache::from_world_with_active_lanes(
+        &world,
+        super::EPOCH_LENGTH_BLOCKS,
+        None,
+        active_lane_ids.as_ref(),
+    );
     let topology = super::network_topology::Topology::new(qc.validator_set.clone());
     let block_signers = BTreeSet::new();
     let prf_seed = Some(super::prf_seed_for_height_from_world(
@@ -1203,11 +1218,17 @@ fn validate_block_sync_update_commit_qc(
         stake_snapshot
             .filter(|snapshot| snapshot.matches_roster(&qc.validator_set))
             .cloned()
-            .or_else(|| CommitStakeSnapshot::from_roster(&world, &qc.validator_set))
+            .or_else(|| {
+                CommitStakeSnapshot::from_roster_with_active_lanes(
+                    &world,
+                    &qc.validator_set,
+                    active_lane_ids.as_ref(),
+                )
+            })
     } else {
         None
     };
-    super::validate_block_sync_qc(
+    super::validate_block_sync_qc_with_active_lanes(
         qc,
         &topology,
         &world,
@@ -1220,6 +1241,7 @@ fn validate_block_sync_update_commit_qc(
         mode_tag,
         prf_seed,
         aggregate_ok,
+        active_lane_ids.as_ref(),
     )
     .map(|_| ())
     .map_err(|err| {
@@ -1447,7 +1469,15 @@ impl Actor {
                     .is_some_and(|snapshot| snapshot.matches_roster(roster));
                 if !matches {
                     let world = state.world_view();
-                    update.stake_snapshot = CommitStakeSnapshot::from_roster(&world, roster);
+                    let nexus = state.nexus_snapshot();
+                    let active_lane_ids = nexus
+                        .enabled
+                        .then(|| crate::state::nexus_active_lane_ids(&nexus));
+                    update.stake_snapshot = CommitStakeSnapshot::from_roster_with_active_lanes(
+                        &world,
+                        roster,
+                        active_lane_ids.as_ref(),
+                    );
                 }
             }
         }
@@ -2218,7 +2248,15 @@ impl Actor {
                             ConsensusMode::Permissioned => None,
                             ConsensusMode::Npos => {
                                 let world = self.state.world_view();
-                                CommitStakeSnapshot::from_roster(&world, &commit_topology)
+                                let nexus = self.state.nexus_snapshot();
+                                let active_lane_ids = nexus
+                                    .enabled
+                                    .then(|| crate::state::nexus_active_lane_ids(&nexus));
+                                CommitStakeSnapshot::from_roster_with_active_lanes(
+                                    &world,
+                                    &commit_topology,
+                                    active_lane_ids.as_ref(),
+                                )
                             }
                         };
                         if let Some((parent_state_root, post_state_root)) =
@@ -3481,7 +3519,15 @@ impl Actor {
                     ConsensusMode::Permissioned => None,
                     ConsensusMode::Npos => {
                         let world = self.state.world_view();
-                        CommitStakeSnapshot::from_roster(&world, &commit_topology)
+                        let nexus = self.state.nexus_snapshot();
+                        let active_lane_ids = nexus
+                            .enabled
+                            .then(|| crate::state::nexus_active_lane_ids(&nexus));
+                        CommitStakeSnapshot::from_roster_with_active_lanes(
+                            &world,
+                            &commit_topology,
+                            active_lane_ids.as_ref(),
+                        )
                     }
                 };
                 if let Some((parent_state_root, post_state_root)) =
@@ -6383,10 +6429,15 @@ impl Actor {
                         signer_peers.insert(peer.clone());
                     }
                     let world = self.state.world_view();
-                    super::stake_snapshot::stake_quorum_reached_for_world(
+                    let nexus = self.state.nexus_snapshot();
+                    let active_lane_ids = nexus
+                        .enabled
+                        .then(|| crate::state::nexus_active_lane_ids(&nexus));
+                    super::stake_snapshot::stake_quorum_reached_for_world_with_active_lanes(
                         &world,
                         &stake_roster,
                         &signer_peers,
+                        active_lane_ids.as_ref(),
                     )
                     .unwrap_or(false)
                 };
@@ -7253,6 +7304,10 @@ impl Actor {
                         };
                     };
                     let world = self.state.world_view();
+                    let nexus = self.state.nexus_snapshot();
+                    let active_lane_ids = nexus
+                        .enabled
+                        .then(|| crate::state::nexus_active_lane_ids(&nexus));
                     match super::qc::select_commit_root_signers_by_stake(
                         &accepted_votes,
                         block_hash,
@@ -7263,6 +7318,7 @@ impl Actor {
                         &signature_topology,
                         &world,
                         stake_roster,
+                        active_lane_ids.as_ref(),
                     ) {
                         Ok((filtered, _groups)) => filtered,
                         Err(_) => BTreeSet::new(),
@@ -7297,10 +7353,15 @@ impl Actor {
                         signer_peers.insert(peer.clone());
                     }
                     let world = self.state.world_view();
-                    super::stake_snapshot::stake_quorum_reached_for_world(
+                    let nexus = self.state.nexus_snapshot();
+                    let active_lane_ids = nexus
+                        .enabled
+                        .then(|| crate::state::nexus_active_lane_ids(&nexus));
+                    super::stake_snapshot::stake_quorum_reached_for_world_with_active_lanes(
                         &world,
                         stake_roster,
                         &signer_peers,
+                        active_lane_ids.as_ref(),
                     )
                 })();
                 stake_result = Some(result);
@@ -8393,6 +8454,10 @@ impl Actor {
                         return None;
                     };
                     let world = self.state.world_view();
+                    let nexus = self.state.nexus_snapshot();
+                    let active_lane_ids = nexus
+                        .enabled
+                        .then(|| crate::state::nexus_active_lane_ids(&nexus));
                     match super::qc::select_commit_root_signers_by_stake(
                         &accepted_votes,
                         qc.subject_block_hash,
@@ -8403,6 +8468,7 @@ impl Actor {
                         &signature_topology,
                         &world,
                         stake_roster,
+                        active_lane_ids.as_ref(),
                     ) {
                         Ok((filtered, _groups)) => filtered,
                         Err(err) => {
@@ -8457,10 +8523,15 @@ impl Actor {
                 let Some(stake_roster) = npos_stake_roster.as_deref() else {
                     return None;
                 };
-                super::stake_snapshot::stake_quorum_reached_for_world(
+                let nexus = self.state.nexus_snapshot();
+                let active_lane_ids = nexus
+                    .enabled
+                    .then(|| crate::state::nexus_active_lane_ids(&nexus));
+                super::stake_snapshot::stake_quorum_reached_for_world_with_active_lanes(
                     &world,
                     stake_roster,
                     &signer_peers,
+                    active_lane_ids.as_ref(),
                 )
                 .unwrap_or(false)
             }
@@ -9848,10 +9919,15 @@ impl Actor {
 
     fn refresh_roster_validation_cache(&mut self) {
         let world = self.state.world.view();
+        let nexus = self.state.nexus_snapshot();
+        let active_lane_ids = nexus
+            .enabled
+            .then(|| crate::state::nexus_active_lane_ids(&nexus));
         self.roster_validation_cache.refresh_from_world(
             &world,
             self.config.npos.epoch_length_blocks,
             Some(&self.common_config.trusted_peers.value().pops),
+            active_lane_ids.as_ref(),
         );
         drop(world);
         self.block_sync_roster_cache.clear();
@@ -10430,6 +10506,7 @@ mod tests {
     #[test]
     fn autoscale_transition_committed_at_requires_enabled_matching_height() {
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.enabled = true;
         nexus.autoscale.enabled = true;
         nexus.autoscale.last_transition_height = 42;
 
@@ -10437,6 +10514,10 @@ mod tests {
         assert!(!autoscale_transition_committed_at(&nexus, 41));
 
         nexus.autoscale.enabled = false;
+        assert!(!autoscale_transition_committed_at(&nexus, 42));
+
+        nexus.autoscale.enabled = true;
+        nexus.enabled = false;
         assert!(!autoscale_transition_committed_at(&nexus, 42));
     }
 

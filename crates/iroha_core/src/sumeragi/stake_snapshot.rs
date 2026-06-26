@@ -3,7 +3,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_crypto::HashOf;
-use iroha_data_model::{nexus::PublicLaneValidatorStatus, peer::PeerId};
+use iroha_data_model::{
+    nexus::{LaneId, PublicLaneValidatorStatus},
+    peer::PeerId,
+};
 use iroha_logger::prelude::*;
 use iroha_primitives::numeric::{Numeric, NumericSpec};
 use mv::storage::StorageReadOnly;
@@ -47,11 +50,23 @@ impl CommitStakeSnapshot {
     /// Missing stakes fall back to the chain-configured minimum self-bond (or 1 when unset).
     #[must_use]
     pub fn from_roster(world: &impl WorldReadOnly, roster: &[PeerId]) -> Option<Self> {
+        Self::from_roster_with_active_lanes(world, roster, None)
+    }
+
+    /// Build a stake snapshot using only public-validator records from active Nexus lanes.
+    ///
+    /// Missing stakes fall back to the chain-configured minimum self-bond (or 1 when unset).
+    #[must_use]
+    pub fn from_roster_with_active_lanes(
+        world: &impl WorldReadOnly,
+        roster: &[PeerId],
+        active_lane_ids: Option<&BTreeSet<LaneId>>,
+    ) -> Option<Self> {
         if roster.is_empty() {
             return None;
         }
         let fallback_stake = fallback_stake_for_world(world);
-        let stake_map = stake_map_from_world(world);
+        let stake_map = stake_map_from_world_with_active_lanes(world, active_lane_ids);
         commit_stake_snapshot_from_map(roster, &stake_map, &fallback_stake)
     }
 
@@ -68,8 +83,83 @@ pub fn stake_quorum_reached_for_world(
     roster: &[PeerId],
     signers: &BTreeSet<PeerId>,
 ) -> Result<bool, StakeQuorumError> {
+    stake_quorum_reached_for_world_with_active_lanes(world, roster, signers, None)
+}
+
+/// Determine whether strict >2/3 stake quorum is reached using only active Nexus lanes.
+pub fn stake_quorum_reached_for_world_with_active_lanes(
+    world: &impl WorldReadOnly,
+    roster: &[PeerId],
+    signers: &BTreeSet<PeerId>,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
+) -> Result<bool, StakeQuorumError> {
+    let stake_map = stake_map_for_roster(world, roster, active_lane_ids);
+    let total = total_stake_for_roster(roster, &stake_map)?;
+    if total.is_zero() {
+        return Err(StakeQuorumError::ZeroTotal);
+    }
+    let signed = selected_stake_for_roster(roster, signers, &stake_map)?;
+
+    let signed_scaled = signed
+        .checked_mul(Numeric::from(3_u64), NumericSpec::default())
+        .ok_or(StakeQuorumError::Overflow)?;
+    let total_scaled = total
+        .checked_mul(Numeric::from(2_u64), NumericSpec::default())
+        .ok_or(StakeQuorumError::Overflow)?;
+    Ok(signed_scaled > total_scaled)
+}
+
+/// Return selected signer stake coverage in basis points for the provided roster.
+pub fn stake_coverage_bps_for_world(
+    world: &impl WorldReadOnly,
+    roster: &[PeerId],
+    signers: &BTreeSet<PeerId>,
+) -> Result<u16, StakeQuorumError> {
+    stake_coverage_bps_for_world_with_active_lanes(world, roster, signers, None)
+}
+
+/// Return selected signer stake coverage using only active Nexus lanes.
+pub fn stake_coverage_bps_for_world_with_active_lanes(
+    world: &impl WorldReadOnly,
+    roster: &[PeerId],
+    signers: &BTreeSet<PeerId>,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
+) -> Result<u16, StakeQuorumError> {
+    let stake_map = stake_map_for_roster(world, roster, active_lane_ids);
+    let total = total_stake_for_roster(roster, &stake_map)?;
+    if total.is_zero() {
+        return Err(StakeQuorumError::ZeroTotal);
+    }
+    let selected = selected_stake_for_roster(roster, signers, &stake_map)?;
+
+    let selected_scaled = selected
+        .checked_mul(Numeric::from(10_000_u64), NumericSpec::unconstrained())
+        .ok_or(StakeQuorumError::Overflow)?;
+    let bps = selected_scaled
+        .checked_div(total, NumericSpec::integer())
+        .and_then(|numeric| numeric.try_mantissa_u128())
+        .ok_or(StakeQuorumError::Overflow)?;
+    Ok(bps.min(10_000) as u16)
+}
+
+/// Return the selected signer stake for a roster using only active Nexus lanes.
+pub(super) fn signed_stake_for_world_with_active_lanes(
+    world: &impl WorldReadOnly,
+    roster: &[PeerId],
+    signers: &BTreeSet<PeerId>,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
+) -> Result<Numeric, StakeQuorumError> {
+    let stake_map = stake_map_for_roster(world, roster, active_lane_ids);
+    selected_stake_for_roster(roster, signers, &stake_map)
+}
+
+fn stake_map_for_roster(
+    world: &impl WorldReadOnly,
+    roster: &[PeerId],
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
+) -> BTreeMap<PeerId, Numeric> {
     let fallback_stake = fallback_stake_for_world(world);
-    let mut stake_map = stake_map_from_world(world);
+    let mut stake_map = stake_map_from_world_with_active_lanes(world, active_lane_ids);
     if stake_map.is_empty() {
         for peer in roster {
             stake_map.insert(peer.clone(), fallback_stake.clone());
@@ -90,8 +180,13 @@ pub fn stake_quorum_reached_for_world(
             );
         }
     }
+    stake_map
+}
 
-    let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
+fn total_stake_for_roster(
+    roster: &[PeerId],
+    stake_map: &BTreeMap<PeerId, Numeric>,
+) -> Result<Numeric, StakeQuorumError> {
     let mut total = Numeric::from(0_u64);
     for peer in roster {
         let Some(stake) = stake_map.get(peer) else {
@@ -101,10 +196,15 @@ pub fn stake_quorum_reached_for_world(
             .checked_add(stake.clone())
             .ok_or(StakeQuorumError::Overflow)?;
     }
-    if total.is_zero() {
-        return Err(StakeQuorumError::ZeroTotal);
-    }
+    Ok(total)
+}
 
+fn selected_stake_for_roster(
+    roster: &[PeerId],
+    signers: &BTreeSet<PeerId>,
+    stake_map: &BTreeMap<PeerId, Numeric>,
+) -> Result<Numeric, StakeQuorumError> {
+    let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
     let mut signed = Numeric::from(0_u64);
     for peer in signers {
         if !roster_set.contains(peer) {
@@ -117,71 +217,7 @@ pub fn stake_quorum_reached_for_world(
             .checked_add(stake.clone())
             .ok_or(StakeQuorumError::Overflow)?;
     }
-
-    let signed_scaled = signed
-        .checked_mul(Numeric::from(3_u64), NumericSpec::default())
-        .ok_or(StakeQuorumError::Overflow)?;
-    let total_scaled = total
-        .checked_mul(Numeric::from(2_u64), NumericSpec::default())
-        .ok_or(StakeQuorumError::Overflow)?;
-    Ok(signed_scaled > total_scaled)
-}
-
-/// Return selected signer stake coverage in basis points for the provided roster.
-pub fn stake_coverage_bps_for_world(
-    world: &impl WorldReadOnly,
-    roster: &[PeerId],
-    signers: &BTreeSet<PeerId>,
-) -> Result<u16, StakeQuorumError> {
-    let fallback_stake = fallback_stake_for_world(world);
-    let mut stake_map = stake_map_from_world(world);
-    if stake_map.is_empty() {
-        for peer in roster {
-            stake_map.insert(peer.clone(), fallback_stake.clone());
-        }
-    } else {
-        for peer in roster {
-            stake_map
-                .entry(peer.clone())
-                .or_insert_with(|| fallback_stake.clone());
-        }
-    }
-
-    let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
-    let mut total = Numeric::from(0_u64);
-    for peer in roster {
-        let Some(stake) = stake_map.get(peer) else {
-            return Err(StakeQuorumError::MissingStake);
-        };
-        total = total
-            .checked_add(stake.clone())
-            .ok_or(StakeQuorumError::Overflow)?;
-    }
-    if total.is_zero() {
-        return Err(StakeQuorumError::ZeroTotal);
-    }
-
-    let mut selected = Numeric::from(0_u64);
-    for peer in signers {
-        if !roster_set.contains(peer) {
-            return Err(StakeQuorumError::SignerOutOfRoster);
-        }
-        let Some(stake) = stake_map.get(peer) else {
-            return Err(StakeQuorumError::MissingStake);
-        };
-        selected = selected
-            .checked_add(stake.clone())
-            .ok_or(StakeQuorumError::Overflow)?;
-    }
-
-    let selected_scaled = selected
-        .checked_mul(Numeric::from(10_000_u64), NumericSpec::unconstrained())
-        .ok_or(StakeQuorumError::Overflow)?;
-    let bps = selected_scaled
-        .checked_div(total, NumericSpec::integer())
-        .and_then(|numeric| numeric.try_mantissa_u128())
-        .ok_or(StakeQuorumError::Overflow)?;
-    Ok(bps.min(10_000) as u16)
+    Ok(signed)
 }
 
 /// Determine whether strict >2/3 stake quorum is reached for the provided signers.
@@ -252,8 +288,21 @@ pub fn stake_quorum_reached_for_snapshot(
 /// Build a stake map keyed by peer id using the largest stake seen per peer.
 #[must_use]
 pub(super) fn stake_map_from_world(world: &impl WorldReadOnly) -> BTreeMap<PeerId, Numeric> {
+    stake_map_from_world_with_active_lanes(world, None)
+}
+
+/// Build a stake map using only active validator records from active Nexus lanes.
+#[must_use]
+pub(super) fn stake_map_from_world_with_active_lanes(
+    world: &impl WorldReadOnly,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
+) -> BTreeMap<PeerId, Numeric> {
     let mut stake_map: BTreeMap<PeerId, Numeric> = BTreeMap::new();
     for ((_lane_id, _validator_id), record) in world.public_lane_validators().iter() {
+        if active_lane_ids.is_some_and(|active_lane_ids| !active_lane_ids.contains(&record.lane_id))
+        {
+            continue;
+        }
         if !matches!(record.status, PublicLaneValidatorStatus::Active) {
             continue;
         }
@@ -351,6 +400,27 @@ mod tests {
         PeerId::new(checked_random_keypair().public_key().clone())
     }
 
+    fn active_validator_record(
+        lane_id: LaneId,
+        account: &AccountId,
+        peer: &PeerId,
+        stake: u64,
+    ) -> PublicLaneValidatorRecord {
+        PublicLaneValidatorRecord {
+            lane_id,
+            validator: account.clone(),
+            peer_id: peer.clone(),
+            stake_account: account.clone(),
+            total_stake: Numeric::new(stake, 0),
+            self_stake: Numeric::new(stake, 0),
+            metadata: Metadata::default(),
+            status: PublicLaneValidatorStatus::Active,
+            activation_epoch: None,
+            activation_height: None,
+            last_reward_epoch: None,
+        }
+    }
+
     #[test]
     fn stake_snapshot_from_roster_preserves_order_and_max_stake() {
         let kura = Kura::blank_kura_for_testing();
@@ -429,6 +499,151 @@ mod tests {
         assert_eq!(snapshot.entries[0].peer_id, peer_b);
         assert_eq!(snapshot.entries[1].peer_id, peer_a);
         assert_eq!(snapshot.entries[1].stake, Numeric::new(25, 0));
+    }
+
+    #[test]
+    fn stake_snapshot_active_lane_filter_ignores_higher_stale_unknown_lane_stake() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
+
+        let keypair = checked_random_keypair();
+        let peer = PeerId::new(keypair.public_key().clone());
+        let account = AccountId::new(keypair.public_key().clone());
+        let stale_lane = LaneId::new(42);
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            block.insert(
+                (LaneId::SINGLE, account.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::SINGLE,
+                    validator: account.clone(),
+                    peer_id: peer.clone(),
+                    stake_account: account.clone(),
+                    total_stake: Numeric::new(10, 0),
+                    self_stake: Numeric::new(10, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.insert(
+                (stale_lane, account.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: stale_lane,
+                    validator: account.clone(),
+                    peer_id: peer.clone(),
+                    stake_account: account,
+                    total_stake: Numeric::new(10_000, 0),
+                    self_stake: Numeric::new(10_000, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.commit();
+        }
+
+        let view = state.view();
+        let active_lane_ids = BTreeSet::from([LaneId::SINGLE]);
+        let unfiltered = stake_map_from_world(view.world());
+        let filtered = stake_map_from_world_with_active_lanes(view.world(), Some(&active_lane_ids));
+        assert_eq!(unfiltered.get(&peer), Some(&Numeric::new(10_000, 0)));
+        assert_eq!(filtered.get(&peer), Some(&Numeric::new(10, 0)));
+
+        let snapshot = CommitStakeSnapshot::from_roster_with_active_lanes(
+            view.world(),
+            std::slice::from_ref(&peer),
+            Some(&active_lane_ids),
+        )
+        .expect("filtered stake snapshot");
+        assert_eq!(snapshot.entries[0].peer_id, peer);
+        assert_eq!(snapshot.entries[0].stake, Numeric::new(10, 0));
+    }
+
+    #[test]
+    fn stake_quorum_coverage_and_signed_stake_active_lane_filter_unknown_lane_stake() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
+
+        let keypair_a = checked_random_keypair();
+        let keypair_b = checked_random_keypair();
+        let keypair_c = checked_random_keypair();
+        let account_a = AccountId::new(keypair_a.public_key().clone());
+        let account_b = AccountId::new(keypair_b.public_key().clone());
+        let account_c = AccountId::new(keypair_c.public_key().clone());
+        let peer_a = PeerId::new(keypair_a.public_key().clone());
+        let peer_b = PeerId::new(keypair_b.public_key().clone());
+        let peer_c = PeerId::new(keypair_c.public_key().clone());
+        let stale_lane = LaneId::new(42);
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            block.insert(
+                (LaneId::SINGLE, account_a.clone()),
+                active_validator_record(LaneId::SINGLE, &account_a, &peer_a, 1),
+            );
+            block.insert(
+                (LaneId::SINGLE, account_b.clone()),
+                active_validator_record(LaneId::SINGLE, &account_b, &peer_b, 1),
+            );
+            block.insert(
+                (LaneId::SINGLE, account_c.clone()),
+                active_validator_record(LaneId::SINGLE, &account_c, &peer_c, 1),
+            );
+            block.insert(
+                (stale_lane, account_a.clone()),
+                active_validator_record(stale_lane, &account_a, &peer_a, 10_000),
+            );
+            block.commit();
+        }
+
+        let view = state.view();
+        let roster = vec![peer_a.clone(), peer_b, peer_c];
+        let signers = BTreeSet::from([peer_a]);
+        let active_lane_ids = BTreeSet::from([LaneId::SINGLE]);
+
+        assert_eq!(
+            stake_quorum_reached_for_world(view.world(), &roster, &signers),
+            Ok(true)
+        );
+        assert_eq!(
+            stake_quorum_reached_for_world_with_active_lanes(
+                view.world(),
+                &roster,
+                &signers,
+                Some(&active_lane_ids),
+            ),
+            Ok(false)
+        );
+        assert_eq!(
+            stake_coverage_bps_for_world(view.world(), &roster, &signers),
+            Ok(9_998)
+        );
+        assert_eq!(
+            stake_coverage_bps_for_world_with_active_lanes(
+                view.world(),
+                &roster,
+                &signers,
+                Some(&active_lane_ids),
+            ),
+            Ok(3_333)
+        );
+        assert_eq!(
+            signed_stake_for_world_with_active_lanes(
+                view.world(),
+                &roster,
+                &signers,
+                Some(&active_lane_ids),
+            ),
+            Ok(Numeric::new(1, 0))
+        );
     }
 
     #[test]

@@ -1,0 +1,21 @@
+# Reviewed SF-14 PoTR rollout evidence collection arguments.
+# The runner only verifies existing payload-free JSON artifacts; collect them
+# from the deployment with site-local commands before running this plan.
+# Run with:
+#   python3 scripts/run_sorafs_potr_rollout_evidence.py \
+#     @scripts/examples/sorafs_potr_rollout_collection.args.example \
+#     --dry-run
+--out-dir /var/tmp/sorafs/potr-rollout
+--multi-provider-probe-evidence /var/tmp/sorafs/potr-rollout/multi-provider-probe.json
+--receipt-validation-evidence /var/tmp/sorafs/potr-rollout/receipt-validation.json
+--proof-stream-evidence /var/tmp/sorafs/potr-rollout/proof-stream.json
+--reputation-integration-evidence /var/tmp/sorafs/potr-rollout/reputation-integration.json
+--observability-evidence /var/tmp/sorafs/potr-rollout/observability.json
+--governance-approval-evidence /var/tmp/sorafs/potr-rollout/governance-approval.json
+--summary-out /var/tmp/sorafs/potr-rollout/rollout-summary.json
+--max-evidence-age-secs 604800
+--max-route-latency-ms 1500
+--max-hot-latency-ms 90000
+--max-warm-latency-ms 300000
+--min-providers 3
+--min-receipts 6

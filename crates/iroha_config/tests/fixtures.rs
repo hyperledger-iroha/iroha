@@ -1403,6 +1403,10 @@ fn minimal_config_snapshot() {
                     disk_store_ttl: 120s,
                     disk_store_max_bytes: 2147483648,
                 },
+                native_amx: SumeragiNativeAmx {
+                    session_cache_max: 1024,
+                    session_body_bucket_max: 256,
+                },
                 finality: SumeragiFinality {
                     proof_policy: Off,
                     commit_cert_history_cap: 512,

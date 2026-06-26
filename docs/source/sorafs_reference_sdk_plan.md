@@ -19,10 +19,17 @@ governance log nodes, governance DAG blocks and signed-head chains, runtime
 signing helpers, C FFI validation, cookbook fixtures, and manifest/CAR replay.
 Remaining SF-11 work is release evidence and SDK distribution: per-target
 published archives, signed release manifests, published downstream binding
-packages, and live operator smoke records. The JavaScript SDK already exposes
-the Rust-backed orderbook and PDP reference validators from both the package
-root and `@iroha/iroha-js/sorafs`; the Python SDK exposes the same orderbook
-and PDP outcome contract from `iroha_python.sorafs` and the package root.
+packages, and live operator smoke records.
+`scripts/check_sorafs_reference_sdk_release_evidence.py` now provides the
+fail-closed SF-11 release evidence gate for those artifacts, including
+cross-artifact `release_manifest_digest_hex` binding from release archives,
+downstream packages, cookbook smoke, FFI/header contract, and governance
+approval evidence back to a valid signed manifest in the same bundle, and
+`scripts/run_sorafs_reference_sdk_release_evidence.py` provides the reviewed
+collection planner/runner. The JavaScript SDK already exposes the Rust-backed
+orderbook and PDP reference validators from both the package root and
+`@iroha/iroha-js/sorafs`; the Python SDK exposes the same orderbook and PDP
+outcome contract from `iroha_python.sorafs` and the package root.
 Kotlin/JVM, Java Android, and Swift now expose matching source-level wrappers
 through the shared `connect_norito_bridge` native facade. JavaScript, Python,
 Kotlin/JVM, Java Android, and Swift also expose the encoded orderbook
@@ -349,7 +356,9 @@ convert decoded or raw Norito payloads into the shared validation functions.
   are added.
 - Release smoke checks run through `scripts/package_sorafs_validate_release.sh`.
 - Cross-target release evidence is still a production gate; archive published
-  checksums and smoke outputs for each supported release target.
+  checksums and smoke outputs for each supported release target and require the
+  SF-11 release evidence gate to pass before declaring those artifacts
+  production-ready.
 
 ## Documentation Requirements
 - Implemented: `docs/examples/sorafs_reference_sdk/` sample scripts, README, and
@@ -368,6 +377,48 @@ convert decoded or raw Norito payloads into the shared validation functions.
 - Sign published archives or binaries in the release pipeline after the helper records deterministic digests; when the release signer is available, sign the helper-generated manifest in the same run and archive the `.manifest.json.sig` file beside the hashes. Keep generated `dist/*` artifacts untracked and commit only `dist/.gitkeep`.
 - Release notes template references new/changed validations and error codes.
 
+## Release Evidence Gate
+
+Operators should keep SF-11 release promotion fail-closed until payload-free
+release evidence passes the checked-in gate:
+
+```bash
+python3 scripts/check_sorafs_reference_sdk_release_evidence.py \
+  @scripts/examples/sorafs_reference_sdk_release_evidence.args.example
+```
+
+For reviewed collection planning, use the runner in dry-run mode before
+executing it against captured evidence paths:
+
+```bash
+python3 scripts/run_sorafs_reference_sdk_release_evidence.py \
+  @scripts/examples/sorafs_reference_sdk_release_collection.args.example \
+  --dry-run
+```
+
+The checker recognizes `sorafs.reference_sdk.*` SF-11 release schemas for
+release archives, signed manifests, downstream bindings, cookbook smoke,
+FFI/header contract, and governance approval. It fails closed on stale evidence,
+raw archive, binary, manifest, package, smoke-output, transaction, token,
+secret, or private-key material, missing x86_64/aarch64 macOS and Linux release
+targets, missing binary/archive checksums, missing deterministic-archive proof,
+tracked generated `dist/*` artifacts beyond `dist/.gitkeep`, unsigned or
+unverified release manifests, missing governed release-key fingerprints, missing
+JavaScript/Python/Kotlin/JVM/Java Android/Swift package publication evidence,
+SDK export or `ValidationOutcomeV1` drift, missing native bridge/header binding,
+failed published-archive cookbook smoke, missing fixture bundle or manifest/CAR
+replay, smoke duration above threshold, FFI header drift, and governance packets
+not bound to the governed release key roster, targets, downstream packages,
+smoke evidence, and a `release_manifest_digest_hex` matching a valid signed
+manifest artifact in the same bundle. Release-manifest binding failures are
+recorded on the offending artifact before required-kind validity is computed,
+so the JSON summary matches the fail-closed release decision.
+
+The release evidence scripts have focused Python coverage in:
+
+- `scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py`
+- `scripts/tests/run_sorafs_reference_sdk_release_evidence_test.py`
+
 ## Rollout Status
 Implemented locally:
 - Reference validation APIs for adverts, admission envelopes, admission
@@ -385,11 +436,18 @@ Implemented locally:
 - Release-packaging helper that stages binary/archive/manifest digests and
   optional detached manifest signatures under untracked
   `dist/sorafs-validate-release/`.
+- Fail-closed SF-11 release evidence gate, collection planner, operator argfile
+  templates, and focused tests for release archives, signed manifests,
+  downstream bindings, cookbook smoke, FFI/header contract, and governance
+  approval, including cross-artifact signed-manifest digest binding.
 
 Remaining production gates:
 - Run the packaging helper for the supported release targets and publish signed
-  release manifests outside the repository using governed release keys.
+  release manifests outside the repository using governed release keys, then
+  require those artifacts to pass the SF-11 release evidence gate.
 - Ship/publish downstream SDK binding packages and release artifacts for the
-  local JavaScript, Python, Kotlin/JVM, Java Android, and Swift wrappers.
+  local JavaScript, Python, Kotlin/JVM, Java Android, and Swift wrappers and
+  attach their digests to the SF-11 downstream-bindings evidence packet.
 - Archive live operator smoke evidence for the published `sorafs-validate`
-  archives and cookbook replay before declaring SF-11 fully released.
+  archives and cookbook replay before declaring SF-11 fully released, and
+  require that evidence to pass the SF-11 gate.

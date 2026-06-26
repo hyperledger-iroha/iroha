@@ -29,10 +29,11 @@ use iroha_config::parameters::actual::{
     AdaptiveObservability, ConsensusMode, NodeRole, ProofPolicy, Queue as QueueConfig,
     SoranetHandshake, SoranetPrivacy, SoranetVpn, Sumeragi as SumeragiConfig, SumeragiBlock,
     SumeragiCollectors, SumeragiDa, SumeragiDebug, SumeragiDebugRbc, SumeragiFanout,
-    SumeragiFinality, SumeragiGating, SumeragiKeys, SumeragiModeFlip, SumeragiNpos,
-    SumeragiNposElection, SumeragiNposReconfig, SumeragiNposTimeoutOverrides, SumeragiNposVrf,
-    SumeragiPacemaker, SumeragiPacingGovernor, SumeragiPersistence, SumeragiQueues, SumeragiRbc,
-    SumeragiRecovery, SumeragiResilience, SumeragiVNext, SumeragiWorker,
+    SumeragiFinality, SumeragiGating, SumeragiKeys, SumeragiModeFlip, SumeragiNativeAmx,
+    SumeragiNpos, SumeragiNposElection, SumeragiNposReconfig, SumeragiNposTimeoutOverrides,
+    SumeragiNposVrf, SumeragiPacemaker, SumeragiPacingGovernor, SumeragiPersistence,
+    SumeragiQueues, SumeragiRbc, SumeragiRecovery, SumeragiResilience, SumeragiVNext,
+    SumeragiWorker,
 };
 use iroha_crypto::{
     Algorithm, BfvEvaluationKeyBundle, BfvParameters, Hash, HashOf, KeyPair, MerkleTree, PublicKey,
@@ -3278,6 +3279,12 @@ fn test_sumeragi_config() -> SumeragiConfig {
                 iroha_config::parameters::defaults::sumeragi::RBC_DISK_STORE_TTL_MS,
             ),
             disk_store_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_DISK_STORE_MAX_BYTES,
+        },
+        native_amx: SumeragiNativeAmx {
+            session_cache_max:
+                iroha_config::parameters::defaults::sumeragi::NATIVE_AMX_SESSION_CACHE_MAX,
+            session_body_bucket_max:
+                iroha_config::parameters::defaults::sumeragi::NATIVE_AMX_SESSION_BODY_BUCKET_MAX,
         },
         finality: SumeragiFinality {
             proof_policy: ProofPolicy::Off,
@@ -95195,9 +95202,13 @@ async fn roster_unavailability_candidate_source_matches_consensus_mode() {
         crate::state::validator_lane_ids_for_peers(&world, commit_topology.iter())
     };
     let npos_candidates = if npos_lane_ids.is_empty() {
-        super::roster::stake_active_validator_roster_from_world(&world)
+        super::roster::stake_active_validator_roster_from_world_with_active_lanes(&world, None)
     } else {
-        super::roster::stake_active_validator_roster_for_lanes_from_world(&world, &npos_lane_ids)
+        super::roster::stake_active_validator_roster_for_lanes_from_world_with_active_lanes(
+            &world,
+            &npos_lane_ids,
+            None,
+        )
     };
     let npos_expected = super::roster::canonicalize_roster_for_mode(
         super::roster::filter_roster_with_live_consensus_keys_at_height_world(
@@ -95285,9 +95296,10 @@ async fn roster_unavailability_candidate_source_npos_uses_local_lane_when_commit
     let expected = super::roster::canonicalize_roster_for_mode(
         super::roster::filter_roster_with_live_consensus_keys_at_height_world(
             &world,
-            super::roster::stake_active_validator_roster_for_lanes_from_world(
+            super::roster::stake_active_validator_roster_for_lanes_from_world_with_active_lanes(
                 &world,
                 &local_lane_ids,
+                None,
             ),
             live_height,
         ),
@@ -95361,7 +95373,7 @@ async fn roster_unavailability_candidate_source_npos_uses_full_active_roster_whe
     let expected = super::roster::canonicalize_roster_for_mode(
         super::roster::filter_roster_with_live_consensus_keys_at_height_world(
             &world,
-            super::roster::stake_active_validator_roster_from_world(&world),
+            super::roster::stake_active_validator_roster_from_world_with_active_lanes(&world, None),
             live_height,
         ),
         ConsensusMode::Npos,
@@ -95376,6 +95388,94 @@ async fn roster_unavailability_candidate_source_npos_uses_full_active_roster_whe
     assert!(
         !actual.contains(&local_peer),
         "the fallback roster should stay limited to the published active validators",
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn roster_unavailability_candidate_source_npos_ignores_stale_inactive_commit_lane_scope() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let stale_peer = PeerId::from(harness.key_pairs[1].public_key().clone());
+    let active_peer_a = PeerId::from(harness.key_pairs[2].public_key().clone());
+    let active_peer_b = PeerId::from(harness.key_pairs[3].public_key().clone());
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        state
+            .commit_topology
+            .mutate_vec(|topology| *topology = vec![stale_peer.clone()]);
+        let mut block = state.world.public_lane_validators.block();
+        let existing: Vec<_> = block.iter().map(|(key, _)| key.clone()).collect();
+        for key in existing {
+            block.remove(key);
+        }
+        let stale_account = AccountId::new(stale_peer.public_key().clone());
+        block.insert(
+            (LaneId::new(7), stale_account.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::new(7),
+                validator: stale_account.clone(),
+                peer_id: stale_peer.clone(),
+                stake_account: stale_account,
+                total_stake: Numeric::new(50, 0),
+                self_stake: Numeric::new(50, 0),
+                metadata: iroha_data_model::metadata::Metadata::default(),
+                status: PublicLaneValidatorStatus::Jailed("retired-lane".to_string()),
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+        for peer in [active_peer_a.clone(), active_peer_b.clone()] {
+            let account_id = AccountId::new(peer.public_key().clone());
+            let record = PublicLaneValidatorRecord {
+                lane_id: LaneId::new(8),
+                validator: account_id.clone(),
+                peer_id: peer,
+                stake_account: account_id.clone(),
+                total_stake: Numeric::new(1, 0),
+                self_stake: Numeric::new(1, 0),
+                metadata: iroha_data_model::metadata::Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            };
+            block.insert((record.lane_id, account_id), record);
+        }
+        block.commit();
+    }
+
+    let height = actor.active_consensus_round_height();
+    let committed_height = u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX);
+    let live_height = height.min(committed_height.saturating_add(1)).max(1);
+    let world = actor.state.world_view();
+    assert!(
+        crate::state::validator_lane_ids_for_peers(&world, [&stale_peer]).is_empty(),
+        "inactive commit-topology records must not produce a live lane scope",
+    );
+    let expected = super::roster::canonicalize_roster_for_mode(
+        super::roster::filter_roster_with_live_consensus_keys_at_height_world(
+            &world,
+            super::roster::stake_active_validator_roster_from_world_with_active_lanes(&world, None),
+            live_height,
+        ),
+        ConsensusMode::Npos,
+    );
+
+    let actual = actor.roster_unavailability_candidate_roster(height, ConsensusMode::Npos);
+
+    assert_eq!(
+        actual, expected,
+        "stale inactive commit-topology lane scope must not suppress live NPoS recovery candidates",
+    );
+    assert!(
+        actual.contains(&active_peer_a) && actual.contains(&active_peer_b),
+        "active validators from the live lane should remain eligible"
     );
 
     harness.shutdown.send();
@@ -171492,6 +171592,135 @@ fn validate_block_sync_qc_falls_back_without_stake_snapshot() {
 }
 
 #[test]
+fn validate_block_sync_qc_active_lane_filter_ignores_stale_unknown_lane_stake() {
+    let chain: ChainId = "block-sync-npos-active-lane-filter"
+        .parse()
+        .expect("chain id parses");
+    let (keypairs, raw_topology) = sample_bls_topology(3);
+    let validator_set = canonical_validator_set_for_mode(&raw_topology, ConsensusMode::Npos);
+    let topology = super::network_topology::Topology::new(validator_set.clone());
+    let world = world_with_consensus_keys(topology.as_ref(), &keypairs);
+    let stale_lane = LaneId::new(42);
+
+    {
+        let mut block = world.public_lane_validators.block();
+        for peer in topology.as_ref() {
+            let account_id = AccountId::new(peer.public_key().clone());
+            let record = PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: account_id.clone(),
+                peer_id: peer.clone(),
+                stake_account: account_id.clone(),
+                total_stake: Numeric::new(1, 0),
+                self_stake: Numeric::new(1, 0),
+                metadata: iroha_data_model::metadata::Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            };
+            block.insert((record.lane_id, account_id), record);
+        }
+
+        let stale_peer = topology.as_ref().first().expect("signer present");
+        let stale_account_id = AccountId::new(stale_peer.public_key().clone());
+        let stale_record = PublicLaneValidatorRecord {
+            lane_id: stale_lane,
+            validator: stale_account_id.clone(),
+            peer_id: stale_peer.clone(),
+            stake_account: stale_account_id.clone(),
+            total_stake: Numeric::new(10_000, 0),
+            self_stake: Numeric::new(10_000, 0),
+            metadata: iroha_data_model::metadata::Metadata::default(),
+            status: PublicLaneValidatorStatus::Active,
+            activation_epoch: None,
+            activation_height: None,
+            last_reward_epoch: None,
+        };
+        block.insert((stale_record.lane_id, stale_account_id), stale_record);
+        block.commit();
+    }
+
+    let world_view = world.view();
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x85; Hash::LENGTH]));
+    let signers_bitmap = vec![0b0000_0001];
+    let aggregate_sig = aggregate_signature_for_bitmap(
+        &chain,
+        super::NPOS_TAG,
+        Phase::Commit,
+        block_hash,
+        3,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
+    let qc = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 3,
+        view: 0,
+        epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
+        mode_tag: super::NPOS_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set,
+        aggregate: QcAggregate {
+            signers_bitmap,
+            bls_aggregate_signature: aggregate_sig,
+        },
+    };
+    let block_signers: BTreeSet<_> = [0_u32].into_iter().collect();
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Npos,
+        None,
+    );
+
+    super::validate_block_sync_qc(
+        &qc,
+        &topology,
+        &world_view,
+        &block_signers,
+        0,
+        &inputs.pops,
+        &chain,
+        ConsensusMode::Npos,
+        None,
+        super::NPOS_TAG,
+        None,
+        Some(true),
+    )
+    .expect("raw fallback still sees the inflated stale-lane stake");
+
+    let active_lane_ids = BTreeSet::from([LaneId::SINGLE]);
+    let result = super::validate_block_sync_qc_with_active_lanes(
+        &qc,
+        &topology,
+        &world_view,
+        &block_signers,
+        0,
+        &inputs.pops,
+        &chain,
+        ConsensusMode::Npos,
+        None,
+        super::NPOS_TAG,
+        None,
+        Some(true),
+        Some(&active_lane_ids),
+    );
+    assert_eq!(result, Err(super::QcValidationError::StakeQuorumMissing));
+}
+
+#[test]
 fn validate_block_sync_qc_rejects_missing_stake_quorum() {
     let chain: ChainId = "block-sync-npos-stake-quorum"
         .parse()
@@ -173185,6 +173414,7 @@ fn tally_qc_against_block_signers_accepts_without_votes() {
         super::PERMISSIONED_TAG,
         None,
         None,
+        None,
     )
     .expect("block-signers tally should succeed");
 
@@ -173257,6 +173487,7 @@ fn tally_qc_against_block_signers_accepts_aggregate_override() {
         super::PERMISSIONED_TAG,
         None,
         Some(true),
+        None,
     )
     .expect("block-signers tally should accept verified aggregate override");
 
@@ -173302,6 +173533,7 @@ fn tally_qc_against_block_signers_preserves_bitmap_indices() {
         ConsensusMode::Permissioned,
         None,
         super::PERMISSIONED_TAG,
+        None,
         None,
         None,
     )

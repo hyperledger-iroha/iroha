@@ -170,10 +170,12 @@ const LOCAL_RUNTIME_SNAPSHOT_TMP_EXT: &str = "tmp";
 const PRIVACY_AGGREGATE_ENTRY_ID_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.privacy_aggregate.entry_id.v1";
 
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry},
     env, fs,
-    io::{self, ErrorKind, Read},
+    io::{self, ErrorKind, Read, Write},
     path::{Component, Path, PathBuf},
     sync::{
         Arc, RwLock,
@@ -390,6 +392,44 @@ fn write_local_checkpoint_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let tmp_path = local_checkpoint_tmp_path(path, std::process::id(), counter);
     fs::write(&tmp_path, bytes)?;
     fs::rename(tmp_path, path)?;
+    Ok(())
+}
+
+fn write_local_private_checkpoint_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let counter = LOCAL_RUNTIME_SNAPSHOT_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp_path = local_checkpoint_tmp_path(path, std::process::id(), counter);
+    write_local_private_file(&tmp_path, bytes)?;
+    fs::rename(&tmp_path, path)?;
+    set_local_private_file_permissions(path)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn write_local_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(bytes)?;
+    file.flush()
+}
+
+#[cfg(not(unix))]
+fn write_local_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    fs::write(path, bytes)
+}
+
+#[cfg(unix)]
+fn set_local_private_file_permissions(path: &Path) -> io::Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(not(unix))]
+fn set_local_private_file_permissions(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
@@ -5679,7 +5719,7 @@ fn create_moderation_quarantine_object_key(
             path: path.display().to_string(),
             message: format!("failed to generate local sealing key: {err}"),
         })?;
-    write_local_checkpoint_atomic(path, &key).map_err(|err| {
+    write_local_private_checkpoint_atomic(path, &key).map_err(|err| {
         ModerationQuarantineObjectError::Io {
             path: path.display().to_string(),
             message: err.to_string(),
@@ -5746,6 +5786,8 @@ fn orderbook_provider_escrow_runways(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::{
         str::FromStr,
         sync::{
@@ -6632,6 +6674,17 @@ mod tests {
         assert_eq!(record.payload_digest, *blake3::hash(&payload).as_bytes());
         assert_eq!(record.payload_len, payload.len() as u64);
         assert_eq!(record.notes.as_deref(), Some("sealed locally"));
+
+        #[cfg(unix)]
+        {
+            let key_path = moderation_quarantine_object_key_path(cfg.data_dir());
+            let mode = fs::metadata(&key_path)
+                .expect("read local seal key metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
 
         let envelope_path =
             moderation_quarantine_object_store_root(cfg.data_dir()).join(&record.envelope_path);

@@ -22,7 +22,16 @@ fixtures. The reference validator also provides
 
 Remaining SF-9a rollout work is live deployment evidence for external drand,
 VRF, and auditor feeds, plus any production governance archive handoff required
-by the operator.
+by the operator. `scripts/check_sorafs_por_rollout_evidence.py` now provides
+the fail-closed SF-9 rollout evidence gate for deployed PoR scheduler,
+randomness, validator, reporting, archive, observability, and governance
+promotion packets, and `scripts/run_sorafs_por_rollout_evidence.py` provides
+the matching reviewed collection planner/runner. The gate now also requires
+scheduler runtime, validator replay, reporting/archive, observability, and
+governance approval artifacts to carry a `seed_replay_digest_hex` matching a
+valid randomness artifact in the same evidence bundle. Seed-replay mismatches
+are recorded on the offending artifact in the JSON summary before required-kind
+validity is reported.
 
 ## Randomness Model
 1. **Epoch cadence:** 1-hour epochs (`epoch_id = floor(unix_time / 3600)`).
@@ -256,6 +265,44 @@ archive handoff required by the deployment operator.
   - Fixture replay verifying `PorProofV1`.
 - Trybuild UI tests ensure compile-time errors for malformed Norito payloads.
 
+The rollout evidence scripts have focused Python coverage in:
+
+- `scripts/tests/check_sorafs_por_rollout_evidence_test.py`
+- `scripts/tests/run_sorafs_por_rollout_evidence_test.py`
+
+## Rollout Evidence Gate
+
+Operators should keep SF-9 promotion fail-closed until the payload-free
+deployment evidence passes the checked-in gate:
+
+```bash
+python3 scripts/check_sorafs_por_rollout_evidence.py \
+  @scripts/examples/sorafs_por_rollout_evidence.args.example
+```
+
+For reviewed collection planning, use the runner in dry-run mode before
+executing it against captured evidence paths:
+
+```bash
+python3 scripts/run_sorafs_por_rollout_evidence.py \
+  @scripts/examples/sorafs_por_rollout_collection.args.example \
+  --dry-run
+```
+
+The checker recognizes `sorafs.por.*` SF-9 rollout schemas for randomness,
+scheduler runtime, validator replay, reporting/archive handoff, observability,
+and governance approval. It fails closed on stale evidence, raw challenge/proof,
+drand, VRF, report, export, response-body, transaction, token, secret, and key
+material, under-sized provider or challenge samples, unauthenticated or
+non-Norito routes, route latency above threshold, scheduler lag above threshold,
+missing deterministic seed replay, missing drand/VRF validation, missing
+repair/governance handoff, missing `sorafs-validate por` replay, unresolved
+manual-trigger route policy, report latency above threshold, missing PoR metrics
+or alerts, critical alerts, seed replay digest drift across runtime/replay/
+reporting/observability/governance artifacts, and governance packets not bound
+to `iroha_config`. Seed-replay binding failures are attached to the offending
+artifact in the emitted summary.
+
 ## Rollout Status
 Implemented locally:
 - `sorafs_manifest::por` challenge, proof, status, manual challenge, provider
@@ -268,10 +315,17 @@ Implemented locally:
 - Scheduler, forced-challenge, duplicate-sample, and ingestion telemetry with
   checked-in dashboard and alert fixtures.
 - `generate_por_fixtures` and `sorafs-validate por` reference validation.
+- Fail-closed SF-9 rollout evidence gate, collection planner, operator argfile
+  templates, and focused tests, including cross-artifact seed replay digest
+  binding with per-artifact summary invalidation.
 
 Remaining production gates:
 - Archive a live drand/VRF/auditor run showing deterministic challenge
-  generation and verdict replay.
+  generation and verdict replay that passes the SF-9 rollout evidence gate with
+  all runtime/replay/reporting/governance evidence bound to the same seed replay
+  digest and any binding failure marked on the offending artifact in the emitted
+  summary.
 - Decide whether each deployment needs the SQL/Parquet warehouse layer in
   addition to the node-local Norito snapshot.
-- Capture governance DAG archive handoff evidence for production operators.
+- Capture governance DAG archive handoff evidence for production operators and
+  include it in the SF-9 reporting/archive evidence packet.

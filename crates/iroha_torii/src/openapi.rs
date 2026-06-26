@@ -4138,6 +4138,17 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/sorafs/por/trigger".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Manual PoR trigger retired.",
+            "Return a fail-closed retirement response for the legacy manual PoR trigger route. Submit governed PorChallengeV1 payloads through `/v1/sorafs/capacity/por-challenge` or the scheduler runtime instead.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/sorafs/capacity/por".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
@@ -4929,7 +4940,7 @@ fn sorafs_paths() -> Map {
     let mut quarantine_object = json_get_operation(
         "SoraFS",
         "Read a local encrypted quarantine payload object.",
-        "Read and decrypt one local SFM-4a quarantine payload object from the node-local encrypted object store. The endpoint verifies the object envelope, returns the payload as standard base64 for authorized operators, and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
+        "Read and decrypt one local SFM-4a quarantine payload object from the node-local encrypted object store. The endpoint verifies the object envelope, returns the payload as standard base64 for authorized operators, marks the response private/no-store with Vary over canonical auth headers, and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
         "#/components/schemas/JsonValue",
         vec![string_path_param(
             "quarantine_id_hex",
@@ -13140,6 +13151,7 @@ mod tests {
         assert!(paths.contains_key("/v1/sorafs/audit/repair/events"));
         assert!(paths.contains_key("/v1/sorafs/audit/repair/events/stream"));
         assert!(paths.contains_key("/v1/sorafs/audit/repair/events/ws"));
+        assert!(paths.contains_key("/v1/sorafs/por/trigger"));
         assert!(paths.contains_key("/v1/sorafs/appeals/pricing/config"));
         assert!(paths.contains_key("/v1/sorafs/appeals/pricing/status"));
         assert!(paths.contains_key("/v1/sorafs/appeals/pricing/quote"));

@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/sorafs_orderbook_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b75bd1c503167f40a912c0ce001e35ae4cc471a470abd5e8d515971f76f37f1d
-source_last_modified: 2026-06-24T09:38:42.574539Z
-translation_last_reviewed: 2026-02-07
+source_hash: 965067d671c0c972601d966f5650ef9d1d55af613bbad4b713da98131c49ffa7
+source_last_modified: "2026-06-25T17:28:04+00:00"
+translation_last_reviewed: 2026-06-25
 title: SoraFS XOR Orderbook & Streaming Settlement
 summary: SFM-2 target architecture and current gap status for XOR orderbook, streaming settlement, APIs, telemetry, and rollout.
 ---
@@ -80,6 +80,15 @@ JavaScript, `iroha_python`, and standalone `iroha_torii_client` local
 order/cancel/receipt submit helpers for already signed Norito payload bytes,
 target observability fixtures, Prometheus metric handles/helper methods, and
 bundle-validation selectors exist locally.
+`scripts/check_sorafs_orderbook_rollout_evidence.py` now provides the
+fail-closed SFM-2 rollout evidence gate for deployed orderbook and
+streaming-settlement promotion packets, and
+`scripts/run_sorafs_orderbook_rollout_evidence.py` provides the matching
+reviewed evidence collection planner/runner. Matcher, settlement, API gateway,
+event stream, SDK release, observability, and reconciliation artifacts must
+carry a `contract_digest_hex` that matches a valid contract-surface artifact in
+the same bundle. Contract-digest mismatches are recorded on the offending
+artifact in the JSON summary before required-kind validity is reported.
 
 Other foundations that this work can build on include generic settlement and
 deal payloads, SoraFS pricing/reserve helpers, repair/PoR governance evidence,
@@ -394,6 +403,44 @@ Required before rollout:
 - Integration tests spanning contract, matcher, settlement service, API, and governance evidence publication.
 - Load and disaster-recovery tests for oracle outage, contract pause, queue lag, and settlement backlog.
 
+The rollout evidence scripts have focused Python coverage in:
+
+- `scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py`
+- `scripts/tests/run_sorafs_orderbook_rollout_evidence_test.py`
+
+## Rollout Evidence Gate
+
+Use the rollout gate after the deployed orderbook contract, durable matcher,
+streaming-settlement receipt service, authenticated API gateway, durable
+SSE/WebSocket streams, released SDK artifacts, live observability, reconciliation
+jobs, and governance packet have produced reviewed, payload-free JSON evidence:
+
+```sh
+python3 scripts/check_sorafs_orderbook_rollout_evidence.py \
+  @scripts/examples/sorafs_orderbook_rollout_evidence.args.example
+```
+
+For staged collections with reviewed evidence paths, prefer the planner so the
+verifier command and summary path are reproducible:
+
+```sh
+python3 scripts/run_sorafs_orderbook_rollout_evidence.py \
+  @scripts/examples/sorafs_orderbook_rollout_collection.args.example \
+  --dry-run
+```
+
+The checker recognizes `sorafs.orderbook.*` SFM-2 rollout schemas for contract
+surface, matcher service, settlement service, API gateway, event streams, SDK
+release, observability, reconciliation, and governance approval evidence. It
+reports `ready` only when every required kind is present, every recognized
+artifact is valid, raw order payloads, receipt payloads, raw snapshots, raw
+contract state, response bodies, signed transactions, secrets, and ledgers are
+absent, route latency, stream lag, and matcher lag stay under configured
+thresholds, reconciliation covers at least four peers, governance is bound to
+`iroha_config`, and matcher, settlement, API, stream, SDK, observability, and
+reconciliation artifacts carry a `contract_digest_hex` that matches a valid
+contract-surface artifact in the same rollout bundle.
+
 ## Rollout Status
-- Done: target architecture and requirements are documented; initial SoraFS orderbook Norito payloads, structural/accounting validators, canonical embedded Ed25519 payload signature digests/verification, Rust/JavaScript/Python/Kotlin/JVM/Java Android/Swift encoded Ed25519 signing helpers for order/cancel/receipt payloads, Rust/JavaScript/Python/Kotlin/JVM/Java Android/Swift field-level signed order/cancel/receipt payload builders, deterministic pair and full-book snapshot matching/fee/settlement helpers, deterministic generated matcher invariant coverage, canonical Norito local runtime replay snapshots with storage-data-dir checkpoint reload, Rust reference validator, reference FFI selector surface, CLI parser surface, committed fixtures, bundle-validator coverage, JavaScript, Python, Kotlin/JVM, Java Android, and Swift orderbook validator bindings, JavaScript and Python Torii read helpers for local book/trades/channels/receipts/events, JavaScript and `iroha_python` local orderbook SSE/WebSocket stream helpers, JavaScript, `iroha_python`, and standalone `iroha_torii_client` local submit helpers for already signed Norito order/cancel/receipt bytes, target dashboard/alert fixtures, orderbook Prometheus metric handles/helper methods, local runtime mirror, local config-backed order admission policy, local settlement receipt application, local orderbook settlement receipt Governance DAG publication, local Torii order/cancel/receipt/book/trade/channel/event API with `limit`-bounded book/trades/channels/receipts readbacks and full total counts, local request-authenticated orderbook POST envelope/account/signer binding, local known-channel receipt provider-role authorization, local provider-advert capability authorization for asks and known-channel receipts, local SSE/WebSocket event streams with frame-shape coverage, local runtime metric emission including provider escrow runway and API error ratios, and focused unit tests are implemented; adjacent settlement, pricing, reserve, validation, and governance foundations exist.
-- Remaining: implement on-chain contract surface, durable matcher service, daemonized settlement receipt service with escrow custody mutation, on-chain/governance-backed admission policy, contract-backed capability policy authorization, contract forwarding, durable contract/matcher-backed WebSocket/SSE streams, SDK release artifacts/live smoke evidence, live dashboard wiring and alert routing, contract/mirror reconciliation tests, and staged/live rollout evidence.
+- Done: target architecture and requirements are documented; initial SoraFS orderbook Norito payloads, structural/accounting validators, canonical embedded Ed25519 payload signature digests/verification, Rust/JavaScript/Python/Kotlin/JVM/Java Android/Swift encoded Ed25519 signing helpers for order/cancel/receipt payloads, Rust/JavaScript/Python/Kotlin/JVM/Java Android/Swift field-level signed order/cancel/receipt payload builders, deterministic pair and full-book snapshot matching/fee/settlement helpers, deterministic generated matcher invariant coverage, canonical Norito local runtime replay snapshots with storage-data-dir checkpoint reload, Rust reference validator, reference FFI selector surface, CLI parser surface, committed fixtures, bundle-validator coverage, JavaScript, Python, Kotlin/JVM, Java Android, and Swift orderbook validator bindings, JavaScript and Python Torii read helpers for local book/trades/channels/receipts/events, JavaScript and `iroha_python` local orderbook SSE/WebSocket stream helpers, JavaScript, `iroha_python`, and standalone `iroha_torii_client` local submit helpers for already signed Norito order/cancel/receipt bytes, target dashboard/alert fixtures, orderbook Prometheus metric handles/helper methods, local runtime mirror, local config-backed order admission policy, local settlement receipt application, local orderbook settlement receipt Governance DAG publication, local Torii order/cancel/receipt/book/trade/channel/event API with `limit`-bounded book/trades/channels/receipts readbacks and full total counts, local request-authenticated orderbook POST envelope/account/signer binding, local known-channel receipt provider-role authorization, local provider-advert capability authorization for asks and known-channel receipts, local SSE/WebSocket event streams with frame-shape coverage, local runtime metric emission including provider escrow runway and API error ratios, fail-closed rollout evidence gate with cross-artifact contract-digest binding, collection planner, operator argfile templates, and focused unit tests are implemented; adjacent settlement, pricing, reserve, validation, and governance foundations exist.
+- Remaining: implement on-chain contract surface, durable matcher service, daemonized settlement receipt service with escrow custody mutation, on-chain/governance-backed admission policy, contract-backed capability policy authorization, contract forwarding, durable contract/matcher-backed WebSocket/SSE streams, SDK release artifacts/live smoke evidence, live dashboard wiring and alert routing, contract/mirror reconciliation tests, and staged/live rollout evidence that passes the SFM-2 gate.

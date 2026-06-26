@@ -26,6 +26,31 @@ enum class SorafsPdpPayloadKind(
     PROOF(3, "proof.to"),
 }
 
+/** PoP payload kind accepted by the Rust-backed SoraFS reference validator. */
+enum class SorafsPopPayloadKind(
+    @JvmField val bridgeCode: Int,
+    @JvmField val defaultLabel: String,
+) {
+    CREDENTIAL(1, "pop-credential.to"),
+    COMMITMENT_ROOT(2, "pop-commitment-root.to"),
+    REVOCATION_LIST(3, "pop-revocation-list.to"),
+    ENROLLMENT_REQUEST(4, "pop-enrollment-request.to"),
+    RENEWAL_REQUEST(5, "pop-renewal-request.to"),
+    MEMBERSHIP_PROOF(6, "pop-membership-proof.to"),
+    ISSUED_CREDENTIAL_BUNDLE(7, "pop-issued-credential-bundle.to"),
+}
+
+/** Hedging and billing payload kind accepted by the Rust-backed SoraFS reference validator. */
+enum class SorafsHedgingPayloadKind(
+    @JvmField val bridgeCode: Int,
+    @JvmField val defaultLabel: String,
+) {
+    PRICE_FEED(1, "hedging-price-feed.to"),
+    REFERENCE_PRICE_DECISION(2, "hedging-reference-price-decision.to"),
+    BILLING_LINE_ITEM(3, "billing-line-item.to"),
+    BILLING_STATEMENT(4, "billing-statement.to"),
+}
+
 /** Side selector for field-level SoraFS orderbook order builders. */
 enum class SorafsOrderbookSide(@JvmField val bridgeCode: Int) {
     BID(1),
@@ -51,7 +76,7 @@ enum class SorafsOrderbookCancelReason(@JvmField val bridgeCode: Int) {
 class SorafsReferenceValidators private constructor() {
     companion object {
         private const val LIBRARY_NAME = "connect_norito_bridge"
-        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 10
+        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 12
         private val nativeAvailable: Boolean = loadLibrary()
 
         @JvmStatic
@@ -77,6 +102,52 @@ class SorafsReferenceValidators private constructor() {
                     generatedAtUnix,
                 ),
                 "SoraFS orderbook validation",
+            )
+        }
+
+        @JvmStatic
+        @JvmOverloads
+        fun validatePopPayloadJson(
+            kind: SorafsPopPayloadKind,
+            noritoBytes: ByteArray,
+            label: String? = null,
+            generatedAtUnix: Long = currentEpochSeconds(),
+        ): String {
+            requireGeneratedAt(generatedAtUnix)
+            val payload = noritoBytes.copyOf()
+            val labelBytes = labelBytes(label, kind.defaultLabel)
+            requireNative()
+            return requireJsonOutput(
+                nativeValidatePopPayloadJson(
+                    kind.bridgeCode,
+                    payload,
+                    labelBytes,
+                    generatedAtUnix,
+                ),
+                "SoraFS PoP validation",
+            )
+        }
+
+        @JvmStatic
+        @JvmOverloads
+        fun validateHedgingPayloadJson(
+            kind: SorafsHedgingPayloadKind,
+            noritoBytes: ByteArray,
+            label: String? = null,
+            generatedAtUnix: Long = currentEpochSeconds(),
+        ): String {
+            requireGeneratedAt(generatedAtUnix)
+            val payload = noritoBytes.copyOf()
+            val labelBytes = labelBytes(label, kind.defaultLabel)
+            requireNative()
+            return requireJsonOutput(
+                nativeValidateHedgingPayloadJson(
+                    kind.bridgeCode,
+                    payload,
+                    labelBytes,
+                    generatedAtUnix,
+                ),
+                "SoraFS hedging validation",
             )
         }
 
@@ -431,6 +502,22 @@ class SorafsReferenceValidators private constructor() {
 
         @JvmStatic
         private external fun nativeValidateOrderbookPayloadJson(
+            kind: Int,
+            payload: ByteArray,
+            label: ByteArray,
+            generatedAtUnix: Long,
+        ): ByteArray?
+
+        @JvmStatic
+        private external fun nativeValidatePopPayloadJson(
+            kind: Int,
+            payload: ByteArray,
+            label: ByteArray,
+            generatedAtUnix: Long,
+        ): ByteArray?
+
+        @JvmStatic
+        private external fun nativeValidateHedgingPayloadJson(
             kind: Int,
             payload: ByteArray,
             label: ByteArray,

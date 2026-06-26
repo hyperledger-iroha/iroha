@@ -5,151 +5,148 @@ source: docs/source/sorafs_orchestrator_telemetry_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: f697d58faa5c634516a58566671cae33538fff8de31422bc34e4e860c0e8dc13
-source_last_modified: "2025-11-02T18:25:19.142204+00:00"
+source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-01-22
 ---
 
-<!-- 日本語訳: docs/source/sorafs_orchestrator_telemetry_plan.md -->
+# SoraFS Orchestrator Telemetry & Alerting Plan
 
-# SoraFS オーケストレーターのテレメトリ／アラート計画
+## Metrics
 
-## メトリクス
+The orchestrator emits Prometheus metrics via `iroha_telemetry::metrics::Metrics`, and mirrors the
+same signals through OpenTelemetry instruments prefixed with `sorafs.fetch.*` when the
+`iroha_telemetry/otel-exporter` feature is enabled.
 
-オーケストレーターは `iroha_telemetry::metrics::Metrics` を通じて Prometheus メトリクスを
-出力し、`iroha_telemetry/otel-exporter` 機能が有効な場合は同じシグナルを
-`sorafs.fetch.*` プレフィックスの OpenTelemetry 計測としても出力する。
+**Prometheus / scrape path**
 
-**Prometheus / スクレイプパス**
+- `sorafs_orchestrator_active_fetches{manifest_id,region}` — active fetch sessions.
+- `sorafs_orchestrator_fetch_duration_ms_bucket{manifest_id,region,le}` — fetch duration histogram.
+- `sorafs_orchestrator_fetch_failures_total{manifest_id,region,failure_reason}` — orchestrator failures.
+- `sorafs_orchestrator_retries_total{manifest_id,provider_id,retry_reason}` — retry counts by provider.
+- `sorafs_orchestrator_provider_failures_total{manifest_id,provider_id,failure_reason}` — provider failure matrix.
 
-- `sorafs_orchestrator_active_fetches{manifest_id,region}` — アクティブなフェッチセッション数。
-- `sorafs_orchestrator_fetch_duration_ms_bucket{manifest_id,region,le}` — フェッチ時間のヒストグラム。
-- `sorafs_orchestrator_fetch_failures_total{manifest_id,region,failure_reason}` — オーケストレーター側の失敗件数。
-- `sorafs_orchestrator_retries_total{manifest_id,provider_id,retry_reason}` — プロバイダ別の再試行回数。
-- `sorafs_orchestrator_provider_failures_total{manifest_id,provider_id,failure_reason}` — プロバイダ障害マトリクス。
+**OpenTelemetry / OTLP push**
 
-**OpenTelemetry / OTLP プッシュ**
+- `sorafs.fetch.active{manifest_id,region,job_id}` — active fetches (up/down counter).
+- `sorafs.fetch.duration_ms{manifest_id,region,job_id}` — fetch duration histogram (milliseconds).
+- `sorafs.fetch.failures_total{manifest_id,region,failure_reason}` — orchestrator-level failures.
+- `sorafs.fetch.retries_total{manifest_id,region,job_id,provider_id,retry_reason}` — retry attempts.
+- `sorafs.fetch.provider_failures_total{manifest_id,region,job_id,provider_id,failure_reason}` — provider failure matrix.
 
-- `sorafs.fetch.active{manifest_id,region,job_id}` — アクティブなフェッチ（up/down カウンタ）。
-- `sorafs.fetch.duration_ms{manifest_id,region,job_id}` — フェッチ時間ヒストグラム（ミリ秒）。
-- `sorafs.fetch.failures_total{manifest_id,region,failure_reason}` — オーケストレーター全体の失敗。
-- `sorafs.fetch.retries_total{manifest_id,region,job_id,provider_id,retry_reason}` — 再試行回数。
-- `sorafs.fetch.provider_failures_total{manifest_id,region,job_id,provider_id,failure_reason}` — プロバイダ障害マトリクス。
+## Events/Logs
 
-## イベント／ログ
+- Provider ban/unban with reason.
+- Token exhaustion events.
+- Proof verification failure details.
 
-- プロバイダの BAN/解除（理由付き）。
-- トークン枯渇イベント。
-- 証明検証失敗の詳細。
+## Dashboards
 
-## ダッシュボード
+- **Overview**: throughput, success ratio, active fetches.
+- **Provider Health**: failure counts, latency, stall rate.
+- **Retries**: histogram and cumulative count by reason.
+- **Per-Manifest**: chunk progress, outstanding tokens.
 
-- **Overview**: スループット、成功率、アクティブフェッチ。
-- **Provider Health**: 失敗件数、レイテンシ、停止率。
-- **Retries**: 理由別のヒストグラムと累積件数。
-- **Per-Manifest**: チャンク進捗、未消化トークン。
+See `docs/examples/sorafs_fetch_dashboard.json` for the baseline Grafana dashboard wired to these
+metrics (matching the panels described above).
 
-これらのメトリクスに接続された Grafana ダッシュボードのベースラインは
-`docs/examples/sorafs_fetch_dashboard.json` を参照（上記パネルに対応）。
+## Alerts
 
-## アラート
+- Success ratio < 99% for >5 minutes.
+- Provider failure rate > 5% over 10-minute window.
+- Chunk latency P95 > 250 ms sustained >10 minutes.
+- Token exhaustion events > threshold per minute.
+- Proof verification failures observed (with severity rating).
 
-- 成功率 < 99% が 5 分以上継続。
-- プロバイダ失敗率 > 5% が 10 分ウィンドウで継続。
-- チャンクレイテンシ P95 > 250 ms が 10 分以上継続。
-- トークン枯渇イベントが 1 分あたりの閾値超過。
-- 証明検証失敗の観測（重要度付き）。
+Alerting rules are codified in `docs/examples/sorafs_fetch_alerts.yaml`, suitable for ingestion by
+Prometheus Alertmanager or Mimir ruler.
 
-アラートルールは `docs/examples/sorafs_fetch_alerts.yaml` に定義されており、Prometheus
-Alertmanager や Mimir ruler での取り込みに適合する。
+## Integration
 
-## 統合
+- Ingest orchestrator metrics via OpenTelemetry -> Prometheus/Mimir.
+- Link dashboards with gateway telemetry (shared labels `manifest`, `provider`).
+- Align alerts with SLOs defined in `sorafs_observability_plan.md`.
 
-- OpenTelemetry でオーケストレーターのメトリクスを取り込み、Prometheus/Mimir へ連携。
-- ゲートウェイのテレメトリとダッシュボードを連携（共通ラベル `manifest`, `provider`）。
-- `sorafs_observability_plan.md` の SLO 定義にアラートを揃える。
+## Implementation Status
 
-## 実装状況
+- Prometheus gauges/counters are emitted from `crates/sorafs_orchestrator/src/lib.rs` via
+  `FetchMetricsCtx`, ensuring scoreboard-driven fetches always update success/failure telemetry.
+- OpenTelemetry metrics are provided by `iroha_telemetry::metrics::SorafsFetchOtel`; the helper
+  `install_sorafs_fetch_otlp_exporter` configures an OTLP push pipeline (see
+  `crates/iroha_telemetry/src/metrics.rs`).
+- CLI / SDK integrations can call the exporter helper with the desired OTLP endpoint and region
+  resource attributes before invoking `Orchestrator::fetch_*`, so both Prometheus scraping and OTLP
+  streaming stay in sync.
 
-- Prometheus のゲージ／カウンタは `crates/sorafs_orchestrator/src/lib.rs` の
-  `FetchMetricsCtx` から出力され、スコアボード駆動のフェッチでも成功／失敗の
-  テレメトリが必ず更新される。
-- OpenTelemetry メトリクスは `iroha_telemetry::metrics::SorafsFetchOtel` が提供し、
-  `install_sorafs_fetch_otlp_exporter` が OTLP プッシュのパイプラインを構成する
-  （`crates/iroha_telemetry/src/metrics.rs` 参照）。
-- CLI/SDK は `Orchestrator::fetch_*` 実行前に OTLP のエンドポイントとリージョン属性を
-  指定してヘルパを呼び出すことで、Prometheus スクレイプと OTLP ストリーミングが
-  同期したまま動作する。
+## Rollout & Tuning Guide
 
-## ロールアウト & チューニングガイド
-
-- **設定。** フェッチ開始前に
+- **Configuration.** Before issuing fetches, call
   `install_sorafs_fetch_otlp_exporter("http://127.0.0.1:4317", "sorafs-orchestrator", &[("deployment.region", region)], Duration::from_secs(5))`
-  を呼び出し、OTLP の送信間隔をローカルコレクタに合わせる。OTLP ストリームと
-  Prometheus テキストエンドポイントが同じ計測値を出力する状態を保つ。
-- **サンプリング間隔。** OTLP ヘルパは 2 秒ごとに送信する。コレクタのバッチ間隔は
-  5 秒に保ち、`rate()`/`histogram_quantile()` を使う Grafana パネルが過剰サンプリング
-  にならず、準リアルタイムの挙動を反映できるようにする。
-- **障害シナリオ。**
-  - `sorafs.fetch.failures_total` の増加は機能不一致や再試行枯渇が原因であることが多い。
-    `failure_reason` ラベルを確認し、オーケストレーター側のゲートを調整する。
-  - `sorafs.fetch.provider_failures_total` のスパイクは不調なプロバイダを示す。`Retries per Provider`
-    パネルと相関させて一時的なブラックリストを判断する。
-  - `sorafs.fetch.duration_ms` の p95 が 250 ms を超えて継続するとバンドル済みアラートが発火する。
-    ページング前に `FetchOptions::global_parallel_limit` と再試行予算を調整する。
-- **検証。** `docs/examples/sorafs_fetch_dashboard.json` の Grafana パネルからロールアウトを開始し、
-  ベースラインのレイテンシと失敗率が安定したら `docs/examples/sorafs_fetch_alerts.yaml` の
-  アラートセットを有効化する。
+  to align OTLP push cadence with the local collector. This keeps the OTLP stream and Prometheus text
+  endpoint emitting the same measurements.
+- **Sampling cadence.** The OTLP helper streams every 2 s; keep the collector batch interval at 5 s so
+  Grafana panels based on `rate()`/`histogram_quantile()` reflect near-real-time behaviour without
+  oversampling.
+- **Failure scenarios.**
+  - Rising `sorafs.fetch.failures_total` usually indicates capability mismatches or exhausted retry
+    budgets—inspect the `failure_reason` labels and gate the orchestrator accordingly.
+  - Spikes in `sorafs.fetch.provider_failures_total` pinpoint unhealthy providers; correlate with the
+    “Retries per Provider” panel to decide on temporary blacklisting.
+  - Sustained `sorafs.fetch.duration_ms` p95 above 250 ms triggers the bundled alert rule; tune
+    `FetchOptions::global_parallel_limit` and retry budgets before paging.
+- **Validation.** Start rollout with the Grafana panels in `docs/examples/sorafs_fetch_dashboard.json`,
+  then enable the alert set from `docs/examples/sorafs_fetch_alerts.yaml` once baseline latency and
+  failure rates stabilise.
 
-## ラベルタクソノミ
+## Label Taxonomy
 
-オーケストレーターのメトリクスは、ゲートウェイ／ノード計画と同じラベル規則と
-セマンティクスを採用し、サービス横断の結合が決定論的に行えるようにする。
+Orchestrator metrics adopt the same label casing and semantic rules as the gateway and node plans so
+cross-service joins remain deterministic.
 
-| ラベル | 適用先 | 説明 |
-|--------|--------|------|
-| `manifest_id` | ゲージ／ヒストグラム／カウンタ | フェッチ対象マニフェストの安定 Norito CID。グローバル指標（例: 総再試行回数）では省略。 |
-| `provider_id` | プロバイダ指標 | ガバナンス発行のプロバイダ識別子（`prov_xxx`）。マルチホップでは最終プロバイダを指す。 |
-| `job_id` | オーケストレーションジョブ | 単一フェッチ要求と再試行を束ねる UUID。トレース相関のためレイテンシ／再試行に含める。 |
-| `region` | 全メトリクス | オーケストレーターのデプロイリージョン（`us-east-1`, `eu-central-1`）。リージョナル表示とアラート振り分けを可能にする。 |
-| `failure_reason` | 失敗カウンタ | 列挙理由（`timeout`, `digest_mismatch`, `http_5xx`, `token_exhausted`）。 |
-| `retry_reason` | 再試行メトリクス | 再試行分類（`retry`, `session_failure`, `length_mismatch` など）。 |
+| Label | Applies to | Description |
+|-------|------------|-------------|
+| `manifest_id` | gauges, histograms, counters | Stable Norito CID of the manifest being fetched. Absent for global metrics (e.g., total retries). |
+| `provider_id` | provider-scoped metrics | Governance-issued provider identifier (`prov_xxx`). For multi-hop fetches this is the terminal provider serving the chunk. |
+| `job_id` | orchestration jobs | UUID that groups a single fetch request and its retries. Included on latency/retry metrics to correlate traces. |
+| `region` | all metrics | Orchestrator deployment region (`us-east-1`, `eu-central-1`). Enables regional dashboards and alert routing. |
+| `failure_reason` | failure counters | Enumerated reason (`timeout`, `digest_mismatch`, `http_5xx`, `token_exhausted`). |
+| `retry_reason` | retry metrics | Classification for retries (`retry`, `session_failure`, `length_mismatch`, etc.). |
 
-ラベルの健全性ルール:
-- `manifest_id` と `provider_id` の組を結合キーにする。どちらかが欠ける場合、下流ダッシュボードは
-  集約指標として扱う。
-- カーディナリティは、`job_id` をエグザンプラ専用にして抑制する（Prometheus のヒストグラムでは
-  通常ラベルではなくエグザンプラ・タグとして出力）。
-- OpenTelemetry スパンを出す場合は、これらのラベルをトレース属性（`sora.manifest_id`,
-  `sora.provider_id`）としても複製し、トレーシングとメトリクスで語彙を一致させる。
+Label hygiene rules:
+- Prefer `manifest_id` + `provider_id` for joins. If either is missing, downstream dashboards treat the
+  metric as aggregate.
+- Keep cardinality bounded by mapping `job_id` via exemplar traces only (`job_id` exported as exemplar tag
+  rather than a regular label on Prometheus histograms).
+- When emitting OpenTelemetry spans, replicate these labels as trace attributes (`sora.manifest_id`,
+  `sora.provider_id`) so the tracing and metrics backends share vocabulary.
 
-## メトリクス配信アーキテクチャ
+## Metric Delivery Architecture
 
-- **エクスポート機構。** `iroha_telemetry::metrics::install_sorafs_fetch_otlp_exporter` を呼び出して
-  OTLP パイプラインを初期化する。デプロイではローカルの OpenTelemetry Collector サイドカーに
-  接続し、スクレイプだけに頼らず 2 秒間隔でストリーミングする。
-- **コレクタパイプライン。**
-  1. オーケストレーターがサイドカーへ OTLP メトリクスを送信（Tokio ランタイム + OTLP gRPC exporter）。
-  2. コレクタは 5 秒ウィンドウでバッチし、リソース属性（`service.name=sorafs-orchestrator`,
-     `deployment.region`）を付与して中央の Prometheus remote-write ゲートウェイへ転送。
-  3. Remote-write ゲートウェイが Mimir/Prometheus に書き込み。ストリーミングにより
-     チャンクレイテンシのヒストグラムにジョブ単位のエグザンプラを付与できる。
-- **フェイルセーフのポーリング。** Prometheus レジストリは既存の `/metrics` で引き続き利用可能。
-  OTLP プッシュが 30 秒以上失敗した場合、コレクタはスクレイプにフォールバックして
-  監視ダッシュボードを維持できる。
-- **トレース相関。** トレースは同じサイドカー経由で流れる。各スパンに `manifest_id`, `provider_id`,
-  `job_id` を含め、Grafana Tempo/Jaeger がメトリクスのデータポイントからトレースへ
-  ピボットできるようにする。
+- **Export mechanism.** Call `iroha_telemetry::metrics::install_sorafs_fetch_otlp_exporter` to initialise
+  the OTLP pipeline. Deployments typically point the helper at a local OpenTelemetry Collector sidecar;
+  metrics stream every 2s instead of relying solely on scrapes.
+- **Collector pipeline.**
+  1. The orchestrator pushes OTLP metrics to the sidecar (Tokio runtime + OTLP gRPC exporter).
+  2. The collector batches per 5s window, attaches resource attributes (`service.name=sorafs-orchestrator`,
+     `deployment.region`), and forwards to the central Prometheus remote-write gateway.
+  3. Remote-write gateway writes into Mimir/Prometheus. Streaming ensures chunk latency histograms carry
+     exemplars for job-level debugging.
+- **Fail-safe polling.** The Prometheus registry remains available via the existing `/metrics` handler.
+  If OTLP push fails for >30s the collector can fall back to scraping, keeping dashboards populated
+  during collector outages.
+- **Trace correlation.** Traces flow alongside metrics via the same sidecar. Each span includes
+  `manifest_id`, `provider_id`, and `job_id` so Grafana Tempo/Jaeger queries can start from a metric
+  datapoint and pivot into traces.
 
-## Grafana 連携
+## Grafana Coordination
 
-- **テンプレートライブラリ。** Observability チームと協調し、共有 Grafana ライブラリ
-  （`grafana/provisioning/dashboards/sorafs.jsonnet`）にオーケストレーターのパネルを追加する。
-  KPI 概要、プロバイダ詳細、再試行マトリクス、マニフェスト進捗のボードを含める。
-- **パネルオーナー。** ダッシュボードの担当（`Storage On-Call`）を定義し、アラートが
-  直ちに当番へ届くよう連絡先メタデータを追加する。
-- **パネル検証。** ステージングでオーケストレーターのメトリクスとゲートウェイのダッシュボードを
-  組み合わせ、ラベル結合（`manifest_id`, `provider_id`, `region`）が一致することを確認する。
-  パネルが安定したら `sorafs_observability_plan.md` にスクリーンショット／リンクを追加する。
-- **アラート統合。** Observability チームが Alertmanager ルートを設定し、オーケストレーターの
-  アラートを Slack/PagerDuty へ振り分ける。各アラートルールは共有 SLO 定義を参照し、
-  一貫した注釈（`summary`, `runbook_url`）で同じ対応ガイドに誘導する。
+- **Template library.** Work with the Observability team to add orchestrator panels to the shared Grafana
+  library (`grafana/provisioning/dashboards/sorafs.jsonnet`). Templates include KPI overview, provider
+  drill-down, retry matrix, and manifest progress boards.
+- **Panel ownership.** Define dashboard owners (`Storage On-Call`) and add contact metadata so alerts link
+  directly to responsible rotation.
+- **Panel validation.** Run staging dry-runs combining orchestrator metrics with gateway dashboards to
+  ensure label joins (`manifest_id`, `provider_id`, `region`) align. Update `sorafs_observability_plan.md`
+  with screenshots/links once panels stabilize.
+- **Alert integration.** Observability team provisions Alertmanager routes mapping orchestrator alerts to
+  Slack/PagerDuty channels. Each alert rule references the shared SLO definitions and uses consistent
+  annotations (`summary`, `runbook_url`) so operators land on the same remediation guides.

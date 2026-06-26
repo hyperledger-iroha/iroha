@@ -1,6 +1,9585 @@
 # Status
 
-Last updated: 2026-06-25
+Last updated: 2026-06-27
+
+## 2026-06-27 SoraFS runner artifact output preflight
+
+- Hardened shared SoraFS collection-runner command execution so planned
+  artifact paths that are symlinks fail before output-directory creation.
+- After each successful command, `run_command_plan(...)` now rejects symlinked
+  expected artifacts and zero-byte expected artifacts with structured runner
+  diagnostics instead of letting empty or redirected evidence satisfy the
+  presence check.
+- Extended focused runner-helper regressions and the rollout-gate static
+  contract so every rollout/release runner keeps the shared symlink and empty
+  artifact defenses.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards showed only Codex resume sessions and no active
+    `cargo`/`rustc` work before Python validation.
+  - after a final line-wrap edit, process guards waited through an unrelated
+    active `cargo test -p iroha_core --lib
+    stake_quorum_coverage_and_signed_stake_active_lane_filter_unknown_lane_stake
+    -- --nocapture` run before rerunning Python validation.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`125` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`841` passed)
+  - `git diff --check -- scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py roadmap.md status.md`
+  - trailing-whitespace and conflict-marker scans across the same touched files.
+  - `git diff -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS chunk-store directory persistence CLI
+
+- Exposed the existing disk-backed SoraFS chunk sink through
+  `--chunk-dir-out=dir` on both `sorafs_chunk_store` and
+  `sorafs_manifest_chunk_store`.
+- Added CLI preflight so the target must be absent or empty, symlink targets
+  and non-directories are rejected before the sink can remove anything, and
+  persisted chunk file names, offsets, lengths, and BLAKE3 digests are included
+  in the JSON report.
+- Kept empty-payload behavior consistent with the existing logical empty chunk:
+  the CLIs now persist `chunk_00000.bin` as an empty file and report the
+  corresponding zero-length record.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards waited through unrelated `cargo check -p iroha_core --lib
+    --tests`, `cargo test -p iroha_core --lib
+    queue_plan_journal_tombstones_elastic_plan_when_range_corrupt_after_restart
+    -- --nocapture`, and `clippy-driver`/`rustc` phases before running Cargo
+    validation.
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-chunk-dir cargo test -p sorafs_car --bin sorafs_chunk_store --bin sorafs_manifest_chunk_store`
+    (`11` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-chunk-dir cargo test -p sorafs_car --test chunk_store_cli`
+    (`16` passed)
+
+## 2026-06-26 Nexus queue journal corrupt elastic replay
+
+- Added restart replay coverage for pending queue-plan journals after active
+  autoscale elastic-range corruption. A transaction first journaled with a
+  valid elastic default-route plan is now proven to be tombstoned after restart
+  when a manual in-range lane makes live routing fall back to the base lane.
+- Updated the Nexus lane docs, transition notes, and roadmap to call out stale
+  elastic default-route journal records alongside stale policy and Native AMX
+  participant tombstones.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-queue-journal-autoscale cargo test -p iroha_core --lib queue_plan_journal_tombstones_elastic_plan_when_range_corrupt_after_restart -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-queue-journal-autoscale cargo test -p iroha_core --lib queue_plan_journal_tombstones_ -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-queue-journal-autoscale cargo clippy -p iroha_core --lib --tests -- -D warnings`
+
+## 2026-06-26 Nexus corrupt elastic context validation
+
+- Added block-validation regression coverage for stale autoscale elastic
+  execution contexts after active elastic-range catalog corruption. Validators
+  now have explicit coverage proving that a manual lane inside the active
+  range makes live routing fall back to the base lane and rejects a delayed or
+  forged elastic context.
+- Updated the Nexus lanes docs, transition notes, and roadmap to call out the
+  corrupted-range execution-context fail-closed boundary alongside the existing
+  disabled-Nexus coverage.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-route-validation cargo test -p iroha_core --lib validate_static_state_dependent_rejects_elastic_context_when_range_corrupt -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-route-validation cargo test -p iroha_core --lib elastic_context -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-route-validation cargo clippy -p iroha_core --lib --tests -- -D warnings`
+
+## 2026-06-26 SoraFS runner namespace integer preflight
+
+- Hardened SoraFS collection-runner `validate_inputs` paths to use shared
+  namespace integer validators for threshold, timeout, quorum, and limit
+  values, rejecting direct non-integer and `bool` values with structured
+  operator diagnostics instead of `TypeError` tracebacks.
+- Gated local count comparisons on successful numeric validation for the AI
+  pre-screen quorum and hedging billing-cycle minimum checks.
+- Added focused shared-helper regressions and rollout-contract coverage pinning
+  the shared validator usage across collection runners.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards waited through an unrelated
+    `cargo test -p iroha_core --lib validate_static_state_dependent_rejects_elastic_context_when_range_corrupt -- --nocapture`
+    run before Python validation.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/run_sorafs_*_evidence.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/run_sorafs_*_evidence_test.py -q`
+    (`235` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`837` passed)
+
+## 2026-06-26 SoraFS JSON serialization error reporting
+
+- Hardened the shared checker summary writer and runner dry-run plan writer so
+  non-serializable values now return structured JSON render errors instead of
+  raising `TypeError` tracebacks.
+- Added focused regressions for non-serializable checker summary and runner
+  plan values, and extended the rollout contract to pin the shared
+  `TypeError`/`ValueError` handling.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - the process guard was clear before each Python validation step.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/sorafs_runner_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`143` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`829` passed)
+
+## 2026-06-26 SoraFS strict summary/plan JSON rendering
+
+- Hardened shared checker summary rendering and runner dry-run plan rendering
+  to use `allow_nan=False`, so SoraFS operator JSON output cannot emit
+  non-standard `NaN`/`Infinity` values.
+- Checker summary writes now return a structured summary-rendering error before
+  writing stdout or `--summary-out` when a non-finite value reaches the shared
+  summary renderer.
+- Runner dry-run plan writes now return structured render errors, and every
+  SoraFS rollout/release runner checks that result before returning dry-run
+  success.
+- Added focused helper regressions plus rollout-contract coverage pinning
+  strict JSON rendering and the guarded runner dry-run call pattern.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards waited through unrelated Rust work
+    (`cargo test -p iroha_core --lib set_nexus_rejects_disabled_autoscale -- --nocapture`,
+    `cargo test -p iroha_config --test autoscale_config
+    autoscale_rejects_enabled_autoscale_when_nexus_disabled -- --nocapture`,
+    and `cargo check -p iroha_core --lib`) before Python validation.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/sorafs_runner_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/run_sorafs_*_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`141` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`827` passed)
+
+## 2026-06-26 Nexus disabled autoscale state guard
+
+- Hardened `State::set_nexus` so direct actual-config swaps reject
+  `nexus.autoscale.enabled = true` when `nexus.enabled = false`, matching the
+  user-config parser and preventing shadow autoscale runtime state that block
+  application and routing would otherwise ignore.
+- Added focused runtime regression coverage next to the disabled Nexus state
+  guard tests, and reran the existing parser-side disabled autoscale fixture.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-disabled-state cargo test -p iroha_core --lib set_nexus_rejects_disabled_autoscale -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-disabled-state cargo test -p iroha_config --test autoscale_config autoscale_rejects_enabled_autoscale_when_nexus_disabled -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-disabled-state cargo test -p iroha_core --lib set_nexus_rejects_disabled_ -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-disabled-state cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS non-finite JSON/number hardening
+
+- Hardened `scripts/sorafs_evidence_json.py` so bounded evidence JSON loading
+  rejects non-standard `NaN`/`Infinity` constants before payload validation and
+  digest binding.
+- Hardened `scripts/sorafs_evidence_validation.py` so shared non-negative and
+  maximum numeric rollout gates reject direct non-finite `float` values instead
+  of allowing `NaN` to bypass comparison checks.
+- Added focused loader/helper regressions plus rollout-contract coverage pinning
+  the `parse_constant` hook and finite-number guard.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards waited through unrelated Rust work
+    (`cargo test -p integration_tests --test nexus_and_streaming
+    nexus::multilane_router::multilane_router_fails_closed_when_elastic_range_contains_corruption
+    -- --nocapture`, then `cargo check -p integration_tests --test
+    nexus_and_streaming`/clippy-driver phases) before Python validation.
+  - `python3 -m py_compile scripts/sorafs_evidence_json.py scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_json_test.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_json_test.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`284` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`823` passed)
+
+## 2026-06-26 Nexus autoscale router elastic-range corruption guard
+
+- Hardened live default-route sharding so an active autoscale elastic range
+  occupied by a manual lane, malformed autoscale-managed lane, or managed lane
+  bound outside the default dataspace falls back to the base default lane until
+  the catalog is repaired.
+- Added adversarial router unit and `nexus_and_streaming` integration coverage
+  for manual, malformed, and off-default in-range corruption while preserving
+  enabled autoscale sharding when the active range contains only valid managed
+  elastic lanes.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-router cargo test -p iroha_core --lib default_route_sharding_fails_closed_when_elastic_range_contains_corruption -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-router cargo test -p iroha_core --lib default_route_ -- --nocapture`
+    (`19` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-router cargo test -p iroha_core --lib queue::router -- --nocapture`
+    (`143` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-router cargo test -p iroha_core --lib autoscale -- --nocapture`
+    (`134` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-router cargo clippy -p iroha_core --lib -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane-router cargo test -p integration_tests --test nexus_and_streaming nexus::multilane_router::multilane_router_fails_closed_when_elastic_range_contains_corruption -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane-router cargo test -p integration_tests --test nexus_and_streaming nexus::multilane_router -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane-router cargo clippy -p integration_tests --test nexus_and_streaming -- -D warnings`
+
+## 2026-06-26 SoraFS string equality validation hardening
+
+- Hardened `scripts/sorafs_evidence_validation.py` so the shared
+  `require_string_value_equal` helper rejects direct blank or non-string
+  actual/expected identity values before comparing cross-artifact string
+  bindings.
+- Added shared validation regressions for malformed direct equality-helper
+  inputs and rollout-contract coverage pinning the string type guards.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards waited through unrelated Rust work
+    (`cargo test -p iroha_core --lib autoscale -- --nocapture`, then
+    `cargo check -p iroha_core --lib`/clippy-driver phases) before starting
+    Python validation.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`273` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`821` passed)
+
+## 2026-06-26 SoraFS digest binding non-empty string hardening
+
+- Hardened `scripts/sorafs_evidence_validation.py` so shared scalar and tuple
+  binding validation rejects empty string components, and valid artifact digest
+  collection ignores empty fingerprint values instead of admitting empty digest
+  anchors.
+- Added shared validation regressions for empty scalar bindings, empty tuple
+  bindings, and empty digest anchors, plus static rollout-contract coverage
+  pinning the non-empty guards.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards waited through unrelated Rust work
+    (`cargo test -p iroha_core --lib
+    default_route_sharding_fails_closed_when_elastic_range_contains_corruption
+    -- --nocapture`, then `cargo test -p iroha_core --lib queue::router --
+    --nocapture`) before starting Python validation.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`272` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`820` passed)
+
+## 2026-06-26 SoraFS scalar evidence consistency string hardening
+
+- Hardened `scripts/sorafs_evidence_validation.py` so shared scalar
+  cross-artifact consistency recording only stores non-empty string values;
+  malformed truthy list/dict values can no longer become canonical snapshot
+  state or leak through mismatch diagnostics.
+- Added shared validation regression coverage for malformed scalar consistency
+  values and static rollout-contract coverage pinning the string-type guard.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards were clear before both focused and broad Python validation.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`270` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`818` passed)
+
+## 2026-06-26 SoraFS snapshot-binding anchor string hardening
+
+- Hardened `scripts/sorafs_evidence_validation.py` so shared snapshot-binding
+  anchor recording only lowercases and admits non-empty string
+  `snapshot_id_hex`/`merkle_root_hex` values; malformed truthy list/dict anchor
+  values now fail closed instead of tracebacking or creating invalid valid-anchor
+  bindings.
+- Added shared validation regression coverage for malformed snapshot anchors and
+  static rollout-contract coverage pinning the string-type guard.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards waited through unrelated Rust work
+    (`cargo test -p integration_tests --test nexus_and_streaming ...`, then
+    `cargo check -p integration_tests --test nexus_and_streaming`) before
+    starting the affected Python validation steps.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`269` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`817` passed)
+
+## 2026-06-26 Nexus multilane router disabled-autoscale integration regressions
+
+- Added `nexus_and_streaming` integration coverage proving stale
+  autoscale-managed lanes left in the catalog do not receive default-route
+  traffic when either `nexus.autoscale.enabled = false` or
+  `nexus.enabled = false`.
+- The regressions exercise the public `ConfigLaneRouter::route_with_view`
+  boundary across many no-target default transactions and verify every route
+  stays on the base default lane while the existing enabled-autoscale sharding
+  integration test still distributes traffic over elastic lanes.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane-router cargo test -p integration_tests --test nexus_and_streaming nexus::multilane_router::multilane_router_ignores_stale_autoscale_lanes_when_autoscale_disabled -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane-router cargo test -p integration_tests --test nexus_and_streaming nexus::multilane_router::multilane_router_ignores_stale_autoscale_lanes_when_nexus_disabled -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane-router cargo test -p integration_tests --test nexus_and_streaming nexus::multilane_router::multilane_router_shards_default_route_over_autoscale_elastic_lanes -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane-router cargo test -p integration_tests --test nexus_and_streaming nexus::multilane_router -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane-router cargo clippy -p integration_tests --test nexus_and_streaming -- -D warnings`
+
+## 2026-06-26 SoraFS required-or-observed presence normalization
+
+- Hardened `scripts/sorafs_evidence_validation.py` so shared
+  required-or-observed presence checks use the same truthy hashable
+  evidence-value normalizer as observed-value recording and missing-value
+  matching; blank, falsey, list, and dict values can no longer satisfy fallback
+  provider-proof presence gates.
+- Added shared validation regressions for malformed required/observed presence
+  inputs and row-error recording, plus static rollout-contract coverage pinning
+  the normalized predicate.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards were clear before both focused and broad Python validation.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`268` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`816` passed)
+
+## 2026-06-26 SoraFS required evidence value hashability hardening
+
+- Hardened `scripts/sorafs_evidence_validation.py` so shared
+  required-vs-observed evidence matching normalizes observed values through the
+  same truthy hashable filter used by observed-value recording; malformed
+  list/dict evidence values now fail closed as missing instead of tracebacking.
+- Added shared validation regressions for falsey/unhashable filtering,
+  unhashable observed values, and unhashable required values, plus static
+  rollout-contract coverage pinning the shared normalizer.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards found unrelated active Rust work
+    (`cargo test -p iroha_core --lib missing_middle_history -- --nocapture`, a
+    matching `rustc` invocation, then `cargo test -p iroha_core --lib
+    autoscale_transition -- --nocapture`, and `cargo test -p iroha_core --lib
+    autoscale -- --nocapture`), so Python validation waited in 30-second
+    intervals until only the guard command and Codex sessions matched.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`266` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`814` passed)
+
+## 2026-06-26 Nexus autoscale missing-middle-history regression
+
+- Added block-application autoscale coverage proving longer decision windows
+  fail closed when a middle historical Kura block is missing.
+- The regressions cover both hot scale-out and cold scale-in candidates, with
+  only the first history block and current block available, and verify no lane
+  catalog mutation or transition-height update is recorded.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib missing_middle_history -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition -- --nocapture`
+    (`33` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+    (`134` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS observed evidence value hashability hardening
+
+- Hardened `scripts/sorafs_evidence_validation.py` so shared observed-value
+  collection records only truthy hashable values; malformed list/dict evidence
+  values no longer traceback through reputation provider ID/count summary
+  finalization or pollute observed-value sets.
+- Added shared validation regression coverage and static rollout-contract
+  coverage pinning the hashability guard.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards were clear before both focused and broad Python validation.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`263` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`811` passed)
+
+## 2026-06-26 Nexus autoscale conflicting-window arbitration regression
+
+- Added block-application autoscale coverage proving a hot longer scale-out
+  window wins over a cold shorter scale-in window when both are eligible in the
+  same block.
+- The regression seeds an existing managed elastic lane, drives conflicting
+  windows through `maybe_apply_nexus_autoscale`, and verifies the block adds the
+  next managed lane instead of retiring capacity.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_prefers_scale_out_when_windows_conflict -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition -- --nocapture`
+    (`31` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+    (`132` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS sensitive-field recursion hardening
+
+- Hardened `scripts/sorafs_evidence_sensitivity.py` so overly deep rollout
+  evidence fails closed with a structured nesting-depth error instead of risking
+  Python recursion errors while scanning sensitive fields.
+- Added helper regression coverage and static rollout-contract checks pinning
+  the shared `MAX_SENSITIVE_FIELD_DEPTH` behavior.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards were clear before both focused and broad Python validation.
+  - `python3 -m py_compile scripts/sorafs_evidence_sensitivity.py scripts/tests/sorafs_evidence_sensitivity_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_sensitivity_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`90` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`810` passed)
+
+## 2026-06-26 SoraFS evidence JSON runtime-error hardening
+
+- Hardened `scripts/sorafs_evidence_json.py` so the shared
+  `load_evidence_json_with_sha256_or_record_error(...)` wrapper records
+  `RuntimeError` filesystem failures as path-qualified evidence JSON errors
+  instead of letting them traceback through rollout/release checkers.
+- Added a shared evidence JSON regression for runtime read failures and static
+  rollout-contract coverage pinning the wrapper behavior.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards found unrelated active Rust work
+    (`cargo test -p iroha_core --lib autoscale_transition_noops_when_last_transition_height_is_future -- --nocapture`,
+    a matching `rustc` invocation,
+    `cargo test -p iroha_core --lib autoscale_transition -- --nocapture`,
+    `cargo test -p iroha_core --lib autoscale -- --nocapture`, and later
+    `cargo check -p iroha_core --lib` via `clippy-driver`), so Python
+    validation waited in 30-second intervals until only the guard command and
+    Codex sessions matched.
+  - `python3 -m py_compile scripts/sorafs_evidence_json.py scripts/tests/sorafs_evidence_json_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_json_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`94` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`809` passed)
+
+## 2026-06-26 Nexus autoscale transition future-cooldown regression
+
+- Added block-application autoscale coverage proving a corrupted future
+  `nexus.autoscale.last_transition_height` suppresses both hot scale-out lane
+  creation and cold scale-in lane retirement without mutating the lane catalog.
+- The regression drives both create and retire candidates through
+  `maybe_apply_nexus_autoscale` and verifies the future transition height is not
+  overwritten by a suppressed transition.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_noops_when_last_transition_height_is_future -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition -- --nocapture`
+    (`30` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+    (`131` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS response-file filesystem-error hardening
+
+- Hardened `scripts/sorafs_response_args.py` so reviewed `@ARGFILE` stat/read
+  failures and non-UTF-8 content fail as stable `ValueError` diagnostics
+  instead of tracebacking through operator entrypoints.
+- Added shared response-file regressions for stat failures, read failures, and
+  non-UTF-8 bytes, plus static rollout-contract coverage for the shared
+  argfile error handling.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards were clear before both focused and broad Python validation.
+  - `python3 -m py_compile scripts/sorafs_response_args.py scripts/tests/sorafs_response_args_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_response_args_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`98` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`808` passed)
+
+## 2026-06-26 Nexus autoscale transition autoscale-disabled regression
+
+- Added block-application autoscale coverage proving enabled Nexus with
+  `nexus.autoscale.enabled = false` does not create elastic lanes during a hot
+  scale-out window or destroy managed elastic lanes during a cold scale-in
+  window.
+- The regression drives both create and retire candidates through
+  `maybe_apply_nexus_autoscale` after corrupting actual state and verifies the
+  lane catalog and `last_transition_height` remain unchanged.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_noops_when_autoscale_disabled_even_if_nexus_enabled -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition -- --nocapture`
+    (`29` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+    (`130` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS evidence discovery filesystem-scan hardening
+
+- Hardened `scripts/sorafs_evidence_paths.py` so evidence directory
+  inspections and JSON discovery scans fail closed with structured errors in
+  both normal evidence discovery and reserved output conflict checks.
+- Added shared evidence-path regressions for directory inspection failures,
+  discovery scan failures, reserved-output conflict scan inspection failures,
+  and reserved-output conflict scan failures, plus static rollout-contract
+  coverage for the shared inspection/scan helpers.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards found unrelated active Rust work
+    (`cargo test -p iroha_core --lib autoscale_transition_noops_when_autoscale_disabled_even_if_nexus_enabled -- --nocapture`,
+    a matching `rustc` invocation,
+    `cargo test -p iroha_core --lib autoscale_transition -- --nocapture`, and
+    `cargo test -p iroha_core --lib autoscale -- --nocapture`), so Python
+    validation waited in 30-second intervals until only the guard command and
+    Codex sessions matched.
+  - `python3 -m py_compile scripts/sorafs_evidence_paths.py scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`98` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`805` passed)
+
+## 2026-06-26 SoraFS runner preflight filesystem-inspection hardening
+
+- Hardened `scripts/sorafs_runner_preflight.py` so verifier, output directory,
+  summary-output, required input file/directory, output creation, and expected
+  artifact inspections report structured runner errors instead of tracebacks.
+- Added shared runner-preflight regressions for verifier, output directory,
+  summary-output, input file, input directory, and post-command artifact
+  inspection failures, plus static rollout-contract coverage for the shared
+  runner inspection helpers.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards found unrelated active Rust work
+    (`cargo test -p iroha_core --lib autoscale_transition_noops_when_nexus_disabled_even_if_autoscale_enabled -- --nocapture`,
+    a matching `rustc` invocation,
+    `cargo test -p iroha_core --lib autoscale_transition -- --nocapture`,
+    `cargo test -p iroha_core --lib autoscale -- --nocapture`, and later
+    `cargo check -p iroha_core --lib` via `clippy-driver`), so Python
+    validation waited in 30-second intervals until only the guard command and
+    Codex sessions matched.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`110` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`801` passed)
+
+## 2026-06-26 Nexus autoscale transition disabled-gate regression
+
+- Added block-application autoscale coverage proving corrupted actual state with
+  `nexus.enabled = false` but `nexus.autoscale.enabled = true` does not create
+  elastic lanes during a hot scale-out window or destroy managed elastic lanes
+  during a cold scale-in window.
+- The regression drives both create and retire candidates through
+  `maybe_apply_nexus_autoscale` and verifies the lane catalog and
+  `last_transition_height` remain unchanged.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_noops_when_nexus_disabled_even_if_autoscale_enabled -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition -- --nocapture`
+    (`28` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+    (`129` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS checker preflight filesystem-inspection hardening
+
+- Hardened `scripts/sorafs_checker_preflight.py` so optional
+  `--summary-out` target and parent path inspection failures are reported as
+  structured preflight errors instead of tracebacking before evidence
+  validation.
+- Added shared preflight regressions for summary target `exists()` failures,
+  summary target `is_dir()` failures, and summary parent inspection failures,
+  plus static rollout-contract coverage for the shared inspection helpers.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards found unrelated active Rust work
+    (`cargo test -p iroha_core --lib validate_static_state_dependent_rejects_elastic_context_when_nexus_disabled -- --nocapture`,
+    a matching `rustc` invocation,
+    `cargo test -p iroha_core --lib autoscale -- --nocapture`, and later
+    `cargo check -p iroha_core --lib` via `clippy-driver`), so Python
+    validation waited in 30-second intervals until only the guard command and
+    Codex sessions matched.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`112` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`795` passed)
+
+## 2026-06-26 Nexus autoscale block-validation disabled-gate regression
+
+- Added block/static validation coverage proving stale elastic execution
+  contexts are rejected after Nexus is disabled, even if autoscale remains marked
+  enabled and the elastic lane still exists in actual state.
+- The regression first selects a transaction that routes to an autoscale-managed
+  elastic lane while Nexus is enabled, embeds that elastic execution context in a
+  block, disables Nexus, and verifies `validate_static_state_dependent` rejects
+  the block with an execution-context routing mismatch back to the base lane.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib validate_static_state_dependent_rejects_elastic_context_when_nexus_disabled -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib validate_static_state_dependent -- --nocapture`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+    (`128` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS hedging fixture filesystem-error hardening
+
+- Hardened `scripts/check_sorafs_hedging_fixture_manifest.py` so manifest
+  reads, manifest SHA-256 reads, generated `.to`/`.json` reads, and generated
+  fixture inventory scans fail closed with structured checker errors instead
+  of Python tracebacks.
+- Added fixture-manifest regressions for manifest read failures, generated
+  Norito read failures, and inventory scan failures, plus static rollout
+  contract coverage for the shared read-error path.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards found unrelated active Rust work
+    (`cargo test -p iroha_core --lib refresh_proposal_routing_from_state_ignores_autoscale_when_nexus_disabled -- --nocapture`,
+    a matching `rustc` invocation, and later
+    `cargo test -p iroha_core --lib autoscale -- --nocapture`), so Python
+    validation waited in 30-second intervals until only the guard command and
+    Codex sessions matched.
+  - `python3 -m py_compile scripts/check_sorafs_hedging_fixture_manifest.py scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`108` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`792` passed)
+
+## 2026-06-26 Nexus autoscale proposal-refresh disabled-gate regression
+
+- Added proposal-refresh coverage proving consensus proposal routing recomputes
+  stale elastic lane vectors back to the default lane when Nexus is disabled,
+  even if autoscale remains marked enabled and an autoscale-managed lane is
+  still present in actual state.
+- The regression first selects a transaction that would shard to the elastic
+  lane while Nexus is enabled, then disables Nexus and verifies
+  `refresh_proposal_routing_from_state` replaces both the coordinator route and
+  routing plan with the base default route.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib refresh_proposal_routing_from_state_ignores_autoscale_when_nexus_disabled -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib refresh_proposal_routing_from_state -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+    (`128` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS hedging fixture summary-output hardening
+
+- Hardened `scripts/check_sorafs_hedging_fixture_manifest.py` so
+  `--summary-out` uses the shared checker summary renderer/writer and cannot
+  resolve to the same filesystem identity as `--manifest`.
+- Added fixture-manifest regressions for manifest/summary aliasing and
+  directory summary targets, plus static rollout-contract coverage that keeps
+  the checker off local `summary_out.parent.mkdir(...)` and
+  `summary_out.write_text(...)` calls.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards found unrelated active Rust work
+    (`cargo test -p iroha_core --lib validate_transaction_without_context_ignores_autoscale_when_nexus_disabled -- --nocapture`,
+    `cargo test -p iroha_core --lib autoscale -- --nocapture`, and
+    `cargo check -p iroha_core --lib` via `clippy-driver`), so Python
+    validation waited in 30-second intervals until only the guard command and
+    Codex sessions matched.
+  - `python3 -m py_compile scripts/check_sorafs_hedging_fixture_manifest.py scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`105` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`789` passed)
+
+## 2026-06-26 Nexus autoscale transaction-validation disabled-gate regression
+
+- Added transaction-validation coverage proving live validation ignores
+  autoscale elastic lanes when `nexus.enabled = false`, even if
+  `nexus.autoscale.enabled = true` and an autoscale-managed lane is still
+  present in corrupted actual state.
+- The regression selects a transaction that would route to the elastic lane
+  with Nexus enabled, then disables Nexus and verifies validation remains on
+  the blocked base lane instead of bypassing base-lane policy.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib validate_transaction_without_context_ignores_autoscale_when_nexus_disabled -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib validate_transaction_without_context_ -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+    (`127` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS runner planned artifact collision hardening
+
+- Hardened shared SoraFS runner command-plan validation so a planned artifact
+  cannot resolve to the same filesystem identity as the runner `--out-dir`.
+  `run_command_plan(...)` now rejects that ambiguity before creating the output
+  directory or launching any collection command.
+- Added focused runner-preflight coverage for direct validator rejection and
+  the shared execution path, plus static rollout-contract coverage pinning the
+  reserved-output guard.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards found unrelated active Rust work
+    (`cargo test -p iroha_core --lib default_route_sharding_fails_closed_when_nexus_disabled -- --nocapture`,
+    `cargo test -p iroha_core --lib autoscale -- --nocapture`, and
+    `cargo check -p iroha_core --lib` via `clippy-driver`), so Python
+    validation waited in 30-second intervals until only the guard command and
+    Codex sessions matched.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`104` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`787` passed)
+
+## 2026-06-26 Nexus autoscale routing requires enabled Nexus
+
+- Hardened live autoscale range construction so default-route elastic sharding
+  requires both `nexus.enabled = true` and `nexus.autoscale.enabled = true`.
+  Corrupted actual state with Nexus disabled but autoscale still marked enabled
+  now stays pinned to the configured default lane instead of admitting elastic
+  lanes into no-target traffic.
+- Added a live-router adversarial regression for disabled Nexus with an
+  autoscale elastic lane present, and made router test fixtures explicitly mark
+  installed Nexus configs as enabled for positive autoscale paths.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib default_route_sharding_fails_closed_when_nexus_disabled -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib default_route_sharding -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+    (`126` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS checker discovered-output collision hardening
+
+- Hardened shared evidence discovery and checker preflight so `--summary-out`
+  cannot resolve to a JSON evidence file discovered through `--evidence-dir`;
+  checkers fail before summary rendering can overwrite the evidence artifact.
+- Threaded the reserved summary-output identity through all SoraFS
+  rollout/release checker summary builders and the reputation checker's
+  kind-prefixed explicit evidence loader.
+- Added focused helper, preflight, reputation, and static rollout-contract
+  coverage for explicit, discovered, and prefixed evidence/output collisions.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - focused Python validation ran after a clear process guard; before the full
+    SoraFS suite, guards found unrelated active Rust work
+    (`cargo test -p iroha_core --lib default_route_sharding_fails_closed_when_autoscale_min_exceeds_max -- --nocapture`
+    followed by `cargo check -p iroha_core --lib`), so validation waited in
+    30-second intervals until only the guard command and Codex sessions
+    matched.
+  - `python3 -m py_compile scripts/sorafs_evidence_paths.py scripts/sorafs_checker_preflight.py scripts/check_sorafs_*rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/tests/sorafs_evidence_paths_test.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`144` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`785` passed)
+
+## 2026-06-26 Nexus autoscale router inverted-bounds regression
+
+- Added live-router regression coverage proving state-backed default-route
+  sharding fails closed when runtime autoscale bounds are inverted
+  (`min_lanes > max_lanes`), keeping no-target traffic pinned to the configured
+  default lane instead of using elastic lanes from corrupted actual state.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib default_route_sharding_fails_closed_when_autoscale_min_exceeds_max -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib default_route_sharding -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 Nexus autoscale scale-in corruption regression
+
+- Added transition-level autoscale scale-in coverage for cold windows with a
+  valid managed retire candidate plus live elastic-range corruption: manual
+  in-range lanes, malformed managed lanes, off-default managed lanes, and
+  out-of-range managed lanes all fail closed without retiring healthy managed
+  capacity or recording a transition.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_scale_in_rejects_runtime_elastic_range_corruption -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_scale_in -- --nocapture`
+    (`8` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition -- --nocapture`
+    (`27` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS checker summary evidence collision hardening
+
+- Hardened shared checker preflight so `--summary-out` cannot resolve to the
+  same filesystem identity as an explicit `--evidence` input, preventing
+  post-validation summary writes from overwriting reviewed evidence artifacts.
+- Added checker-preflight unit coverage for normalized path aliases and static
+  rollout-gate coverage pinning the shared collision diagnostic.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before focused/full Python validation showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`108` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`781` passed)
+
+## 2026-06-26 SoraFS runner output path collision hardening
+
+- Hardened shared collection-runner preflight so `--summary-out` cannot resolve
+  to the same filesystem identity as `--out-dir`, avoiding late verifier
+  summary directory/file collisions after output directory creation.
+- Added runner-preflight unit coverage for normalized path aliases and static
+  rollout-gate coverage pinning the shared collision diagnostic.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards detected an active external `cargo test`/`rustc` run, so
+    validation waited until only the guard command and Codex sessions matched;
+    follow-up guards before focused/full Python validation were clear.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`102` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`780` passed)
+
+## 2026-06-26 Nexus QC fallback active-lane stake hardening
+
+- Threaded active Nexus lane ids into state-backed QC and block-sync validation
+  fallback paths so missing NPoS stake snapshots are recomputed from active
+  lanes only.
+- Added a gated main-loop regression proving a stale unknown-lane high-stake
+  record can make the raw fallback accept, while the active-lane-aware block-sync
+  QC path rejects the same single-signer QC for missing stake quorum.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib --features sumeragi-main-loop-tests validate_block_sync_qc_active_lane_filter_ignores_stale_unknown_lane_stake -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib sumeragi::stake_snapshot::tests -- --nocapture`
+    (`10` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib stake_snapshot_tests -- --nocapture`
+    (`14` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib sumeragi::main_loop::roster::tests -- --nocapture`
+    (`27` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS runner input diagnostics hardening
+
+- Hardened shared collection-runner input preflight so ordinary missing input
+  files/directories report the exact file or directory requirement without
+  resolver noise, while symlink/path-resolution failures remain fail-closed.
+- Added runner-preflight unit coverage for missing file and directory inputs.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards detected active external `cargo test`/`rustc` runs, so
+    validation waited until only the guard command and Codex sessions matched;
+    follow-up guards before focused/full Python validation were clear.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py -q`
+    (`16` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`779` passed)
+
+## 2026-06-26 SoraFS evidence directory diagnostics hardening
+
+- Hardened shared evidence discovery so `--evidence-dir` paths that are missing
+  or point at files report that the path must exist and be a directory.
+- Added evidence-path unit coverage for file-as-directory input and static
+  rollout-gate coverage pinning shared directory diagnostics.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards detected an active external `cargo test`/`rustc` run, so
+    validation waited until only the guard command and Codex sessions matched;
+    follow-up guards before focused/full Python validation were clear.
+  - `python3 -m py_compile scripts/sorafs_evidence_paths.py scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`92` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`777` passed)
+
+## 2026-06-26 SoraFS response argfile line diagnostics
+
+- Hardened shared `@ARGFILE` expansion so malformed shell-style lines report the
+  response file path and line number instead of a bare `shlex` parsing error.
+- Added response-arg unit coverage for unterminated quoting and static
+  rollout-gate coverage that pins path/line diagnostics in the shared helper.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before focused/full Python validation showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_response_args.py scripts/tests/sorafs_response_args_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_response_args_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`95` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`776` passed)
+
+## 2026-06-26 SoraFS response argfile resolve hardening
+
+- Hardened shared `@ARGFILE` expansion so path-resolution failures such as
+  symlink loops or filesystem resolver errors become stable, path-qualified
+  `ValueError`s handled by the rollout checker/runner error paths.
+- Added response-arg unit coverage for resolver failures and static
+  rollout-gate coverage that pins the shared helper behavior.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before focused/full Python validation showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_response_args.py scripts/tests/sorafs_response_args_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_response_args_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`94` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`775` passed)
+
+## 2026-06-26 SoraFS checker argparse return-code hardening
+
+- Wrapped rollout/release checker `parser.parse_args(...)` calls so raw argparse
+  failures return deterministic integer error codes from `main(argv)` instead of
+  leaking `SystemExit` to programmatic callers.
+- Added a gateway compliance regression for missing option values and static
+  rollout-gate coverage that requires checker mains to catch parser `SystemExit`
+  and return the argparse code.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before focused/full Python validation showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/check_sorafs_*rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py -q`
+    (`101` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`774` passed)
+
+## 2026-06-26 SoraFS runner caught-argument error reporting
+
+- Replaced rollout/release runner `parse_args` `ValueError` paths that used
+  `parser.error(str(error))` with shared `emit_runner_error_lines(...)` reporting
+  and `SystemExit(2)` for the existing runner `main` return-code handler.
+- Tightened the gateway compliance runner regression so unknown required kinds
+  cannot emit argparse usage text, and added static rollout-gate coverage that
+  rejects runner-local caught-argument parser errors.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before focused/full Python validation showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/run_sorafs_*rollout_evidence.py scripts/run_sorafs_reference_sdk_release_evidence.py scripts/tests/run_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/run_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`92` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`772` passed)
+
+## 2026-06-26 SoraFS checker caught-argument error reporting
+
+- Replaced the remaining rollout/release checker `ValueError` handlers that used
+  `parser.error(str(error))` with shared `emit_checker_error_lines(...)` reporting
+  and deterministic `2` returns, avoiding argparse usage dumps and `SystemExit`
+  leaks for caught response-file and required-kind errors.
+- Added a gateway compliance regression for unknown required-kind reporting and
+  static rollout-gate coverage that rejects checker-local caught-argument parser
+  errors.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards initially found an active external `cargo test`/`rustc`; Python
+    validation waited until the guard showed no active `cargo`, `rustc`, or
+    `clippy-driver` process beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/check_sorafs_*rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py -q`
+    (`98` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`771` passed)
+
+## 2026-06-26 SoraFS runner dry-run stdout gating
+
+- Fixed the gateway compliance rollout evidence runner so dry-run collection
+  plan JSON is emitted only when `--dry-run` is set; normal execution now keeps
+  stdout clear before delegating to shared command-plan execution.
+- Added a direct gateway compliance regression for non-dry-run execution with an
+  empty stdout contract, plus static rollout-gate coverage that requires every
+  collection runner to guard `write_runner_plan(...)` behind `args.dry_run`.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before focused/full Python validation showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/run_sorafs_gateway_compliance_rollout_evidence.py scripts/tests/run_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/run_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`90` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`769` passed)
+
+## 2026-06-26 SoraFS runner stderr reporting hardening
+
+- Added shared runner stderr emitters for `ERROR:` lines, incomplete-input
+  bullet blocks, and human command-run notices, then routed SoraFS collection
+  runner mains and shared command-plan execution through them.
+- Removed runner-local required-kind error prints, input-error loops,
+  incomplete-input bullet loops, and command-plan stderr prints so dry-run stdout
+  remains machine-readable and operator diagnostics stay centralized.
+- Added helper unit coverage and static rollout-gate coverage that rejects
+  runner-local stderr print loops.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before focused/full Python validation showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/run_sorafs_ai_prescreen_rollout_evidence.py scripts/run_sorafs_appeal_finance_rollout_evidence.py scripts/run_sorafs_gateway_compliance_rollout_evidence.py scripts/run_sorafs_governance_dag_rollout_evidence.py scripts/run_sorafs_hedging_rollout_evidence.py scripts/run_sorafs_moderation_panel_rollout_evidence.py scripts/run_sorafs_orderbook_rollout_evidence.py scripts/run_sorafs_pdp_rollout_evidence.py scripts/run_sorafs_pop_credentials_rollout_evidence.py scripts/run_sorafs_por_rollout_evidence.py scripts/run_sorafs_potr_rollout_evidence.py scripts/run_sorafs_reference_sdk_release_evidence.py scripts/run_sorafs_repair_rollout_evidence.py scripts/run_sorafs_reputation_rollout_evidence.py scripts/run_sorafs_reserve_rent_rollout_evidence.py scripts/run_sorafs_transparency_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/run_sorafs_*_evidence_test.py -q`
+    (`209` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`768` passed)
+  - conflict-marker, trailing-whitespace, runner-local stderr print-loop, and
+    Cargo.lock diff scans passed.
+
+## 2026-06-26 SoraFS checker stderr reporting hardening
+
+- Added shared checker stderr emitters for `ERROR:` lines, incomplete-evidence
+  bullet blocks, and human notices, then routed SoraFS rollout/release checker
+  main paths through them.
+- Removed checker-local preflight/summary error loops, caught-argument error
+  prints, incomplete-evidence bullet loops, and ready-notice `print(...)` calls
+  so operator diagnostics and machine-readable stdout behavior cannot drift.
+- Added helper unit coverage and static rollout-gate coverage that rejects
+  checker-local stderr print loops.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before focused/full Python validation showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_transparency_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py scripts/tests/check_sorafs_pdp_rollout_evidence_test.py -q`
+    (`139` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`765` passed)
+  - conflict-marker, trailing-whitespace, checker-local stderr print-loop, and
+    Cargo.lock diff scans passed.
+
+## 2026-06-26 SoraFS checker stdout summary hardening
+
+- Moved checker stdout JSON summary emission into
+  `render_and_write_checker_summary(...)` so SoraFS rollout/release checkers use
+  the same sorted, indented, newline-terminated JSON summary when
+  `--summary-out` is omitted.
+- Removed checker-local `print(rendered_summary, ...)` calls and moved human
+  success notices to stderr, preserving machine-readable stdout for operators
+  and wrappers.
+- Added helper/static/PoP regressions that pin stdout-vs-stderr behavior for
+  both summary-file and stdout-summary modes.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before focused/full Python validation showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_transparency_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`155` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`762` passed)
+  - conflict-marker, trailing-whitespace, checker-local rendered-summary print,
+    and Cargo.lock diff scans passed.
+
+## 2026-06-26 SoraFS checker evidence-input preflight hardening
+
+- Moved the `--evidence-dir`/`--evidence` required-source check into shared
+  `validate_checker_preflight(...)` so every SoraFS rollout/release checker uses
+  the same fail-closed preflight path before discovery or validation.
+- Removed checker-local missing-evidence branches, including the reputation
+  parser-error special case, and added static coverage that prevents those local
+  branches from returning.
+- Added focused helper and checker regressions for missing evidence sources.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before focused/full Python validation showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_transparency_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`140` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`762` passed)
+
+## 2026-06-26 SoraFS runner dry-run rendering hardening
+
+- Added shared `render_runner_plan(...)` and `write_runner_plan(...)` helpers so
+  every SoraFS rollout/release collection runner emits sorted, indented,
+  newline-terminated dry-run command-plan JSON through one path.
+- Replaced runner-local `json.dumps(...)` plan output across the SoraFS
+  collection runners and pinned the static contract against reintroducing local
+  JSON rendering/imports in those runners.
+- Added focused helper coverage for deterministic rendering and stdout writing.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before focused/full Python validation showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/run_sorafs_ai_prescreen_rollout_evidence.py scripts/run_sorafs_appeal_finance_rollout_evidence.py scripts/run_sorafs_gateway_compliance_rollout_evidence.py scripts/run_sorafs_governance_dag_rollout_evidence.py scripts/run_sorafs_hedging_rollout_evidence.py scripts/run_sorafs_moderation_panel_rollout_evidence.py scripts/run_sorafs_orderbook_rollout_evidence.py scripts/run_sorafs_pdp_rollout_evidence.py scripts/run_sorafs_pop_credentials_rollout_evidence.py scripts/run_sorafs_por_rollout_evidence.py scripts/run_sorafs_potr_rollout_evidence.py scripts/run_sorafs_reference_sdk_release_evidence.py scripts/run_sorafs_repair_rollout_evidence.py scripts/run_sorafs_reputation_rollout_evidence.py scripts/run_sorafs_reserve_rent_rollout_evidence.py scripts/run_sorafs_transparency_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/run_sorafs_*_evidence_test.py -q`
+    (`205` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`755` passed)
+
+## 2026-06-26 SoraFS reputation missing-file load-error hardening
+
+- Removed the custom SFM-3 reputation `path.is_file()` load branch so missing
+  explicit evidence files use the same shared bounded JSON load-error recorder
+  as malformed, oversized, non-object, unreadable, or non-UTF-8 evidence.
+- Added a missing explicit-evidence regression and tightened the rollout-gate
+  static contract so reputation cannot reintroduce local file-existence load
+  errors ahead of the shared loader.
+- Preserved reputation's custom evidence-kind inference and unknown-schema
+  handling while keeping load errors path-qualified in the JSON summary.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before focused/full Python validation initially found
+    unrelated `cargo test -p iroha_core --lib authoritative_lane_ -- --nocapture`
+    with live `rustc`; waited in 30-second cycles until clear.
+  - `python3 -m py_compile scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`104` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`752` passed)
+  - conflict-marker, trailing-whitespace, touched-file diff-check, old local
+    file-existence branch, and Cargo.lock diff scans passed.
+
+## 2026-06-26 SoraFS reputation JSON load-error hardening
+
+- Routed the custom SFM-3 reputation evidence loader through
+  `load_evidence_json_with_sha256_or_record_error(...)` so malformed,
+  non-object, oversized, unreadable, or non-UTF-8 evidence files use the same
+  bounded JSON load and path-qualified error format as the standard rollout
+  gates.
+- Preserved reputation's custom evidence-kind inference and unknown-schema
+  handling while removing its local `json.JSONDecodeError` branch and direct
+  raw-loader call.
+- Added a malformed explicit-evidence regression and tightened the rollout-gate
+  static contract so reputation cannot drift back to local JSON load-error
+  handling.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards initially found unrelated `cargo test -p iroha_core --lib`
+    and `cargo check -p iroha_core --lib` jobs with live `rustc`/`clippy-driver`;
+    waited in 30-second cycles until the guard showed no active `cargo`,
+    `rustc`, or `clippy-driver` process beyond the guard command and Codex
+    sessions.
+  - initial focused pytest exposed an assertion mismatch in the new regression
+    because reputation reports load errors in the JSON summary rather than
+    stderr; corrected the test and reran validation.
+  - `python3 -m py_compile scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`103` passed after the test assertion fix)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`751` passed)
+  - conflict-marker, trailing-whitespace, touched-file diff-check, and
+    Cargo.lock diff scans passed; the raw-loader/`json.JSONDecodeError` scan
+    now only finds negative static-contract assertions.
+
+## 2026-06-26 SoraFS governed false flag hardening
+
+- Added a shared `require_false_or_governed(...)` evidence helper for rollout
+  fields that must remain exact `false` unless an exact `true` value is paired
+  with an explicit governance approval flag.
+- Routed SFM-5 hedging `hedge_execution_enabled` validation through the shared
+  helper so non-boolean values still fail closed and enabled hedge execution
+  requires `hedge_execution_governed: true`.
+- Tightened focused helper, hedging rollout, and static contract coverage so
+  the local one-off governance branch cannot drift from the shared policy.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before focused and full Python validation showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`281` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`750` passed)
+  - conflict-marker, trailing-whitespace, touched-file diff-check, local
+    hedging branch, and Cargo.lock diff scans passed; the static contract
+    intentionally retains a negative assertion that the hedging checker does
+    not call `payload.get("hedge_execution_enabled")`.
+
+## 2026-06-26 SoraFS canonical integer argument hardening
+
+- Hardened the shared SoraFS argparse integer parser so runner/checker
+  thresholds, timeouts, limits, and deterministic-clock arguments accept only
+  canonical ASCII decimal integers.
+- Rejected Python `int(...)` coercions that are too loose for reviewed rollout
+  operations, including leading plus signs, negative zero, leading-zero
+  spellings, underscores, surrounding whitespace, and non-ASCII digits.
+- Tightened focused parser tests and the rollout-gate static contract so future
+  SoraFS operator tools keep the canonical integer policy centralized in
+  `sorafs_response_args.py`.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - the process guard before focused validation initially found an unrelated
+    `cargo check -p iroha_core --lib` job with live `clippy-driver`; waited 30
+    seconds until the guard showed no active `cargo`, `rustc`, or
+    `clippy-driver` process beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_response_args.py scripts/tests/sorafs_response_args_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_response_args_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`88` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`745` passed)
+  - conflict-marker, trailing-whitespace, touched-file diff-check, and
+    Cargo.lock diff scans passed.
+
+## 2026-06-26 Nexus authoritative lane roster fail-closed
+
+- Authoritative lane validator/account and peer resolution now requires the
+  lane to exist in the active derived lane config and requires that lane's
+  dataspace to exist in the active dataspace catalog before consulting manifest
+  bindings or public-lane validator stake records.
+- Global NPoS epoch stake snapshots now apply the same active lane/dataspace
+  guard before public-lane validator records can influence topology scope,
+  council member mapping, or stake-ranked candidates.
+- Nexus-enabled NPoS active-topology derivation, roster-unavailability recovery
+  candidate selection, block-sync sender-lane roster caching, and block-apply
+  peer reconciliation now intersect validator-derived lane scopes with active
+  Nexus lane ids before stale records can narrow or widen live recovery
+  rosters.
+- State-backed commit stake snapshot construction and roster-validation cache
+  refresh now filter stake maps through active Nexus lane ids, so stale
+  higher-stake records from unknown or retired lanes cannot override a
+  validator's active-lane stake weight.
+- `manifest_lane_validator_bindings` now shares the same active-catalog guard,
+  and manifest-backed authority is ignored when the manifest registry status no
+  longer matches the lane's current dataspace, so Torii proxy authority checks
+  cannot use stale manifest bindings for retired, rebound, or unknown lanes.
+- Added BLS-backed regressions covering stale active public-validator records
+  plus stale manifest bindings for unknown and rebound lanes, and an NPoS
+  epoch-roster regression where a higher-stake active validator record for an
+  unknown lane is ignored while the valid active-lane candidate remains
+  selected. Added an enabled-Nexus active-topology regression where a live
+  active commit-topology peer on an unknown lane cannot pin NPoS recovery away
+  from the valid default-lane validator. Added a stake snapshot regression where
+  a higher stale unknown-lane stake record for the same peer is ignored by the
+  active-lane-aware stake map and commit snapshot.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib epoch_validator_peer_ids_ignore_active_public_validators_for_unknown_lanes -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib stake_snapshot_tests -- --nocapture`
+    (`14` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib active_topology_for_npos_ignores_active_unknown_lane_scope_when_nexus_enabled -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib sumeragi::main_loop::roster::tests -- --nocapture`
+    (`27` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib stake_snapshot_active_lane_filter_ignores_higher_stale_unknown_lane_stake -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib sumeragi::stake_snapshot::tests -- --nocapture`
+    (`10` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib authoritative_lane_validators_ignore -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib lane_relay_validator_pool_uses_stake_when_no_manifest -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib authoritative_lane_validator_accounts_use_manifest_for_admin_managed_lane -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib authoritative_lane_ -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+  - `git diff --check`
+  - Exact conflict-marker scan returned no matches across the touched files.
+  - Cargo.lock diff guard returned no tracked lockfile changes.
+
+## 2026-06-26 Nexus public-lane validator reset cleanup
+
+- Lane reset paths now mark revivable public-lane validator records for reset
+  lanes as `Exited` during direct `set_nexus` config swaps, manual lane
+  lifecycle retirement/rebinding, and autoscale scale-in.
+- Covered `PendingActivation`, `Active`, and `Jailed` records so stale pending
+  validators cannot be epoch-promoted after lane retirement and stale active
+  validators cannot remain in live NPoS lane-scope inputs.
+- Added focused regressions for `set_nexus`, manual lifecycle retirement, and
+  autoscale-managed scale-in, while preserving active validators on unaffected
+  lanes.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib apply_lane_lifecycle_exits_reset_lane_public_validators -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_exits_retired_managed_lane_public_validators -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib set_nexus_exits_public_validators_for_removed_lanes -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib exits_ -- --nocapture`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib validator_lane_ids_for_peers_ignore_inactive_public_lane_records -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+  - `git diff --check`
+  - Cargo.lock diff guard returned no tracked lockfile changes.
+  - Exact conflict-marker scan returned no matches across the touched files.
+
+## 2026-06-26 SoraFS optional false flag hardening
+
+- Hardened the shared `require_false_or_absent(...)` helper so optional
+  no-leak/no-debug rollout fields accept only absent/null or exact `false`
+  values.
+- Rejected malformed optional false values such as strings, numbers, objects,
+  and literal `true`, closing bypasses for optional evidence flags including
+  response-body leakage, degraded status, and debug artifact markers.
+- Tightened helper and rollout-gate static contract coverage so future gates
+  keep the exact-false-when-present policy.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before focused and full Python validation initially found
+    unrelated `cargo test -p iroha_core --lib` jobs for
+    `apply_lane_lifecycle_exits_reset_lane_public_validators` and
+    `autoscale_transition_exits_retired_managed_lane_public_validators`, with
+    live `rustc`; waited in 30-second cycles until the guard showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`255` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`744` passed)
+  - conflict-marker, trailing-whitespace, touched-file diff-check, live helper
+    stale-wording, `must not be true`, and Cargo.lock diff scans passed; the
+    rollout-gate contract intentionally retains a negative assertion that the
+    helper source does not contain `not exactly true`.
+
+## 2026-06-26 SoraFS deployment-id non-production marker hardening
+
+- Extended the shared reviewed deployment-id validator so compact deployment
+  ids reject additional non-production labels including `development`,
+  `nonprod`, `nonproduction`, `notforprod`, `notprod`, and `testing`.
+- Preserved reviewed `staging` and `release` deployment ids while preventing
+  common non-production aliases from anchoring rollout/release evidence.
+- Tightened focused helper tests and the rollout-gate static contract so every
+  checker continues to use the shared expanded marker policy.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before focused and full Python validation showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`255` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`744` passed)
+  - conflict-marker, trailing-whitespace, touched-file diff-check, compact
+    marker presence, and Cargo.lock diff scans passed.
+
+## 2026-06-26 SoraFS bare inclusion-marker hardening
+
+- Extended the shared recursive sensitive-field walker so a bare `included`
+  evidence marker is treated the same as suffix markers such as
+  `payloadIncluded` and `response_bodies_included`.
+- Preserved exact `included: false` payload-free metadata while rejecting bare
+  `included` markers with any non-false value.
+- Tightened focused sensitivity tests and the rollout-gate static contract so
+  future helper changes cannot reintroduce the exact-`included` bypass.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before focused and full Python validation showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_sensitivity.py scripts/tests/sorafs_evidence_sensitivity_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_sensitivity_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`84` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`744` passed)
+  - conflict-marker, trailing-whitespace, touched-file diff-check, stale
+    exact-included guard, and Cargo.lock diff scans passed.
+
+## 2026-06-26 SoraFS inclusion-marker fail-closed hardening
+
+- Hardened the shared recursive sensitive-field walker so any
+  punctuation-insensitive `*included` marker in rollout/release evidence must
+  be exactly `false`; string, numeric, null, object, or array values no longer
+  bypass the payload-free evidence guard.
+- Preserved the existing allowance for explicit payload-free metadata such as
+  digest, hash, absence, and `included: false` fields while continuing to reject
+  high-risk compound secret/body/header fields.
+- Tightened focused sensitivity, hedging-gate, and rollout-gate static contract
+  coverage so future checkers cannot loosen the shared inclusion-marker policy
+  back to literal-`True` rejection only.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before pytest validation initially found an unrelated
+    `cargo test -p iroha_core --lib
+    roster_unavailability_candidate_source_npos_ignores_stale_inactive_commit_lane_scope
+    --features sumeragi-main-loop-tests -- --nocapture` job with live `rustc`;
+    waited in 30-second cycles until the guard showed no active `cargo`,
+    `rustc`, or `clippy-driver` process beyond the guard command and Codex
+    sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_sensitivity.py scripts/tests/sorafs_evidence_sensitivity_test.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_sensitivity_test.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`105` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`744` passed)
+  - conflict-marker, trailing-whitespace, touched-file diff-check, and
+    Cargo.lock diff scans passed; the stale-inclusion diagnostic scan found
+    only the new negative fixture that proves numeric inclusion markers fail.
+
+## 2026-06-26 SoraFS sensitive-field fragment hardening
+
+- Hardened the shared rollout-evidence sensitive-field walker so normalized
+  compound high-risk fields such as `httpAuthorizationHeader`,
+  `rawRequestBodyPreview`, and `sealedSigningKeyMaterial` are rejected even when
+  they are not exact sensitive-key matches.
+- Preserved payload-free metadata allowance for digest, hash, absence, and
+  inclusion-marker fields such as `request_body_blake3`,
+  `responseBodySha256`, `response_body_included: false`, and
+  `private_key_absent`.
+- Tightened the rollout-gate static contract so all SoraFS checkers continue to
+  use the shared sensitive-field helper and its high-risk fragment/suffix
+  policy.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation initially found unrelated
+    `cargo test -p iroha_core --lib
+    validator_lane_ids_for_peers_ignore_inactive_public_lane_records -- --nocapture`
+    and
+    `cargo test -p iroha_core --lib
+    active_topology_for_npos_ignores_stale_inactive_commit_lane_scope -- --nocapture`
+    jobs with live `rustc`; waited in 30-second cycles until the guard showed
+    no active `cargo`, `rustc`, or `clippy-driver` process beyond the guard
+    command and Codex sessions.
+  - focused pytest first exposed payload-free suffix false positives for
+    request/response body digests and private-key absence metadata; added the
+    suffix allowance and reran the focused set.
+  - `python3 -m py_compile scripts/sorafs_evidence_sensitivity.py scripts/tests/sorafs_evidence_sensitivity_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_sensitivity_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`83` passed after the suffix/test adjustment)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`743` passed)
+
+## 2026-06-26 SoraFS reviewed deployment-id compact marker hardening
+
+- Hardened `require_rollout_deployment_id(...)` so reviewed deployment ids reject
+  compact handoff markers even when separators are removed, including
+  `notproductionready`, `replacebeforeproduction`, and embedded
+  `placeholder` fragments.
+- Added longest-match diagnostics for overlapping compact markers so
+  `replacebeforeproduction` does not also report its shorter
+  `replacebeforeprod` prefix.
+- Tightened helper and rollout-gate contract coverage for the compact marker set
+  and shared deployment-id path.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before focused and full Python validation showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - focused pytest first exposed the overlapping compact-marker diagnostic;
+    de-duplicated to the longest matching marker and reran the focused set.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`255` passed after the diagnostic fix)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`741` passed)
+  - conflict-marker, trailing-whitespace, docs diff-check, and Cargo.lock diff
+    scans passed.
+
+## 2026-06-26 SoraFS Pop credential digest helper migration
+
+- Extended `validate_bound_evidence_digest_references(...)` with
+  kind-dependent digest field dispatch and added shared digest-set and
+  mismatch-error helpers for valid evidence artifacts.
+- Routed Pop credential issuer/commitment-root and issuer/revocation-registry
+  mismatch invalidation plus root/revocation bound-reference checks through the
+  shared helpers, including juror-client `synced_*` digest fields.
+- Tightened the rollout-gate static contract so Pop credential scalar digest
+  bindings, governance approval validation, and helper primitive expectations
+  match the shared-helper path.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation initially found an unrelated
+    `cargo test -p iroha_core --lib torii_routing_plan_hint_ -- --nocapture`
+    with live `rustc`; waited in 30-second cycles until the guard showed no
+    active `cargo`, `rustc`, or `clippy-driver` process beyond the guard command
+    and Codex sessions.
+  - focused pytest first exposed stale static-contract expectations for Pop
+    credential governance and primitive helper membership; updated the contract
+    and reran the focused set.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`269` passed after the contract fix)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`740` passed)
+  - conflict-marker, trailing-whitespace, stale local Pop binding-recorder, and
+    Cargo.lock diff scans passed.
+
+## 2026-06-26 SoraFS rollout bound-reference helper migration
+
+- Routed AI pre-screening runner/workflow anchor checks, moderation-panel
+  case/roster/tally anchor checks, and transparency source/publication cycle
+  anchor checks through the shared bound-reference helpers.
+- Tightened the rollout-gate static contract so AI pre-screening and
+  moderation-panel tuple bindings must use
+  `validate_bound_evidence_tuple_references(...)`, and AI pre-screening,
+  moderation-panel, and transparency scalar digest bindings must use
+  `validate_bound_evidence_digest_references(...)`.
+- At this checkpoint, Pop credential root/revocation bindings were left on the
+  local path for a later helper pass because their source fingerprint field
+  varied by artifact kind; the later Pop credential digest helper migration
+  above completes that handoff.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before focused and full Python validation showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_transparency_rollout_evidence.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py scripts/tests/check_sorafs_transparency_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`143` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`737` passed)
+  - conflict-marker, stale local binding-recorder, and Cargo.lock diff scans
+    passed.
+
+## 2026-06-26 SoraFS shared tuple bound-reference helper
+
+- Added `validate_bound_evidence_tuple_references(...)` and extended the scalar
+  bound-reference helper with optional missing-anchor artifact sets plus
+  summary errors, preserving reserve-rent's wider fail-closed diagnostics.
+- Routed hedging billing-cycle tuple bindings and reserve-rent policy,
+  quote-matrix, and ledger anchor checks through shared helpers so local tuple
+  binding, missing-anchor, and artifact-error branches cannot drift.
+- Hardened reserve-rent rollout evidence to require the shared reviewed
+  deployment context (`deployment_id` plus `environment`) and updated reserve
+  gate fixtures to carry reviewed production context by default.
+- Strengthened the rollout-gate contract so tuple-bound checkers use
+  `validate_bound_evidence_tuple_references(...)` and reserve-rent participates
+  in the shared deployment-id contract.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation initially found unrelated active
+    `cargo test -p iroha_core --lib requeue_block_transactions_discards_stale_native_amx_routing_ledger_plan -- --nocapture`
+    plus `rustc`; waited until the guard showed no active `cargo`, `rustc`, or
+    `clippy-driver` process beyond the guard command and Codex sessions before
+    rerunning validation.
+  - focused pytest first exposed reserve-rent's missing reviewed-context
+    enforcement and stale fixture context; hardened the checker, updated the
+    deployment-id contract, refreshed fixtures, and reran the focused set.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py -q`
+    (`290` passed after the reviewed-context fix)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`737` passed)
+  - `git diff --check -- scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py roadmap.md status.md`
+  - conflict-marker, trailing-whitespace, stale local reserve bound-reference,
+    stale local hedging tuple-binding, and Cargo.lock diff scans passed.
+
+## 2026-06-26 SoraFS shared bound-digest reference helper
+
+- Added `validate_bound_evidence_digest_references(...)` so standard scalar
+  anchor/bound rollout evidence gates share digest-reference validation,
+  missing-anchor failure behavior, and artifact-error recording.
+- Routed gateway compliance, appeal finance, governance DAG, orderbook, PDP,
+  PoR, PoTR, reference-SDK release, and repair bound-digest checks through the
+  shared helper, leaving hedging tuple bindings and reserve-rent multi-anchor
+  logic scoped for separate treatment.
+- Strengthened the rollout-gate contract so migrated scalar bound-digest
+  checkers cannot reintroduce local `record_artifact_error(...)`,
+  `record_string_value_binding_errors(...)`, or
+  `required_evidence_has_any_kind(...)` branches.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation showed no active `cargo`, `rustc`,
+    or `clippy-driver` process beyond the guard command and Codex sessions.
+  - focused pytest initially exposed stale contract expectations for the
+    migrated helper path; updated the contract and reran the focused set.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_repair_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py scripts/tests/check_sorafs_governance_dag_rollout_evidence_test.py scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py scripts/tests/check_sorafs_pdp_rollout_evidence_test.py scripts/tests/check_sorafs_por_rollout_evidence_test.py scripts/tests/check_sorafs_potr_rollout_evidence_test.py scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py scripts/tests/check_sorafs_repair_rollout_evidence_test.py -q`
+    (`409` passed after the contract update)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`732` passed)
+  - `git diff --check -- scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_repair_rollout_evidence.py roadmap.md status.md`
+  - conflict-marker, trailing-whitespace, stale local bound-digest helper,
+    shared helper presence, and Cargo.lock diff scans passed.
+
+## 2026-06-26 SoraFS shared required-kind all/any helpers
+
+- Added `required_evidence_has_all_kinds(...)` beside the existing
+  `required_evidence_has_any_kind(...)` and covered the all-kind helper with
+  unit tests.
+- Routed the remaining direct required-kind membership checks through shared
+  helpers, including hedging's billing-cycle/reference-price pair,
+  signed-manifest release fallback, and anchor-plus-bound fallback checks in
+  appeal finance, orderbook, PDP, PoR, PoTR, and repair.
+- Strengthened the rollout-gate contract so checkers cannot reintroduce direct
+  `"kind" in required_kinds` or local `any(kind in required_kinds for ...)`
+  predicates.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before the first Python validation showed no active `cargo`,
+    `rustc`, or `clippy-driver` process beyond the guard command and Codex
+    sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_repair_rollout_evidence.py`
+  - focused pytest initially exposed an over-specific contract assertion for
+    multi-line helper calls; relaxed the assertion and reran the focused set.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py scripts/tests/check_sorafs_pdp_rollout_evidence_test.py scripts/tests/check_sorafs_por_rollout_evidence_test.py scripts/tests/check_sorafs_potr_rollout_evidence_test.py scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py scripts/tests/check_sorafs_repair_rollout_evidence_test.py -q`
+    (`395` passed after the assertion fix)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`728` passed)
+  - post-test process guards found unrelated active
+    `cargo test -p iroha_core --lib reroute_pending_transactions_with_state -- --nocapture`
+    plus `rustc`; waited until the guard showed no active `cargo`, `rustc`, or
+    `clippy-driver` process beyond the guard command and Codex sessions before
+    static validation.
+  - `git diff --check -- scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_repair_rollout_evidence.py roadmap.md status.md`
+  - conflict-marker, trailing-whitespace, stale direct required-kind
+    membership, shared helper presence, and Cargo.lock diff scans passed.
+
+## 2026-06-26 SoraFS shared required-kind membership
+
+- Routed standard rollout/release checker bound-evidence fallback checks through
+  `required_evidence_has_any_kind(...)` instead of checker-local
+  `any(kind in required_kinds for kind in ...)` predicates.
+- Covered gateway compliance, appeal finance, governance DAG, hedging,
+  orderbook, PDP, PoR, PoTR, repair, and reserve-rent evidence gates.
+- Extended the rollout-gate contract so standard checkers cannot reintroduce
+  local required-kind membership predicates for bound-evidence checks.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation, before focused pytest, before the
+    full SoraFS sweep, and before static validation showed no active `cargo`,
+    `rustc`, or `clippy-driver` process beyond the guard command and Codex
+    sessions.
+  - `python3 -m py_compile scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py scripts/tests/check_sorafs_governance_dag_rollout_evidence_test.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py scripts/tests/check_sorafs_pdp_rollout_evidence_test.py scripts/tests/check_sorafs_por_rollout_evidence_test.py scripts/tests/check_sorafs_potr_rollout_evidence_test.py scripts/tests/check_sorafs_repair_rollout_evidence_test.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py -q`
+    (`262` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`727` passed)
+  - `git diff --check -- scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_rollout_gate_contract_test.py roadmap.md status.md`
+  - conflict-marker, trailing-whitespace, stale checker-local required-kind
+    membership predicate, shared helper presence, and Cargo.lock diff scans
+    passed.
+
+## 2026-06-26 SoraFS shared summary render/write helper
+
+- Added `render_and_write_checker_summary(...)` so rollout/release checkers
+  share canonical JSON summary rendering plus optional `--summary-out` writes.
+- Routed every SoraFS rollout/release evidence checker through the helper and
+  removed checker-local render-then-write plumbing while preserving
+  gateway/reputation JSON stdout behavior.
+- Extended helper tests and the rollout-gate contract so checkers cannot
+  reintroduce local summary rendering or summary-output writes.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation showed no active `cargo`, `rustc`,
+    or `clippy-driver` process beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_transparency_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_*evidence_test.py -q`
+    (`396` passed)
+  - process guards before the full SoraFS sweep and before static validation
+    found unrelated active
+    `cargo test -p iroha_core --lib gossip_batch_refreshes -- --nocapture`
+    plus `rustc`; waited until the guard showed no active `cargo`, `rustc`, or
+    `clippy-driver` process beyond the guard command and Codex sessions before
+    continuing.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`726` passed)
+  - `git diff --check -- scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_transparency_rollout_evidence.py roadmap.md status.md`
+  - conflict-marker, trailing-whitespace, stale checker-local summary
+    render/write plumbing, shared helper presence, and Cargo.lock diff scans
+    passed.
+
+## 2026-06-26 SoraFS shared summary renderer
+
+- Added `render_checker_summary(...)` to the shared checker preflight helper so
+  rollout/release checker summaries use one sorted, indented, newline-terminated
+  JSON rendering path for stdout/file output.
+- Routed every SoraFS rollout/release evidence checker through the shared
+  renderer and removed checker-local `json.dumps(summary, ...)` calls; the
+  reputation checker keeps its `json` import only for custom `JSONDecodeError`
+  handling.
+- Extended preflight helper tests and the rollout-gate contract so checkers
+  cannot reintroduce local summary JSON rendering.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation showed no active `cargo`, `rustc`,
+    or `clippy-driver` process beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_transparency_rollout_evidence.py`
+  - process guards before pytest found unrelated active
+    `cargo test -p iroha_core --lib gossip_batch_refreshes_stale_native_amx_participant_plan -- --nocapture`
+    plus `rustc`; waited until the guard showed no active `cargo`, `rustc`, or
+    `clippy-driver` process beyond the guard command and Codex sessions before
+    continuing.
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_*evidence_test.py -q`
+    (`394` passed)
+  - process guards before the full SoraFS sweep found the same unrelated
+    `cargo test`/`rustc` work active again; waited until it cleared before
+    continuing.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`724` passed)
+  - post-test process guard showed no active `cargo`, `rustc`, or
+    `clippy-driver` process beyond the guard command and Codex sessions before
+    static validation.
+  - `git diff --check -- scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_transparency_rollout_evidence.py roadmap.md status.md`
+  - conflict-marker, trailing-whitespace, stale checker-local summary renderer,
+    stale ad hoc newline append, shared renderer presence, and Cargo.lock diff
+    scans passed.
+
+## 2026-06-26 SoraFS shared JSON load-error recorder
+
+- Added `load_evidence_json_with_sha256_or_record_error(...)` so standard
+  rollout/release checkers share bounded JSON parsing, SHA-256 digesting, and
+  path-qualified load failure diagnostics.
+- Routed every standard SoraFS rollout/release evidence checker through the new
+  helper, removing duplicated local `json.JSONDecodeError` try/except append
+  blocks while keeping the reputation checker on its custom explicit-evidence
+  loader semantics.
+- Extended helper tests and the rollout-gate contract so standard checkers
+  cannot reintroduce checker-local JSON load-error recording.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation showed no active `cargo`, `rustc`,
+    or `clippy-driver` process beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_json.py scripts/tests/sorafs_evidence_json_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_transparency_rollout_evidence.py scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/check_sorafs_governance_dag_rollout_evidence_test.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py scripts/tests/check_sorafs_pdp_rollout_evidence_test.py scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py scripts/tests/check_sorafs_por_rollout_evidence_test.py scripts/tests/check_sorafs_potr_rollout_evidence_test.py scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py scripts/tests/check_sorafs_repair_rollout_evidence_test.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py scripts/tests/check_sorafs_transparency_rollout_evidence_test.py`
+  - focused pytest initially exposed a removed `json` import needed for summary
+    serialization; restored that import and narrowed the rollout contract to
+    local JSON-load error handling.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_json_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/check_sorafs_governance_dag_rollout_evidence_test.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py scripts/tests/check_sorafs_pdp_rollout_evidence_test.py scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py scripts/tests/check_sorafs_por_rollout_evidence_test.py scripts/tests/check_sorafs_potr_rollout_evidence_test.py scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py scripts/tests/check_sorafs_repair_rollout_evidence_test.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py scripts/tests/check_sorafs_transparency_rollout_evidence_test.py -q`
+    (`367` passed after the import fix)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`723` passed)
+  - process guards after Python validation found an unrelated active
+    `cargo test -p iroha_core --lib proposal_batch_formal_gate_matrix -- --nocapture`
+    plus `rustc`; waited until the guard showed no active `cargo`, `rustc`, or
+    `clippy-driver` process beyond the guard command and Codex sessions before
+    static validation.
+  - `git diff --check -- scripts/sorafs_evidence_json.py scripts/tests/sorafs_evidence_json_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_transparency_rollout_evidence.py roadmap.md status.md`
+  - conflict-marker, trailing-whitespace, standard checker local JSON-load
+    error handling, shared helper presence, and Cargo.lock diff scans passed.
+
+## 2026-06-26 SoraFS scalar binding recorder completion
+
+- Routed the remaining checker-local scalar binding loops through
+  `record_string_value_binding_errors(...)` for AI pre-screen workflow,
+  hedging reference decisions, moderation panel case digests, PoP credential
+  root/revocation anchors, PoR seed replay, PoTR receipt summaries, reference
+  SDK release manifests, repair roster/failure bundles, reserve rent policy
+  digests, and transparency source/cycle digests.
+- Removed direct `require_string_value_in(...)` imports/calls from SoraFS
+  rollout/release checkers so scalar normalization plus artifact invalidation
+  is centralized in the shared helper.
+- Strengthened the rollout-gate contract so every scalar-binding checker must
+  use `record_string_value_binding_errors(...)` and cannot reintroduce local
+  scalar binding error lists.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation showed no active `cargo`, `rustc`,
+    or `clippy-driver` process beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_transparency_rollout_evidence.py scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py scripts/tests/check_sorafs_por_rollout_evidence_test.py scripts/tests/check_sorafs_potr_rollout_evidence_test.py scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py scripts/tests/check_sorafs_repair_rollout_evidence_test.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py scripts/tests/check_sorafs_transparency_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py scripts/tests/check_sorafs_por_rollout_evidence_test.py scripts/tests/check_sorafs_potr_rollout_evidence_test.py scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py scripts/tests/check_sorafs_repair_rollout_evidence_test.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py scripts/tests/check_sorafs_transparency_rollout_evidence_test.py -q`
+    (`273` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`721` passed)
+  - `git diff --check -- scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_transparency_rollout_evidence.py scripts/tests/check_sorafs_rollout_gate_contract_test.py roadmap.md status.md`
+  - conflict-marker, trailing-whitespace, checker-local
+    `require_string_value_in(...)`, scalar-loop, and Cargo.lock diff scans
+    passed.
+
+## 2026-06-26 SoraFS orderbook and PDP scalar binding recorders
+
+- Routed the SFM-2 orderbook contract-surface binding and the SF-13 PDP
+  proof-generation summary binding through `record_string_value_binding_errors(...)`.
+- Removed checker-local `require_string_value_in(...)` plus artifact-error
+  loops for contract-bound and proof-summary-bound downstream evidence so
+  scalar normalization and artifact invalidation stay centralized.
+- Extended the rollout-gate contract so orderbook and PDP cannot reintroduce
+  local scalar binding error recording for those anchor paths.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found an unrelated active
+    `cargo test`/`rustc` job and waited until the guard showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py scripts/tests/check_sorafs_pdp_rollout_evidence_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py scripts/tests/check_sorafs_pdp_rollout_evidence_test.py -q`
+    (`119` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` (`721` passed)
+  - `git diff --check -- scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/tests/check_sorafs_rollout_gate_contract_test.py roadmap.md status.md`
+  - conflict-marker, trailing-whitespace, local `require_string_value_in(...)`,
+    scalar-loop, and Cargo.lock diff scans passed.
+
+## 2026-06-26 SoraFS gateway and appeal scalar binding recorders
+
+- Routed the SFM-4 gateway-compliance feed-promotion bundle binding and the
+  SFM-4b2 appeal-finance pricing-config binding through
+  `record_string_value_binding_errors(...)`.
+- Removed checker-local `require_string_value_in(...)` plus artifact-error
+  loops for bundle-bound and config-bound downstream evidence so scalar
+  normalization and artifact invalidation stay centralized.
+- Extended the rollout-gate contract so gateway compliance and appeal finance
+  cannot reintroduce local scalar binding error recording for those anchor
+  paths.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found unrelated active
+    `cargo test`/`rustc` and `cargo check`/`clippy-driver` jobs and waited
+    until the guard showed no active `cargo`, `rustc`, or `clippy-driver`
+    process beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py -q`
+    (`107` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`721` passed)
+  - `git diff --check -- scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/tests/check_sorafs_rollout_gate_contract_test.py roadmap.md status.md`
+  - conflict-marker and trailing-whitespace scans across the touched gateway
+    compliance checker, appeal finance checker, rollout-gate contract, roadmap,
+    and status files.
+  - static scans confirmed gateway compliance and appeal finance no longer
+    import or call `require_string_value_in(...)` directly and no longer keep
+    local `valid_bundle_digests`/`valid_config_digests` scalar binding error
+    loops.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS Governance DAG scalar binding artifact-error recorder
+
+- Added `record_string_value_binding_errors(...)` so rollout evidence gates can
+  mirror scalar binding failures to artifact errors through the same shared
+  pattern used for tuple bindings.
+- Routed the SF-12 Governance DAG public-head CID binding check through the new
+  helper, removing checker-local `require_string_value_in(...)` plus
+  artifact-error loops for public-head-bound downstream evidence.
+- Extended helper and rollout-gate contract coverage so Governance DAG evidence
+  cannot reintroduce local scalar binding error recording for the public-head
+  path.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation showed no active `cargo`, `rustc`,
+    or `clippy-driver` process beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_governance_dag_rollout_evidence_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_governance_dag_rollout_evidence_test.py -q`
+    (`258` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`721` passed)
+  - `git diff --check -- scripts/sorafs_evidence_validation.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py roadmap.md status.md`
+  - conflict-marker and trailing-whitespace scans across the touched helper,
+    Governance DAG checker, helper tests, rollout-gate contract, roadmap, and
+    status files.
+  - static scans confirmed Governance DAG no longer imports or calls
+    `require_string_value_in(...)` directly and no longer keeps the local
+    `valid_public_head_cids` scalar binding error loop.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS AI pre-screen tuple binding artifact-error recorder
+
+- Routed the SFM-4a AI pre-screen runner manifest/hash/subject tuple binding
+  check through `record_string_tuple_binding_errors(...)`.
+- Removed checker-local `require_string_tuple_in(...)` plus artifact-error
+  loops for runner-bound committee evidence so tuple normalization and artifact
+  invalidation stay centralized.
+- Extended the rollout-gate contract so AI pre-screen evidence cannot
+  reintroduce local tuple binding error recording for the runner tuple path.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found an unrelated active
+    `cargo test`/`rustc` job and waited until the guard showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py -q`
+    (`257` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`719` passed)
+  - `git diff --check -- scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/tests/check_sorafs_rollout_gate_contract_test.py roadmap.md status.md`
+  - conflict-marker and trailing-whitespace scans across the touched AI
+    pre-screen checker, rollout-gate contract, roadmap, and status files.
+  - static scans confirmed AI pre-screen no longer imports or calls
+    `require_string_tuple_in(...)` directly and no longer keeps the local
+    `valid_runner_bindings` tuple-binding error loop.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS moderation tuple binding artifact-error recorder
+
+- Routed the SFM-4b moderation-panel roster and tally tuple binding checks
+  through `record_string_tuple_binding_errors(...)`.
+- Removed checker-local `require_string_tuple_in(...)` plus artifact-error loops
+  for roster-bound and commit/reveal-bound downstream evidence so tuple
+  normalization and artifact invalidation stay centralized.
+- Extended the rollout-gate contract so moderation panel evidence cannot
+  reintroduce local tuple binding error recording for those roster/tally paths.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - an earlier process guard found an unrelated active `cargo test`/`rustc`
+    job and waited; subsequent guards before Python validation showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py -q`
+    (`264` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`719` passed)
+  - `git diff --check -- scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/tests/check_sorafs_rollout_gate_contract_test.py roadmap.md status.md`
+  - conflict-marker and trailing-whitespace scans across the touched
+    moderation checker, rollout-gate contract, roadmap, and status files.
+  - static scans confirmed moderation no longer imports or calls
+    `require_string_tuple_in(...)` directly and no longer keeps local
+    `valid_roster_bindings`/`valid_tally_bindings` tuple-binding error loops.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS reserve tuple binding artifact-error recorder
+
+- Routed the SFM-6 reserve/rent policy-matrix and ledger tuple binding checks
+  through `record_string_tuple_binding_errors(...)`.
+- Removed reserve/rent's checker-local `require_string_tuple_in(...)` plus
+  artifact-error loops for quote-matrix and ledger-digest bindings so tuple
+  normalization and artifact invalidation stay centralized.
+- Extended the rollout-gate contract so reserve/rent cannot reintroduce local
+  tuple binding error recording for those policy/matrix/ledger checks.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation showed no active `cargo`, `rustc`,
+    or `clippy-driver` process beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py -q`
+    (`256` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`719` passed)
+  - `git diff --check -- scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_rollout_gate_contract_test.py roadmap.md status.md`
+  - conflict-marker and trailing-whitespace scans across the touched reserve
+    checker, rollout-gate contract, roadmap, and status files.
+  - static scans confirmed reserve/rent no longer imports or calls
+    `require_string_tuple_in(...)` directly and no longer keeps local
+    `valid_policy_matrix_*` tuple-binding error loops.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared tuple binding artifact-error recorder
+
+- Added `record_string_tuple_binding_errors(...)` so rollout evidence gates can
+  keep tuple normalization and artifact-error mirroring in one shared helper.
+- Routed the SFM-5 hedging/billing staged billing-cycle binding check through
+  the helper, removing the local `require_string_tuple_in(...)` plus
+  artifact-error loop from that checker.
+- Extended helper and rollout-gate contract coverage so hedging cannot
+  reintroduce checker-local billing-cycle tuple binding error recording.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found unrelated active
+    `cargo test`/`rustc` and `cargo check`/`clippy-driver` jobs and waited
+    until the guard showed no active `cargo`, `rustc`, or `clippy-driver`
+    process beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py -q`
+    (`259` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`719` passed)
+  - `git diff --check -- scripts/sorafs_evidence_validation.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py roadmap.md status.md`
+  - conflict-marker and trailing-whitespace scans across the touched SoraFS
+    helper, hedging checker, tests, roadmap, and status files.
+  - static scan confirmed hedging no longer imports or calls
+    `require_string_tuple_in(...)` directly.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared inconsistent evidence value recorder
+
+- Added `record_inconsistent_evidence_values_error(...)` for evidence gates
+  that need to fail all required summary rows and append a focused row error
+  when observed cross-artifact values disagree.
+- Routed reputation's provider-count mismatch path through the helper so the
+  checker no longer owns local distinct-value branching, summary-wide
+  invalidation, or latest-row error append logic.
+- Extended helper coverage and the rollout-gate contract so reputation cannot
+  reintroduce the provider-count mismatch branch locally.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found unrelated active
+    `cargo test`/`rustc` jobs and waited until the guard showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`258` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`717` passed)
+
+## 2026-06-26 SoraFS shared required-or-observed error recorder
+
+- Added `record_missing_required_or_observed_evidence_error(...)` for evidence
+  gates that need to mark a required row invalid when neither configured
+  required values nor observed evidence values exist.
+- Routed reputation's "at least one provider proof must be verified" fallback
+  through the helper so the checker no longer owns the predicate branch and
+  row-error append.
+- Extended helper coverage and the rollout-gate contract so reputation cannot
+  reintroduce checker-local required-or-observed branching.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found unrelated active
+    `cargo test`/`rustc` jobs and waited until the guard showed no active
+    `cargo`, `rustc`, or `clippy-driver` process beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`256` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`715` passed)
+
+## 2026-06-26 SoraFS shared missing required value error recorder
+
+- Added `record_missing_required_evidence_value_errors(...)` for evidence gates
+  that need to mark a required row invalid and append one diagnostic for each
+  required value absent from observed evidence.
+- Routed reputation's required provider/proof diagnostics through the helper so
+  the checker no longer owns a local missing-provider loop.
+- Extended helper coverage and the rollout-gate contract so reputation cannot
+  reintroduce checker-local missing-provider iteration or direct
+  `missing_required_evidence_values(...)` use.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation showed no active `cargo`, `rustc`,
+    or `clippy-driver` process beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`254` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`713` passed)
+
+## 2026-06-26 SoraFS shared kinded evidence artifact builder
+
+- Added `build_kinded_evidence_artifact(...)` for evidence gates that need a
+  payload-free artifact summary row keyed by local evidence kind rather than
+  the standard schema/status row shape.
+- Routed reputation's custom recognized artifact rows through the helper so
+  path, SHA-256, fingerprint, validity, and error-bucket construction no
+  longer lives in the checker.
+- Extended helper coverage and the rollout-gate contract so reputation cannot
+  reintroduce checker-local fingerprint mutation or artifact-row dict assembly.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found unrelated active
+    `cargo test`/`rustc` and `cargo check`/`clippy-driver` jobs at different
+    points; validation waited until the guard showed no active `cargo`,
+    `rustc`, or `clippy-driver` process beyond the guard command and Codex
+    sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`252` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`711` passed)
+
+## 2026-06-26 Nexus NPoS lane-scope active-validator hardening
+
+- `validator_lane_ids_for_peers(...)` now derives live lane scope only from
+  `Active` public-lane validator records. Historical `PendingActivation`,
+  `Jailed`, `Exiting`, `Exited`, or `Slashed` records remain queryable for
+  lifecycle/audit state, but they cannot pin NPoS recovery elections or active
+  topology selection to a stale lane after retirement, rebinding, or autoscale
+  scale-in.
+- Added a direct state helper regression covering active, jailed, and exiting
+  records across different lanes.
+- Added an adversarial NPoS roster regression where the commit topology contains
+  only a jailed stale-lane peer; active topology selection now ignores that
+  stale lane scope and returns the live active validators.
+- Added the matching feature-gated Sumeragi main-loop recovery-candidate
+  regression and refreshed the test-only `SumeragiConfig` helper with the
+  current `native_amx` defaults so the feature-gated module compiles against
+  the latest config shape.
+- Updated Nexus lane docs, transition notes, and roadmap text with the
+  active-record-only lane-scope invariant.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib validator_lane_ids_for_peers_ignore_inactive_public_lane_records -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib active_topology_for_npos_ignores_stale_inactive_commit_lane_scope -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib active_topology_for_npos -- --nocapture`
+    (`9` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib roster_unavailability_candidate_source_npos_ignores_stale_inactive_commit_lane_scope --features sumeragi-main-loop-tests -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 Nexus block requeue stale routing-ledger cleanup
+
+- Hardened block requeue so a failed ledger-sourced reinsertion discards the
+  exact stale process-global full routing plan before returning. A follow-up
+  recovery pass must therefore recompute from current committed Nexus state
+  instead of replaying the same stale Native AMX participant legs behind an
+  unchanged coordinator route.
+- Added a default `iroha_core --lib` regression that poisons the global routing
+  ledger with a stale Native AMX participant plan, verifies the first block
+  requeue fails closed without queueing or gossiping the transaction, then
+  verifies the second pass recomputes the current plan and queues normally.
+- Updated Nexus lane docs, transition notes, and roadmap text with the
+  block-requeue stale-ledger cleanup guarantee.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib requeue_block_transactions_discards_stale_native_amx_routing_ledger_plan -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+  - `git diff --check`
+  - anchored conflict-marker scan across touched Nexus files (no matches)
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` (no output)
+
+## 2026-06-26 Nexus Torii proxy routing-plan hint hardening
+
+- Added checked conversion for `ToriiRoutingPlanHintV1` so submit-transaction
+  proxy receivers reject malformed routing hints before queue admission.
+  Coordinator and participant leg roles must be canonical, and Native AMX
+  hints must advertise a `plan_digest` that matches the digest recomputed from
+  the supplied route legs.
+- Wired the Torii submit-proxy receiver through the checked conversion, so
+  forged Native AMX plan digests now fail as `invalid_proxy_request` instead of
+  being silently normalized into a fresh `RoutingPlan`.
+- Added core and Torii receiver regressions covering forged Native AMX plan
+  digests and malformed route-leg roles.
+- Updated Nexus lane docs, transition notes, and roadmap text with the
+  proxy-hint validation guarantee.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib torii_routing_plan_hint_ -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_torii --lib validate_proxy_routing_plan_hint_rejects_forged_digest_and_roles --features connect -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_torii --lib --features connect -- -D warnings`
+  - `git diff --check`
+  - anchored conflict-marker scan across touched Nexus/Torii files (no matches)
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` (no output)
+
+## 2026-06-26 Nexus queue reconfiguration Native AMX participant refresh guard
+
+- Added a queue reconfiguration regression proving
+  `reconfigure_nexus_with_state` refreshes cached full Native AMX routing plans
+  for pending transactions from committed Nexus state. The test poisons the
+  queue-local plan and global routing ledger with stale participant legs, then
+  verifies the reconfiguration path restores the current full plan while keeping
+  the pending transaction queued.
+- Added the same regression for the view-backed `reconfigure_nexus` entry point
+  so Torii/test harness callers cannot preserve stale Native AMX participant
+  legs behind an unchanged coordinator route.
+- Updated Nexus lane docs, transition notes, and roadmap text with the
+  reconfiguration-specific full-plan refresh guarantee across both entry
+  points.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib reconfigure_nexus_with_state_refreshes_stale_native_amx_participant_plan -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib reconfigure_nexus_with_view_refreshes_stale_native_amx_participant_plan -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib reconfigure_nexus_with_state -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib reconfigure_nexus_with_ -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib reroute_pending_transactions_with_state -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 Nexus outgoing gossip Native AMX participant refresh guard
+
+- Added an outgoing gossip regression proving `gossip_batch_with_state`
+  refreshes cached full Native AMX routing plans from committed Nexus state
+  before emitting route hints, so stale participant legs are corrected even when
+  the coordinator route is unchanged.
+- Aligned the generic stale-routing metadata regression with the production
+  state-backed outgoing gossip path and a neutral transaction fixture, so it
+  verifies committed-state route refresh instead of a test-only view/router
+  mismatch.
+- Updated Nexus lane docs, transition notes, and roadmap text to distinguish
+  full-plan preservation during gossip partitioning from state-backed outgoing
+  gossip batch refresh before serialization.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib gossip_batch_refreshes_stale_native_amx_participant_plan -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib gossip_batch_refreshes -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 Nexus direct admission Native AMX participant-drift guard
+
+- Added a direct precomputed-plan admission regression proving
+  `push_with_gossip_payload_with_state_and_routing_plan` rejects stale Native
+  AMX participant legs after committed Nexus routing changes, even when the
+  coordinator route is unchanged. Rejected direct admissions leave queue caches,
+  gossip payloads, and gossip notifications empty.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib push_with_gossip_payload_with_state_and_routing_rejects_native_amx_participant_drift -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib push_with_gossip_payload_with_state_and_routing -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib precomputed_routing -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 Nexus proposal trim Native AMX full-plan preservation
+
+- Extended the proposal batch formal gate matrix with a real
+  `RoutingPlan::NativeAmx` case, proving size-cap trimming returns removed
+  transactions with their full routing plan and participant legs intact for
+  overflow requeue.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib proposal_batch_formal_gate_matrix -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib trim_batch_for_size_cap -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 Nexus TEU deferral Native AMX full-plan preservation
+
+- Added a lane-TEU deferral regression proving deferred Native AMX transactions
+  carry their full routing plan, including participant legs, into consensus
+  requeue. The preserved plan is accepted by requeue and the transaction is
+  available in the next block collection pass.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib enforce_lane_teu_limits_preserves_native_amx_requeue_plan -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib enforce_lane_teu_limits_with_routing_plans -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 Nexus consensus requeue Native AMX participant-drift guard
+
+- Added a consensus requeue regression proving `push_requeued_with_routing_plan`
+  rejects stale Native AMX participant legs after committed Nexus routing
+  changes, even when the coordinator route is unchanged. Rejected requeues leave
+  queue routing caches empty and publish no gossip notification.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib push_requeued_with_routing_plan_rejects_native_amx_participant_drift -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib push_requeued_with_routing_plan -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 Nexus proposal Native AMX participant refresh guard
+
+- Added a proposal routing refresh regression proving sidecar/execution-context
+  preparation replaces stale Native AMX participant legs from committed Nexus
+  state even when the coordinator route is unchanged. This keeps proposal
+  vectors from becoming coordinator-only agreement after participant lane drift.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib refresh_proposal_routing_from_state_refreshes_native_amx_participant_legs -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib refresh_proposal_routing_from_state -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 Nexus batch Native AMX participant-drift guard
+
+- Added a batch admission regression proving caller-provided Native AMX routing
+  plans are rejected when the coordinator route still matches but participant
+  legs differ from the plan recomputed from committed Nexus state. Rejected
+  batches leave the queue empty and publish no gossip notification.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib batch_push_with_precomputed_routing_rejects_native_amx_participant_drift -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib batch_push_with_precomputed_routing -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 Nexus queue journal Native AMX participant restart guard
+
+- Added a queue plan-journal replay regression proving restart recovery
+  tombstones stale Native AMX participant legs after committed Nexus routing
+  changes, even when the old participant lane still exists and resolves against
+  the active catalog.
+- Aligned the existing stale single-route journal fixture with state-aware
+  admission by writing its stale frame directly, so the test continues to cover
+  replay tombstoning instead of failing before restart replay.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib queue_plan_journal_tombstones_stale_native_amx_participant_after_restart -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib queue_plan_journal -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 Nexus Torii proxy Native AMX participant-drift guard
+
+- Added a Torii submit-transaction proxy regression proving receiver-side
+  routing validation rejects Native AMX ingress hints when the coordinator route
+  is unchanged but participant legs differ from the receiver-recomputed full
+  plan. This keeps proxied submissions from accepting coordinator-only agreement
+  after lane/dataspace drift.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_torii validate_proxy_routing_plan_rejects_native_amx_participant_drift -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_torii validate_proxy_routing_plan -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_torii --lib -- -D warnings`
+
+## 2026-06-26 Nexus gossiper Native AMX full-plan preservation
+
+- Fixed transaction-gossip batch partitioning so routing plans that cannot report
+  a static Norito length fall back to their actual encoded length instead of
+  being requeued. This lets Native AMX full routing plans with participant legs
+  cross the gossip plane instead of collapsing to coordinator-only visibility or
+  staying local.
+- Added a partition/roundtrip regression proving a Native AMX plan keeps both
+  participant legs through `TransactionGossip` assembly and Norito decode.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib partition_preserves_native_amx_full_routing_plan -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib partition_ -- --nocapture`
+    (`9` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 Nexus Native AMX block execution-context participant guard
+
+- Added a block validation regression for durable Native AMX execution contexts:
+  a block whose coordinator route and routing-plan digest are current but whose
+  persisted participant leg is stale now fails at the routing-plan leg comparison
+  before receipt validation.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib validate_static_state_dependent_rejects_native_amx_participant_leg_mismatch -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib execution_context -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib native_amx -- --nocapture`
+    (`21` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 Nexus Native AMX participant route validation regression
+
+- Added a queue routing regression proving that full Native AMX routing plans
+  validate participant legs, not only the coordinator route. A valid coordinator
+  with a stale participant lane, unknown participant dataspace, or participant
+  lane/dataspace mismatch now has explicit coverage for the existing fail-closed
+  resolver labels.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib resolve_routing_plan_rejects_stale_native_amx_participant_legs -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib stale_policy_even_when_old_lane_still_exists -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 Nexus same-shard dataspace rebind DA cursor reset
+
+- Added a persisted-journal regression for lane/dataspace rebinding that keeps
+  the same runtime DA shard id. The test seeds stale DA shard and receipt
+  cursors, applies a `set_nexus` dataspace rebind for the same lane id, verifies
+  the in-memory and persisted cursors are removed, and then records a fresh
+  lower sequence for the rebound lane.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib set_nexus_same_shard_dataspace_rebind_persists_da_cursor_reset -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib da_cursor -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS shared observed evidence value recorder
+
+- Added `record_observed_evidence_value(...)` for evidence gates that need to
+  retain only truthy observed values while preserving set normalization.
+- Routed reputation's observed provider IDs and provider-count values through
+  the helper so the checker no longer owns local `if value: set.add(value)`
+  guards for those rollout requirements.
+- Extended helper coverage and the rollout-gate contract so reputation cannot
+  reintroduce checker-local provider ID/count set-add guards.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation initially found an active
+    unrelated `cargo test`/`rustc` job and then a `cargo check`/`clippy-driver`
+    job; validation waited until the guard showed no active `cargo`, `rustc`,
+    or `clippy-driver` process beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`250` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`709` passed)
+
+## 2026-06-26 Nexus gossip route-hint dataspace-catalog guard
+
+- Transaction gossip route hints now resolve against both the active
+  `LaneCatalog` and `DataSpaceCatalog` before broadcast/reinsertion admission.
+  Missing lanes, lane/dataspace mismatches, and dangling lane bindings whose
+  dataspace has already been removed fail closed with stable route-resolution
+  labels instead of relying on lane-only validation.
+- Added focused regressions for missing lane, lane/dataspace mismatch, missing
+  dataspace, and valid route acceptance through the gossiper route validator.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib validate_route -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 Nexus Torii incoming read/verified-query proxy stale-route guard
+
+- Incoming Torii read and verified-query proxy requests now validate
+  ingress-selected lane/dataspace hints against the receiver's active Nexus
+  catalogs before local read execution. Active routes still execute on the
+  receiver to avoid multi-hop proxy cascades during transient authority-view
+  skew, but retired-lane and lane/dataspace mismatch hints fail as
+  `route_unavailable` with `stale_route` diagnostics.
+- Added adversarial regressions for missing retired lanes and forged
+  lane/dataspace mismatches across both app-api read and verified-query proxy
+  requests, plus reran the active-route local-execution regression to preserve
+  the no-cascade behavior.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_torii incoming_read_proxy_rejects -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_torii incoming_verified_query_proxy_rejects -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_torii incoming_proxy_reads_execute_locally_even_when_local_authority_is_stale -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_torii --lib -- -D warnings`
+
+## 2026-06-26 Nexus Torii pipeline-status hinted fanout guard
+
+- Global `/v1/pipeline/transactions/status` reads now treat cached routing-plan
+  hints as probes: hinted `Queued`, `Approved`, `Committed`, or malformed
+  successful responses fall through to full fanout, while only terminal hinted
+  statuses may short-circuit. This prevents stale retired-lane status caches
+  from hiding newer terminal results on active autoscale lanes.
+- Added adversarial Torii regressions for non-terminal hinted successes,
+  terminal hinted successes, and malformed hinted success bodies.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_torii pipeline_status_hint -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_torii pipeline_status_handler -- --nocapture`
+    (`9` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_torii --lib -- -D warnings`
+
+## 2026-06-26 SoraFS shared consistent evidence value recorder
+
+- Added `record_consistent_evidence_value(...)` for evidence gates that need to
+  capture the first non-empty cross-artifact value and report later mismatches
+  with path-qualified context.
+- Routed reputation's `snapshot_id_hex` and `merkle_root_hex` consistency
+  tracking through the helper so the checker no longer owns local
+  `append_match(...)` state/mismatch logic.
+- Extended helper coverage and the rollout-gate contract so reputation cannot
+  reintroduce the local consistency helper or checker-local mismatch formatter.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found no active `cargo`, `rustc`,
+    or `clippy-driver` process beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`249` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`708` passed)
+
+## 2026-06-26 SoraFS shared snapshot-bound validator
+
+- Added `validate_snapshot_bound_evidence_artifacts(...)` for evidence gates
+  that need to validate downstream snapshot-bound artifacts against valid
+  publish/latest anchors and record the same artifact plus required-row errors
+  on mismatch or missing anchors.
+- Routed reputation's snapshot-bound tuple validation, artifact invalidation,
+  and no-anchor required-latest failure through the helper so it no longer
+  owns local `require_string_tuple_in(...)`, `record_artifact_error(...)`,
+  artifact-kind, or artifact-fingerprint access paths.
+- Extended helper coverage and the rollout-gate contract so reputation cannot
+  reintroduce the local snapshot-bound validation loop while still using the
+  shared tuple-binding and artifact-error primitives via the helper.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found unrelated
+    `cargo test -p iroha_core --lib validate_route -- --nocapture` work with
+    active `rustc`; validation waited in 30-second intervals and resumed only
+    after no active `cargo`, `rustc`, or `clippy-driver` process remained
+    visible beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`248` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`707` passed)
+
+## 2026-06-26 SoraFS shared snapshot-binding recorder
+
+- Added `record_snapshot_bound_evidence_artifact(...)` for evidence gates that
+  need to classify valid snapshot anchors separately from downstream
+  snapshot-bound artifacts without duplicating checker-local branch logic.
+- Routed reputation's valid publish/latest anchor recording and
+  provider/events/verify/metrics/transport/consumption snapshot-bound artifact
+  collection through the helper while keeping the custom reputation artifact row
+  shape.
+- Extended helper coverage and the rollout-gate contract so reputation cannot
+  reintroduce direct `valid_snapshot_bindings.add(...)` or
+  `snapshot_bound_artifacts.append(record)` classification.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found unrelated
+    `cargo test -p iroha_torii incoming_read_proxy_rejects -- --nocapture`
+    work with active `rustc`/link activity, then unrelated
+    `cargo check -p iroha_torii --lib` work with active `clippy-driver`;
+    validation waited in 30-second intervals and resumed only after no active
+    `cargo`, `rustc`, or `clippy-driver` process remained visible beyond the
+    guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`246` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`705` passed)
+
+## 2026-06-26 SoraFS shared provider presence helper
+
+- Added `required_or_observed_evidence_values_are_present(...)` for evidence
+  gates that need either an explicit required-value set or an observed evidence
+  value before promotion can proceed.
+- Routed reputation's fallback provider-proof requirement through the helper so
+  the no-allowlist path no longer depends on checker-local
+  `not required_providers and not provider_ids` logic.
+- Extended helper coverage and the rollout-gate contract so reputation cannot
+  reintroduce the local empty-required/empty-observed provider check.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found unrelated
+    `cargo test -p iroha_torii incoming_read_proxy_rejects -- --nocapture`
+    work with active `rustc`, then unrelated
+    `cargo check -p iroha_torii --lib` work with active `clippy-driver`;
+    validation waited in 30-second intervals and resumed only after no active
+    `cargo`, `rustc`, or `clippy-driver` process remained visible beyond the
+    guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`245` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`704` passed)
+
+## 2026-06-26 SoraFS shared distinct-value consistency helper
+
+- Added `distinct_evidence_values_are_consistent(...)` for evidence gates that
+  need to fail when multiple distinct observed values appear for a single
+  cross-artifact field.
+- Routed reputation's provider-count mismatch predicate through the helper so
+  rollout summary invalidation no longer depends on checker-local
+  `len(provider_counts) > 1` semantics.
+- Extended helper coverage and the rollout-gate contract so reputation cannot
+  reintroduce the local provider-count set-size predicate.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found unrelated
+    `cargo test -p iroha_torii incoming_read_proxy_rejects -- --nocapture`
+    work with active `rustc`; validation waited in 30-second intervals and
+    resumed only after no active `cargo`, `rustc`, or `clippy-driver` process
+    remained visible beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`244` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`703` passed)
+
+## 2026-06-26 SoraFS shared missing-value helper
+
+- Added `missing_required_evidence_values(...)` for evidence gates that need to
+  compare required values against observed evidence values while preserving the
+  required-value diagnostic order.
+- Routed reputation's required provider/proof check through the helper so
+  provider rollout requirements no longer rely on a checker-local
+  `provider_id not in provider_ids` branch.
+- Extended helper coverage and the rollout-gate contract so reputation cannot
+  reintroduce direct provider-membership checks for required providers.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found no active `cargo`, `rustc`,
+    or `clippy-driver` process beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`243` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`702` passed)
+
+## 2026-06-26 Nexus committed TEU telemetry route attribution
+
+- Block scheduler committed-TEU telemetry now attributes each transaction from
+  the validated block routing vector instead of the process-global routing-plan
+  ledger, preventing stale cached hints from moving committed load metrics onto
+  a retired or previously selected lane after autoscale reroutes.
+- Added focused regressions for route-sourced attribution and saturating TEU
+  accumulation.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib committed_teu_attribution -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib --features telemetry -- -D warnings`
+
+## 2026-06-26 SoraFS shared required-kind membership helper
+
+- Added `required_evidence_has_any_kind(...)` for custom evidence gates that
+  need to test whether required kinds intersect a candidate kind set.
+- Routed reputation's snapshot-bound-required check through the helper so the
+  no-anchor failure path no longer carries a checker-local
+  `any(kind in required_kinds for kind in SNAPSHOT_BOUND_KINDS)` expression.
+- Extended helper coverage and the rollout-gate contract so reputation cannot
+  reintroduce the local snapshot-bound required-kind membership comprehension.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found unrelated
+    `cargo test -p iroha_torii pipeline_status_hint -- --nocapture`,
+    `cargo test -p iroha_torii pipeline_status_handler -- --nocapture`, and
+    `cargo check -p iroha_torii --lib` work with active `rustc` or
+    `clippy-driver`; validation waited in 30-second intervals and resumed only
+    after no active `cargo`, `rustc`, or `clippy-driver` process remained
+    visible beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`242` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`701` passed)
+
+## 2026-06-26 SoraFS existing-row invalidation helper
+
+- Added `mark_required_evidence_invalid_if_present(...)` for custom artifact
+  flows that should invalidate only existing required summary rows.
+- Routed reputation's snapshot-bound artifact error mirroring through the helper
+  so optional/non-required rows are skipped without checker-local
+  `artifact_kind in required` branches.
+- Extended helper coverage and the rollout-gate contract so reputation cannot
+  reintroduce direct `mark_required_evidence_invalid(required, artifact_kind)`
+  or local membership checks.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found no active `cargo`, `rustc`,
+    or `clippy-driver` process beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`241` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`700` passed)
+
+## 2026-06-26 SoraFS shared required-summary invalidator
+
+- Added `mark_required_evidence_summary_invalid(...)` for custom required
+  evidence summaries that need every row failed at once.
+- Routed reputation's provider-count mismatch path through the helper so
+  summary-wide invalidation no longer loops over `required.values()` locally.
+- Extended helper coverage and the rollout-gate contract so reputation cannot
+  reintroduce direct `record["valid"] = False` loops for required summaries.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found unrelated
+    `cargo test -p iroha_core --lib committed_teu_attribution -- --nocapture`,
+    `cargo check -p iroha_core --lib`, and
+    `cargo check -p iroha_core --lib --features telemetry` work with active
+    `rustc`/`clippy-driver`; validation waited in 30-second intervals and
+    resumed only after no active `cargo`, `rustc`, or `clippy-driver` process
+    remained visible beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`240` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`699` passed)
+
+## 2026-06-26 Nexus transaction validation autoscale fallback
+
+- Stateful transaction validation now resolves missing routing context through
+  the active Nexus full-plan helper and uses the coordinator route from that
+  plan, so direct validation entrypoints share the live autoscale elastic range
+  used by queue admission, proposal assembly, and block validation.
+- Added a regression where catalog-only routing would hit a governance-blocked
+  base lane while the live Nexus autoscale range routes the same transaction to
+  an elastic lane that validates successfully.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib validate_transaction_without_context_uses_live_autoscale_route -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib default_route_ -- --nocapture`
+    (`16` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib routing_plan -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib validate_static_state_dependent -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS shared custom required-row artifact recorder
+
+- Added `record_custom_required_evidence_artifact(...)` for reputation's custom
+  required evidence rows.
+- Routed reputation's per-artifact required-row recording through the helper so
+  checker-local `required[evidence.kind]` artifact/error/validity mutation is
+  gone.
+- Extended helper coverage and the rollout-gate contract so malformed custom
+  row lists are rebuilt fail-closed and reputation cannot reintroduce direct
+  required-row artifact mutation.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found unrelated
+    `cargo check -p iroha_core --lib --features telemetry` and
+    `cargo test -p iroha_core --lib committed_teu_attribution -- --nocapture`
+    work with active `clippy-driver`/`rustc`; validation waited in 30-second
+    intervals and resumed only after no active `cargo`, `rustc`, or
+    `clippy-driver` process remained visible beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`239` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`698` passed)
+
+## 2026-06-26 SoraFS shared custom required-row finalizer
+
+- Added `finalize_custom_required_evidence_rows(...)` for reputation's richer
+  required evidence summary rows.
+- Routed reputation's missing-row diagnostics and per-row artifact validity
+  finalization through the helper so required-row artifact/error/validity
+  mutation no longer lives in the checker.
+- Extended helper coverage and the rollout-gate contract so reputation cannot
+  reintroduce checker-local required-row finalization loops.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found no active `cargo`, `rustc`,
+    or `clippy-driver` process beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`238` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`697` passed)
+
+## 2026-06-26 SoraFS shared recognized-list validity
+
+- Added `recognized_evidence_artifacts_are_valid(...)` for custom recognized
+  artifact lists that need the same explicit-true validity semantics as
+  standard artifact buckets.
+- Routed reputation's final ready/failed recognized-artifact aggregate through
+  the helper so the top-level status no longer carries a checker-local
+  `all(evidence_artifact_is_valid(...))` expression.
+- Extended helper coverage and the rollout-gate contract so reputation cannot
+  reintroduce the inline recognized-list validity aggregate.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found no active `cargo`, `rustc`,
+    or `clippy-driver` process beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`237` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`696` passed)
+
+## 2026-06-26 SoraFS shared recognized-list counter
+
+- Added `count_recognized_evidence_artifacts(...)` for custom recognized
+  artifact lists that are not stored in standard per-kind buckets.
+- Routed reputation's `recognized_artifact_count` through the helper so its
+  custom snapshot-bound summary no longer direct-counts `len(recognized)`.
+- Extended helper coverage and the rollout-gate contract so reputation cannot
+  reintroduce the raw recognized-list count.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found an unrelated
+    `cargo test -p iroha_core --lib default_route_ -- --nocapture`; validation
+    waited one 30-second interval and resumed only after no active `cargo`,
+    `rustc`, or `clippy-driver` process remained visible beyond the guard
+    command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`236` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`695` passed)
+
+## 2026-06-26 Nexus block validation autoscale execution context
+
+- Block validation and block execution now recompute routing through the active
+  Nexus snapshot instead of the catalog-only helper, so execution-context
+  validation and per-lane transaction summaries use the same live autoscale
+  elastic range as queue admission and proposal assembly.
+- Added coverage proving validators accept a matching elastic default-route
+  execution context and reject a stale base-lane context for a transaction that
+  live Nexus routes to an elastic lane.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib elastic_context -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib stale_default_context_for_elastic_route -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib validate_static_state_dependent -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib default_route_ -- --nocapture`
+    (`16` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib routing_plan -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS shared required summary validity
+
+- Added `required_evidence_summary_is_valid(...)` so custom required evidence
+  rows use the same explicit-true validity semantics as artifact rows.
+- Routed reputation's final ready/failed status through the helper so malformed,
+  missing, or truthy non-boolean row validity cannot raise or pass the gate.
+- Extended helper coverage and the rollout-gate contract so reputation cannot
+  reintroduce direct `all(record["valid"] for record in required.values())`
+  status checks.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found no active `cargo`, `rustc`,
+    or `clippy-driver` process beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`235` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`694` passed)
+
+## 2026-06-26 SoraFS shared required-row invalidator
+
+- Added `mark_required_evidence_invalid(...)` for custom required evidence
+  summary rows that need to fail closed outside the standard summary builder.
+- Routed reputation provider/latest required-row failures and snapshot-bound
+  artifact invalidation through the helper so row creation, invalidation, and
+  malformed error-list recovery cannot drift locally.
+- Extended helper coverage and the rollout-gate contract so reputation cannot
+  reintroduce checker-local `required.setdefault(...)`,
+  `required[artifact_kind]`, or empty `summary_errors` invalidation paths.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found no active `cargo`, `rustc`,
+    or `clippy-driver` process beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`234` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`693` passed)
+
+## 2026-06-26 SoraFS shared artifact kind accessor
+
+- Added `evidence_artifact_kind(...)` for fail-closed custom artifact kind
+  lookups in rollout evidence rows.
+- Routed reputation snapshot-bound artifact invalidation through the helper so
+  malformed or missing kind fields cannot make local `artifact.get("kind")`
+  checks drift from the shared artifact access pattern.
+- Extended helper coverage and the rollout-gate contract so reputation cannot
+  reintroduce direct artifact kind indexing or local kind access.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found unrelated
+    `cargo check -p iroha_core --lib` work with `clippy-driver`; validation
+    waited in a 30-second interval and resumed only after no active `cargo`,
+    `rustc`, or `clippy-driver` process remained visible beyond the guard
+    command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`231` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`690` passed)
+
+## 2026-06-26 Nexus state-free default-route rule fallback
+
+- `ConfigLaneRouter` state-free fast paths now decline unmatched no-target
+  default-route transactions even when the routing policy contains unrelated
+  rules, forcing state-aware callers to use the live Nexus autoscale elastic
+  range.
+- Added coverage proving unrelated nonmatching rules cannot pin autoscaled
+  default traffic to the base lane while matched explicit rules remain
+  state-free.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib default_route_with_unmatched_rules_still_uses_live_autoscale_range -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib default_route_ -- --nocapture`
+    (`16` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib routing_plan -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS artifact error path labels
+
+- Added `artifact_path_label(...)` to the shared SoraFS checker preflight
+  helper so artifact-error summary mirroring no longer direct-indexes
+  `artifact["path"]`.
+- `record_artifact_error(...)` now reports `<unknown>` for missing or malformed
+  artifact path fields while still marking the artifact invalid and appending
+  the artifact-local error.
+- Extended preflight helper coverage and the rollout-gate static contract so
+  cross-artifact error recording cannot reintroduce direct path indexing.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found unrelated
+    `cargo test -p iroha_core --lib elastic_context -- --nocapture` work with
+    active `rustc`; validation waited in 30-second intervals and resumed only
+    after no active `cargo`, `rustc`, or `clippy-driver` process remained
+    visible beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`89` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`688` passed)
+
+## 2026-06-26 SoraFS shared artifact detail accessor
+
+- Added `evidence_artifact_detail(...)` for fail-closed cached artifact detail
+  maps in rollout evidence rows.
+- Routed hedging billing-cycle and reserve-rent provider-bake detail reads
+  through the helper so malformed cached detail fields resolve to an empty map
+  instead of direct indexing.
+- Reused cached provider-bake and appeal-finance reconciliation fingerprints
+  after deriving them once, avoiding duplicate custom-detail recomputation on
+  valid artifacts.
+- Tightened helper unit coverage and the rollout-gate contract so these custom
+  detail reads stay on the shared accessor.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found unrelated
+    `cargo test -p iroha_core --lib default_route_with_unmatched_rules_still_uses_live_autoscale_range -- --nocapture`
+    work with active `rustc`/linker activity, followed by unrelated
+    `cargo check -p iroha_core --lib` work with `clippy-driver`; validation
+    waited in 30-second intervals and resumed only after no active `cargo`,
+    `rustc`, or `clippy-driver` process remained visible beyond the guard
+    command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py -q`
+    (`261` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`686` passed)
+
+## 2026-06-26 Nexus proposal autoscale routing refresh
+
+- Proposal routing refresh now recomputes full routing plans through the active
+  Nexus snapshot instead of the catalog-only helper, so sidecar and execution
+  context assembly use the same live autoscale elastic range as queue
+  admission.
+- Added coverage proving a stale single-lane proposal vector is refreshed onto
+  an autoscale-managed elastic default-route lane, while the existing
+  catalog-only default-route guard remains unchanged.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib refresh_proposal_routing_from_state -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib default_route_shards_no_target_traffic_across_autoscaled_lanes -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib routing_plan -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 Nexus queue precomputed routing-plan guard
+
+- State-aware queue admission now synchronizes the queue router, routing
+  policy, cached catalogs, and lane limits from the supplied committed
+  `StateView`/`State` before accepting transactions.
+- Caller-provided routing plans used by gossip reinsertion, batch admission,
+  TEU requeue, and block requeue must now resolve against current catalogs and
+  exactly match a freshly recomputed full routing plan for the same transaction.
+  Stale plans are rejected even when their old lane is still catalog-valid.
+- Updated queue-plan journal stale-policy coverage to seed the stale durable
+  record directly, because live admission no longer accepts that stale plan.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib stale_policy -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib queue_plan_journal_tombstones_stale_nexus_policy_after_restart -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib routing_plan -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib fresh_default_lane -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib validates_precomputed_plan -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS shared artifact schema diagnostics accessor
+
+- Added `evidence_artifact_schema(...)` for fail-closed artifact schema labels
+  in rollout/release diagnostics.
+- Routed reserve-rent policy/matrix/ledger binding messages through the helper
+  so malformed artifact rows report `<unknown>` instead of raising on direct
+  `artifact["schema"]` indexing.
+- Removed reputation's duplicate local evidence-directory precheck so missing
+  directory diagnostics stay centralized in `discover_evidence_files(...)`.
+- Tightened the rollout-gate contract so SoraFS rollout/release checkers cannot
+  reintroduce direct artifact schema indexing or checker-local directory
+  existence checks.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found unrelated
+    `cargo test -p iroha_core --lib refresh_proposal_routing_from_state -- --nocapture`
+    work with active `rustc`; validation waited in 30-second intervals and
+    resumed only after no active `cargo`, `rustc`, or `clippy-driver` process
+    remained visible beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_reputation_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`245` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`684` passed)
+
+## 2026-06-26 SoraFS fail-closed artifact validity coverage
+
+- Routed `build_required_evidence_summary(...)` through
+  `evidence_artifact_is_valid(...)` so malformed, missing, or truthy
+  non-boolean artifact validity fields make required summary rows invalid
+  instead of raising or drifting from the standard predicate.
+- Routed the remaining hedging billing-cycle, reserve-rent policy/matrix, and
+  reputation custom summary artifact checks through the same helper instead of
+  direct artifact validity indexing or checker-local
+  `artifact.get("valid") is True` predicates. Reputation's custom snapshot
+  binding now also reads artifact fingerprints through the shared accessor.
+- Added helper coverage for missing and non-boolean `valid` fields, and pinned
+  the rollout-gate contract so the shared summary builder and standard
+  rollout/release checkers cannot reintroduce direct `artifact["valid"]`
+  indexing, direct `artifact["fingerprint"]` indexing, or checker-local
+  `artifact.get("valid") is True` predicates.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before final Python validation found unrelated `cargo`,
+    `rustc`, and `clippy-driver` work; validation waited in 30-second
+    intervals and resumed only after no active `cargo`, `rustc`, or
+    `clippy-driver` process remained visible beyond the guard command and
+    Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_reputation_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    (`264` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`682` passed)
+
+## 2026-06-26 SoraFS shared artifact fingerprint accessor
+
+- Added `evidence_artifact_fingerprint(...)` as the standard fail-closed
+  fingerprint accessor for rollout/release artifact binding checks.
+- Routed the standard rollout checkers plus the reference SDK release checker
+  through the helper so malformed or absent artifact fingerprint fields resolve
+  to an empty mapping instead of direct indexing.
+- Tightened the rollout-gate contract so standard checkers must import/call
+  the shared accessor and cannot reintroduce direct `artifact["fingerprint"]`
+  reads.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation showed no active `cargo`, `rustc`,
+    or `clippy-driver` processes beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/check_sorafs_transparency_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/tests/check_sorafs_transparency_rollout_evidence_test.py -q`
+    (`482` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`681` passed)
+
+## 2026-06-26 SoraFS shared artifact validity helper
+
+- Added `evidence_artifact_is_valid(...)` as the standard fail-closed validity
+  predicate for rollout/release artifact classification.
+- Routed the standard rollout checkers plus the reference SDK release checker
+  through the helper for valid-artifact binding and post-processing decisions.
+- Tightened the rollout-gate contract so standard checkers must import/call
+  the shared predicate and cannot reintroduce direct `artifact["valid"]` or
+  `not validation_errors` classification checks.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation showed no active `cargo`, `rustc`,
+    or `clippy-driver` processes beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/check_sorafs_transparency_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/tests/check_sorafs_transparency_rollout_evidence_test.py -q`
+    (`480` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`679` passed)
+
+## 2026-06-26 SoraFS shared artifact bucket recorder
+
+- Added `record_evidence_artifact(...)` for standard rollout/release insertion
+  of recognized artifact rows into their kind buckets.
+- Routed the standard rollout checkers plus the reference SDK release checker
+  through the helper while preserving each gate's valid-artifact binding logic.
+- Tightened the rollout-gate contract so standard checkers must import/call
+  the shared recorder and cannot reintroduce local
+  `artifacts_by_kind[kind_name].append(artifact)` calls.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found unrelated
+    `cargo test -p iroha_core --lib ... -- --nocapture` work with active
+    `rustc`; validation waited and resumed only after no active `cargo`,
+    `rustc`, or `clippy-driver` process remained visible beyond the guard
+    command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/check_sorafs_transparency_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/tests/check_sorafs_transparency_rollout_evidence_test.py -q`
+    (`478` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`677` passed)
+
+## 2026-06-26 SoraFS shared artifact bucket initializer
+
+- Added `init_evidence_artifact_buckets(...)` for the standard rollout/release
+  empty artifact-bucket map used before evidence classification.
+- Routed the standard rollout checkers plus the reference SDK release checker
+  through the helper while preserving existing required-kind coverage.
+- Tightened the rollout-gate contract so standard checkers must import/call
+  the shared initializer and cannot reintroduce local
+  `name: [] for name in DEFAULT_REQUIRED_KINDS` bucket comprehensions.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found unrelated
+    `cargo test -p iroha_core --lib ... -- --nocapture` jobs with active
+    `rustc`; validation waited in 30-second intervals and resumed only after
+    no active `cargo`, `rustc`, or `clippy-driver` process remained visible
+    beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/check_sorafs_transparency_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/tests/check_sorafs_transparency_rollout_evidence_test.py -q`
+    (`476` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`675` passed)
+
+## 2026-06-26 SoraFS shared required-kind schema map
+
+- Added `evidence_schema_by_kind(...)` for the standard rollout/release schema
+  map passed into required-kind summary finalization.
+- Routed the standard rollout checkers plus the reference SDK release checker
+  through the helper while preserving existing schema values and summary rows.
+- Tightened the rollout-gate contract so standard checkers must import/call
+  the shared schema-map helper and cannot reintroduce the inline
+  `{name: kind.schema for name, kind in KIND_BY_NAME.items()}` comprehension.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation showed no active `cargo`, `rustc`,
+    or `clippy-driver` processes beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/check_sorafs_transparency_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/tests/check_sorafs_transparency_rollout_evidence_test.py -q`
+    (`474` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`673` passed)
+
+## 2026-06-26 SoraFS shared required-kind summary names
+
+- Added `required_evidence_kind_names(...)` for the standard rollout/release
+  `required_kinds` summary list.
+- Routed the standard rollout checkers plus the reference SDK release checker
+  through the helper while preserving existing required-kind parsing and
+  validation behavior.
+- Tightened the rollout-gate contract so standard checkers must import/call
+  the shared helper and cannot reintroduce direct `list(required_kinds)`
+  summary materialization.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found an unrelated
+    `cargo test -p iroha_core --lib default_route_rejects_autoscale_owned_default_lane -- --nocapture`
+    job with an active `rustc`, then an unrelated
+    `cargo check -p iroha_core --lib` job with an active `clippy-driver`;
+    validation waited in 30-second intervals and resumed only after no active
+    `cargo`, `rustc`, or `clippy-driver` process remained visible beyond the
+    guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/check_sorafs_transparency_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/tests/check_sorafs_transparency_rollout_evidence_test.py -q`
+    (`472` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`671` passed)
+
+## 2026-06-26 Nexus router autoscale-owned default-lane guard
+
+- Hardened fallible default-route resolution so a corrupted in-memory policy
+  whose configured default lane claims autoscale ownership fails with
+  `autoscale_owned_default_lane` before sharding or returning a route/plan.
+  This keeps autoscale elastic lanes from becoming the default anchor even if
+  policy construction bypasses parser and runtime config validation.
+- Added a router regression covering `try_route`, `try_route_with_view`, and
+  `try_route_plan` for an autoscale-owned default lane, while preserving the
+  state-deferral behavior of `try_route_without_state` for no-target default
+  traffic.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib default_route_rejects_autoscale_owned_default_lane -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib queue::router::tests::default_route_ -- --nocapture`
+    (`8` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS shared evidence file counter
+
+- Added `count_evidence_files(...)` for the standard rollout/release
+  `evidence_file_count` calculation.
+- Routed the standard rollout checkers plus the reference SDK release checker
+  through the helper while preserving existing discovery and summary behavior.
+- Tightened the rollout-gate contract so standard checkers must import/call
+  the shared counter and cannot reintroduce direct `len(files)` summary counts.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation first showed no active `cargo`,
+    `rustc`, or `clippy-driver` processes beyond the guard command and Codex
+    sessions, then found an unrelated `cargo check -p iroha_core --lib` job
+    with an active `clippy-driver`; validation waited 30 seconds and resumed
+    only after no active `cargo`, `rustc`, or `clippy-driver` process remained
+    visible beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/check_sorafs_transparency_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/tests/check_sorafs_transparency_rollout_evidence_test.py -q`
+    (`470` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`669` passed)
+
+## 2026-06-26 Nexus router autoscale-owned rule-lane guard
+
+- Hardened fallible router resolution so a matched explicit routing rule whose
+  target lane claims autoscale ownership fails with
+  `autoscale_owned_rule_lane` before returning a route or routing plan. This is
+  defense in depth for corrupted or manually constructed in-memory policies
+  that bypass runtime config validation.
+- Added router coverage proving `try_route`, `try_route_with_view`,
+  `try_route_plan`, and `try_route_without_state` all reject an explicit rule
+  pointed at a valid autoscale-owned elastic lane, while the existing manual
+  explicit-rule override still works for non-autoscale lanes.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib explicit_rule_rejects_autoscale_owned_rule_lane -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib explicit_rule_ -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS shared gate status helper
+
+- Added `evidence_gate_status(...)` for the standard rollout/release
+  ready-versus-blocked summary status calculation.
+- Routed the standard rollout checkers plus the reference SDK release checker
+  through the helper while leaving each summary layout and custom fields
+  unchanged.
+- Tightened the rollout-gate contract so standard checkers must import/call
+  the shared status helper and cannot reintroduce inline
+  `"ready" if not errors else "blocked"` expressions.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation showed no active `cargo`, `rustc`,
+    or `clippy-driver` processes beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/check_sorafs_transparency_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/tests/check_sorafs_transparency_rollout_evidence_test.py -q`
+    (`468` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`667` passed)
+
+## 2026-06-26 SoraFS shared recognized artifact counter
+
+- Added `count_evidence_artifacts(...)` for the standard rollout/release
+  `recognized_artifact_count` calculation.
+- Routed the standard rollout checkers plus the reference SDK release checker
+  through the helper. Reputation remains on its custom `len(recognized)` flow
+  because it maintains a separate recognized-artifact list.
+- Tightened the rollout-gate contract so standard checkers must import/call
+  the shared counter and cannot reintroduce raw
+  `sum(len(artifacts) for artifacts in artifacts_by_kind.values())`
+  expressions.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found an unrelated
+    `cargo test -p iroha_core --lib apply_lane_lifecycle_rejects_rebinding_rule_lane_without_rule_dataspace -- --nocapture`
+    job with an active `rustc`, followed later by an unrelated
+    `cargo check -p iroha_core --lib` job with an active `clippy-driver`;
+    validation waited in 30-second intervals and resumed only after no active
+    `cargo`, `rustc`, or `clippy-driver` process remained visible beyond the
+    guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/check_sorafs_transparency_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/tests/check_sorafs_transparency_rollout_evidence_test.py -q`
+    (`466` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`665` passed)
+
+## 2026-06-26 Nexus routing-policy explicit-rule validation
+
+- Hardened runtime routing-policy validation so explicit rules cannot target
+  lanes that claim autoscale ownership. Config swaps may still preserve an
+  existing autoscale-owned lane unchanged, but they cannot pin that elastic
+  lane through an explicit policy rule outside the autoscaler.
+- Runtime policy validation now resolves rules that omit `dataspace` against
+  `nexus.routing_policy.default_dataspace`, matching static TOML parsing and
+  preventing lifecycle plans from rebinding such rule lanes into another
+  dataspace while leaving the rule unrouteable.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib apply_lane_lifecycle_rejects_rebinding_rule_lane_without_rule_dataspace -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib set_nexus_rejects_explicit_rule_targeting_autoscale_managed_lane -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib rule_lane -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS shared standard payload validator
+
+- Added `validate_standard_evidence_payload(...)` to centralize standard
+  rollout/release payload wrapper validation: schema recognition, optional
+  reviewed deployment/environment context, sensitive-field walking, and
+  kind-specific callback dispatch.
+- Routed the standard rollout checkers plus the reference SDK release checker
+  through the helper and removed their direct `require_known_schema(...)` and
+  `visit_sensitive_fields(...)` wrapper branches. Reputation remains on its
+  custom snapshot-bound validation flow.
+- Tightened the rollout-gate contract so standard checkers must import/call
+  the shared standard payload validator, while deployment/environment-gated
+  checkers must pass the reviewed-context flag through that helper.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation showed no active `cargo`, `rustc`,
+    or `clippy-driver` processes beyond the guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/sorafs_evidence_sensitivity.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/check_sorafs_transparency_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/tests/check_sorafs_transparency_rollout_evidence_test.py -q`
+    (`464` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`663` passed)
+
+## 2026-06-26 Nexus autoscale out-of-range owned-lane precheck
+
+- Hardened the runtime autoscale elastic-range precheck so any lane claiming
+  autoscale ownership outside `autoscale.min_lanes..autoscale.max_lanes` is
+  rejected before sampling and lifecycle plan construction. The existing
+  lifecycle apply path already failed closed before catalog mutation; the
+  runtime guard now catches the corruption earlier and reports the same
+  out-of-bounds ownership error.
+- Updated the low-level runtime guard regression to assert that out-of-range
+  autoscale-owned lanes fail closed, and kept the transition-level regression
+  proving hot scale-out leaves the catalog and `last_transition_height`
+  unchanged under that corruption.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_runtime_elastic_range -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_scale_out_rejects_out_of_range_managed_runtime_lane -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS shared explicit evidence error recorder
+
+- Added `record_explicit_evidence_validation_errors(...)` to centralize the
+  rule that unrecognized evidence payload validation errors are reported only
+  for explicit evidence path inputs.
+- Routed the standard rollout checkers plus the reference SDK release checker
+  through the helper and removed their direct `is_explicit_evidence_path`
+  imports/branches. Reputation remains on its custom evidence validation flow.
+- Tightened the rollout-gate contract so standard checkers must import and
+  call the shared explicit-path recorder and cannot reintroduce local
+  `is_explicit_evidence_path(...)` branches.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found an unrelated
+    `cargo test -p iroha_core --lib canonical_dataspace_route -- --nocapture`
+    job with an active `rustc`, followed later by an unrelated
+    `cargo check -p iroha_core --lib` job with an active `clippy-driver`;
+    validation waited in 30-second intervals and resumed only after no active
+    `cargo`, `rustc`, or `clippy-driver` process remained visible beyond the
+    guard command and Codex sessions.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/check_sorafs_transparency_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/tests/check_sorafs_transparency_rollout_evidence_test.py -q`
+    (`462` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`661` passed)
+
+## 2026-06-26 Nexus autoscale canonical dataspace anchors
+
+- Hardened canonical dataspace route selection so lanes that claim autoscale
+  ownership are never selected as dataspace anchors, including malformed
+  `autoscale.managed` claims. Dataspace-targeted writes, settlement routes, and
+  permission-scope routes now require a non-autoscale lane for the target
+  dataspace and fail closed with `no_lane_for_dataspace` when only
+  autoscale-owned lanes exist.
+- Added router regressions for a valid elastic lane plus a malformed
+  autoscale-owned lane with lower lane ids than the base default lane, proving
+  catalog and live-state routing keep the canonical universal route on the
+  non-autoscale base lane.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib canonical_dataspace_route -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib queue::router::tests::default_route_ -- --nocapture`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib queue::router::tests::mixed_domain_write_targets -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS shared evidence discovery cleanup
+
+- Moved missing evidence-directory diagnostics into
+  `discover_evidence_files(...)`, so directory existence, duplicate detection,
+  resolver failure handling, and JSON file discovery now live in the shared
+  evidence-path helper.
+- Removed the standard rollout/release checker-local `discover_files(...)`
+  wrappers and local missing-directory loops; each checker now calls the shared
+  discovery helper directly. Reputation also benefits from the shared
+  missing-directory fail-closed behavior through its existing direct helper
+  call.
+- Tightened rollout-gate contracts so checker-local discovery wrappers,
+  checker-local missing-directory diagnostics, manual `rglob`, and local
+  `path.resolve()` discovery logic cannot return.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found an unrelated
+    `cargo test -p integration_tests --test nexus_and_streaming multilane_router_shards_default_route_over_autoscale_elastic_lanes -- --nocapture`
+    job compiling `iroha`, `iroha_torii`, and then the `nexus_and_streaming`
+    test binary; validation waited in 30-second intervals and resumed only
+    after no active `cargo` or `rustc` process remained visible.
+  - `python3 -m py_compile scripts/sorafs_evidence_paths.py scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/check_sorafs_transparency_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/tests/check_sorafs_transparency_rollout_evidence_test.py -q`
+    (`350` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`659` passed)
+
+## 2026-06-26 Nexus autoscale live-state-only default sharding
+
+- Tightened default-route elastic candidate selection so catalog-only routing
+  without a live Nexus state view returns only the configured base default lane.
+  Autoscale-managed elastic lanes now participate in no-target default sharding
+  only when the caller supplies live autoscale enablement and bounds, preventing
+  stale router snapshots from selecting retired or disabled elastic lanes.
+- Updated router regressions to prove live-state routing still shards over
+  valid elastic lanes, while `evaluate_policy_with_catalog`, `try_route`, and
+  `try_route_plan` stay on the base default lane without live state and
+  `try_route_without_state` still forces a stateful lookup for no-target default
+  traffic.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib default_route_ -- --nocapture`
+    (`14` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib queue::router::tests::default_route_ -- --nocapture`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p integration_tests --test nexus_and_streaming multilane_router_shards_default_route_over_autoscale_elastic_lanes -- --nocapture`
+    (`1` passed)
+
+## 2026-06-26 SoraFS shared validation-error recorder
+
+- Added shared `record_evidence_validation_errors(...)` coverage for
+  path-qualified payload validation diagnostics emitted by standard
+  rollout/release checkers.
+- Routed the standard rollout checkers plus the reference SDK release checker
+  through the helper for both explicit unrecognized evidence paths and
+  recognized artifact validation errors. Reputation remains intentionally
+  excluded because it keeps a custom per-kind summary error flow.
+- Tightened the rollout-gate contract so standard checkers must import and call
+  the shared recorder and cannot reintroduce checker-local
+  `errors.extend(f"{path}: {error}" for error in validation_errors)` loops.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found unrelated
+    `cargo test -p iroha_core --lib default_route_ -- --nocapture` and later
+    `cargo check -p iroha_core --lib` jobs with active `rustc` children;
+    validation waited in 30-second intervals and resumed only after no active
+    `cargo` or `rustc` process remained visible.
+  - `python3 -m py_compile` over the shared evidence helper, rollout contract
+    test, helper unit tests, and all migrated standard rollout/release
+    checkers.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/tests/check_sorafs_transparency_rollout_evidence_test.py -q`
+    (`460` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`658` passed)
+
+## 2026-06-26 SoraFS shared artifact-row builder
+
+- Added shared `build_evidence_artifact(...)` coverage for the standard
+  rollout/release artifact summary row shape: path, SHA-256, schema, status,
+  payload-free fingerprint, validity, and mutable error bucket.
+- Routed the standard rollout checkers plus the reference SDK release checker
+  through the helper. Reputation remains intentionally excluded because it
+  keeps a custom snapshot-bound record shape and summary bucket flow.
+- Tightened the rollout-gate contract so standard checkers must import and call
+  the shared builder, cannot reintroduce local artifact row dict literals, and
+  the bounded JSON contract still proves the SHA-256 digest reaches the summary
+  either through reputation's custom record or through the shared builder.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation showed no active `cargo` or
+    `rustc` processes beyond the guard command and Codex sessions.
+  - `python3 -m py_compile` over the shared evidence helper, rollout contract
+    test, helper unit tests, and all migrated standard rollout/release
+    checkers.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/tests/check_sorafs_transparency_rollout_evidence_test.py -q`
+    (`458` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`656` passed)
+
+## 2026-06-26 Nexus autoscale parser fail-closed coverage
+
+- Tightened Nexus config parsing so `nexus.autoscale.enabled=true` is rejected
+  unless `nexus.enabled=true`; operator TOML can no longer carry a shadow
+  autoscale setting that runtime would ignore because Nexus itself is disabled.
+- Extended the autoscale config parser regression suite to pin fail-closed
+  handling for disabled-Nexus autoscale, `nexus.autoscale.max_lanes` values
+  above the compiled safety cap, and non-finite latency/utilization ratios. The
+  non-finite case is rejected by the config reader before runtime parse,
+  preserving the invariant that bad operator TOML never reaches actual
+  autoscale state.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_config --test autoscale_config -- --nocapture`
+    (`12` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_config --test autoscale_config -- -D warnings`
+
+## 2026-06-26 SoraFS required-kind summary builder
+
+- Added shared `build_required_evidence_summary(...)` coverage for standard
+  rollout/release required-kind summary rows, preserving the existing
+  `schema`/`present`/`valid`/`artifact_count`/`artifacts` shape and the
+  rollout/release missing or invalid diagnostics.
+- Routed the standard rollout checkers plus the reference SDK release checker
+  through the helper. Reputation remains intentionally excluded because it
+  keeps richer per-kind required buckets during validation.
+- Tightened the rollout-gate contract so standard checkers must import and call
+  the shared builder and cannot reintroduce local `present = bool(artifacts)`,
+  `all(artifact["valid"] for artifact in artifacts)`, or missing/invalid
+  required-kind diagnostic loops.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found an unrelated
+    `cargo check -p integration_tests --test nexus_and_streaming` job with
+    active `clippy-driver`/`rustc` children compiling `iroha_core` and then
+    `iroha_torii`; validation waited in 30-second intervals and resumed only
+    after no active `cargo` or `rustc` process remained visible.
+  - `python3 -m py_compile` over the shared evidence helper, rollout contract
+    test, helper unit tests, and all migrated standard rollout/release
+    checkers.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py ... scripts/tests/check_sorafs_transparency_rollout_evidence_test.py -q`
+    (`456` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`654` passed)
+
+## 2026-06-26 Nexus multilane router autoscale integration coverage
+
+- Added a cheap `integration_tests --test nexus_and_streaming` regression that
+  installs a live Nexus state snapshot with base lanes plus autoscale-managed
+  elastic lanes, routes real accepted no-target transactions through
+  `ConfigLaneRouter::route_with_view`, and proves default-route traffic shards
+  across the base lane and elastic lanes while explicit governance and zk rules
+  keep precedence.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p integration_tests --test nexus_and_streaming multilane_router_shards_default_route_over_autoscale_elastic_lanes -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p integration_tests --test nexus_and_streaming multilane_router -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p integration_tests --test nexus_and_streaming -- -D warnings`
+
+## 2026-06-26 SoraFS reputation artifact-error recorder contract
+
+- Extended `record_artifact_error(...)` with an optional `summary_error`
+  override so artifact-local diagnostics can stay detailed while required-kind
+  summary buckets keep their existing shorter operator-facing message.
+- Migrated the reputation rollout checker's snapshot-bound invalidation off its
+  nested `record_snapshot_bound_error` helper and onto the shared recorder,
+  preserving artifact invalidation, required-kind invalidation, and the existing
+  snapshot binding summary text.
+- Tightened the rollout-gate static contract so `artifact_error_checkers()` now
+  covers every checker, including reputation, and checker-local
+  `artifact_errors = artifact.get("errors")` mutation cannot return.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found an unrelated
+    `cargo test -p integration_tests --test nexus_and_streaming multilane_router_shards_default_route_over_autoscale_elastic_lanes -- --nocapture`
+    job compiling `iroha_data_model`, `iroha_p2p`, `iroha_core`,
+    `sorafs_node`, `iroha_torii`, and finally the `nexus_and_streaming` test
+    binary; validation waited in 30-second intervals and resumed only after no
+    active `cargo` or `rustc` process remained visible.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`94` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`651` passed)
+
+## 2026-06-26 SoraFS reputation bounded loader contract
+
+- Removed the reputation rollout checker-local `read_json_artifact` wrapper;
+  reputation now calls
+  `load_evidence_json_with_sha256(path, MAX_EVIDENCE_BYTES)` directly like the
+  other rollout gates.
+- Brought reputation under the all-checker bounded JSON and artifact
+  fingerprint contracts. Its summary fingerprints now seed through the shared
+  `artifact_fingerprint(payload, FINGERPRINT_FIELDS)` helper while preserving
+  the validated snapshot binding values used by the rollout gate.
+- Tightened the static rollout-gate contract so `bounded_json_checkers()` covers
+  every checker, including reputation, and asserts that `read_json_artifact`
+  cannot return.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation first found an unrelated
+    `cargo test -p iroha_core --lib autoscale -- --nocapture` job, then an
+    `iroha_core` `cargo check -p iroha_core --lib`/`clippy-driver` rustc child;
+    validation waited in 30-second intervals and resumed only after no active
+    `cargo` or `rustc` process remained visible.
+  - `python3 -m py_compile scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`84` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`650` passed)
+
+## 2026-06-26 Nexus autoscale commit-transition gating
+
+- Tightened the Sumeragi commit-side autoscale transition predicate so queue
+  reconfiguration after a committed autoscale transition requires both
+  `nexus.enabled=true` and `nexus.autoscale.enabled=true` at the matching
+  committed height. Corrupted disabled-Nexus snapshots can no longer be treated
+  as deterministic autoscale transitions.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_committed_at_requires_enabled_matching_height -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+    (`114` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 Nexus autoscale scale-in committed-fragment load coverage
+
+- Added transition-level negative coverage proving autoscale scale-in counts
+  committed fragments as load before retiring elastic lanes. Current
+  block-local committed fragments and persisted historical committed fragments
+  both keep the managed lane active and avoid recording a transition, so hidden
+  internal work cannot make a busy lane set look idle.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_scale_in_counts_ -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+    (`114` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS rollout scalar binding helper coverage
+
+- Added shared `require_string_value_in` validation for normalized scalar
+  cross-artifact digest/id membership.
+- Migrated checker-local scalar binding predicates across AI pre-screen,
+  appeal finance, gateway compliance, governance DAG, hedging, moderation,
+  orderbook, PDP, PoP credentials, PoR, PoTR, reference SDK release, repair,
+  reserve/rent, and transparency rollout/release evidence gates while
+  preserving their existing artifact-error paths and diagnostics.
+- Tightened the rollout-gate static contract so scalar-binding checkers must
+  import and call the shared helper and cannot reintroduce direct
+  `digest.lower() not in valid_*`/`decision_id.lower() not in valid_*`
+  predicates.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before `py_compile` and focused pytest found only existing
+    `codex resume` sessions plus the guard command itself; before the broad
+    SoraFS sweep, the guard found an unrelated
+    `cargo test -p iroha_core --lib autoscale_transition_scale_in_counts_ -- --nocapture`
+    job with a `rustc` child, so validation waited in 30-second intervals and
+    resumed only after no active `cargo` or `rustc` process remained visible.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_transparency_rollout_evidence.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/check_sorafs_governance_dag_rollout_evidence_test.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py scripts/tests/check_sorafs_pdp_rollout_evidence_test.py scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py scripts/tests/check_sorafs_por_rollout_evidence_test.py scripts/tests/check_sorafs_potr_rollout_evidence_test.py scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py scripts/tests/check_sorafs_repair_rollout_evidence_test.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py scripts/tests/check_sorafs_transparency_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`342` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`650` passed)
+
+## 2026-06-26 SoraFS rollout tuple binding helper coverage
+
+- Extended shared `require_string_tuple_in` usage from the SFM-5 hedging gate
+  to every current rollout checker that had checker-local `binding not in
+  valid_*bindings` predicates.
+- AI pre-screen runner bindings, moderation roster and tally bindings,
+  reputation snapshot bindings, and reserve-rent policy/matrix/ledger bindings
+  now use the shared normalized tuple helper while preserving their existing
+  artifact-error recording paths and diagnostics.
+- Tightened the static rollout-gate contract so all tuple-binding checkers must
+  import and call the shared helper and cannot reintroduce local
+  `binding not in valid_*bindings` predicates.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found only existing `codex resume`
+    sessions plus the guard command itself; before the broad SoraFS sweep, the
+    guard found an unrelated
+    `cargo test -p iroha_torii --test torii_nexus_sorafs nexus_lifecycle_allows_repair_retire_of_off_default_autoscale_lane -- --nocapture`
+    job with a `rustc` child, so validation waited 30 seconds and resumed only
+    after no active `cargo` or `rustc` process remained visible.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`167` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`649` passed)
+
+## 2026-06-26 SoraFS hedging tuple binding shared helper
+
+- Added shared `require_string_tuple_in` validation for normalized
+  cross-artifact tuple membership.
+- Replaced the SFM-5 hedging/billing checker-local
+  `binding not in valid_cycle_bindings` predicate with the shared helper while
+  preserving artifact-level invalidation through `record_artifact_error` and the
+  existing reconciliation/billing-cycle diagnostic.
+- Tightened the rollout-gate static contract with direct helper behavior checks
+  and a guard that prevents the hedging billing-cycle tuple predicate from
+  drifting back into the checker.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards before Python validation found only existing `codex resume`
+    sessions plus the guard command itself; no active `cargo`, `rustc`, or
+    `clippy-driver` job was touched.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`82` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`649` passed)
+
+## 2026-06-26 Torii Nexus lifecycle autoscale repair-retire coverage
+
+- Added public `/v1/nexus/lifecycle` coverage proving an operator-signed
+  explicit retire can remove an invalid autoscale-owned lane for repair.
+- The regression seeds an autoscale-owned elastic lane with malformed
+  `autoscale.created_height`, first verifies an unrelated signed lifecycle
+  addition is rejected while the corrupted owned lane remains, then submits a
+  signed retire plan, verifies the catalog returns to the default lane, and
+  proves a valid outside-range manual lane can still be added afterward.
+- Added the same public-route repair proof for an out-of-range autoscale-owned
+  lane: unrelated updates fail while the owned lane sits outside
+  `autoscale.min_lanes..autoscale.max_lanes`, explicit retire removes it, and
+  normal outside-range manual additions resume afterward.
+- Added the same public-route repair proof for an off-default autoscale-owned
+  lane: unrelated updates fail while the owned lane is bound to a non-default
+  dataspace, explicit retire removes it, and normal default-dataspace manual
+  additions resume afterward.
+- Added the same public-route repair proof for an autoscale-owned lane left in
+  the catalog while `nexus.autoscale.enabled=false`: unrelated updates fail
+  with the disabled-autoscale ownership error, explicit retire removes it, and
+  normal outside-range manual additions resume afterward.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_torii --test torii_nexus_sorafs nexus_lifecycle_allows_repair_retire_of_invalid_autoscale_lane -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_torii --test torii_nexus_sorafs nexus_lifecycle_allows_repair_retire_of_out_of_range_autoscale_lane -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_torii --test torii_nexus_sorafs nexus_lifecycle_allows_repair_retire_of_off_default_autoscale_lane -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_torii --test torii_nexus_sorafs nexus_lifecycle_allows_repair_retire_of_disabled_autoscale_owned_lane -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_torii --test torii_nexus_sorafs nexus_lifecycle -- --nocapture`
+    (`11` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_torii --test torii_nexus_sorafs -- -D warnings`
+
+## 2026-06-26 SoraFS AI pre-screen execution summary object gate
+
+- Replaced the AI pre-screen commit/reveal executor checker-local
+  `execution_summary` object predicate with the shared `require_object`
+  validation helper while preserving the existing
+  `execution_summary must be an object` diagnostic.
+- Strengthened the missing execution-summary regression to assert the
+  artifact-level helper diagnostic and tightened the rollout-gate contract so
+  the direct `not isinstance(summary, dict)` predicate cannot drift back into
+  the checker.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards deferred Python validation while unrelated
+    `cargo test -p iroha_torii --test torii_nexus_sorafs nexus_lifecycle_rejects_manual_retire_of_valid_autoscale_lane -- --nocapture`
+    and `cargo check -p iroha_torii --test torii_nexus_sorafs` jobs and their
+    `rustc`/`clippy-driver` children were active; validation resumed only
+    after no active `cargo` or `rustc` process remained visible. Existing
+    `codex resume` sessions were left untouched.
+  - `python3 -m py_compile scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`79` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`648` passed)
+  - `git diff --check -- scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py status.md roadmap.md`
+  - conflict-marker, trailing-whitespace, Cargo.lock, and AI pre-screen local
+    execution-summary object predicate scans found no blocking changes.
+
+## 2026-06-26 Torii Nexus lifecycle autoscale retire protection coverage
+
+- Added public `/v1/nexus/lifecycle` coverage proving operator-signed manual
+  retire plans cannot retire a valid autoscale-owned elastic lane.
+- The regression seeds a valid `autoscale.managed = true` lane in the shared
+  Torii state, submits a signed manual retire, verifies the
+  `lane_lifecycle_error`, and then proves a valid outside-range manual lane can
+  still be added afterward.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_torii --test torii_nexus_sorafs nexus_lifecycle_rejects_manual_retire_of_valid_autoscale_lane -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_torii --test torii_nexus_sorafs nexus_lifecycle -- --nocapture`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_torii --test torii_nexus_sorafs -- -D warnings`
+
+## 2026-06-26 SoraFS reputation metrics maximum-number gate
+
+- Replaced the reputation metrics canary checker-local snapshot-age and
+  ingest-lag ceiling predicates with shared `require_maximum_number`
+  validation.
+- Kept reputation `provider_count` minimum checks on the shared
+  `require_minimum_int` helper and tightened the rollout-gate contract so the
+  metrics checker must use shared maximum-number validation instead of local
+  `exceeds` diagnostics or direct `>` predicates.
+- Added metrics regressions for both over-age and over-lag evidence with the
+  shared `<field> must be <= <maximum>` diagnostics.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards deferred Python validation while unrelated
+    `cargo test -p iroha_core --lib queue_plan_journal_tombstones_stale_nexus_policy_after_restart -- --nocapture`,
+    `cargo test -p iroha_core --lib queue_plan_journal -- --nocapture`, and
+    `cargo check -p iroha_core --lib` jobs and their `rustc`/`clippy-driver`
+    children were active; validation resumed only after no active `cargo` or
+    `rustc` process remained visible. Existing `codex resume` sessions were
+    left untouched.
+  - `python3 -m py_compile scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`82` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`648` passed)
+  - `git diff --check -- scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py status.md roadmap.md`
+  - conflict-marker, trailing-whitespace, Cargo.lock, and reputation metrics
+    local maximum-predicate scans found no blocking changes.
+
+## 2026-06-26 Nexus queue journal restart stale-policy coverage
+
+- Added restart-boundary coverage proving pending queue-plan journal replay
+  synchronizes queue-local Nexus routing from committed state before comparing
+  persisted plans.
+- The regression writes a plan under an old Nexus routing rule, restarts with
+  that stale policy still cached locally, and verifies replay tombstones the
+  stale record once current Nexus policy routes the same transaction elsewhere.
+- Updated the existing stale-plan journal regression so it now explicitly
+  writes a stale route instead of relying on a queue-local router change that
+  current-state synchronization intentionally overrides.
+- Updated Nexus docs and roadmap notes with the queue-plan journal replay
+  invariant.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib queue_plan_journal_tombstones_stale_nexus_policy_after_restart -- --nocapture`
+    (`1` passed after switching the setup to the funded Nexus fee fixture)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib queue_plan_journal -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib route_plan_with_state_ -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS AI pre-screen route coverage shared string coverage gate
+
+- Replaced the AI pre-screen operator-workflow required-route set/loop with
+  the shared `require_string_coverage` helper.
+- Strengthened the missing juror-notifications route regression to assert the
+  artifact-level shared-helper diagnostic and tightened the rollout-gate
+  contract so the local `routes must include` append and `required not in
+  names` predicate cannot drift back into the checker.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards deferred Python validation while unrelated
+    `cargo test -p iroha_torii --test torii_nexus_sorafs nexus_lifecycle_rejects_reserved_autoscale_metadata -- --nocapture`
+    and `cargo check -p iroha_torii --test torii_nexus_sorafs` jobs and their
+    `rustc`/`clippy-driver` children were active; validation resumed only
+    after no active `cargo` or `rustc` process remained visible. Existing
+    `codex resume` sessions were left untouched.
+  - `python3 -m py_compile scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`79` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`647` passed)
+  - `git diff --check -- scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py status.md roadmap.md`
+  - conflict-marker, trailing-whitespace, Cargo.lock, and AI pre-screen local
+    route-coverage predicate scans found no blocking changes.
+
+## 2026-06-26 Torii Nexus lifecycle autoscale metadata spoofing coverage
+
+- Added a public `/v1/nexus/lifecycle` regression proving operator-signed
+  lifecycle requests cannot claim the reserved `autoscale.managed` metadata key,
+  even for manual lanes outside the active autoscale elastic id range.
+- The regression also proves the rejected spoof does not poison the lifecycle
+  endpoint: a valid outside-range manual lane can still be added afterward.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_torii --test torii_nexus_sorafs nexus_lifecycle_rejects_reserved_autoscale_metadata -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_torii --test torii_nexus_sorafs nexus_lifecycle -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_torii --test torii_nexus_sorafs -- -D warnings`
+
+## 2026-06-26 SoraFS AI pre-screen route schema shared string equality gate
+
+- Replaced the AI pre-screen operator-workflow route schema checker-local
+  `record.get("schema") != expected_schema` predicate with the shared
+  path-qualified `require_string_equal` helper.
+- Added a regression for mismatched operator-panel route schema evidence and
+  tightened the rollout-gate contract so the direct route-schema predicate and
+  append diagnostic cannot drift back into the checker.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards found no active `cargo` or `rustc` processes before Python
+    validation; existing `codex resume` sessions were left untouched.
+  - `python3 -m py_compile scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`79` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`647` passed)
+  - `git diff --check -- scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py status.md roadmap.md`
+  - conflict-marker, trailing-whitespace, Cargo.lock, and AI pre-screen local
+    route-schema predicate scans found no blocking changes.
+
+## 2026-06-26 SoraFS reputation provider proof shared string equality gate
+
+- Added shared `require_string_value_equal` validation for computed string
+  equality checks that compare already-normalized fields.
+- Replaced the reputation checker-local `proof.provider_id ==
+  provider.provider_id` predicate with the shared helper while preserving the
+  existing diagnostic.
+- Added helper and reputation provider proof regressions plus contract scans to
+  prevent direct predicate/append drift.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards deferred Python validation while unrelated
+    `cargo test -p iroha_core --lib route_plan_with_state_ -- --nocapture`,
+    `cargo test -p iroha_core --lib proposal_queue_reconfigures_pending_default_route_after_autoscale_scale_in -- --nocapture`,
+    and `cargo test -p iroha_core --lib autoscale -- --nocapture` jobs and
+    their `rustc` children were active; validation resumed only after no active
+    `cargo` or `rustc` process remained visible. Existing `codex resume`
+    sessions were left untouched.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`192` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`646` passed)
+  - `git diff --check -- scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py status.md roadmap.md`
+  - conflict-marker, trailing-whitespace, Cargo.lock, and reputation local
+    provider-id predicate scans found no blocking changes.
+
+## 2026-06-26 Nexus state-aware routing cache hardening
+
+- State-aware queue routing now synchronizes the queue router, routing policy,
+  lane catalog, dataspace catalog, limits, manifests, and pending route cache
+  from current Nexus state before resolving Torii/gossip/proposal refresh plans,
+  then validates plans against the current Nexus catalogs. This allows freshly
+  added lanes to route before an external cache refresh while preventing stale
+  queue-local policy from winning when both old and new lanes still exist.
+- Added regressions for stale queue routing state: one proves a fresh default
+  lane becomes authoritative through state-aware routing, and another proves an
+  old explicit rule cannot continue routing to its old lane after current Nexus
+  policy moves that rule to a different still-valid lane.
+- Kept the autoscale scale-in queue regression aligned with default-route
+  sharding semantics by accepting either surviving default-route candidate while
+  still rejecting stale retired-lane routing.
+- Updated Nexus lane docs and transition notes with the current-state
+  synchronization rule.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib proposal_queue_reconfigures_pending_default_route_after_autoscale_scale_in -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib route_plan_with_state_ -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib route_for_gossip_with_state -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+    (`112` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS PoP privacy proof backend shared string gate
+
+- Added shared `require_string_not_equal` validation for string fields that
+  must reject a known local/development sentinel value.
+- Replaced the PoP credentials governance approval checker-local
+  `privacy_proof_system != transcript_digest_v1` predicate with the shared
+  helper while preserving the existing production-backend diagnostic.
+- Added helper regressions and strengthened the PoP rollout regression to
+  assert the artifact-level summary error for transcript-digest proof systems.
+- Tightened the rollout-gate contract so the old local proof-system predicate
+  and direct append diagnostic cannot drift back into the checker.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards deferred Python validation while unrelated
+    `cargo test -p iroha_core --lib route_plan_with_state_ -- --nocapture`,
+    `cargo test -p iroha_core --lib route_for_gossip_with_state -- --nocapture`,
+    `cargo test -p iroha_core --lib autoscale -- --nocapture`, and
+    `cargo check -p iroha_core --lib` jobs and their `rustc`/`clippy-driver`
+    children were active; validation resumed only after no active `cargo` or
+    `rustc` process remained visible. Existing `codex resume` sessions were
+    left untouched.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`184` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`643` passed)
+  - `git diff --check -- scripts/sorafs_evidence_validation.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py status.md roadmap.md`
+  - conflict-marker, trailing-whitespace, Cargo.lock, and PoP local
+    proof-system predicate scans found no blocking changes.
+
+## 2026-06-26 SoraFS reserve bake timestamp ordering gate
+
+- Replaced the reserve/rent provider bake `completed_at_unix >=
+  started_at_unix` local predicate with the shared computed minimum helper
+  while preserving the existing operator diagnostic.
+- Added a provider bake regression that mutates completion time before start
+  time and asserts the artifact-level summary error.
+- Tightened the rollout-gate contract so the old local timestamp-ordering
+  predicate and direct append diagnostic cannot drift back into the checker.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards deferred Python validation while unrelated
+    `cargo test -p iroha_core --lib proposal_queue_reconfigures_pending_default_route_after_autoscale_scale_in -- --nocapture`,
+    `cargo test -p iroha_core --lib autoscale -- --nocapture`, and
+    `cargo check -p iroha_core --lib` jobs and their `rustc`/`clippy-driver`
+    children were active; validation resumed only after no active `cargo` or
+    `rustc` process remained visible. Existing `codex resume` sessions were
+    left untouched.
+  - `python3 -m py_compile scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`78` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`641` passed)
+  - `git diff --check -- scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py status.md roadmap.md`
+  - conflict-marker, trailing-whitespace, Cargo.lock, and reserve bake
+    timestamp local predicate scans found no blocking changes.
+
+## 2026-06-26 Nexus autoscale pending scale-in reroute coverage
+
+- Added a proposal-queue regression for autoscale scale-in: a queued
+  default-route transaction initially sharded to a managed elastic lane remains
+  pending after that lane is retired and is re-routed to the surviving elastic
+  candidate instead of keeping stale retired-lane metadata.
+- Clarified Nexus lane docs and transition notes to distinguish autoscale
+  scale-in re-sharding from genuinely unrouteable lifecycle updates, which
+  still reject queued transactions and clear stale route/TEU bookkeeping.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib proposal_queue_reconfigures_pending_default_route_after_autoscale_scale_in -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+    (`112` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+
+## 2026-06-26 SoraFS moderation quorum maximum-value gate
+
+- Added shared `require_maximum_value` validation for computed integer ceilings
+  to complement the existing computed minimum helper.
+- Replaced the moderation panel sortition `quorum <= panel_size` local
+  predicate with the shared helper while preserving the existing
+  `quorum must be <= panel_size` diagnostic.
+- Added helper and moderation sortition regressions that assert the computed
+  ceiling behavior and artifact-level summary error.
+- Tightened the rollout-gate contract so the old local sortition quorum
+  predicate and local append diagnostic cannot drift back into the checker.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards deferred Python validation while unrelated
+    `cargo test -p iroha_core --lib autoscale_transition_scale_out_fails_closed_when_id_range_exhausted`
+    and `cargo test -p iroha_core --lib autoscale` jobs and their `rustc`
+    children were active; validation resumed only after no active `cargo` or
+    `rustc` process remained visible. Existing `codex resume` sessions were
+    left untouched.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py && python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`193` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`640` passed)
+  - `git diff --check -- scripts/sorafs_evidence_validation.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py status.md roadmap.md`
+  - conflict-marker, trailing-whitespace, Cargo.lock, and moderation
+    sortition local quorum predicate scans found no blocking changes.
+
+## 2026-06-26 SoraFS moderation viewer shared count and TTL gates
+
+- Added shared `require_count_value_equal` validation for count fields that
+  must match an already validated positive count without revalidating the
+  source field.
+- Replaced the moderation panel evidence-viewer `max_url_ttl_secs` local
+  ceiling check with `require_maximum_int(..., minimum=1)` and replaced the
+  `logged_session_count` local equality predicate with the shared computed
+  count helper, preserving the existing operator diagnostics.
+- Added helper and moderation evidence-viewer regressions that assert the
+  exact artifact-level summary errors for overlong URLs and mismatched logged
+  session counts.
+- Tightened the rollout-gate contract so the old local evidence-viewer TTL and
+  logged-session predicates cannot drift back into the checker.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards deferred Python validation while unrelated
+    `cargo test -p iroha_core --lib autoscale_latency_ratio_permille`,
+    `cargo test -p iroha_core --lib autoscale`, and
+    `cargo check -p iroha_core --lib` jobs and their `rustc`/`clippy-driver`
+    children were active; validation resumed only after no active `cargo` or
+    `rustc` process remained visible. Existing `codex resume` sessions were
+    left untouched.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`189` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`636` passed)
+  - `git diff --check -- scripts/sorafs_evidence_validation.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py status.md roadmap.md`
+  - conflict-marker, trailing-whitespace, Cargo.lock, and moderation
+    evidence-viewer local TTL/logged-session predicate scans found no blocking
+    changes.
+
+## 2026-06-26 SoraFS hedging reconciliation count-equality gate
+
+- Replaced the remaining hedging checker-local
+  `reconciled_line_item_count` equality predicate with the shared
+  `require_count_equal` helper while preserving the existing
+  `reconciled_line_item_count must equal line_item_count` diagnostic.
+- Added a hedging reconciliation regression that mutates the reconciled
+  line-item count and asserts the artifact-level summary error.
+- Tightened the rollout-gate contract so the old hedging local
+  count-equality predicate and error string cannot drift back into the
+  checker.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards deferred Python validation while unrelated
+    `cargo test -p iroha_core --lib default_route_sharding_fails_closed`,
+    `cargo test -p iroha_core --lib autoscale`, and
+    `cargo check -p iroha_core --lib` jobs and their `rustc`/`clippy-driver`
+    children were active; validation resumed only after no active `cargo` or
+    `rustc` process remained visible. Existing `codex resume` sessions were
+    left untouched.
+  - `python3 -m py_compile scripts/check_sorafs_hedging_rollout_evidence.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`81` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`632` passed)
+  - `git diff --check -- scripts/check_sorafs_hedging_rollout_evidence.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py status.md roadmap.md`
+  - conflict-marker, trailing-whitespace, Cargo.lock, and hedging checker-local
+    reconciled-line-item count predicate scans found no blocking changes.
+
+## 2026-06-26 SoraFS PoR manual-trigger string membership gate
+
+- Added a shared `require_string_in` validation helper for exact allowed
+  string fields while preserving backticked operator-facing diagnostics.
+- Replaced the PoR reporting archive `manual_trigger_route_state`
+  `wired`/`retired` membership check with the shared helper.
+- Extended helper, PoR checker, and rollout-gate contract tests so the local
+  membership check cannot drift back into the checker.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards showed no active `cargo` or `rustc` jobs before Python
+    validation; existing `codex resume` sessions were left untouched.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_por_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_por_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_por_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`180` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`631` passed)
+  - `git diff --check -- status.md roadmap.md`
+  - conflict-marker, trailing-whitespace, Cargo.lock, and PoR local
+    manual-trigger membership predicate scans found no blocking changes.
+
+## 2026-06-26 SoraFS transparency bool-true gate
+
+- Replaced the remaining checker-local top-level transparency
+  `publisher_identity_required` true predicate with the shared
+  `require_bool_true` helper while preserving the existing
+  `publisher_identity_required must be true` diagnostic.
+- Added a transparency rollout regression that mutates the publication policy
+  flag and asserts the artifact-level error in the emitted summary.
+- Tightened the static rollout-gate contract so checker-local top-level
+  `payload.get(...) is not True` predicates are rejected and bool-true
+  validation continues to flow through the shared helper.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards showed no active `cargo` or `rustc` jobs before Python
+    validation; existing `codex resume` sessions were left untouched.
+  - `python3 -m py_compile scripts/check_sorafs_transparency_rollout_evidence.py scripts/tests/check_sorafs_transparency_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_transparency_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`78` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`629` passed)
+  - `git diff --check -- status.md roadmap.md`
+  - conflict-marker, trailing-whitespace, Cargo.lock, and checker-wide local
+    top-level bool-true predicate scans found no blocking changes.
+
+## 2026-06-26 SoraFS reputation schema equality gate
+
+- Extended the shared `require_string_equal` validation helper with optional
+  path-qualified and unquoted expected-value diagnostics so rollout gates can
+  preserve existing operator-facing messages while avoiding local exact-string
+  predicates.
+- Replaced the remaining reputation checker-local canary schema comparisons
+  for metrics, transport, and routing/incentive consumption evidence with the
+  shared helper.
+- Tightened the static rollout-gate contract so the reputation checker is no
+  longer exempt from shared exact-string validation and checker-local schema
+  equality predicates are rejected outside the transparency gate's stricter
+  local schema flow.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards deferred Python validation while an unrelated
+    `cargo check -p iroha_core --lib` and its clippy/rustc child were active;
+    validation resumed only after no active `cargo` or `rustc` process
+    remained visible.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`179` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`628` passed)
+  - `git diff --check -- status.md roadmap.md`
+  - conflict-marker, trailing-whitespace, Cargo.lock, and checker-wide local
+    schema-equality scans found no blocking changes.
+
+## 2026-06-26 SoraFS shared status-set validation
+
+- Added a shared `require_status_in` evidence-validation helper and rewired
+  `require_passed_status` through it so status checks use one implementation
+  for literal `passed` gates and mixed accepted-status gates.
+- Replaced local status membership checks in the AI pre-screen and reputation
+  rollout evidence checkers. AI pre-screen evidence now validates
+  `verified`/`passed` classes through the helper, while reputation
+  publish/latest snapshot states and metrics/transport/consumption canaries
+  preserve their context-specific diagnostics through shared validation.
+- Extended helper, reputation checker, and static rollout-gate contract tests
+  so future checker changes cannot reintroduce ad-hoc local status-set
+  predicates.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards deferred Python validation while an unrelated
+    `cargo test -p iroha_core --lib default_lane_inside -- --nocapture` and
+    its `rustc` child were active; validation resumed only after no active
+    `cargo` or `rustc` process remained visible.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`193` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`624` passed)
+  - `git diff --check -- status.md roadmap.md`
+  - conflict-marker, trailing-whitespace, Cargo.lock, and checker-wide local
+    status-comparison scans found no blocking changes.
+
+## 2026-06-26 SoraFS rollout argfile role split
+
+- Split the SFM-3 reputation and SFM-4c transparency operator examples into
+  direct verifier argfiles (`*_rollout_evidence.args.example`) and collection
+  runner argfiles (`*_rollout_collection.args.example`) so the checked-in
+  examples match the parser role implied by their filenames.
+- Tightened the static rollout contract so every SoraFS rollout/release runner
+  must keep a collection-named argfile example; the runner parser tests now use
+  those collection examples, while checker examples remain direct evidence-gate
+  examples.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards deferred Python validation while an unrelated
+    `cargo test -p iroha_torii --test torii_nexus_sorafs ...` and its `rustc`
+    children were active; validation resumed only after the guard was clear.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/run_sorafs_reputation_rollout_evidence.py scripts/run_sorafs_transparency_rollout_evidence.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/check_sorafs_transparency_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/run_sorafs_reputation_rollout_evidence_test.py scripts/tests/run_sorafs_transparency_rollout_evidence_test.py -q`
+    (`71` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`619` passed)
+
+## 2026-06-26 SoraFS policy digest gate
+
+- Added a shared `require_policy_digest` helper for rollout/release evidence.
+  It preserves the existing `policy_digest_hex must be 64 hex characters`
+  diagnostics while centralizing the requirement that production evidence bind
+  to a concrete policy digest.
+- Wired the helper into every `validate_governance_approval` body: appeal
+  finance, gateway compliance, Governance DAG, hedging/billing, moderation
+  panel, orderbook, PDP, PoP credentials, PoR, PoTR, reference SDK release,
+  repair, and reserve rent. The AI pre-screen governance-DAG gate and
+  reserve-rent policy/matrix/ledger anchors now use the same helper as well.
+- Added shared-helper unit coverage and extended the static rollout-gate
+  contract so policy digest validators must import and call
+  `require_policy_digest(payload, errors)` and cannot fall back to local
+  `require_hex(payload, "policy_digest_hex", ...)` checks.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards showed no active `cargo` or `rustc` jobs before Python
+    validation; existing `codex resume` sessions were left untouched.
+  - `python3 -m py_compile scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`189` passed)
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q`
+    (`618` passed)
+  - `git diff --check` passed across the touched rollout-gate helper,
+    checkers, tests, roadmap, and status files.
+  - conflict-marker, Cargo.lock, and checker-wide local `policy_digest_hex`
+    scans found no blocking changes.
+
+## 2026-06-26 SoraFS config-backed governance approval gate
+
+- Added a shared `require_config_backed_governance_approval` helper that
+  composes accepted governance, recorded governance vote, `iroha_config_bound`,
+  and `config_source == iroha_config` validation for rollout gates that promote
+  config-backed production behavior.
+- Wired the helper into the 12 config-backed governance approval checkers:
+  appeal finance, gateway compliance, Governance DAG, hedging/billing,
+  moderation panel, orderbook, PDP, PoP credentials, PoR, PoTR, repair, and
+  reserve rent. The reference SDK release checker keeps its direct
+  `require_governance_approval` call because it validates the separate
+  `governed_release` source contract instead of `iroha_config`.
+- Updated the static rollout-gate contract so `iroha_config` validation accepts
+  either direct `require_iroha_config_binding` calls or the new config-backed
+  governance helper, and rejects local direct governance/config-source calls in
+  config-backed governance approval validators.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards deferred Python validation while unrelated active
+    `cargo`/`rustc` jobs were visible, including `cargo test -p iroha_core
+    --lib runtime_elastic_range -- --nocapture` and `cargo check -p iroha_core
+    --lib`; work resumed only after clear guards.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/check_sorafs_governance_dag_rollout_evidence_test.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py scripts/tests/check_sorafs_pdp_rollout_evidence_test.py scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py scripts/tests/check_sorafs_por_rollout_evidence_test.py scripts/tests/check_sorafs_potr_rollout_evidence_test.py scripts/tests/check_sorafs_repair_rollout_evidence_test.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py -q`
+    (`388` passed)
+  - `git diff --check` passed across the touched rollout-gate helper,
+    checkers, tests, roadmap, and status files.
+  - conflict-marker, Cargo.lock, and legacy config-backed governance call scans
+    found no blocking changes.
+
+## 2026-06-26 SoraFS rollout governance approval gate
+
+- Added a shared `require_governance_approval` helper for rollout and release
+  evidence. It preserves the existing `approved must be true` and
+  `governance_vote_recorded must be true` diagnostics while centralizing the
+  production policy that promotions need an accepted, recorded governance
+  decision.
+- Wired the helper into every checker with governance approval evidence:
+  appeal finance, gateway compliance, Governance DAG, hedging/billing,
+  moderation panel, orderbook, PDP, PoP credentials, PoR, PoTR, reference SDK
+  release, repair, and reserve rent.
+- Added shared-helper unit coverage and a static rollout-gate contract that
+  rejects checker-local `approved` or `governance_vote_recorded` boolean checks
+  outside the shared helper.
+- Fixed the SF-11 reference SDK subset gate so `--require-kind release_archive`
+  no longer requires an absent `signed_manifest` anchor, while present optional
+  artifacts still validate and can still fail the subset.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards deferred pytest while unrelated active `cargo`/`rustc` jobs
+    were visible, including `cargo check -p iroha_core --lib` and
+    `cargo check -p iroha_config --all-targets`; work resumed only after clear
+    guards.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/check_sorafs_governance_dag_rollout_evidence_test.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py scripts/tests/check_sorafs_pdp_rollout_evidence_test.py scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py scripts/tests/check_sorafs_por_rollout_evidence_test.py scripts/tests/check_sorafs_potr_rollout_evidence_test.py scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py scripts/tests/check_sorafs_repair_rollout_evidence_test.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py -q`
+    (`386` passed after the SF-11 subset-anchor correction)
+  - `git diff --check` passed across the touched rollout-gate helper,
+    checkers, tests, roadmap, and status files.
+  - conflict-marker and checker-local governance boolean scans found no matches.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` produced no output.
+
+## 2026-06-26 SoraFS rollout iroha_config binding gate
+
+- Added a shared `require_iroha_config_binding` helper for SoraFS rollout
+  evidence. It preserves the existing `iroha_config_bound must be true` and
+  `config_source must be \`iroha_config\`` diagnostics while centralizing the
+  policy that production evidence must be driven by `iroha_config`, not
+  environment variables or ad-hoc local config.
+- Wired the helper into every rollout checker that already enforced
+  `config_source == iroha_config`: AI pre-screening, appeal finance, gateway
+  compliance, Governance DAG, hedging/billing, moderation panel, orderbook,
+  PDP, PoP credentials, PoR, PoTR, repair, and reserve rent.
+- Added shared-helper unit coverage and a static rollout-gate contract that
+  rejects local `iroha_config_bound` or `config_source` checks outside the
+  shared helper, including a bound-field call requirement for gates that must
+  prove `iroha_config_bound`.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards deferred Python validation while unrelated active
+    `cargo`/`rustc` jobs were visible, including `cargo test -p iroha_core
+    --lib sub_permille -- --nocapture` and `cargo check -p iroha_core --lib`;
+    work resumed only after clear guards.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/check_sorafs_governance_dag_rollout_evidence_test.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py scripts/tests/check_sorafs_pdp_rollout_evidence_test.py scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py scripts/tests/check_sorafs_por_rollout_evidence_test.py scripts/tests/check_sorafs_potr_rollout_evidence_test.py scripts/tests/check_sorafs_repair_rollout_evidence_test.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py -q`
+    (`380` passed)
+
+## 2026-06-26 SoraFS rollout deployment-id gate
+
+- Added a shared reviewed deployment-id validator for SoraFS evidence gates.
+  Deployment ids now must be bounded ASCII labels that start/end with an
+  alphanumeric character and cannot contain obvious non-reviewed markers such
+  as `dev`, `test`, `mock`, `local`, `sample`, `placeholder`, or `changeme`.
+- Wired the validator into every rollout/release checker that fingerprints
+  `deployment_id`: gateway compliance, Governance DAG, orderbook, PDP, PoR,
+  PoTR, reference SDK release, and repair.
+- Added shared-helper unit coverage, a static rollout-gate contract that keeps
+  all deployment-id-bearing checkers on the shared validator, and an orderbook
+  integration regression proving `deployment_id: orderbook-dev-a` marks the
+  contract-surface artifact invalid.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards showed no active `cargo` or `rustc` jobs before Python
+    validation; existing `codex resume` sessions were left untouched.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`162` passed)
+
+## 2026-06-26 SoraFS rollout environment gate
+
+- Added a shared reviewed environment validator for SoraFS evidence gates.
+  Environment-bearing rollout/release artifacts now must declare one of
+  `prod`, `production`, `release`, or `staging`; dev/test/mock/local-style
+  labels fail closed before the artifact can satisfy required evidence.
+- Wired the validator into the gateway compliance, Governance DAG, orderbook,
+  PDP, PoR, PoTR, reference SDK release, and repair rollout/release gates.
+- Added shared-helper unit coverage, a static rollout-gate contract that keeps
+  all environment-bearing checkers on the shared validator, and an orderbook
+  integration regression proving `environment: dev` marks the contract-surface
+  artifact invalid.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards showed no active `cargo` or `rustc` jobs before Python
+    validation; existing `codex resume` sessions were left untouched.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`157` passed)
+
+## 2026-06-26 SoraFS hedging/billing fixture byte suite
+
+- Generated and checked in the SFM-5 hedging/billing positive and negative
+  fixture byte suite under `fixtures/sorafs_manifest/hedging/`: price feeds,
+  reference-price decision, storage/egress/incentive billing lines, weekly
+  billing statement, and stale-feed, line-USD-mismatch, and totals-mismatch
+  rejection fixtures, each with matching `.to` Norito bytes and JSON sidecars.
+- Added a rollout-gate contract that pins every generated `.to` and `.json`
+  path to `fixture_manifest.json` and rejects empty, missing, or unmanifested
+  checked-in fixture files.
+- Hardened `scripts/check_sorafs_hedging_fixture_manifest.py` so manifest
+  structural errors return `generated: not_checked` summaries and stop before
+  generated-byte reads or validator execution; command-injection drift in the
+  manifest can no longer start later validator checks for other entries.
+- Updated the hedging fixture README, SFM-5 plan, localized SFM-5 mirror
+  metadata, and roadmap so the completed fixture-byte suite and full
+  generated-byte validation are no longer listed as remaining SFM-5 work.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards deferred Cargo/Python validation while unrelated active
+    `cargo`/`rustc` jobs were visible, including `cargo test -p iroha_core`
+    and `cargo check -p iroha_core --lib`; work resumed only after clear
+    guards.
+  - `cargo run -p sorafs_manifest --bin generate_hedging_fixtures`
+  - `cargo build -p sorafs_manifest --bin sorafs-validate`
+  - `python3 -m py_compile scripts/check_sorafs_hedging_fixture_manifest.py scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 scripts/check_sorafs_hedging_fixture_manifest.py --validator-bin target/debug/sorafs-validate`
+    (`status: ok`, `entry_count: 10`; 7 accepted fixtures returned exit code
+    `0`, and 3 negative fixtures returned the expected rejection exit code
+    `2`)
+  - `python3 -m pytest scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`71` passed)
+  - `git diff --check` passed across the touched SFM-5 fixture, checker, test,
+    docs, roadmap, and status files.
+  - anchored conflict-marker and stale missing-fixture wording scans found no
+    matches across the touched SFM-5 files.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` produced no output.
+
+## 2026-06-26 SoraFS runner argfile parser contract
+
+- Added a rollout-gate contract that dynamically imports every SoraFS
+  rollout/release collection runner and verifies its checked-in operator
+  argfile example parses through that runner's `parse_args` path when reviewed
+  as `@ARGFILE --dry-run`.
+- Fixed the import drift the new contract exposed: collection runners that
+  expose narrowed `--require-kind` parsing now import the shared
+  `sorafs_required_kinds` parser directly and pass the checker-owned
+  `KIND_BY_NAME`/`DEFAULT_REQUIRED_KINDS` contract instead of expecting
+  checker-local parser wrappers.
+- Added static coverage so runner-side `--require-kind` parsing stays on the
+  shared helper and stale `parse_required_kinds(args.require_kind)` calls do
+  not re-enter collection runners.
+- Split AI pre-screening runner parsing from input preflight so checked-in
+  reviewed args can be parser-validated without requiring live runtime
+  directories, while `main` still fails before planning when preflight inputs
+  are missing.
+- Normalized collection-runner `main` functions to convert argparse
+  `SystemExit` failures into numeric return codes, and added static coverage for
+  any runner that can call `parser.error`.
+- Roadmap updated so runner examples must remain parser-valid against the
+  concrete runner that consumes them, not only parseable by the shared response
+  file expander, runner `--require-kind` handling must stay on the shared
+  parser, and runner argparse failures must return codes through `main`.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guard showed unrelated active Cargo/Rust work
+    (`cargo test -p iroha_core --lib apply_lane_lifecycle_internal_autoscale_ -- --nocapture`
+    and a child `rustc`), so Python/Cargo validation and rustfmt were deferred.
+  - after a clear process guard, `python3 -m py_compile
+    scripts/tests/check_sorafs_rollout_gate_contract_test.py` passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    initially failed because the appeal finance runner still imported a
+    checker-local `parse_required_kinds` symbol that no longer exists; the
+    runner import/call pattern was fixed across all affected collection runners.
+  - after that fix, the contract exposed AI pre-screening parser/preflight
+    coupling, which was split so parser validation no longer requires a live
+    executor bundle directory.
+  - the broader collection-runner test slice then exposed runner `main`
+    functions that leaked argparse `SystemExit(2)` for unknown `--require-kind`
+    values; runner mains now return the numeric parse error code.
+  - a later process guard showed unrelated active Cargo/Rust work
+    (`cargo test -p iroha_core --lib apply_lane_lifecycle_same_plan_recreated_lane_resets_da_cursors -- --nocapture`
+    and a child `rustc`), so Python revalidation waited for a clear guard.
+  - a final process guard showed no active Cargo/Rust jobs before Python
+    validation.
+  - `python3 -m py_compile` over the rollout contract test and all SoraFS
+    rollout/release collection runner scripts.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/run_sorafs_*rollout_evidence_test.py scripts/tests/run_sorafs_reference_sdk_release_evidence_test.py -q`
+    (`165` passed)
+  - static conflict-marker and `git diff --check` scans passed across the
+    touched runner, rollout contract, roadmap, status, and example files;
+    Cargo.lock was untouched.
+
+## 2026-06-26 SoraFS argfile example parser guard
+
+- Added a rollout-gate static contract that loads the shared
+  `scripts/sorafs_response_args.py` parser and expands every checked-in
+  `scripts/examples/sorafs_*_*.args.example` file through the bounded
+  `@ARGFILE` expander.
+- Roadmap updated so reviewed SoraFS operator argfile examples must remain
+  parseable by the same shared response parser used by rollout/release checkers
+  and collection runners.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guard showed no active Cargo/Rust jobs before Python validation.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`49` passed)
+
+## 2026-06-26 SoraFS rollout argfile secret-material guard
+
+- Added a rollout-gate static contract that scans non-comment lines in
+  checked-in SoraFS rollout/release argfile examples and rejects secret-bearing
+  operator options or inline fields such as authorization, bearer-token,
+  private-key, signing-key, token, secret, and PEM private-key material.
+- Roadmap updated so reviewed SoraFS operator examples must stay free of
+  non-comment runtime secret option/field material in addition to textual and
+  all-zero placeholder sentinels.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - the first process guard still showed unrelated active Cargo/Rust work, including
+    `cargo test -p iroha_core --lib apply_lane_lifecycle_rejects_preserving_ -- --nocapture`
+    and a child `rustc`, so Python/Cargo validation and rustfmt were deferred
+    until a clear guard.
+  - a later process guard showed no active Cargo/Rust jobs before Python
+    validation.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`48` passed)
+  - static non-comment argfile scan found no secret-bearing option names,
+    inline secret fields, or PEM private-key material in checked-in
+    `scripts/examples/sorafs_*_*.args.example` files.
+  - conflict-marker, trailing-whitespace, and `git diff --check` scans passed
+    across the touched rollout contract, transparency example, roadmap, and
+    status files; Cargo.lock was untouched.
+
+## 2026-06-26 SoraFS rollout argfile all-zero placeholder guard
+
+- Replaced the all-zero transparency rollout example `--cycle-id` sentinel
+  with a non-zero hex exemplar so reviewed operator argfiles no longer model a
+  placeholder cycle id.
+- Added a rollout-gate static contract that rejects all-zero 16-, 32-, 40-, or
+  64-character hex sentinels in checked-in SoraFS rollout/release argfile
+  examples.
+- Roadmap updated so all-zero hex sentinels are explicitly banned alongside
+  textual handoff placeholders in reviewed SoraFS operator examples.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - the first process guard showed unrelated active Cargo/Rust work, including
+    `cargo test -p iroha_core --lib apply_lane_lifecycle_rejects_preserving_ -- --nocapture`
+    and a child `rustc`, so Python/Cargo validation and rustfmt were deferred
+    until a clear guard.
+  - a later process guard showed no active Cargo/Rust jobs before Python
+    validation.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`48` passed)
+  - static scans confirmed no all-zero 16/32/40/64-character hex sentinels
+    remain in checked-in `scripts/examples/sorafs_*_*.args.example` files.
+  - conflict-marker and trailing-whitespace scans passed across the touched
+    rollout contract, transparency example, roadmap, and status files.
+
+## 2026-06-26 SoraFS transparency runner source-kind example guard
+
+- Added a rollout-gate static contract that reads
+  `DEFAULT_REQUIRED_SOURCE_KINDS` from the transparency evidence checker and
+  verifies the checked-in transparency collection argfile includes every
+  required `--source-entry KIND=PATH` value.
+- Roadmap updated so source-entry coverage in the transparency collection
+  example is part of the recorded SoraFS rollout-gate contract.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guard showed no active Cargo/Rust jobs before Python validation.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`46` passed)
+
+## 2026-06-26 SoraFS runner integer parser contract
+
+- Strengthened the SoraFS rollout-gate static contract so collection runners
+  must keep using `type=positive_int_arg` for positive bounded operator
+  arguments, and the runners with zero-allowed operator options must keep using
+  `type=non_negative_int_arg`.
+- Removed unused `non_negative_int_arg` imports from the AI pre-screening and
+  transparency collection runners, which only expose positive integer bounds.
+- Roadmap updated so the runner positive/non-negative parser split is part of
+  the recorded SoraFS rollout-gate contract rather than only an implementation
+  detail.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - the first process guard still showed unrelated active Cargo/Rust work, including
+    `cargo test -p iroha_torii --test torii_nexus_sorafs --features app_api nexus_lifecycle_rejects_manual_lane_inside_active_autoscale_range -- --nocapture`
+    and a child `rustc`, so Python/Cargo validation and rustfmt were deferred
+    until a clear guard.
+  - a later process guard showed no active Cargo/Rust jobs before Python
+    validation.
+  - `python3 -m py_compile scripts/sorafs_response_args.py scripts/tests/sorafs_response_args_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_*rollout_evidence.py scripts/check_sorafs_*release_evidence.py scripts/run_sorafs_*rollout_evidence.py scripts/run_sorafs_*release_evidence.py scripts/tests/run_sorafs_transparency_rollout_evidence_test.py`
+  - `python3 -m pytest scripts/tests/sorafs_response_args_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/run_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/run_sorafs_transparency_rollout_evidence_test.py -q`
+    (`64` passed)
+  - this completed the previously deferred Python validation for the
+    runner-wide shared integer parser migration.
+  - static marker scans confirmed SoraFS rollout/release checkers and runners
+    still have no raw `type=int`, local positive/non-negative parser
+    definitions, or local argparse positive/non-negative diagnostics.
+  - static import scan confirmed the two positive-only runners no longer import
+    `non_negative_int_arg`.
+
+## 2026-06-26 SoraFS runner CLI integer parsers
+
+- Migrated SoraFS rollout/release collection runners away from raw
+  `type=int` argparse parsing for operator-supplied clocks, freshness and
+  latency ceilings, event cursors, watch limits, timeouts, readback limits,
+  quorum, and minimum evidence counts.
+- Runner parser bounds now use the shared positive/non-negative integer
+  parsers from `scripts/sorafs_response_args.py`, preserving non-negative
+  behavior for existing zero-allowed fields such as reputation `--watch-since`
+  and `--watch-poll-interval-ms`.
+- Extended the rollout-gate static contract so raw `type=int` cannot be
+  reintroduced in either checkers or runners.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guard showed unrelated active Cargo/Rust work, including
+    `cargo test -p iroha_torii --test torii_nexus_sorafs --features app_api nexus_lifecycle_rejects_manual_lane_inside_active_autoscale_range -- --nocapture`
+    and a child `rustc`, so Python/Cargo validation and rustfmt were deferred
+    for this slice until a clear guard.
+  - static marker scans confirmed SoraFS rollout/release checkers and runners
+    no longer contain raw `type=int`, local response parser classes, or local
+    `shlex` response parsing.
+  - conflict-marker and trailing-whitespace scans passed across the touched
+    response helper, response helper test, rollout contract, rollout/release
+    checkers, collection runners, roadmap, and status.
+
+## 2026-06-26 SoraFS shared response-line parser
+
+- Added `EvidenceArgumentParser` to `scripts/sorafs_response_args.py` so
+  rollout/release checkers and collection runners share one shell-like
+  response-file line parser for reviewed `@ARGFILE` inputs.
+- Migrated the SoraFS rollout/release checkers and collection runners away from
+  local `EvidenceArgumentParser` classes and local `shlex.split(...)` response
+  parsing. Inline comments in AI pre-screening checker response files now follow
+  the same `comments=True` handling as the other tools.
+- Extended the rollout-gate static contract so SoraFS rollout tools must import
+  the shared parser and cannot reintroduce local response parser classes,
+  `convert_arg_line_to_args(...)` overrides, or local `shlex` parsing.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guard showed unrelated active Cargo/Rust work, including
+    `cargo check -p iroha_core --lib` and a child `clippy-driver`/`rustc`, so
+    Python/Cargo validation and rustfmt were deferred for this slice until a
+    clear guard.
+  - static marker scan confirmed rollout/release checkers and runners no longer
+    define local `EvidenceArgumentParser`, `convert_arg_line_to_args(...)`, or
+    local `shlex` parsing.
+  - conflict-marker and trailing-whitespace scans passed across the touched
+    response helper, response helper test, rollout contract, rollout/release
+    checkers, and collection runners.
+
+## 2026-06-26 SoraFS reputation clock parser hardening
+
+- Routed the reputation rollout checker `--now-unix` override through the
+  shared positive integer argparse parser, matching the other SoraFS
+  rollout/release gates and rejecting zero/negative deterministic validation
+  clocks before evidence processing.
+- Tightened the rollout-gate static contract so checker CLI options cannot
+  reintroduce raw `type=int` parsing.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guard showed unrelated active Cargo/Rust work, including
+    `cargo test -p iroha_core --lib manual_lane_inside_active_autoscale_range -- --nocapture`
+    and a child `rustc`, so Python/Cargo validation and rustfmt were deferred
+    for this slice until a clear guard.
+  - static marker scan confirmed rollout/release checkers have no raw
+    `type=int`, local positive/non-negative parser definitions, local parser
+    diagnostics, or local positive/non-negative parser predicates.
+  - conflict-marker, trailing-whitespace, and Python line-length scans passed
+    for the touched checker and contract files.
+
+## 2026-06-26 SoraFS shared checker CLI integer parsers
+
+- Extended `scripts/sorafs_response_args.py` with shared argparse integer
+  parsers for plain integer, positive integer, and non-negative integer
+  operator arguments.
+- Migrated the SoraFS rollout/release checkers that accept freshness, latency,
+  count, lag, peer, target, package, provider, challenge, proof, receipt, and
+  smoke-duration thresholds away from checker-local parser copies. Reputation
+  snapshot-age and ingest-lag bounds now use the same shared positive parser as
+  the other gates.
+- Extended the rollout-gate static contract so checker-local parser functions,
+  local positive/non-negative argparse diagnostics, and post-parse reputation
+  threshold predicates cannot be reintroduced.
+- Validation completed:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guard showed no active Cargo/Rust jobs before Python validation.
+  - `python3 -m py_compile scripts/sorafs_response_args.py scripts/tests/sorafs_response_args_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_reputation_rollout_evidence.py`
+  - `python3 -m pytest scripts/tests/sorafs_response_args_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`51` passed)
+  - static marker scan confirmed the migrated checkers have no local
+    `positive_int_arg`/`non_negative_int_arg` definitions, local
+    positive/non-negative argparse diagnostics, or local `parsed <= 0` /
+    `parsed < 0` predicates.
+
+## 2026-06-26 Nexus autoscale elastic-range reservation
+
+- Reserved the active `autoscale.min_lanes..autoscale.max_lanes` id range for
+  consensus-managed elastic lanes. Static TOML parsing, external lifecycle
+  additions, and full Nexus config swaps now reject manual lanes in that range
+  while autoscale is enabled, preventing operator-managed lanes from silently
+  consuming future scale-out capacity. Lifecycle validation also checks the
+  post-plan catalog, so unrelated updates cannot preserve a pre-existing manual
+  lane in the active elastic range or any autoscale-owned lane with malformed
+  metadata, disabled autoscale, an out-of-range id, or a non-default dataspace
+  binding. An explicit retire of a manual elastic-range lane remains available
+  as the manual-lane repair path. Explicit lifecycle retires can now also remove
+  invalid autoscale-owned lanes for repair, while valid autoscale-owned lanes
+  remain protected from manual retirement and unrelated lifecycle updates cannot
+  carry corrupted owned lanes forward. The internal autoscale lifecycle path
+  also rejects unmanaged/manual additions as well as unmanaged/manual retires,
+  so the owner-only entry point cannot create manual lanes outside the reserved
+  range. Autoscale config parsing, runtime config swaps, lifecycle post-plan
+  validation, and block autoscale application now also reject a
+  `routing_policy.default_lane` inside the elastic range, keeping the default
+  route anchored on a base lane instead of an autoscale-owned lane.
+- Added negative state-boundary regressions for both runtime lifecycle plans and
+  `State::set_nexus` config swaps, plus a parser fixture that rejects a manual
+  lane inside `[min_lanes, max_lanes)` and a Torii lifecycle endpoint
+  regression that exposes the same `lane_lifecycle_error`. The state tests
+  assert rejected plans leave the active catalog unchanged. Same-plan
+  retire+add replacements now mark the lane id for a full lane-scoped state
+  reset too, so stale DA shard/receipt cursors and merge/relay state cannot
+  survive a fresh incarnation that keeps the same dataspace and geometry.
+  Autoscale sample collection now rejects equal/backward block timestamps as
+  incomplete timing evidence, preventing invalid clocks from being clamped into
+  synthetic hot scale-out or cold scale-in windows. Programmatic config swaps,
+  lifecycle preparation, and block autoscale application now also revalidate
+  runtime lane bounds against the compiled `max_lanes` safety cap, so corrupted
+  actual state cannot scale out beyond the parser-enforced production limit.
+  Autoscale threshold parsing and runtime checks also reject sub-permille
+  ratios, preventing tiny positive values from rounding to zero and making
+  hot scale-out effectively unconditional. They also require rounded permille
+  thresholds to preserve strict scale-in/scale-out hysteresis, so tiny raw
+  gaps cannot collapse at the integer precision used by block application.
+  Autoscale latency-ratio and utilization calculations now use widened
+  deterministic integer intermediates and saturate only the final permille
+  value, so extreme timestamps or committed-fragment counters cannot wrap or
+  deflate an overloaded sample into a cold one.
+  Block autoscale application also prechecks the active elastic range before a
+  deterministic transition. In-range ids must already be valid
+  autoscale-managed default-dataspace lanes, and autoscale-owned out-of-range
+  corruption still blocks unrelated lifecycle mutation until an explicit repair
+  retire removes it. Live default-route sharding now also treats corrupted
+  runtime autoscale bounds or a default lane inside the elastic range as
+  elastic-sharding disabled, keeping no-target traffic on the configured
+  default lane until runtime state is repaired. Block-time scale-out now gates
+  directly on a free elastic id in the configured range instead of comparing
+  default-route capacity against the numeric `max_lanes` id bound, so
+  public-profile configs with `min_lanes > 1` keep the intended fail-closed
+  range-exhaustion behavior explicit.
+- Documentation updated in the Nexus lane model, transition notes, and roadmap.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_config --test autoscale_config autoscale_rejects_manual_lane_inside_elastic_id_range -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_config --test autoscale_config autoscale_rejects_default_lane_inside_elastic_id_range -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_config --test autoscale_config -- --nocapture`
+    (`9` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib manual_lane_inside_active_autoscale_range -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib apply_lane_lifecycle_rejects_preserving_ -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib apply_lane_lifecycle_internal_autoscale_ -- --nocapture`
+    (`12` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib apply_lane_lifecycle_allows_retiring_corrupt_autoscale_managed_lanes_for_repair -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib apply_lane_lifecycle_rejects_external_autoscale_managed_retire -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib apply_lane_lifecycle_same_plan_recreated_lane_resets_da_cursors -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_sample_latency_ms -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib non_monotonic_timestamps -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_latency_ratio_permille -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_window_stats_keeps_extreme_latency_hot -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_utilization_permille -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib collect_autoscale_samples_reads_persisted_historical_fragment_counts -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib default_route_sharding_fails_closed -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_runtime_lane_bounds -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib runtime_max_lanes_above_safety_cap -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib set_nexus_rejects_autoscale_max_lanes_above_safety_cap -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib sub_permille -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_config --test autoscale_config autoscale_rejects_sub_permille_ratios -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib quantized_hysteresis -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_config --test autoscale_config autoscale_rejects_hysteresis_that_collapses_after_permille_rounding -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib runtime_elastic_range -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib default_lane_inside -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib out_of_range_managed_runtime_lane -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_scale_out_fails_closed_when_id_range_exhausted -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+    (`111` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib apply_lane_lifecycle_internal_autoscale_rejects_unmanaged_retire -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib apply_lane_lifecycle_updates_catalog -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_scale_out_ignores_unmanaged_capacity_lanes -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_torii --test torii_nexus_sorafs --features app_api nexus_lifecycle_endpoint -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_config --all-targets -- -D warnings`
+    (passed after cleaning existing autoscale/native-AMX config test lints)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_torii --test torii_nexus_sorafs --features app_api -- -D warnings`
+    (passed)
+  - `git diff --check -- crates/iroha_core/src/state.rs crates/iroha_core/src/queue/router.rs crates/iroha_config/src/parameters/user.rs crates/iroha_config/tests/autoscale_config.rs docs/source/nexus_lanes.md docs/source/nexus_transition_notes.md roadmap.md status.md`
+    (passed)
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no output)
+
+## 2026-06-26 Nexus autoscale scale-in capacity guard
+
+- Tightened scale-in eligibility so the autoscaler only retires a managed
+  elastic lane when default-route autoscale capacity is strictly above
+  `autoscale.min_lanes`. Total catalog size no longer makes scale-in eligible,
+  so unrelated manual lanes cannot cause the autoscaler to destroy the last
+  elastic lane needed to satisfy the default-route minimum.
+- Added an adversarial block-transition regression with one valid managed lane
+  at minimum default-route capacity plus unrelated manual lanes. The cold
+  window no longer retires the managed lane or records a transition.
+- Documentation updated in the Nexus lane model and transition notes.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_scale_in_ignores_unrelated_manual_lanes_at_min_capacity -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_scale_in -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_retires_managed_elastic_lane_when_window_is_cold -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+    (passed)
+
+## 2026-06-26 Nexus autoscale capacity range guard
+
+- Tightened autoscale capacity accounting so default-route scale-out decisions
+  count only the default lane plus valid autoscale-managed elastic lanes inside
+  the configured `autoscale.min_lanes..autoscale.max_lanes` range. Corrupted
+  out-of-range managed lanes no longer inflate capacity or receive default
+  traffic, and later runtime lifecycle checks require explicit repair before
+  any catalog mutation can create or retire lanes around that corruption.
+- Added pure selector and block-transition regressions covering an
+  out-of-range managed lane in the default dataspace. The transition test now
+  simulates corrupted rehydrated state and proves autoscale skips the mutation
+  without silently destroying the corrupt lane or creating around it.
+- Documentation updated in the Nexus lane model and transition notes.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_default_route_capacity_ignores_managed_lanes_outside_elastic_range -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_scale_out_rejects_out_of_range_managed_runtime_lane -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_default_route_capacity -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_scale_out -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+    (passed)
+
+## 2026-06-26 SoraFS client/CLI readback clippy cleanup
+
+- Split SoraFS pin-registration manifest encoding and chunker JSON insertion
+  into focused client helpers, preserving explicit-manifest-byte verification
+  while keeping the payload builder under the workspace line-count lint.
+- Updated the small `Copy` SoraFS readback filters to be applied and passed by
+  value, and mirrored those signatures through the CLI helper closures and
+  operator-panel workflow source so client, CLI, and Torii grouped clippy agree.
+- Cleaned up the remaining client lints reached by Torii grouped clippy:
+  duplicate hex trimming, `SoraFS` rustdoc code formatting, by-reference
+  trivial-copy filters, and the long pin-register payload builder.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha --lib build_register_manifest_payload -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo check -p iroha_cli --bin iroha`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha --lib -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_cli --bin iroha -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_torii --test torii_nexus_sorafs --features app_api -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_cli moderation_quarantine_operator_panel -- --nocapture`
+    (filtered operator-panel tests passed across the `iroha`, `iroha3`, and
+    `iroha_cli` test binaries)
+
+## 2026-06-26 SoraFS moderation helper clippy cleanup
+
+- Refactored the private moderation quarantine object-id helper to take a
+  structured input, preserving the deterministic hash field order while
+  avoiding the `too_many_arguments` lint reached through Torii grouped clippy.
+- Added a focused unit test that seals and opens a quarantine object, decodes
+  the envelope, and checks the derived object id against the refactored helper.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p sorafs_node --lib moderation_quarantine_object_seal_open_preserves_object_id -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p sorafs_node --lib -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_torii --test torii_nexus_sorafs --features app_api -- -D warnings`
+    later passed after the client/CLI readback cleanup above.
+
+## 2026-06-26 Nexus lifecycle duplicate-entry guard
+
+- Hardened `LaneCatalog::apply_lifecycle` so lifecycle plans that repeat
+  addition ids, repeat addition aliases, or list the same retired lane id more
+  than once are rejected as malformed before catalog reconstruction instead of
+  relying on implicit deduplication or merged-catalog validation.
+- Added data-model, state-boundary, and Torii endpoint negative coverage
+  proving duplicate lifecycle entries fail closed and leave the active lane
+  catalog unchanged.
+- Documentation updated in the Nexus overview, lane model, transition notes,
+  and roadmap.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_data_model --lib lane_lifecycle_rejects_unknown_retire_or_empty -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_data_model --lib lane_lifecycle_rejects_duplicate_additions_before_merge -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib apply_lane_lifecycle_rejects_duplicate_retire_lane -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib apply_lane_lifecycle_rejects_duplicate_additions -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_data_model --lib lane_lifecycle -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib apply_lane_lifecycle_ -- --nocapture`
+    (`29` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_torii --test torii_nexus_sorafs --features app_api nexus_lifecycle_endpoint -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_data_model --lib -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+    (passed)
+
+## 2026-06-26 Nexus autoscale default-route range gate
+
+- Tightened live default-route sharding so autoscale-managed elastic candidates
+  are used only when `nexus.autoscale.enabled` is true and the lane id is inside
+  the configured `autoscale.min_lanes..autoscale.max_lanes` range. Catalog-only
+  routing still treats range as unknown, while stateful routing fails closed to
+  the default lane for disabled autoscale or corrupted out-of-range managed
+  lanes.
+- Added router adversarial coverage for range filtering, disabled-autoscale
+  fallback, infallible stateful route parity, and routing-plan parity with the
+  single-route decision.
+- Documentation updated in the Nexus lane model, transition notes, and roadmap.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib default_route_elastic_candidates_apply_autoscale_range_when_available -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib default_route_sharding_ignores_autoscale_lanes_outside_enabled_range -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib default_route_sharding_ignores_managed_lanes_when_autoscale_disabled -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib default_route -- --nocapture`
+    (`14` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+    (`74` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+    (passed)
+
+## 2026-06-26 Nexus autoscale retire-range fail-closed guard
+
+- Tightened autoscale retire ownership so managed elastic lanes are eligible
+  for automatic retirement only inside the configured
+  `autoscale.min_lanes..autoscale.max_lanes` range. The internal autoscale
+  lifecycle now rejects explicit retire plans for corrupted out-of-range
+  managed lanes instead of silently destroying them.
+- Added adversarial selector and lifecycle coverage that forces an
+  out-of-range managed lane into runtime state and proves autoscale leaves it
+  untouched for explicit repair instead of silently destroying it.
+- Documentation updated in the Nexus lane model, transition notes, and roadmap.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_retire_selection_ignores_managed_lanes_outside_elastic_range -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib apply_lane_lifecycle_internal_autoscale_rejects_managed_retire_outside_range -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib internal_autoscale -- --nocapture`
+    (`10` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+    (`71` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+    (passed)
+
+## 2026-06-26 SoraFS shared checker string coverage validation
+
+- Added `scripts/sorafs_evidence_validation.py` with shared
+  `collect_string_values(...)` and `require_string_coverage(...)` helpers for
+  rollout evidence array coverage checks.
+- Routed the 15 SoraFS rollout/release checkers that enforce string coverage
+  through the shared helper and removed their local coverage helper copies.
+  The transparency rollout checker now explicitly passes
+  `allow_scalar_items=False` and `trim_values=False` to preserve its stricter
+  dict-only exact-value coverage policy.
+- Added focused `scripts/tests/sorafs_evidence_validation_test.py` coverage for
+  scalar arrays, dict-field arrays, exact-value mode, and error labels.
+  Extended the rollout contract so checker-local `collect_string_values(...)`
+  / `require_string_coverage(...)` copies cannot be reintroduced.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guards were checked before Python validation. The first guard still
+    showed unrelated active Cargo/Rust work, including
+    `cargo test -p iroha_core --lib apply_lane_lifecycle_rejects_duplicate_retire_lane -- --nocapture`
+    and an `iroha_core` `rustc` compile; later guards were clear of
+    Cargo/Rust before the Python commands below ran.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`38` passed)
+  - `python3 -m py_compile scripts/check_sorafs_*_evidence.py scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - static Node marker scan confirmed all 15 applicable checkers use the
+    shared string coverage helper and the transparency checker keeps all three
+    strict dict-only exact-value coverage calls.
+  - `git diff --check -- roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null <touched-sorafs-validation-file>`
+    loop across the SoraFS checker scripts, shared validation helper, helper
+    test, rollout contract test, roadmap, and status.
+  - anchored conflict-marker scan across the touched SoraFS checker files,
+    shared validation helper/test, rollout contract, roadmap, and status.
+  - trailing-whitespace scan across the touched SoraFS checker files, shared
+    validation helper/test, rollout contract, roadmap, and status.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker artifact error recorder
+
+- Extended `scripts/sorafs_checker_preflight.py` with
+  `record_artifact_error(...)`, which marks a summary artifact invalid,
+  normalizes its artifact-local `errors` list, and mirrors the path-qualified
+  error into the checker summary error list.
+- Routed the original 15 SoraFS rollout/release checkers with cross-artifact
+  binding invalidation through the shared recorder and removed their nested
+  `record_artifact_error(...)` copies. A later follow-up also moved the
+  reputation snapshot-bound invalidation path onto the shared recorder using
+  the `summary_error` override for its per-required-kind error buckets.
+- Added focused `scripts/tests/sorafs_checker_preflight_test.py` coverage for
+  appending to existing artifact errors and rebuilding malformed artifact error
+  lists. Extended the rollout contract so checker-local artifact error recorder
+  copies cannot be reintroduced in the 15 shared-recorder gates.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard showed unrelated active Cargo/Rust work, including
+    `cargo check -p iroha_data_model --lib` and
+    `cargo check -p iroha_core --lib`, so Python/Cargo validation and rustfmt
+    were deferred for this slice until a later clear guard.
+  - static Node marker scan confirmed all 15 applicable checkers use the
+    shared artifact error recorder and every call passes the summary `errors`
+    list explicitly.
+  - `git diff --check -- roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null <touched-sorafs-artifact-error-file>`
+    loop across the SoraFS checker scripts, shared checker preflight helper,
+    helper test, rollout contract test, roadmap, and status.
+  - anchored conflict-marker scan across the touched SoraFS checker files,
+    shared checker preflight helper/test, rollout contract, roadmap, and
+    status.
+  - trailing-whitespace scan across the touched SoraFS checker files, shared
+    checker preflight helper/test, rollout contract, roadmap, and status.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared basic checker validation primitives
+
+- Extended `scripts/sorafs_evidence_validation.py` with shared
+  `require_object(...)`, `require_string(...)`, and
+  `require_positive_int(...)` primitives for rollout evidence field checks.
+- Routed all 16 SoraFS rollout/release checkers through those shared helpers
+  and removed their identical local definitions. Existing variant helpers such
+  as `require_string_equal(...)`, `require_non_negative_int(...)`, and
+  `require_count_equal(...)` remain local where their presence or bodies still
+  differ across gates.
+- Added focused `scripts/tests/sorafs_evidence_validation_test.py` coverage for
+  accepted and rejected object, string, and positive-integer values. Extended
+  the rollout contract so checker-local copies of those three primitives cannot
+  be reintroduced.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guards were checked before Python validation. The first guard
+    showed unrelated active Cargo/Rust work, including
+    `cargo check -p iroha_core --lib` and a `clippy-driver`/`rustc` compile,
+    so Python/Cargo validation and rustfmt were deferred until later guards
+    were clear of Cargo/Rust.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`46` passed)
+  - `python3 -m py_compile scripts/check_sorafs_*_evidence.py scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - static Node marker scan confirmed all 16 checkers use the shared
+    object/string/positive-integer validation primitives and no checker keeps
+    local copies.
+  - `git diff --check -- roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null <touched-sorafs-basic-validation-file>`
+    loop across the SoraFS checker scripts, shared validation helper, helper
+    test, rollout contract test, roadmap, and status.
+  - anchored conflict-marker scan across the touched SoraFS checker files,
+    shared validation helper/test, rollout contract, roadmap, and status.
+  - trailing-whitespace scan across the touched SoraFS checker files, shared
+    validation helper/test, rollout contract, roadmap, and status.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared extended checker validation primitives
+
+- Extended `scripts/sorafs_evidence_validation.py` with shared
+  `require_string_equal(...)`, `require_bool_true(...)`,
+  `require_non_negative_int(...)`, and `require_count_equal(...)` helpers for
+  rollout evidence field checks and count parity checks.
+- Routed every SoraFS rollout/release checker that used those local helpers
+  through the shared implementations and removed the checker-local copies.
+  Timestamp validation remains local because the rollout gates still use
+  different option signatures.
+- Added focused `scripts/tests/sorafs_evidence_validation_test.py` coverage for
+  exact string matches/mismatches, bool-true checks, non-negative integers, and
+  count equality. Extended the rollout contract with the expected per-helper
+  checker matrix so local copies cannot be reintroduced.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard showed unrelated active Cargo/Rust work, including
+    `cargo test -p iroha_data_model --lib lane_lifecycle_rejects_duplicate_additions_before_merge -- --nocapture`
+    and a `rustc` compile, so Python/Cargo validation and rustfmt were
+    deferred for this slice until a later clear guard.
+  - static Node marker scan confirmed the expected checkers import each shared
+    extended validation helper and no checker keeps local copies.
+  - `git diff --check -- roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null <touched-sorafs-extended-validation-file>`
+    loop across the SoraFS checker scripts, shared validation helper, helper
+    test, rollout contract test, roadmap, and status.
+  - anchored conflict-marker scan across the touched SoraFS checker files,
+    shared validation helper/test, rollout contract, roadmap, and status.
+  - trailing-whitespace scan across the touched SoraFS checker files, shared
+    validation helper/test, rollout contract, roadmap, and status.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker timestamp validation
+
+- Extended `scripts/sorafs_evidence_validation.py` with shared
+  `require_recent_timestamp(...)`, which reuses the shared positive-integer
+  validation and rejects future or stale evidence timestamps.
+- Routed the 13 SoraFS rollout/release checkers that enforce timestamp
+  freshness through the shared helper and removed their local
+  `require_recent_timestamp(...)` copies. Option-object callers now pass
+  `now_unix` and `max_age_secs` explicitly so each gate's freshness window
+  remains visible at the call site.
+- Added focused `scripts/tests/sorafs_evidence_validation_test.py` coverage for
+  fresh, future, stale, and invalid timestamps. Extended the rollout contract
+  so local timestamp helpers and old positional option-object calls cannot be
+  reintroduced.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard showed unrelated active Cargo/Rust work, including
+    `cargo test -p iroha_data_model --lib lane_lifecycle_rejects_duplicate_additions_before_merge -- --nocapture`
+    and a `rustc` compile, so Python/Cargo validation and rustfmt were
+    deferred for this slice until a later clear guard.
+  - static Node marker scan confirmed all 13 timestamp-validating checkers use
+    the shared helper with explicit `now_unix` and `max_age_secs` arguments and
+    no checker keeps local timestamp helper copies.
+
+## 2026-06-26 SoraFS shared checker hex validation
+
+- Extended `scripts/sorafs_evidence_validation.py` with shared `is_hex(...)`
+  and `require_hex(...)` helpers for exact-length digest validation and
+  lowercase normalization.
+- Routed all 16 SoraFS rollout/release checkers that validate digest fields
+  through the shared `require_hex(...)` helper and removed their local
+  `is_hex(...)` / `require_hex(...)` copies. The AI pre-screening, hedging,
+  and reputation gates still import shared `is_hex(...)` for direct optional
+  or array-entry digest checks.
+- Added focused `scripts/tests/sorafs_evidence_validation_test.py` coverage for
+  exact hex lengths, uppercase normalization, invalid hex values, and missing
+  fields. Extended the rollout contract so checker-local hex helper copies
+  cannot be reintroduced and direct `is_hex(...)` users stay explicit.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard showed unrelated active Cargo/Rust work, including
+    `cargo test -p iroha_core --lib apply_lane_lifecycle_rejects_duplicate_additions -- --nocapture`
+    and a child `rustc` compile, so Python/Cargo validation and rustfmt were
+    deferred for this slice until a later clear guard.
+  - static Node marker scan confirmed all 16 hex-validating checkers use
+    shared helpers, the three direct `is_hex(...)` users import it from the
+    shared helper, and no checker keeps local hex helper copies.
+  - `git diff --check -- roadmap.md status.md scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - static whitespace/conflict-marker scan across the 16 hex-validating
+    checker scripts, shared validation helper, helper test, rollout contract,
+    roadmap, and status.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker false/number validation
+
+- Extended `scripts/sorafs_evidence_validation.py` with shared
+  `require_false(...)`, `require_false_or_absent(...)`, and
+  `require_non_negative_number(...)` helpers for payload-redaction flags and
+  latency/lag ceiling checks.
+- Routed every SoraFS rollout/release checker that used those primitives
+  through the shared helpers and removed their local copies. The migration
+  covers exact-false checks in 15 checkers, false-or-absent checks in 6
+  checkers, and non-negative-number checks in 13 checkers.
+- Added focused `scripts/tests/sorafs_evidence_validation_test.py` coverage for
+  exact-false acceptance/rejection, false-or-absent acceptance/rejection, and
+  non-negative numeric conversion/rejection. Extended the rollout contract with
+  explicit per-helper checker matrices so local copies cannot be reintroduced.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard showed unrelated active Cargo/Rust work, including
+    `cargo test -p iroha_core --lib apply_lane_lifecycle_rejects_duplicate_additions -- --nocapture`
+    and a child `rustc` compile, so Python/Cargo validation and rustfmt were
+    deferred for this slice until a later clear guard.
+  - static Node marker scan confirmed every expected checker imports the
+    shared false/false-or-absent/non-negative-number helpers and no checker
+    keeps local copies.
+  - `git diff --check -- roadmap.md status.md scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - static whitespace/conflict-marker scan across the 16 migrated checker
+    scripts, shared validation helper, helper test, rollout contract, roadmap,
+    and status.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker optional hex/count validation
+
+- Extended `scripts/sorafs_evidence_validation.py` with shared
+  `require_optional_hex(...)`, `require_score_bps(...)`, and
+  `require_count_match(...)` helpers for optional digest fields, basis-point
+  score ceilings, and positive-total/pass-count parity checks that stop after
+  invalid totals.
+- Routed the AI pre-screening rollout checker through shared optional-hex and
+  score-bps validation and removed its local helper copies. Routed the
+  transparency rollout checker through the shared count-match helper and
+  removed its local copy. The AI pre-screening checker no longer imports
+  `is_hex(...)` directly.
+- Added focused `scripts/tests/sorafs_evidence_validation_test.py` coverage for
+  absent/null/present optional hex fields, score-bps upper bounds, and
+  count-match early return after invalid totals. Extended the rollout contract
+  with explicit checker sets for those narrower helpers so local copies cannot
+  be reintroduced.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard showed unrelated active Cargo/Rust work, including
+    `cargo check -p iroha_core --lib` and a child `clippy-driver`/`rustc`
+    compile, so Python/Cargo validation and rustfmt were deferred for this
+    slice until a later clear guard.
+  - static Node marker scan confirmed the AI pre-screening and transparency
+    checkers import the expected shared helpers, no checker keeps local
+    optional-hex, score-bps, or count-match copies, and the AI checker no
+    longer imports `is_hex(...)` directly.
+  - `git diff --check -- roadmap.md status.md scripts/sorafs_evidence_validation.py scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/check_sorafs_transparency_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - static whitespace/conflict-marker scan across the migrated checkers,
+    shared validation helper, helper test, rollout contract, roadmap, and
+    status.
+  - blank-run scan across the migrated checkers, shared validation helper,
+    helper test, and rollout contract.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker HTTP status validation
+
+- Extended `scripts/sorafs_evidence_validation.py` with shared
+  `require_2xx_status(...)`, which rejects bools, non-integers, and
+  non-2xx HTTP status codes while preserving path-qualified checker errors.
+- Routed the 14 SoraFS rollout/release checkers with route or probe status
+  checks through the shared helper and removed their local
+  `must be a 2xx status` predicate blocks. Route-specific checks such as
+  `passed`, `authz_enforced`, latency ceilings, and publication metadata remain
+  local to their gates.
+- Added focused `scripts/tests/sorafs_evidence_validation_test.py` coverage for
+  accepted 200/299 statuses, rejected non-2xx/bool/string values, and
+  path-qualified errors. Extended the rollout contract with the 14-checker
+  HTTP-status matrix and pinned the AI pre-screening/transparency probe-array
+  path form.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard was clear of active Cargo/Rust before Python validation; it
+    only showed this guard's own `rg` process and unrelated `codex resume`
+    sessions.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`83` passed)
+  - `python3 -m py_compile scripts/check_sorafs_*_evidence.py scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - static Node marker scan confirmed every expected route/probe checker
+    imports and calls `require_2xx_status(...)`, and no checker keeps local
+    `must be a 2xx status` errors.
+  - `git diff --check -- roadmap.md status.md scripts/sorafs_evidence_validation.py scripts/check_sorafs_*_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker route/probe object arrays
+
+- Extended `scripts/sorafs_evidence_validation.py` with shared
+  `require_object_array(...)`, which requires a non-empty array and returns
+  indexed object records using the existing path-qualified object validation.
+- Routed the 14 SoraFS rollout/release checkers with route or probe endpoint
+  arrays through the shared helper, including AI pre-screening's route/probe
+  count checks and the transparency probe arrays. Endpoint-specific checks
+  such as required route names, authz flags, latency ceilings, schema
+  assertions, and publication metadata remain local to their gates.
+- Added focused `scripts/tests/sorafs_evidence_validation_test.py` coverage for
+  indexed object records, missing/empty arrays, and non-object items. Extended
+  the rollout contract so local `routes = payload.get("routes")`,
+  `probes = payload.get(field)`, and route/probe non-empty-array boilerplate
+  cannot be reintroduced.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard showed unrelated active Cargo/Rust work, including
+    `cargo test -p iroha_torii --test torii_nexus_sorafs --features app_api nexus_lifecycle_endpoint -- --nocapture`
+    and a child `rustc` compile, so Python/Cargo validation and rustfmt were
+    deferred for this slice until a later clear guard.
+  - static Node marker scan confirmed every expected route/probe checker
+    imports `require_object_array(...)`, and no checker keeps local route/probe
+    object-array boilerplate.
+  - `git diff --check -- roadmap.md status.md scripts/sorafs_evidence_validation.py scripts/check_sorafs_*_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - static whitespace/conflict-marker scan across the migrated checkers,
+    shared validation helper, helper test, rollout contract, roadmap, and
+    status.
+  - blank-run scan across the migrated checkers, shared validation helper,
+    helper test, and rollout contract.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker generic object arrays
+
+- Extended the `require_object_array(...)` rollout-gate migration beyond
+  route/probe endpoints to generic artifact, stream, and event arrays.
+- Routed hedging native-bridge artifacts, orderbook streams and SDK artifacts,
+  AI pre-screening commit/reveal artifacts, and reputation event arrays through
+  the shared helper. Gate-specific field validation, count matching, and
+  redaction checks remain local.
+- Extended the rollout contract so local `artifacts`/`streams`/`events`
+  non-empty object-array boilerplate cannot be reintroduced while leaving
+  scalar/string arrays such as `statement_digests_hex` under their specialized
+  validators.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard showed unrelated active Cargo/Rust work, including
+    `cargo test -p iroha_torii --test torii_nexus_sorafs --features app_api nexus_lifecycle_endpoint -- --nocapture`
+    and a child `rustc` compile, so Python/Cargo validation and rustfmt were
+    deferred for this slice until a later clear guard.
+  - static Node marker scan confirmed all generic object-array gates import
+    `require_object_array(...)` and no checker keeps local artifact/stream/event
+    object-array boilerplate.
+  - `git diff --check -- roadmap.md status.md scripts/sorafs_evidence_validation.py scripts/check_sorafs_*_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker timestamp paths
+
+- Extended `scripts/sorafs_evidence_validation.py` so
+  `require_recent_timestamp(...)` can keep the shared positive-integer and
+  freshness checks while emitting path-qualified future/stale diagnostics.
+- Routed the reputation rollout gate's publish/latest snapshot freshness checks
+  through the shared helper with `publish.generated_at_unix` and
+  `latest.generated_at_unix` diagnostic labels, removing the checker-local
+  timestamp comparison branch.
+- Added focused helper coverage for path-qualified future/stale timestamp
+  errors and extended the rollout contract so the reputation checker must
+  import the shared timestamp helper and checker-local timestamp predicates
+  cannot be reintroduced.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guard was clear of active Cargo/Rust work before Python validation.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`119` passed).
+  - process guard was clear of active Cargo/Rust work before Python compile
+    validation.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `git diff --check -- scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - anchored conflict-marker scan across the touched Python files.
+  - line-length scan across the touched Python files.
+
+## 2026-06-26 SoraFS shared checker governance zero count
+
+- Routed Governance DAG `missing_block_count` validation through the shared
+  `require_zero_count(...)` helper and removed the now-stale
+  `require_non_negative_int(...)` import from that checker.
+- Expanded the rollout contract so Governance DAG participates in the shared
+  zero-count helper requirement and no checker-local `!= 0` zero-count branch
+  is allowed.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards showed unrelated active Cargo/Rust work, including a prior
+    `cargo test -p iroha_config --test autoscale_config autoscale_rejects_manual_lane_inside_elastic_id_range -- --nocapture`
+    with a child `rustc` and a later
+    `cargo check -p iroha_config --all-targets` with a child `clippy-driver`,
+    so Python/Cargo validation and rustfmt were deferred for this slice until a
+    clear guard.
+  - anchored conflict-marker scan across the touched checker and rollout
+    contract.
+  - trailing-whitespace scan across the touched checker and rollout contract.
+  - line-length scan across the touched checker and rollout contract.
+  - static marker scan confirmed the old `missing_block_count` local branch is
+    gone.
+
+## 2026-06-26 SoraFS shared checker passed-status expansion
+
+- Routed the remaining plain `status must be passed` checks through
+  `require_passed_status(...)` in governance DAG, hedging, appeal finance,
+  moderation panel, reserve/rent, orderbook, PoP credentials, transparency,
+  and reference SDK release evidence gates. Reputation keeps its contextual
+  `metrics.status`, `transport.status`, and `consumption.status` diagnostics.
+- Expanded the rollout contract so every gate with plain passed-status
+  semantics must import the shared helper and cannot reintroduce the local
+  `payload.get("status") != "passed"` branch.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guard was clear of active Cargo/Rust work before Python validation.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`126` passed).
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_transparency_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - anchored conflict-marker scan across the touched checkers and rollout
+    contract.
+  - trailing-whitespace scan across the touched checkers and rollout contract.
+  - line-length scan across the touched checkers and rollout contract.
+  - static marker scan confirmed plain passed-status predicates only remain in
+    the rollout contract deny list and reputation's context-specific checks.
+
+## 2026-06-26 SoraFS shared checker computed minimums
+
+- Added `require_minimum_value(...)` to the shared SoraFS evidence validation
+  helper and routed `require_minimum_int(...)` through it so computed counts can
+  share minimum-threshold enforcement without re-reading payload fields.
+- Routed computed minimum checks through the helper in AI pre-screen committee,
+  execution summary, and governance producer validation; hedging feed,
+  reference-price, billing statement, and distinct-cycle validation; reserve
+  quote-matrix coverage; PoP credential issuer bundle coverage; and
+  transparency explorer route coverage. Custom diagnostics are preserved for
+  quorum and coverage-specific failures.
+- Extended the rollout contract so these gates must import
+  `require_minimum_value(...)` and cannot reintroduce the migrated local
+  `value < minimum` branches or `errors.append(...)` diagnostics.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guard showed unrelated active Cargo/Rust work, including
+    `cargo test -p iroha_core --lib manual_lane_inside_active_autoscale_range -- --nocapture`
+    and a child `rustc`, so Python/Cargo validation and rustfmt were deferred
+    for this slice until a clear guard.
+  - anchored conflict-marker scan across the touched helper, checkers, and
+    tests.
+  - trailing-whitespace scan across the touched helper, checkers, and tests.
+  - line-length scan across the touched helper, checkers, and tests.
+  - static marker scan confirmed the migrated value-level minimum predicates
+    and local append diagnostics only remain in the rollout contract deny list.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker minimum threshold expansion
+
+- Expanded the shared `require_minimum_int(...)` rollout-gate contract beyond
+  the first PoR/PDP/repair thresholds. Governance DAG block and payload-kind
+  floors, appeal finance class and peer floors, moderation panel/peer floors,
+  orderbook reconciliation peer floors, reference SDK release target/package
+  floors, reserve policy dimension floors, and hedging bridge ABI floors now
+  route through the shared helper.
+- Extended `scripts/tests/check_sorafs_rollout_gate_contract_test.py` so those
+  gates must continue importing `require_minimum_int(...)` and cannot reintroduce
+  the migrated local `require_positive_int(...)` plus comparison branches.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guard was clear of active Cargo/Rust work before Python validation.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`119` passed).
+  - process guard was clear of active Cargo/Rust work before Python compile
+    validation.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `git diff --check -- scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - anchored conflict-marker scan and line-length scan across the touched
+    Python files.
+
+## 2026-06-26 SoraFS shared checker indexed booleans
+
+- Extended `require_bool_true(...)` with an optional `path` override so route,
+  stream, probe, and step validators can share exact-true checks while keeping
+  diagnostics such as `routes[N].passed must be true`.
+- Routed indexed route/stream/probe/step boolean checks through the shared
+  helper across the rollout evidence checkers, including transparency's
+  publication-only and optional `http_success` guards.
+- Tightened the rollout contract so checker-local indexed `record.get(...) is
+  not True`/`step.get(...) is not True` predicates and matching `must be true`
+  diagnostics cannot be reintroduced. Also narrowed the non-negative-number
+  contract to the reputation checker, which is now the remaining direct caller,
+  and removed stale imports from hedging/reference SDK checkers.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guard initially showed unrelated active Cargo/Rust work, so Python
+    validation was deferred until a later clear guard.
+  - process guard was clear before Python validation.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`123` passed).
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_transparency_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - anchored conflict-marker scan across the touched helper, checkers, tests,
+    roadmap, and status.
+  - trailing-whitespace scan across the touched helper, checkers, tests,
+    roadmap, and status.
+  - line-length scan across the touched Python files.
+  - static marker scan confirmed the migrated indexed boolean predicates and
+    diagnostics only remain in the rollout contract deny list.
+  - `git diff --check -- roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker integer maximums
+
+- Added `require_maximum_int(...)` to the shared SoraFS evidence validation
+  helper so rollout gates can enforce integer-only ceilings without loosening
+  positive/non-negative integer diagnostics.
+- Routed PoP credentials verifier `max_verify_latency_ms` and
+  `max_service_lag_seconds` checks through the integer helper, and routed
+  orderbook event stream `lag_ms` checks through the existing path-qualified
+  `require_maximum_number(...)` helper.
+- Extended the rollout contract so these gates must keep using the shared
+  maximum helpers and cannot reintroduce local stream-lag, verifier-latency, or
+  service-lag comparison branches.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guard showed unrelated active Cargo/Rust work, including
+    `cargo test -p iroha_core --lib autoscale_transition_scale_in_ignores_unrelated_manual_lanes_at_min_capacity -- --nocapture`
+    and a child `rustc`, so Python/Cargo validation and rustfmt were deferred
+    for this slice until a clear guard.
+  - static marker scan confirmed the migrated local maximum predicates and
+    diagnostics only remain in the rollout contract deny list.
+  - anchored conflict-marker scan across the touched helper, checkers, and
+    tests.
+  - trailing-whitespace scan across the touched helper, checkers, and tests.
+  - line-length scan across the touched helper, checkers, and tests.
+
+## 2026-06-26 SoraFS shared checker route latency maximums
+
+- Routed route `latency_ms` maximum comparisons through
+  `require_maximum_number(...)` in the Governance DAG, gateway compliance, PDP,
+  PoR, PoTR, repair, orderbook, appeal finance, moderation panel, and
+  reserve/rent rollout gates. The optional-latency gates still skip absent
+  `latency_ms` fields, and all migrated checks keep indexed
+  `routes[N].latency_ms` diagnostics.
+- Extended the rollout contract so route checkers cannot reintroduce local
+  `routes[{index}].latency_ms must be <= ...` diagnostics or
+  `latency > options.max_route_latency_ms` predicates.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guard showed unrelated active Cargo/Rust work, including
+    `cargo test -p iroha_core --lib autoscale_transition_scale_in_ignores_unrelated_manual_lanes_at_min_capacity -- --nocapture`
+    and a child `rustc`, so Python/Cargo validation and rustfmt were deferred
+    for this slice until a clear guard.
+  - anchored conflict-marker scan across the touched route checkers, rollout
+    contract, roadmap, and status.
+  - line-length scan across the touched route checkers and rollout contract.
+  - trailing-whitespace scan across the touched route checkers, rollout
+    contract, roadmap, and status.
+  - static marker scan confirmed the route-local maximum predicate and
+    diagnostic only remain in the rollout contract deny list.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker maximum threshold expansion
+
+- Expanded `require_maximum_number(...)` usage across additional rollout and
+  release gates. Governance DAG pin/head age ceilings, hedging feed lag,
+  divergence, and decision lag ceilings, appeal finance route/settlement
+  ceilings, moderation event-lag ceilings, orderbook matcher lag, reference SDK
+  smoke duration, and reserve/rent lifecycle/route ceilings now route through
+  the shared helper.
+- Extended the rollout contract so these gates must continue importing
+  `require_maximum_number(...)` and cannot reintroduce the migrated
+  `require_non_negative_number(...)` plus comparison branches.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guard showed unrelated active Cargo/Rust work, including
+    `cargo test -p iroha_core --lib autoscale_default_route_capacity_ignores_managed_lanes_outside_elastic_range -- --nocapture`
+    and a child `rustc`, so Python/Cargo validation and rustfmt were deferred
+    for this slice until a clear guard.
+  - `git diff --check -- scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_reference_sdk_release_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - anchored conflict-marker scan across the touched Python files.
+  - line-length scan across the touched Python files.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker known schemas
+
+- Extended `scripts/sorafs_evidence_validation.py` with
+  `require_known_schema(...)`, composing the shared schema string type check
+  with schema-map lookup while preserving each gate's artifact-specific
+  unknown-schema diagnostic.
+- Routed standard rollout/release schema recognition through the shared helper
+  while keeping each local `SCHEMA_TO_KIND` map and rollout artifact label
+  explicit. The reputation checker keeps its custom multi-artifact discovery
+  flow.
+- Added focused helper tests for mapped schemas, non-string schemas, and
+  unknown schemas. Extended the rollout contract so these checker-local schema
+  lookup branches cannot be reintroduced in the migrated gates.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard showed unrelated active Cargo/Rust work, including
+    `cargo check -p iroha_cli --bin iroha` and live `clippy-driver`/`rustc`
+    child compiles, so Python/Cargo validation and rustfmt were deferred for
+    this slice until a clear guard.
+  - `git diff --check -- roadmap.md status.md scripts/sorafs_evidence_validation.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - anchored conflict-marker scan across the touched helper, rollout checkers,
+    helper test, rollout contract, roadmap, and status.
+  - line-length scan across the touched Python files.
+  - static schema-recognition marker scan confirmed migrated checkers
+    import/use `require_known_schema(...)` and no migrated checker keeps local
+    unknown-schema diagnostics or direct `SCHEMA_TO_KIND.get(schema)` lookup
+    branches.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker schema strings
+
+- Extended `scripts/sorafs_evidence_validation.py` with
+  `require_string_type(...)`, preserving the existing type-only schema
+  validation semantics and `schema must be a string` diagnostic without
+  trimming or rejecting empty strings.
+- Routed gateway compliance, PDP, PoR, PoTR, and repair
+  `validate_evidence_payload(...)` schema type checks through the shared
+  helper. Unknown-schema diagnostics remain local because each gate reports a
+  different rollout artifact family.
+- Added focused helper tests for untrimmed string values and path-qualified
+  non-string errors. Extended the rollout contract so these checker-local
+  schema type branches cannot be reintroduced in the migrated gates.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard initially showed unrelated active Cargo/Rust work, including
+    `cargo check -p iroha_cli --bin iroha` and a live child `rustc` compile;
+    a later guard was clear for Cargo/Rust before Python validation.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed with 116 tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `git diff --check -- roadmap.md status.md scripts/sorafs_evidence_validation.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - anchored conflict-marker scan across the touched helper, rollout checkers,
+    helper test, rollout contract, roadmap, and status.
+  - line-length scan across the touched Python files.
+  - static schema-string marker scan confirmed migrated checkers import/use
+    `require_string_type(...)` and no migrated checker keeps local
+    `schema must be a string` diagnostics or direct schema type predicates.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker passed status
+
+- Extended `scripts/sorafs_evidence_validation.py` with
+  `require_passed_status(...)`, preserving the existing
+  `status must be passed` diagnostic while centralizing the common
+  rollout-artifact status check.
+- Routed gateway compliance, PDP, PoR, PoTR, and repair kind-specific status
+  checks through the shared helper. The AI pre-screen and reputation checkers
+  keep their custom accepted-status and context-qualified status handling.
+- Added focused helper tests for passed, missing, and non-passed statuses.
+  Extended the rollout contract so these checker-local status branches cannot
+  be reintroduced in the migrated gates.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard initially showed unrelated active Cargo/Rust work, including
+    `cargo check -p iroha_cli --bin iroha` and a live child `rustc` compile,
+    and a later guard was clear for Cargo/Rust before Python validation.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed with 116 tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `git diff --check -- roadmap.md status.md scripts/sorafs_evidence_validation.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - anchored conflict-marker scan across the touched helper, rollout checkers,
+    helper test, rollout contract, roadmap, and status.
+  - line-length scan across the touched Python files.
+  - static passed-status marker scan confirmed migrated checkers import/use
+    `require_passed_status(...)` and no migrated checker keeps local
+    `status must be passed` diagnostics or direct `payload.get("status")`
+    predicates.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker maximum thresholds
+
+- Extended `scripts/sorafs_evidence_validation.py` with
+  `require_maximum_number(...)`, which reuses non-negative number validation
+  and centralizes the existing `<field> must be <= <maximum>` diagnostic for
+  single-field rollout latency and lag ceilings.
+- Routed gateway reload, PDP proof generation, PoR scheduler/reporting, PoTR
+  hot/warm probe, and repair worker/event stream ceilings through the shared
+  helper. Route-loop latency ceilings remain local because they carry
+  index-qualified route paths.
+- Added focused helper tests for accepted ceiling values, above-ceiling
+  diagnostics, and non-negative-number validation reuse. Extended the rollout
+  contract so these checker-local ceiling branches cannot be reintroduced.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard initially showed unrelated active Cargo/Rust work, including
+    `cargo check -p iroha --lib` and live `clippy-driver`/`rustc` child
+    compiles, and a later guard was clear for Cargo/Rust before Python
+    validation.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed with 116 tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `git diff --check -- roadmap.md status.md scripts/sorafs_evidence_validation.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - anchored conflict-marker scan across the touched helper, rollout checkers,
+    helper test, rollout contract, roadmap, and status.
+  - line-length scan across the touched Python files.
+  - static maximum-threshold marker scan confirmed migrated checkers import/use
+    `require_maximum_number(...)` and no migrated checker keeps local
+    single-field `must be <=` diagnostics or local ceiling predicates.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker minimum thresholds
+
+- Extended `scripts/sorafs_evidence_validation.py` with
+  `require_minimum_int(...)`, which reuses positive-integer validation and
+  centralizes the existing `<field> must be at least <minimum>` rollout gate
+  diagnostic.
+- Routed gateway compliance, PDP, PoR, PoTR, and repair minimum count checks
+  through the shared helper while leaving unrelated positive-count-only fields
+  unchanged.
+- Added focused helper tests for accepted threshold values, below-threshold
+  counts, and positive-integer validation reuse. Extended the rollout contract
+  so these checker-local minimum-count branches cannot be reintroduced.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard initially showed unrelated active Cargo/Rust work, including
+    `cargo test -p iroha --lib build_register_manifest_payload -- --nocapture`
+    and a child `rustc` compile; later guards were clear for Cargo/Rust before
+    Python validation.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed with 109 tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `git diff --check -- roadmap.md status.md scripts/sorafs_evidence_validation.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - anchored conflict-marker scan across the touched helper, rollout checkers,
+    helper test, rollout contract, roadmap, and status.
+  - line-length scan across the touched Python files.
+  - static minimum-threshold marker scan confirmed migrated checkers import/use
+    `require_minimum_int(...)` and no migrated checker keeps local
+    `must be at least` diagnostics or `< options.min_*` branches.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker zero-count validation
+
+- Extended `scripts/sorafs_evidence_validation.py` with
+  `require_zero_count(...)`, which reuses non-negative integer validation and
+  then enforces an exact zero count with the existing `<field> must be 0`
+  diagnostic.
+- Routed fail-closed zero counters in hedging, orderbook, appeal finance,
+  moderation panel, and reserve/rent through the shared helper. The Governance
+  DAG `missing_block_count` direct check was left local in this slice and then
+  migrated in the follow-up Governance DAG zero-count slice above.
+- Added focused helper tests for accepted zero counts, non-zero counts, and
+  bool rejection through the shared non-negative-integer path. Extended the
+  rollout contract so checker-local `require_non_negative_int(...) != 0`
+  branches and migrated zero-count diagnostics cannot be reintroduced.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard initially showed unrelated active Cargo/Rust work, including
+    `cargo test -p sorafs_node --lib moderation_quarantine_object_seal_open_preserves_object_id -- --nocapture`
+    and a child `rustc` compile; a later guard still showed unrelated active
+    Cargo/Rust work, including
+    `cargo test -p iroha --lib build_register_manifest_payload -- --nocapture`
+    and a child `rustc` compile, so Python/Cargo validation and rustfmt were
+    deferred for this slice until a later clear guard.
+  - `git diff --check -- roadmap.md status.md scripts/sorafs_evidence_validation.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - anchored conflict-marker scan across the touched helper, rollout checkers,
+    helper test, rollout contract, roadmap, and status.
+  - line-length scan across the touched Python files.
+  - static zero-count marker scan confirmed migrated checkers import/use
+    `require_zero_count(...)`, no checker keeps
+    `require_non_negative_int(...) != 0` branches, with the Governance DAG
+    `missing_block_count` gate covered by the follow-up migration above.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker sum/count validation
+
+- Extended `scripts/sorafs_evidence_validation.py` with
+  `require_sum_equal(...)`, which compares named part counts against a total
+  and emits the existing `a plus b must equal total` diagnostics.
+- Routed reserve/rent appeal probe accounting and PoP credential proof-probe
+  accounting through the shared helper. The PoP gate keeps its previous
+  invalid-total behavior by using the helper's zero-total skip mode.
+- Added focused helper tests for matching sums, mismatched sums, and zero-total
+  skip behavior. Extended the rollout contract so checker-local appeal/proof
+  probe sum predicates and diagnostics cannot be reintroduced.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - initial process guard showed unrelated active Cargo/Rust work, including
+    `cargo test -p sorafs_node --lib moderation_quarantine_object_seal_open_preserves_object_id -- --nocapture`
+    and a child `rustc` compile, so Cargo validation and rustfmt were deferred
+    for this slice; a later guard showed no active Cargo/Rust work before
+    focused Python validation started.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed with 103 tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `git diff --check -- roadmap.md status.md scripts/sorafs_evidence_validation.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - anchored conflict-marker scan across the touched helper, rollout checkers,
+    helper test, rollout contract, roadmap, and status.
+  - line-length scan across the touched Python files.
+  - static sum-helper marker scan confirmed migrated checkers import/use
+    `require_sum_equal(...)` and no checker keeps the old appeal/proof probe
+    sum branches.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker count/length validation
+
+- Extended `scripts/sorafs_evidence_validation.py` with
+  `require_count_length_match(...)`, which compares an already validated count
+  value against an already validated object-array length while preserving the
+  existing `<count> must equal <array> length` diagnostics.
+- Routed AI pre-screen route/probe/artifact counts, hedging native-bridge
+  artifacts, orderbook SDK artifacts, and reputation event counts through the
+  shared helper.
+- Added focused helper tests for matching and mismatched collection lengths.
+  Extended the rollout contract so checker-local route/probe/artifact/event
+  count-length predicates and diagnostics cannot be reintroduced.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard showed unrelated active Cargo/Rust work, including
+    `cargo test -p sorafs_node --lib moderation_quarantine_object_seal_open_preserves_object_id -- --nocapture`
+    and a child `rustc` compile, so Python/Cargo validation and rustfmt were
+    deferred for this slice until a later clear guard.
+  - `git diff --check -- roadmap.md scripts/sorafs_evidence_validation.py scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/check_sorafs_hedging_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - anchored conflict-marker scan across the touched helper, rollout checkers,
+    helper test, rollout contract, roadmap, and status.
+  - line-length scan across the touched helper, rollout checkers, helper test,
+    and rollout contract.
+  - static count-length marker scan confirmed migrated checkers import/use
+    `require_count_length_match(...)` and no checker keeps the old
+    route/probe/artifact/event count-length branches.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker advancing integer pairs
+
+- Extended `scripts/sorafs_evidence_validation.py` with
+  `require_advancing_int_pair(...)`, which combines non-negative current cursor
+  validation, positive next cursor validation, and strict advancement checking
+  in one shared helper.
+- Routed the reputation rollout gate's `since`/`next_since` event cursor checks
+  through the shared helper, preserving the existing diagnostics while removing
+  checker-local integer predicates and the local `next_since <= since` branch.
+- Added focused helper tests for valid cursor advancement, invalid cursor
+  endpoints, and non-advancing pairs. Extended the rollout contract so the
+  reputation checker must import the shared helper and checker-local cursor
+  advancement diagnostics/predicates cannot be reintroduced.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - initial process guard showed unrelated active Cargo/Rust work, including
+    `cargo check -p sorafs_node --lib` and a child `clippy-driver` compile, so
+    Cargo validation and rustfmt were deferred for this slice; a later guard
+    showed no active Cargo/Rust work before focused Python validation started.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed with 98 tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `git diff --check -- roadmap.md status.md scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - anchored conflict-marker scan across the touched helper, reputation
+    checker, helper test, rollout contract, roadmap, and status.
+  - line-length scan across the touched Python files.
+  - static cursor-predicate scan confirmed no checker keeps local
+    `next_since <= since` predicates or literal `next_since must advance past
+    since` diagnostics.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker route latency paths
+
+- Routed the remaining route `latency_ms` ceiling checks through the
+  path-qualified `require_non_negative_number(...)` call in the Governance DAG,
+  gateway compliance, PoTR, repair, orderbook, PoR, and PDP rollout gates.
+  Every route latency diagnostic now names `routes[N].latency_ms` before the
+  local maximum-latency ceiling check runs.
+- Extended the rollout contract so plain
+  `require_non_negative_number(record, "latency_ms", errors)` calls cannot be
+  reintroduced in checker route loops.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard showed unrelated active Cargo/Rust work, including
+    `cargo check -p sorafs_node --lib` and a child `clippy-driver` compile, so
+    Python/Cargo validation and rustfmt were deferred for this slice until a
+    later clear guard.
+  - `git diff --check -- roadmap.md scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/check_sorafs_potr_rollout_evidence.py scripts/check_sorafs_repair_rollout_evidence.py scripts/check_sorafs_orderbook_rollout_evidence.py scripts/check_sorafs_por_rollout_evidence.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - anchored conflict-marker scan across the touched route checkers, rollout
+    contract, and roadmap.
+  - line-length scan across the touched route checkers, shared validation
+    helper/test, and rollout contract.
+  - static marker scan confirmed every route checker now uses
+    `path=f"routes[{index}].latency_ms"` and no checker keeps plain route
+    latency helper calls.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker route latency numbers
+
+- Extended `require_non_negative_number(...)` with an optional path override so
+  checkers can share numeric validation while keeping route-indexed diagnostics
+  such as `routes[0].latency_ms`.
+- Routed optional `latency_ms` validation in the appeal-finance, moderation
+  panel, and reserve-rent rollout gates through the shared helper. The gates
+  still skip absent latency fields and keep their local maximum-latency ceiling
+  checks.
+- Added helper coverage for path-qualified non-negative-number errors and
+  extended the rollout contract so checker-local optional route latency
+  predicates and diagnostics cannot be reintroduced.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard showed unrelated active Cargo/Rust work, including
+    `cargo check -p iroha_torii --test torii_nexus_sorafs --features app_api`
+    and child `clippy-driver` compiles, so Python/Cargo validation and rustfmt
+    were deferred for this slice until a later clear guard.
+  - `git diff --check -- roadmap.md status.md scripts/sorafs_evidence_validation.py scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - anchored conflict-marker scan across the touched helper, rollout checkers,
+    helper test, rollout contract, roadmap, and status.
+  - line-length scan across the touched Python files.
+  - static latency predicate scan confirmed no checker keeps local
+    `latency_ms must be a non-negative number` diagnostics or
+    `isinstance(latency, (int, float))` predicate fragments.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker integer ranges
+
+- Extended `scripts/sorafs_evidence_validation.py` with
+  `require_int_range(...)`, which validates inclusive integer ranges while
+  allowing callers to keep path-qualified or custom operator diagnostics.
+- Routed the reputation rollout gate's provider score and proof replay
+  `provider_score_bps` checks through the shared helper, preserving the
+  existing `must be an integer in 0..=10000` diagnostics without keeping
+  checker-local type/range predicates.
+- Added focused helper tests for inclusive bounds, bool rejection, path labels,
+  custom messages, and fallback return values. Extended the rollout contract so
+  the reputation checker must import the shared helper and checker-local
+  basis-point range predicates/diagnostics cannot be reintroduced.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard showed unrelated active Cargo/Rust work, including
+    `cargo check -p iroha_torii --test torii_nexus_sorafs --features app_api`
+    and child `clippy-driver` compiles, so Python/Cargo validation and rustfmt
+    were deferred for this slice until a later clear guard.
+  - `git diff --check -- roadmap.md status.md scripts/sorafs_evidence_validation.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - anchored conflict-marker scan across the touched helper, reputation
+    checker, helper test, rollout contract, roadmap, and status.
+  - static range-predicate scan confirmed no checker keeps
+    `must be an integer in 0..=10000` diagnostics or `not (0 <= ...)`
+    predicate fragments.
+  - `require_int_range(...)` marker scan confirmed the helper, reputation
+    checker, helper tests, and rollout contract are wired.
+  - line-length scan across the touched Python files.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker hex-string arrays
+
+- Extended `scripts/sorafs_evidence_validation.py` with
+  `require_hex_string_array(...)`, which validates array shape, exact hex
+  width, optional non-empty requirements, optional length binding, uniqueness,
+  lowercase normalization, and path-qualified error labels.
+- Routed hedging statement digest arrays and reputation proof sibling arrays
+  through the shared helper. The hedging gate keeps its `statement_count`
+  length binding and uniqueness policy; the reputation gate keeps the
+  `proof.siblings_hex` diagnostic path. No rollout checker imports `is_hex(...)`
+  directly anymore.
+- Added focused `scripts/tests/sorafs_evidence_validation_test.py` coverage for
+  optional arrays, non-empty arrays, expected-length labels, invalid hex
+  entries, duplicate detection, lowercase normalization, and path overrides.
+  Extended the rollout contract so checker-local hex-array loops and direct
+  `is_hex(...)` imports cannot be reintroduced.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard showed unrelated active Cargo/Rust work, including
+    `cargo test -p iroha_torii --test torii_nexus_sorafs --features app_api nexus_lifecycle_endpoint -- --nocapture`
+    and a child `rustc` compile, so Python/Cargo validation and rustfmt were
+    deferred for this slice until a later clear guard.
+  - static Node marker scan confirmed hedging and reputation import
+    `require_hex_string_array(...)`, no checker imports `is_hex(...)` directly,
+    and no checker keeps local statement-digest or proof-sibling hex-array
+    loops.
+  - `git diff --check -- roadmap.md status.md scripts/sorafs_evidence_validation.py scripts/check_sorafs_*_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - static whitespace/conflict-marker scan across the checker scripts, shared
+    validation helper, helper test, rollout contract, roadmap, and status.
+  - blank-run scan across the migrated checkers, shared validation helper,
+    helper test, and rollout contract.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker summary writer
+
+- Extended `scripts/sorafs_checker_preflight.py` with
+  `write_checker_summary(...)`, which creates missing `--summary-out` parents
+  and reports parent-creation or summary-write failures as structured checker
+  errors instead of raw filesystem tracebacks.
+- Routed all 16 SoraFS rollout/release checker scripts through the shared
+  summary writer and removed their local `args.summary_out.parent.mkdir(...)`
+  / `args.summary_out.write_text(...)` blocks.
+- Added focused `scripts/tests/sorafs_checker_preflight_test.py` coverage for
+  absent summary output, parent creation, parent-file failure, and
+  directory-target write failure. Extended the rollout contract so every
+  checker must use the shared writer and must not reintroduce checker-local
+  summary file writes.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard still showed unrelated active Cargo/Rust work, including
+    `cargo test -p iroha_core --lib autoscale_transition -- --nocapture` and
+    a second `iroha_core` test compiling under `rustc`, so Python/Cargo
+    validation, rustfmt, and fixture generation were deferred.
+  - `git diff --check -- scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null <untracked-sorafs-checker-summary-file>`
+    loop across all 16 checker scripts,
+    `scripts/sorafs_checker_preflight.py`,
+    `scripts/tests/sorafs_checker_preflight_test.py`, and
+    `scripts/tests/check_sorafs_rollout_gate_contract_test.py`.
+  - anchored conflict-marker scan across the touched SoraFS checker files,
+    roadmap, and status.
+  - trailing-whitespace scan across the touched SoraFS checker files, roadmap,
+    and status.
+  - static Node marker scan confirmed all 16 checkers import and call
+    `write_checker_summary(...)` and no checker keeps local
+    `summary_out.parent.mkdir(...)` or `summary_out.write_text(...)` calls.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker JSON loader
+
+- Added `scripts/sorafs_evidence_json.py` as the shared bounded JSON evidence
+  loader for SoraFS rollout/release checkers. It preserves the existing
+  `MAX_EVIDENCE_BYTES` cap and JSON-object root requirement while removing
+  duplicated local `load_json(...)` implementations.
+- Routed the 15 non-digest SoraFS checker scripts through
+  `load_evidence_json(path, MAX_EVIDENCE_BYTES)`. The reputation checker keeps
+  its raw-byte reader because it hashes the exact evidence bytes for digest
+  binding before validating the parsed object.
+- Added `scripts/tests/sorafs_evidence_json_test.py` coverage for successful
+  object loading, oversized evidence, non-object roots, and malformed JSON.
+  Extended the rollout contract so non-digest checkers must use the shared
+  loader and must not reintroduce local `def load_json(...)` / `json.load(...)`
+  code.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard still showed an unrelated active
+    `cargo test -p iroha_core --lib autoscale_transition -- --nocapture`, so
+    Python/Cargo validation, rustfmt, and fixture generation were deferred.
+  - `git diff --check -- scripts/sorafs_evidence_json.py scripts/tests/sorafs_evidence_json_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `git diff --check --no-index -- /dev/null <untracked-sorafs-json-loader-file>`
+    loop across all 16 checker scripts, `scripts/sorafs_evidence_json.py`,
+    `scripts/tests/sorafs_evidence_json_test.py`, and
+    `scripts/tests/check_sorafs_rollout_gate_contract_test.py`.
+  - anchored conflict-marker scan across the touched SoraFS JSON-loader files.
+  - trailing-whitespace scan across the touched SoraFS JSON-loader files.
+  - static Node marker scan confirmed all 15 non-digest checkers import and
+    call `load_evidence_json(path, MAX_EVIDENCE_BYTES)`, no non-digest checker
+    keeps local `def load_json(...)` or `json.load(...)`, and the reputation
+    checker still keeps its digest-producing reader.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared checker evidence digest loader
+
+- Extended `scripts/sorafs_evidence_json.py` so evidence JSON loading reads a
+  bounded byte stream once, decodes the JSON object from those exact bytes, and
+  can return the SHA-256 digest of the same bytes via
+  `load_evidence_json_with_sha256(...)`.
+- Routed the 15 non-digest SoraFS checker scripts through the shared
+  parse-and-digest helper, removed their duplicated local `sha256_hex(...)`
+  helpers and unused `hashlib` imports, and kept the reputation checker on its
+  raw-byte digest path because it binds digest data into reputation evidence.
+- Added `scripts/tests/sorafs_evidence_json_test.py` coverage proving the
+  parse-and-digest helper hashes the same bytes it parses. Extended the rollout
+  contract so non-digest checkers must call
+  `load_evidence_json_with_sha256(path, MAX_EVIDENCE_BYTES)`, write artifact
+  summaries from the returned `digest`, and must not reintroduce local
+  `sha256_hex(...)` helpers.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard still showed an unrelated active
+    `cargo test -p iroha_core --lib autoscale_transition -- --nocapture`, so
+    Python/Cargo validation, rustfmt, and fixture generation were deferred.
+  - `git diff --check -- scripts/sorafs_evidence_json.py scripts/tests/sorafs_evidence_json_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `git diff --check --no-index -- /dev/null <untracked-sorafs-digest-loader-file>`
+    loop across all 16 checker scripts, `scripts/sorafs_evidence_json.py`,
+    `scripts/tests/sorafs_evidence_json_test.py`, and
+    `scripts/tests/check_sorafs_rollout_gate_contract_test.py`.
+  - anchored conflict-marker scan across the touched SoraFS digest-loader
+    files.
+  - trailing-whitespace scan across the touched SoraFS digest-loader files.
+  - static Node marker scan confirmed all 15 non-digest checkers import and
+    call `load_evidence_json_with_sha256(path, MAX_EVIDENCE_BYTES)`, no
+    non-digest checker keeps local `sha256_hex(...)` or `hashlib` use, and the
+    reputation checker still keeps its digest-producing reader.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS reputation bounded digest reader
+
+- Routed `scripts/check_sorafs_reputation_rollout_evidence.py` through the
+  shared `load_evidence_json_with_sha256(...)` helper as well. The reputation
+  checker still keeps its small `read_json_artifact(...)` wrapper for
+  path-prefixed diagnostics, but it no longer uses unbounded
+  `path.read_bytes()` or local `hashlib.sha256(data)` hashing.
+- Added direct `scripts/tests/sorafs_evidence_json_test.py` coverage for
+  oversized parse-and-digest calls. Extended the rollout contract so the
+  reputation checker must use the shared bounded parse-and-digest helper and
+  must not reintroduce `path.read_bytes()` or local raw-byte hashing.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard still showed an unrelated active
+    `cargo test -p iroha_core --lib autoscale_transition -- --nocapture`, so
+    Python/Cargo validation, rustfmt, and fixture generation were deferred.
+  - `git diff --check -- scripts/check_sorafs_reputation_rollout_evidence.py scripts/sorafs_evidence_json.py scripts/tests/sorafs_evidence_json_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `git diff --check --no-index -- /dev/null <untracked-sorafs-reputation-bounded-file>`
+    loop across all 16 checker scripts, `scripts/sorafs_evidence_json.py`,
+    `scripts/tests/sorafs_evidence_json_test.py`, and
+    `scripts/tests/check_sorafs_rollout_gate_contract_test.py`.
+  - anchored conflict-marker scan across the touched SoraFS reputation bounded
+    reader files, roadmap, and status.
+  - trailing-whitespace scan across the touched SoraFS reputation bounded
+    reader files, roadmap, and status.
+  - static marker scan confirmed all 16 checkers use
+    `load_evidence_json_with_sha256(...)`, no checker keeps local
+    `sha256_hex(...)`, no checker uses `path.read_bytes()`, and the reputation
+    checker keeps only its path-prefixing wrapper.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS direct shared required-kind parsing
+
+- Removed the remaining checker-local `parse_required_kinds(...)` wrapper
+  functions from the 15 SoraFS rollout/release checkers that still had them.
+  All 16 checkers now call the shared
+  `parse_required_evidence_kinds(..., allowed_kinds=KIND_BY_NAME,
+  default_required=DEFAULT_REQUIRED_KINDS)` path directly at the CLI boundary.
+- Extended the rollout contract so checkers must keep direct shared-parser
+  calls with explicit allowed/default bindings, and must not reintroduce local
+  `def parse_required_kinds(...)` wrappers or wrapper calls.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard showed no active Cargo/Rust work before Python validation.
+  - `python3 -m pytest scripts/tests/sorafs_required_kinds_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    (`36` passed)
+  - process guard showed no active Cargo/Rust work before Python compile
+    validation.
+  - `python3 -m py_compile scripts/check_sorafs_*_evidence.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `git diff --check -- scripts/check_sorafs_*_evidence.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `git diff --check --no-index -- /dev/null <untracked-sorafs-direct-required-file>`
+    loop across all 16 checker scripts and
+    `scripts/tests/check_sorafs_rollout_gate_contract_test.py`.
+  - anchored conflict-marker scan across the touched SoraFS required-kind
+    files.
+  - trailing-whitespace scan across the touched SoraFS required-kind files.
+  - static Node marker scan confirmed all 16 checkers call
+    `parse_required_evidence_kinds(...)` with `allowed_kinds=KIND_BY_NAME` and
+    `default_required=DEFAULT_REQUIRED_KINDS`, and no checker keeps local
+    `def parse_required_kinds(...)` or `parse_required_kinds(args.require_kind)`
+    paths.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared artifact fingerprint helper
+
+- Added `scripts/sorafs_evidence_fingerprint.py` with a shared
+  `artifact_fingerprint(payload, fields)` helper for payload-free summary
+  fingerprints.
+- Replaced the 15 checker-local `artifact_fingerprint(...)` dictionary builders
+  with explicit `FINGERPRINT_FIELDS` tuples plus the shared helper. The
+  reputation checker keeps its custom inline fingerprint because it includes
+  reputation-specific snapshot/provider fields rather than the generic
+  selected-field summary shape.
+- Added `scripts/tests/sorafs_evidence_fingerprint_test.py` coverage for
+  selected-field ordering and missing-field preservation. Extended the rollout
+  contract so fingerprint-emitting checkers must import the shared helper, keep
+  explicit `FINGERPRINT_FIELDS`, call
+  `artifact_fingerprint(payload, FINGERPRINT_FIELDS)`, and must not
+  reintroduce local `def artifact_fingerprint(...)` builders. The PoP
+  credentials gate also pins `synced_revocation_list_digest_hex` in its field
+  tuple.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - process guard showed unrelated active Cargo/Rust work, so Python/Cargo
+    validation, rustfmt, and fixture generation were deferred.
+  - `git diff --check -- scripts/check_sorafs_*_evidence.py scripts/sorafs_evidence_fingerprint.py scripts/tests/sorafs_evidence_fingerprint_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+  - `git diff --check --no-index -- /dev/null <untracked-sorafs-fingerprint-file>`
+    loop across all 16 checker scripts,
+    `scripts/sorafs_evidence_fingerprint.py`,
+    `scripts/tests/sorafs_evidence_fingerprint_test.py`, and
+    `scripts/tests/check_sorafs_rollout_gate_contract_test.py`.
+  - anchored conflict-marker scan across the touched SoraFS fingerprint files.
+  - trailing-whitespace scan across the touched SoraFS fingerprint files.
+  - static Node marker scan confirmed all 15 fingerprint-emitting checkers use
+    the shared helper with the expected field tuples and no local
+    `artifact_fingerprint(...)` builders remain.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-26 SoraFS shared runner directory preflight
+
+- Extended `scripts/sorafs_runner_preflight.py` with shared runner input
+  directory validation. Directory inputs now use the same canonical identity,
+  resolver-failure, and duplicate-path handling as runner input files.
+- Routed `scripts/run_sorafs_ai_prescreen_rollout_evidence.py` through the
+  shared directory helper for `--executor-bundle`, removing its local
+  `require_existing_dirs(...)` copy and adding a shared directory identity
+  tracker for the validation run.
+- Added focused `scripts/tests/sorafs_runner_preflight_test.py` coverage for
+  duplicate input directory identities and directory resolver failures.
+  Extended the rollout contract so runners must not reintroduce local
+  `def require_existing_dirs(...)` copies, and the AI pre-screen runner must
+  keep the shared `seen_input_dirs` path.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - `git diff --check -- roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null <untracked-sorafs-directory-preflight-file>`
+    loop across `scripts/run_sorafs_ai_prescreen_rollout_evidence.py`,
+    `scripts/sorafs_runner_preflight.py`,
+    `scripts/tests/check_sorafs_rollout_gate_contract_test.py`, and
+    `scripts/tests/sorafs_runner_preflight_test.py`.
+  - anchored conflict-marker scan across the same touched files, roadmap, and
+    status.
+  - trailing-whitespace scan across the same touched files, roadmap, and
+    status.
+  - static marker scan confirmed no runner keeps a local
+    `def require_existing_dirs(...)`, the AI pre-screen runner imports
+    `require_existing_dirs(...)` and uses `seen=seen_input_dirs`, and the
+    shared runner preflight helper keeps directory identity and duplicate
+    diagnostics.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - process guard still showed an unrelated active `cargo test`, so
+    Python/Cargo validation, rustfmt, and fixture generation were deferred.
+
+## 2026-06-26 SoraFS shared runner command execution
+
+- Added shared command-plan execution to `scripts/sorafs_runner_preflight.py`.
+  Runners now validate planned artifact identities before executing, reject
+  duplicate planned output artifacts, report `--out-dir` creation failures,
+  report subprocess launch failures, and keep the existing non-zero exit and
+  missing expected artifact checks as structured runner errors.
+- Routed all 16 `scripts/run_sorafs_*_evidence.py` rollout/release collection
+  runners through `run_command_plan(...)` and removed the repeated local
+  `subprocess.run(...)` / `out_dir.mkdir(...)` execution loops.
+- Added focused `scripts/tests/sorafs_runner_preflight_test.py` coverage for
+  duplicate planned artifacts and subprocess launch failures. Extended the
+  rollout contract so every runner must keep the shared execution helper and
+  must not reintroduce local command execution loops.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - `git diff --check -- roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null <untracked-sorafs-runner-execution-file>`
+    loop across SoraFS rollout/release runner scripts,
+    `scripts/sorafs_runner_preflight.py`,
+    `scripts/tests/check_sorafs_rollout_gate_contract_test.py`, and
+    `scripts/tests/sorafs_runner_preflight_test.py`.
+  - anchored conflict-marker scan across the same touched runner files,
+    roadmap, and status.
+  - trailing-whitespace scan across the same touched runner files, roadmap, and
+    status.
+  - static marker scan confirmed all 16 runners call `run_command_plan(...)`
+    and do not keep local `subprocess.run(...)` or `out_dir.mkdir(...)` loops;
+    the shared helper keeps duplicate planned artifact, output-directory, and
+    launch-failure diagnostics.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - process guard still showed an unrelated active `cargo test`, so
+    Python/Cargo validation, rustfmt, and fixture generation were deferred.
+
+## 2026-06-26 SoraFS shared evidence-path discovery
+
+- Added `scripts/sorafs_evidence_paths.py` as the shared evidence file
+  discovery helper for SoraFS rollout/release evidence checkers. It preserves
+  explicit evidence ordering while rejecting duplicate explicit paths,
+  overlapping evidence-directory scans, and files supplied through both
+  `--evidence` and `--evidence-dir`.
+- Wired all 16 `scripts/check_sorafs_*_evidence.py` rollout/release checkers
+  through the shared discovery path. The reputation checker preserves its
+  `kind=path` explicit evidence hints while using the same canonical path
+  identity and duplicate/overlap errors as the other gates.
+- Routed checker-side explicit evidence identity checks through the shared
+  helper as well, and made that helper catch resolver `RuntimeError`s in
+  addition to `OSError`s. Symlink-loop or otherwise unresolvable evidence paths
+  now produce structured gate errors instead of raw `Path.resolve()` tracebacks.
+- Added `scripts/tests/sorafs_evidence_paths_test.py` for explicit ordering,
+  duplicate explicit paths, explicit/directory overlap, and overlapping
+  evidence directories plus resolver-failure identity helpers. Extended the
+  repository-wide rollout contract so every checker must use the shared helper
+  and must not reintroduce local `rglob("*.json")` scanning, local
+  `seen: set[Path]` de-duplication, or checker-local `path.resolve()` calls.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - `git diff --check -- roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null <untracked-sorafs-checker-or-helper>`
+    loop across SoraFS rollout/release checker scripts,
+    `scripts/sorafs_evidence_paths.py`,
+    `scripts/tests/check_sorafs_rollout_gate_contract_test.py`, and
+    `scripts/tests/sorafs_evidence_paths_test.py`.
+  - anchored conflict-marker scan across the same touched files, roadmap, and
+    status.
+  - trailing-whitespace scan across the same touched files.
+  - static marker scan confirmed all 16 checkers import
+    `sorafs_evidence_paths`, call `discover_evidence_files(...)`, do not keep
+    local `seen: set[Path]` de-duplication, and do not keep local
+    `rglob("*.json")` scans or checker-local `path.resolve()` calls.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - process guard still showed unrelated active `cargo test` and `rustc`
+    processes, so Python/Cargo validation, rustfmt, and fixture generation were
+    deferred.
+
+## 2026-06-26 SoraFS shared runner input-file preflight
+
+- Extended `scripts/sorafs_runner_preflight.py` with shared runner input-file
+  validation. The helper still rejects missing input files, and now also
+  canonicalizes input identities, reports resolver failures, and rejects
+  duplicate or aliased input paths across all runner input flags before dry-run
+  plans or verifier commands are emitted.
+- Removed the local `require_existing_files(...)` copies from all 16
+  `scripts/run_sorafs_*_evidence.py` rollout/release collection runners and
+  routed them through the shared helper with one shared input-identity tracker
+  per validation run.
+- Added focused `scripts/tests/sorafs_runner_preflight_test.py` coverage for
+  same-label duplicate input identity rejection, cross-label duplicate input
+  identity rejection, and resolver-failure diagnostics. Extended the rollout
+  contract so every runner must use the shared helper, carry a
+  `seen_input_files` tracker, and must not reintroduce a local
+  `def require_existing_files(...)`.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - `git diff --check -- roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null <untracked-sorafs-runner-or-helper>`
+    loop across SoraFS rollout/release runner scripts,
+    `scripts/sorafs_runner_preflight.py`,
+    `scripts/tests/check_sorafs_rollout_gate_contract_test.py`, and
+    `scripts/tests/sorafs_runner_preflight_test.py`.
+  - anchored conflict-marker scan across the same touched runner files,
+    roadmap, and status.
+  - trailing-whitespace scan across the same touched runner files, roadmap, and
+    status.
+  - static marker scan confirmed all 16 runners import
+    `sorafs_runner_preflight`, call `require_existing_files(...)` with
+    `seen=seen_input_files`, and do not keep a local
+    `def require_existing_files(...)`; the shared helper keeps the
+    duplicate-input, cross-label identity tracker, and resolver-failure markers.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - process guard still showed unrelated active `cargo test` processes, so
+    Python/Cargo validation, rustfmt, and fixture generation were deferred.
+
+## 2026-06-26 SoraFS required-kind fail-closed parser
+
+- Added `scripts/sorafs_required_kinds.py` as the shared `--require-kind`
+  parser for SoraFS rollout/release evidence checkers. It preserves the default
+  full-kind gate when no narrowing is requested, while rejecting empty entries,
+  unknown kind names, and duplicate narrowed kind names.
+- Wired all 16 `scripts/check_sorafs_*_evidence.py` checkers through the
+  shared parser. The reputation checker now uses the same comma-separated
+  parsing path as the other gates instead of argparse `choices`, so empty and
+  duplicate narrowed reputation gates fail closed too.
+- Added `scripts/tests/sorafs_required_kinds_test.py` for default, comma-list,
+  empty, duplicate, and unknown-kind cases. Extended the repository-wide
+  rollout contract so every checker must keep the shared parser and must not
+  reintroduce empty-token skipping or argparse `choices=tuple(KIND_BY_NAME)`.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - `git diff --check -- roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null <untracked-sorafs-tool-or-helper>`
+    loop across SoraFS rollout/release checker scripts, runner scripts, shared
+    preflight/sensitivity/required-kind/response helpers, and helper/contract
+    tests.
+  - anchored conflict-marker scan across the same touched SoraFS files,
+    roadmap, and status.
+  - trailing-whitespace scan across the same touched files.
+  - static marker scan confirmed all 16 checkers import
+    `sorafs_required_kinds`, call `parse_required_evidence_kinds(...)`, do not
+    keep argparse `choices=tuple(KIND_BY_NAME)`, and no longer skip empty
+    `--require-kind` tokens.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - process guard still showed unrelated active Cargo/Rust jobs (`cargo test`,
+    `cargo check`, and a live `rustc`), so Python/Cargo validation, rustfmt,
+    and fixture generation were deferred.
+
+## 2026-06-25 SoraFS bounded response-file expansion
+
+- Added `scripts/sorafs_response_args.py` as the shared response-file expander
+  for SoraFS rollout/release checkers and collection runners. It keeps the
+  existing shell-style line parsing while bounding reviewed `@ARGFILE` inputs
+  by file type, byte size, nesting depth, recursion, UTF-8 decoding, and total
+  expanded argument count.
+- Replaced local `expand_response_args(...)` copies across all 16
+  `scripts/check_sorafs_*_evidence.py` checkers and all 16
+  `scripts/run_sorafs_*_evidence.py` runners. The AI pre-screening checker now
+  uses the same shared helper instead of argparse's built-in
+  `fromfile_prefix_chars` expansion.
+- Added `scripts/tests/sorafs_response_args_test.py` for shell-style parsing,
+  recursive argfiles, directory argfiles, and oversized argfiles. Extended the
+  repository-wide rollout contract so every checker/runner must use the shared
+  helper and must not define a local expander or built-in argparse response-file
+  expansion.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - `git diff --check -- roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null <untracked-sorafs-tool-or-helper>`
+    loop across SoraFS rollout/release checker scripts, runner scripts, shared
+    preflight/sensitivity/response helpers, and helper/contract tests.
+  - anchored conflict-marker scan across the same touched SoraFS files,
+    roadmap, and status.
+  - trailing-whitespace scan across the same touched files.
+  - static marker scan confirmed all 32 rollout/release tools import
+    `sorafs_response_args`, call `expand_response_args(...)`, do not define a
+    local `expand_response_args(...)`, and do not retain `fromfile_prefix_chars`.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - process guard still showed unrelated active Cargo/Rust jobs (`cargo test`
+    and a live `rustc`), so Python/Cargo validation, rustfmt, and fixture
+    generation were deferred.
+
+## 2026-06-25 SoraFS runner output-parent preflight
+
+- Tightened `scripts/sorafs_runner_preflight.py` so SoraFS rollout/release
+  evidence runners reject `--out-dir` and `--summary-out` paths whose existing
+  parent is a file before emitting dry-run plans or building verifier commands.
+  This extends the shared runner preflight beyond missing verifier, file-valued
+  `--out-dir`, and directory-valued `--summary-out` checks.
+- Added `scripts/tests/sorafs_runner_preflight_test.py` for file-parent
+  `--out-dir` and `--summary-out` cases. Extended the repository-wide rollout
+  contract so the shared runner helper must retain both parent-path checks.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - `git diff --check -- roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null <untracked-runner-or-helper>`
+    loop across `scripts/check_sorafs_*_evidence.py`,
+    `scripts/run_sorafs_*_evidence.py`, `scripts/sorafs_checker_preflight.py`,
+    `scripts/sorafs_evidence_sensitivity.py`,
+    `scripts/sorafs_runner_preflight.py`,
+    `scripts/tests/check_sorafs_rollout_gate_contract_test.py`,
+    `scripts/tests/sorafs_checker_preflight_test.py`,
+    `scripts/tests/sorafs_evidence_sensitivity_test.py`, and
+    `scripts/tests/sorafs_runner_preflight_test.py`.
+  - anchored conflict-marker scan across the touched SoraFS checker/runner
+    scripts, shared helpers, rollout contract test, helper tests, roadmap, and
+    status.
+  - trailing-whitespace scan across the same touched files.
+  - static marker scan confirmed all 16 checkers and all 16 runners keep their
+    shared preflight calls, and confirmed `sorafs_runner_preflight.py` contains
+    the `--out-dir parent` and `--summary-out parent` guards.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - process guard still showed an unrelated long-running
+    `cargo test -p iroha_core --lib autoscale_transition -- --nocapture`, so
+    Python/Cargo validation, rustfmt, and fixture generation were deferred.
+
+## 2026-06-25 SoraFS checker summary-output preflight
+
+- Added `scripts/sorafs_checker_preflight.py` as the shared fail-closed
+  preflight for SoraFS rollout/release evidence checkers. It rejects
+  `--summary-out` values that already point at directories and rejects summary
+  paths whose existing parent is a file before any evidence artifacts are read.
+- Wired all 16 `scripts/check_sorafs_*_evidence.py` checkers through the
+  shared checker preflight, including the reputation checker's custom
+  `load_evidence(...)` flow and the reference SDK release checker.
+- Added `scripts/tests/sorafs_checker_preflight_test.py` for absent output,
+  existing-directory, and file-parent cases. Extended the repository-wide
+  rollout contract so every checker must keep the shared summary-output
+  preflight alongside the shared sensitive-field walker.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - `git diff --check -- roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null <untracked-checker-or-helper>`
+    loop across `scripts/check_sorafs_*_evidence.py`,
+    `scripts/sorafs_checker_preflight.py`,
+    `scripts/sorafs_evidence_sensitivity.py`,
+    `scripts/tests/check_sorafs_rollout_gate_contract_test.py`,
+    `scripts/tests/sorafs_checker_preflight_test.py`, and
+    `scripts/tests/sorafs_evidence_sensitivity_test.py`.
+  - anchored conflict-marker scan across the touched SoraFS checker scripts,
+    shared checker/sensitivity helpers, rollout contract test, helper tests,
+    roadmap, and status.
+  - trailing-whitespace scan across the same touched files.
+  - static marker scan confirmed all 16 SoraFS evidence checkers import
+    `sorafs_checker_preflight`, call `validate_checker_preflight(args)`, keep
+    the shared sensitivity helper, and pass `sensitive_keys=SENSITIVE_KEYS`.
+  - process guard still showed an unrelated long-running
+    `cargo test -p iroha_core --lib autoscale_transition -- --nocapture`, so
+    Python/Cargo validation, rustfmt, and fixture generation were deferred.
+
+## 2026-06-25 SoraFS shared rollout sensitivity guard
+
+- Added `scripts/sorafs_evidence_sensitivity.py` as the shared
+  punctuation-insensitive sensitive-field walker for SoraFS rollout/release
+  evidence gates. It preserves each checker script's domain-specific
+  `SENSITIVE_KEYS` while also rejecting common camel-case or hyphenated secret,
+  token, key, body, payload, and `*Included` marker variants.
+- Wired all 16 `scripts/check_sorafs_*_evidence.py` checkers through the
+  shared helper, including the reference SDK release checker with its
+  `release evidence` error label. Removed the hedging-only local alias walker
+  so SFM-5 no longer carries a stronger secret-key policy than the rest of the
+  SoraFS gates.
+- Added `scripts/tests/sorafs_evidence_sensitivity_test.py` for normalized
+  variant coverage and extended the repository-wide rollout contract test so
+  every checker must keep using the shared helper with its local
+  `SENSITIVE_KEYS`.
+- Validation status:
+  - no processes were killed, signaled, or interrupted.
+  - `git diff --check -- roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null <untracked-checker-or-helper>`
+    loop across `scripts/check_sorafs_*_evidence.py`,
+    `scripts/sorafs_evidence_sensitivity.py`,
+    `scripts/tests/check_sorafs_rollout_gate_contract_test.py`, and
+    `scripts/tests/sorafs_evidence_sensitivity_test.py`.
+  - anchored conflict-marker scan across the touched SoraFS checker scripts,
+    shared sensitivity helper, rollout contract test, helper test, roadmap, and
+    status.
+  - trailing-whitespace scan across the same touched files.
+  - static marker scan confirmed all 16 SoraFS evidence checkers import
+    `sorafs_evidence_sensitivity`, pass `sensitive_keys=SENSITIVE_KEYS`, and
+    no longer define local `visit_sensitive_fields(...)` walkers.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - process guard still showed unrelated active Cargo/Rust jobs (`cargo test`,
+    `cargo check`, and a live `clippy-driver`/`rustc` child), so
+    Python/Cargo validation, rustfmt, and fixture generation were deferred.
+
+## 2026-06-25 SoraFS shared rollout runner preflight
+
+- Added `scripts/sorafs_runner_preflight.py` as the shared fail-closed
+  preflight for SoraFS rollout/release evidence runners. It verifies the
+  configured verifier script exists, rejects `--out-dir` values that already
+  point at files, and rejects `--summary-out` values that point at directories
+  before any dry-run command plan is emitted.
+- Wired all 16 `scripts/run_sorafs_*_evidence.py` runners through that helper,
+  including the reference SDK release runner with `release-summary.json` and
+  all rollout runners with `rollout-summary.json`.
+- Extended the repository-wide rollout contract test so every runner must keep
+  the shared verifier/output-target preflight in addition to response-file
+  support, dry-run plans, required-file checks, and checked-in operator
+  examples. Updated `roadmap.md` to document the stronger runner contract.
+- Validation status:
+  - process guard showed unrelated active Cargo/Rust jobs; no processes were
+    killed or interrupted, and Python/Cargo validation, rustfmt, and fixture
+    generation were deferred.
+  - `git diff --check -- roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null <untracked-runner-or-helper>`
+    loop across `scripts/run_sorafs_*_evidence.py`,
+    `scripts/sorafs_runner_preflight.py`, and
+    `scripts/tests/check_sorafs_rollout_gate_contract_test.py`.
+  - anchored conflict-marker scan across the touched SoraFS runner scripts,
+    shared preflight helper, rollout contract test, roadmap, and status.
+  - trailing-whitespace scan across the same touched files.
+  - static marker scan confirmed all 16 SoraFS evidence runners import
+    `sorafs_runner_preflight` and call `validate_runner_preflight(...)` with
+    the correct rollout/release summary filename.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-25 Nexus autoscale runtime-threshold fail-closed guard
+
+- Added effective-runtime autoscale threshold validation inside block
+  application. Even though config parsing rejects non-finite, zero, and
+  collapsed scale-in/scale-out ratios, corrupted actual state now fails closed
+  before sample evaluation instead of converting bad ratios into permissive
+  permille thresholds.
+- Added helper-level and transition-level adversarial coverage for invalid
+  scale-out and scale-in runtime thresholds.
+- Focused clippy validation also cleaned supporting SoraFS data-model lint
+  warnings in reserve lifecycle and transparency helpers; existing focused
+  tests cover those touched paths.
+- Documentation updated in the Nexus lane model, transition notes, and roadmap.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_thresholds_permille_rejects_runtime_invalid_ratios -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_scale_out_rejects_invalid_runtime_thresholds -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_scale_in_rejects_invalid_runtime_thresholds -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition -- --nocapture`
+    (`14` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+    (`69` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_data_model --lib lifecycle_projection -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_data_model --lib transparency_ -- --nocapture`
+    (`12` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo clippy -p iroha_core --lib -- -D warnings`
+    (passed)
+
+## 2026-06-25 SoraFS hedging rollout collection preflight
+
+- Tightened `scripts/run_sorafs_hedging_rollout_evidence.py` so SFM-5 rollout
+  collection fails before dry-run planning when `--verifier` is missing, when
+  `--out-dir` already points at a file, or when `--summary-out` points at a
+  directory. This keeps reviewed operator plans from looking runnable when the
+  verifier or output target cannot actually be used.
+- Added focused runner regressions plus a static rollout contract marker for
+  the verifier/output preflight, and updated the SFM-5 plan, localized mirrors,
+  and roadmap wording.
+- Validation status:
+  - process guard still showed unrelated `cargo`/`rustc` jobs, so Python/Cargo
+    validation, rustfmt, and fixture generation were deferred without killing
+    or interrupting any process.
+  - `git diff --check -- scripts/run_sorafs_hedging_rollout_evidence.py scripts/tests/run_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py docs/source/sorafs_hedging_plan.md docs/source/sorafs_hedging_plan.*.md roadmap.md status.md`
+  - anchored conflict-marker scan across the touched SFM-5 rollout runner,
+    tests, docs, mirrors, roadmap, and status.
+  - trailing-whitespace scan across the same touched files.
+  - mirror consistency check for 20 localized SFM-5 hedging/billing docs:
+    `0/20 SFM-5 mirror mismatches`.
+  - static marker scan for the new verifier/output preflight and tests.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-25 SoraFS hedging rollout evidence secret-key guard
+
+- Tightened `scripts/check_sorafs_hedging_rollout_evidence.py` so SFM-5
+  payload-free rollout evidence rejects common secret-bearing key variants such
+  as camel-case `accessToken`/`privateKey`, hyphenated `api-key` and
+  `response-body`, and camel-case `payloadIncluded: true` leakage in addition
+  to the existing exact sensitive-field list.
+- Added focused checker coverage and a static rollout contract marker so the
+  normalized sensitive-key guard remains part of the SFM-5 promotion gate.
+- Updated the SFM-5 hedging/billing plan, localized mirrors, and roadmap to
+  document that staged evidence must reject payload-bearing secret-key spelling
+  variants.
+- Validation status:
+  - process guard showed an unrelated
+    `cargo test -p iroha_core --lib autoscale_transition -- --nocapture` job
+    still running; no processes were killed or interrupted, and Python/Cargo
+    validation, rustfmt, and fixture generation were deferred.
+  - `git diff --check -- scripts/check_sorafs_hedging_rollout_evidence.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py docs/source/sorafs_hedging_plan.md docs/source/sorafs_hedging_plan.*.md roadmap.md`
+  - anchored conflict-marker scan across the touched SFM-5 rollout checker,
+    tests, docs, mirrors, and roadmap.
+  - trailing-whitespace scan across the same touched files.
+  - mirror consistency check for 20 localized SFM-5 hedging/billing docs:
+    `0/20 SFM-5 mirror mismatches`.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-25 Nexus autoscale route/window fail-closed coverage
+
+- Added transition-level negative coverage for corrupted default-route binding:
+  even under hot committed-fragment load or cold scale-in conditions, autoscale
+  leaves the catalog unchanged and does not record a transition when the
+  default lane no longer resolves to the default dataspace.
+- Added transition-level negative coverage for missing historical Kura samples:
+  neither a hot scale-out block nor a cold scale-in block can synthesize a
+  complete autoscale window when the previous block is absent from Kura.
+- Documentation updated in the Nexus lane model, transition notes, and roadmap.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_scale_out_fails_closed_when_default_route_misbound -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_scale_out_requires_complete_historical_window -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_scale_in_fails_closed_when_default_route_misbound -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_scale_in_requires_complete_historical_window -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition -- --nocapture`
+    (`12` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+    (`66` passed)
+
+## 2026-06-25 Nexus autoscale exhausted-range fail-closed guard
+
+- Tightened deterministic autoscale scale-out eligibility so a hot sample
+  window is actionable only when default-route capacity is below the configured
+  bound and `autoscale.min_lanes..autoscale.max_lanes` still has a free elastic
+  lane id.
+- Added transition-level negative coverage for a public-profile catalog with
+  base lanes plus managed elastic lanes filling the whole elastic id range:
+  even under high committed-fragment load, no out-of-range lane is created and
+  no autoscale transition height is recorded.
+- Documentation updated in the Nexus lane model and roadmap.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_scale_out_fails_closed_when_id_range_exhausted -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition -- --nocapture`
+    (`8` passed)
+
+## 2026-06-25 Nexus lane relay unknown-dataspace diagnostics
+
+- Added `LaneRelayError::UnknownDataspace` with a stable
+  `unknown_dataspace` label so lane relay admission reports active dataspace
+  catalog drift separately from invalid validator-roster/quorum failures.
+- `State::record_lane_relay` now returns the precise unknown-dataspace error
+  when the relay's lane binding matches the lane catalog but the dataspace is
+  absent from the active dataspace catalog.
+- Added negative coverage that removes the dataspace catalog entry, submits a
+  relay for the configured lane, and asserts no relay cache entry is admitted.
+- Documentation updated in the Nexus lane model and roadmap.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib record_lane_relay_rejects_unknown_dataspace_catalog_entry -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib record_lane_relay_rejects_when_validator_pool_under_quorum -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib record_lane_relay_ -- --nocapture`
+    (`28` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_data_model --lib relay -- --nocapture`
+    (`23` passed)
+
+## 2026-06-25 Nexus lane lifecycle DA cursor reset hardening
+
+- Centralized lane-scoped runtime reset logic so `State::set_nexus`, manual
+  lane lifecycle plans, and the block-local autoscale lifecycle path prune the
+  same volatile lane state: latest merge snapshots, relay caches, DA
+  commitments, confidential-compute receipts, pin intents, DA receipt cursors,
+  and unshared DA shard cursors.
+- Added `DaReceiptCursorIndex::prune_lanes` and `DaShardCursorIndex::prune_lanes`
+  with direct unit coverage. Shard cursor pruning removes unshared reset-lane
+  shards while preserving shared shards still owned by retained lanes.
+- Extended recreated-lane regression coverage for both `set_nexus` and
+  `apply_lane_lifecycle`: stale high DA receipt/shard cursors are seeded before
+  the lane id is recreated, and fresh lower DA sequences must be accepted after
+  the reset alongside the existing merge-history replay checks.
+- Added a real Kura-backed recreated-lane regression that persists a stale DA
+  shard cursor journal, recreates the lane, verifies the stale journal entry is
+  cleared, then persists and restart-hydrates a fresh lower-sequence cursor.
+- Extended autoscale scale-in coverage so retiring a managed elastic lane now
+  proves stale DA receipt cursors and lane-owned DA shard cursors are pruned in
+  the committed block-local lifecycle transition.
+- Documentation updated in the Nexus lane model, transition notes, and roadmap
+  to state that fresh lane incarnations reset DA receipt cursors and unshared
+  DA shard cursor state as well as merge height.
+- Validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib prune_lanes -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib resets_rehydrated_merge_history_for_recreated_lane -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib da_shard_cursors -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib da_receipt_cursors -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib apply_lane_lifecycle_recreated_lane_persists_da_cursor_reset -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_retires_managed_elastic_lane_when_window_is_cold -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib apply_lane_lifecycle_ -- --nocapture`
+    (`26` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib set_nexus_ -- --nocapture`
+    (`43` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib commit_merge_entry_rejects -- --nocapture`
+    (`13` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib merge_candidates_ignore_cached -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition -- --nocapture`
+    (`7` passed)
+  - `git diff --check -- crates/iroha_core/src/state.rs crates/iroha_core/src/da/receipts.rs crates/iroha_core/src/da/shard_cursor.rs docs/source/nexus_lanes.md docs/source/nexus_transition_notes.md roadmap.md status.md`
+
+## 2026-06-25 SoraFS hedging/billing fixture generator scaffold
+
+- Added `crates/sorafs_manifest/src/bin/generate_hedging_fixtures.rs` as the
+  deterministic SFM-5 fixture generator for positive price-feed,
+  reference-price-decision, billing-line, and billing-statement payloads plus
+  negative stale-decision, line-USD-mismatch, and totals-mismatch statements.
+- Added `fixtures/sorafs_manifest/hedging/README.md` documenting the target
+  generated `.to`/`.json` fixture set, regeneration command, and positive
+  `sorafs-validate hedging` validation commands.
+- Added `fixtures/sorafs_manifest/hedging/fixture_manifest.json` as the pinned
+  inventory for the generated SFM-5 `.to`/`.json` pairs, validator command,
+  payload kind, and expected accepted/rejected outcome for each fixture.
+- Added `scripts/check_sorafs_hedging_fixture_manifest.py` to validate that
+  manifest structurally before fixture generation and to fail closed when the
+  generated `.to`/`.json` byte pairs are missing, oversized, malformed, or
+  inconsistent with each JSON `norito_bytes_hex`. Added focused test coverage
+  in `scripts/tests/check_sorafs_hedging_fixture_manifest_test.py`.
+- Hardened full generated-byte validation so the checker only reads fixture
+  paths that already passed the repository-relative
+  `fixtures/sorafs_manifest/hedging` corridor. Missing or malformed manifest
+  paths now report blocked summaries with `generated: not_checked` instead of
+  raising tracebacks or attempting out-of-corridor reads.
+- Extended full fixture validation to execute the pinned
+  `sorafs-validate hedging` command contract without shell execution after the
+  generated `.to` bytes match each JSON `norito_bytes_hex`, then compare the
+  observed validator exit status against each manifest entry's accepted or
+  rejected outcome. The checker exposes `--validator-bin` for environments
+  where the built `sorafs-validate` binary is not on `PATH`, resolves
+  multi-component relative validator paths under the repository root, and
+  rejects drifted or injected manifest commands before any validator process is
+  started.
+- Added exact generated-file inventory validation for the SFM-5 fixture
+  directory: full mode now rejects extra generated `.to` or `.json` files under
+  `fixtures/sorafs_manifest/hedging` that are not pinned by
+  `fixture_manifest.json`, preventing stale fixture bytes from silently
+  shipping beside the reviewed manifest.
+- Added kind-specific generated JSON sidecar validation for the SFM-5 fixture
+  checker. Full mode now rejects missing or unexpected top-level and nested
+  fields, bad digest hex, invalid enum labels, malformed numeric strings,
+  missing arrays, and malformed nested feed, reference-price, and statement
+  line objects before validator execution. It also rejects sidecar version
+  drift, duplicate nested feed/line ids, statement due dates before the
+  statement period end, and account hex strings that do not decode to the
+  account id. Numeric sidecar fields now also enforce positive prices,
+  timestamps, canonical unsigned `u128` billing amount/quantity strings, and
+  bounded basis-point policy values, while `norito_bytes_hex` must be
+  even-length lowercase hex before decode.
+- Tightened manifest-only validation so accepted fixtures cannot be placed
+  under `negative/`, rejected fixtures must stay under `negative/`, and the
+  three reviewed rejected fixture names must carry their exact
+  `negative_case` labels.
+- Extended the repository-wide SoraFS rollout gate contract test so the
+  hedging/billing generator, fixture README, fixture manifest, manifest checker,
+  and checker test stay checked in and mention the expected payload families,
+  validator commands, outcomes, negative cases, and malformed-manifest path
+  regressions plus validator-outcome enforcement. Updated the SFM-5 plan,
+  localized mirrors, and roadmap to distinguish the shipped
+  generator/manifest/checker scaffold from the still-missing generated fixture
+  bytes.
+- Validation status:
+  - Static source/README/manifest/contract scans for the generator, fixture
+    README, fixture manifest, required hedging/billing payload names, fixture
+    kinds, expected outcomes, validator commands, manifest checker, checker
+    tests, safe-path markers, validator-outcome markers, and
+    malformed-manifest, malformed/nested/value/range-sidecar,
+    negative-case/path drift, command-drift, and unmanifested-fixture
+    regression test names
+  - JSON parse and structural validation for
+    `fixtures/sorafs_manifest/hedging/fixture_manifest.json`
+  - `git diff --check -- crates/sorafs_manifest/src/bin/generate_hedging_fixtures.rs fixtures/sorafs_manifest/hedging/README.md fixtures/sorafs_manifest/hedging/fixture_manifest.json scripts/check_sorafs_hedging_fixture_manifest.py scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py docs/source/sorafs_hedging_plan.md docs/source/sorafs_hedging_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the new generator and
+    fixture README/manifest files, manifest checker, checker test, plus the
+    untracked rollout gate contract test
+  - anchored conflict-marker scan across the touched SFM-5 generator, fixture,
+    checker, contract-test, docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-5 generator, fixture,
+    checker, contract-test, docs, roadmap, and status files
+  - mirror consistency check for 20 localized SFM-5 hedging/billing docs:
+    `0/20` mismatches
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` produced no output
+  - `cargo run -p sorafs_manifest --bin generate_hedging_fixtures`,
+    full generated-byte fixture validation, `cargo fmt`, Cargo tests, and
+    Python `py_compile`/pytest were deferred because unrelated active
+    `cargo`/`rustc` processes were present in the process guard; no processes
+    were interrupted.
+
+## 2026-06-25 SoraFS hedging/billing observability pack
+
+- Added a checked-in SFM-5 Grafana dashboard at
+  `dashboards/grafana/sorafs_hedging_billing.json` for XOR/USD reference
+  price, feed lag/divergence, exposure drift, statement throughput/failures,
+  acknowledgement backlog, and escrow runway.
+- Added Prometheus alert rules and rule tests for primary feed staleness,
+  feed divergence, exposure drift, statement generation failures,
+  acknowledgement backlog, and low escrow runway.
+- Added `iroha_telemetry::Metrics` fields, helper methods, and unit coverage
+  for the SFM-5 dashboard/alert metric families, including reference price,
+  feed lag/divergence, exposure drift, statement generation/failure counters,
+  acknowledgement backlog, and escrow runway. The rollout gate contract test
+  now statically requires those telemetry names and helpers alongside the
+  dashboard and alert fixtures.
+- Extended the SoraFS rollout gate contract test with a static guard requiring
+  the hedging/billing dashboard, alert rules, and alert test fixtures to remain
+  checked in. Updated the SFM-5 plan and roadmap so dashboards/alerts are no
+  longer listed as missing local artifacts; runtime service emission of the
+  checked-in metric families and live rollout evidence remain outstanding.
+- Validation status:
+  - Static JSON/YAML parse checks for the new dashboard and alert fixtures
+  - Static dashboard/alert metric-name check against
+    `crates/iroha_telemetry/src/metrics.rs`
+  - `git diff --check -- crates/iroha_telemetry/src/metrics.rs docs/source/sorafs_hedging_plan.md docs/source/sorafs_hedging_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the new dashboard,
+    alert rule, alert test, and rollout gate contract test files
+  - anchored conflict-marker scan across the touched SFM-5 observability,
+    telemetry, docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-5 observability, docs,
+    telemetry, roadmap, and status files
+  - mirror consistency check for 20 localized SFM-5 hedging/billing docs:
+    `0/20` mismatches
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` produced no output
+  - Prometheus `promtool` validation was not run because `promtool` is not
+    installed in this environment
+  - `cargo fmt`, `cargo test -p iroha_telemetry`, and Python
+    `py_compile`/pytest were deferred because unrelated active `cargo`/`rustc`
+    processes were present in the process guard; no processes were interrupted.
+
+## 2026-06-25 SoraFS rollout argfile placeholder guard
+
+- Normalized checked-in SoraFS rollout/release operator argfile examples so
+  their comments describe reviewed runtime artifact inputs directly instead of
+  using handoff-style `Replace ...` wording.
+- Extended `scripts/tests/check_sorafs_rollout_gate_contract_test.py` with a
+  static guard that rejects SoraFS example argfiles containing `# Replace`,
+  `TODO`, `replace-me`, `changeme`, or `your-` placeholders.
+- Validation status:
+  - Static scan across `scripts/examples` confirmed no guarded placeholder
+    markers remain.
+  - `git diff --check -- roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the touched SoraFS
+    example argfiles and rollout gate contract test
+  - anchored conflict-marker scan across the touched SoraFS examples, rollout
+    gate contract test, roadmap, and status files
+  - trailing-whitespace scan across the touched SoraFS examples, rollout gate
+    contract test, roadmap, and status files
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` produced no output
+  - Python `py_compile`/pytest were deferred because unrelated active
+    `cargo`/`rustc` processes were present in the process guard; no processes
+    were interrupted.
+
+## 2026-06-25 SoraFS reserve/rent tuple summary binding
+
+- Tightened `scripts/check_sorafs_reserve_rent_rollout_evidence.py` so
+  policy, quote-matrix, and ledger tuple binding failures use the same
+  artifact-level error contract as the other SoraFS rollout gates: each
+  offending artifact carries the clean binding error, while the top-level error
+  list remains path-qualified.
+- Extended focused negative coverage for mismatched reserve-movement ledger
+  tuples and ledger-bound subset evidence without policy/quote/ledger anchors
+  to assert per-artifact invalid summary state and `required[*].valid` drift
+  prevention.
+- Updated the SFM-6 reserve/rent plan, localized mirrors, and roadmap wording
+  to document that tuple binding failures are recorded on the offending
+  artifact before required-kind validity is reported.
+- Validation status:
+  - `git diff --check -- docs/source/sorafs_reserve_rent_plan.md docs/source/sorafs_reserve_rent_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the SFM-6 reserve/rent
+    verifier and test files
+  - anchored conflict-marker scan across the touched SFM-6 verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-6 verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SFM-6 reserve/rent docs: `0/20`
+    mismatches
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` produced no output
+  - Python `py_compile`/pytest were deferred because unrelated active
+    `cargo`/`rustc` processes were present in the process guard; no processes
+    were interrupted.
+
+## 2026-06-25 SoraFS reputation snapshot summary binding
+
+- Tightened `scripts/check_sorafs_reputation_rollout_evidence.py` so provider,
+  event, proof replay, metrics, transport, and routing/incentive consumption
+  artifacts with stale, missing, or mismatched publish/latest snapshot anchors
+  now become invalid in the emitted JSON summary instead of only blocking the
+  synthetic latest gate row.
+- Required-kind validity for snapshot-bound artifacts is updated when
+  publish/latest binding checks fail, so stale publish/latest evidence cannot
+  leave downstream SFM-3 artifacts looking valid while the top-level gate
+  reports `failed`.
+- Extended focused negative coverage for stale publish/latest anchoring and
+  mismatched transport snapshot metadata to assert per-artifact invalid summary
+  state. Updated the SFM-3 reputation plan, localized mirrors, and roadmap
+  wording to document the stricter summary contract.
+- Validation status:
+  - `git diff --check -- docs/source/sorafs_reputation_plan.md docs/source/sorafs_reputation_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the SFM-3 reputation
+    verifier and test files
+  - anchored conflict-marker scan across the touched SFM-3 reputation verifier,
+    tests, docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-3 reputation verifier,
+    tests, docs, roadmap, and status files
+  - mirror consistency check for 20 localized SFM-3 reputation docs: `0/20`
+    mismatches
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` produced no output
+  - Python `py_compile`/pytest were deferred because an unrelated active
+    `cargo test` process was present in the process guard; no processes were
+    interrupted.
+
+## 2026-06-25 SoraFS Governance DAG public-head summary binding
+
+- Tightened `scripts/check_sorafs_governance_dag_rollout_evidence.py` so
+  mirror datastore, operator recovery, dashboard API, observability,
+  IPFS/IPNS end-to-end, and governance approval artifacts with stale or
+  mismatched publisher-service public heads now become invalid in the emitted
+  JSON summary instead of only blocking the top-level rollout status.
+- Required-kind validity is now computed after public-head binding checks, so
+  an invalid or stale publisher-service artifact cannot anchor downstream
+  SF-12 evidence and `required[*].valid` matches the fail-closed rollout
+  decision.
+- Extended focused negative coverage for mismatched IPFS/IPNS public-head
+  binding and stale publisher-service anchoring to assert per-artifact invalid
+  summary state. Updated the SF-12 Governance DAG plan, localized mirrors, and
+  roadmap wording to document the stricter summary contract.
+- Validation status:
+  - `git diff --check -- docs/source/sorafs_governance_dag_plan.md docs/source/sorafs_governance_dag_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the SF-12 Governance
+    DAG verifier and test files
+  - anchored conflict-marker scan across the touched SF-12 verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SF-12 verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SF-12 Governance DAG docs:
+    `0/20` mismatches
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` produced no output
+  - Python `py_compile`/pytest were deferred because unrelated active
+    `cargo`/`rustc` processes were present in the process guard; no processes
+    were interrupted.
+
+## 2026-06-25 SoraFS hedging summary binding
+
+- Tightened `scripts/check_sorafs_hedging_rollout_evidence.py` so staged
+  billing cycles with stale or mismatched reference-price decisions and
+  downstream statement-publication, reconciliation, metrics/alert, or
+  governance artifacts with stale or mismatched billing-cycle tuples now become
+  invalid in the emitted JSON summary instead of only blocking the top-level
+  rollout status.
+- Required-kind validity is now computed after reference-price and cycle-tuple
+  binding checks, so invalid or stale billing-cycle artifacts cannot anchor
+  downstream SFM-5 evidence and `required[*].valid` matches the fail-closed
+  rollout decision.
+- Extended focused negative coverage for mismatched billing-cycle
+  reference-price binding, mismatched reconciliation tuple binding,
+  cycle-bound subset evidence without a billing-cycle anchor, and stale
+  billing-cycle anchoring to assert per-artifact invalid summary state. Updated
+  the SFM-5 hedging/billing plan, localized mirrors, and roadmap wording to
+  document the stricter summary contract.
+- Validation status:
+  - `git diff --check -- docs/source/sorafs_hedging_plan.md docs/source/sorafs_hedging_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the SFM-5
+    hedging/billing verifier and test files
+  - anchored conflict-marker scan across the touched SFM-5 verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-5 verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SFM-5 hedging/billing docs:
+    `0/20` mismatches
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` produced no output
+  - Python `py_compile`/pytest were deferred because an unrelated active
+    `cargo test` process was present in the process guard; no processes were
+    interrupted.
+
+## 2026-06-25 SoraFS reference SDK release summary binding
+
+- Tightened `scripts/check_sorafs_reference_sdk_release_evidence.py` so release
+  archive, downstream binding, cookbook smoke, FFI/header contract, and
+  governance approval artifacts with stale or mismatched signed-manifest
+  digests now become invalid in the emitted JSON summary instead of only
+  blocking the top-level release status.
+- Required-kind validity is now computed after signed-manifest binding checks,
+  so an invalid or stale signed-manifest artifact cannot anchor downstream
+  SF-11 release evidence and `required[*].valid` matches the fail-closed
+  release decision.
+- Extended focused negative coverage for mismatched release-archive manifest
+  binding and stale signed-manifest anchoring to assert per-artifact invalid
+  summary state. Updated the SF-11 reference SDK plan, localized mirrors, and
+  roadmap wording to document the stricter release summary contract.
+- Validation status:
+  - `git diff --check -- docs/source/sorafs_reference_sdk_plan.md docs/source/sorafs_reference_sdk_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the SF-11 reference SDK
+    release verifier and test files
+  - anchored conflict-marker scan across the touched SF-11 reference SDK
+    verifier, tests, docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SF-11 reference SDK verifier,
+    tests, docs, roadmap, and status files
+  - mirror consistency check for 20 localized SF-11 reference SDK docs: `0/20`
+    mismatches
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` produced no output
+  - Python `py_compile`/pytest were deferred because unrelated active
+    `cargo`/`rustc` processes were present in the process guard; no processes
+    were interrupted.
+
+## 2026-06-25 SoraFS PoTR receipt summary binding
+
+- Tightened `scripts/check_sorafs_potr_rollout_evidence.py` so receipt
+  validation, proof-stream, reputation-integration, observability, and
+  governance approval artifacts with stale or mismatched multi-provider receipt
+  summaries now become invalid in the emitted JSON summary instead of only
+  blocking the top-level rollout status.
+- Required-kind validity is now computed after receipt-summary binding checks,
+  so an invalid or stale multi-provider probe artifact cannot anchor downstream
+  SF-14 evidence and `required[*].valid` matches the fail-closed process
+  result.
+- Extended focused negative coverage for mismatched reputation receipt-summary
+  binding and stale multi-provider probe anchoring to assert per-artifact
+  invalid summary state. Updated the SF-14 PoTR plan, localized mirrors, and
+  roadmap wording to document the stricter receipt summary contract.
+- Validation status:
+  - `git diff --check -- docs/source/sorafs_potr_plan.md docs/source/sorafs_potr_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the SF-14 PoTR
+    verifier and test files
+  - anchored conflict-marker scan across the touched SF-14 PoTR verifier,
+    tests, docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SF-14 PoTR verifier, tests,
+    docs, roadmap, and status files
+  - mirror consistency check for 20 localized SF-14 PoTR docs: `0/20`
+    mismatches
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` produced no output
+  - Python `py_compile`/pytest were deferred because an unrelated active
+    `cargo test` process was present in the process guard; no processes were
+    interrupted.
+
+## 2026-06-25 SoraFS PoR seed summary binding
+
+- Tightened `scripts/check_sorafs_por_rollout_evidence.py` so scheduler
+  runtime, validator replay, reporting/archive, observability, and governance
+  approval artifacts with stale or mismatched randomness seed replay digests now
+  become invalid in the emitted JSON summary instead of only blocking the
+  top-level rollout status.
+- Required-kind validity is now computed after seed-replay binding checks, so
+  an invalid or stale randomness artifact cannot anchor downstream SF-9
+  evidence and `required[*].valid` matches the fail-closed process result.
+- Extended focused negative coverage for mismatched reporting/archive seed
+  binding and stale randomness anchoring to assert per-artifact invalid summary
+  state. Updated the SF-9 PoR plan, localized mirrors, and roadmap wording to
+  document the stricter seed summary contract.
+- Validation status:
+  - `git diff --check -- docs/source/sorafs_por_plan.md docs/source/sorafs_por_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the SF-9 PoR verifier
+    and test files
+  - anchored conflict-marker scan across the touched SF-9 PoR verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SF-9 PoR verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SF-9 PoR docs: `0/20`
+    mismatches
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` produced no output
+  - Python `py_compile`/pytest were deferred because unrelated active
+    `cargo`/`rustc` processes were present in the process guard; no processes
+    were interrupted.
+
+## 2026-06-25 SoraFS PDP proof-summary binding
+
+- Tightened `scripts/check_sorafs_pdp_rollout_evidence.py` so validator
+  replay, governance/repair, observability, and governance approval artifacts
+  with stale or mismatched proof-generation summaries now become invalid in the
+  emitted JSON summary instead of only blocking the top-level rollout status.
+- Required-kind validity is now computed after proof-summary binding checks, so
+  an invalid or stale proof-generation artifact cannot anchor downstream SF-13
+  evidence and `required[*].valid` matches the fail-closed process result.
+- Extended focused negative coverage for mismatched governance/repair
+  proof-summary binding and stale proof-generation anchoring to assert
+  per-artifact invalid summary state. Updated the SF-13 PDP plan, localized
+  mirrors, and roadmap wording to document the stricter proof-summary contract.
+- Validation status:
+  - `git diff --check -- docs/source/sorafs_pdp_plan.md docs/source/sorafs_pdp_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the SF-13 PDP verifier
+    and test files
+  - anchored conflict-marker scan across the touched SF-13 PDP verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SF-13 PDP verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SF-13 PDP docs: `0/20`
+    mismatches
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` produced no output
+  - Python `py_compile`/pytest were deferred because unrelated active
+    `cargo`/`rustc` processes were present in the process guard; no processes
+    were interrupted.
+
+## 2026-06-25 SoraFS appeal finance config summary binding
+
+- Tightened `scripts/check_sorafs_appeal_finance_rollout_evidence.py` so quote,
+  deposit, settlement, submitter, moderation-worker, Governance DAG,
+  dashboard, reconciliation, and governance artifacts with stale or mismatched
+  pricing-config digests now become invalid in the emitted JSON summary instead
+  of only blocking the top-level rollout status.
+- Required-kind validity is now computed after pricing-config binding checks,
+  so an invalid or stale pricing-config artifact cannot anchor downstream
+  SFM-4b2 evidence and `required[*].valid` matches the fail-closed process
+  result.
+- Extended focused negative coverage for mismatched settlement-execution config
+  binding and stale pricing-config anchoring to assert per-artifact invalid
+  summary state. Updated the SFM-4b2 appeal pricing plan, localized mirrors,
+  and roadmap wording to document the stricter config summary contract.
+- Validation status:
+  - `git diff --check -- docs/source/sorafs_appeal_pricing_plan.md docs/source/sorafs_appeal_pricing_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the SFM-4b2 appeal
+    finance verifier and test files
+  - anchored conflict-marker scan across the touched SFM-4b2 appeal finance
+    verifier, tests, docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-4b2 appeal finance
+    verifier, tests, docs, roadmap, and status files
+  - mirror consistency check for 20 localized SFM-4b2 appeal pricing docs:
+    `0/20` mismatches
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` produced no output
+  - Python `py_compile`/pytest were deferred because an unrelated active
+    `cargo test` process was present in the process guard; no processes were
+    interrupted.
+
+## 2026-06-25 SoraFS repair roster/failure summary binding
+
+- Tightened `scripts/check_sorafs_repair_rollout_evidence.py` so signed
+  auditor API, worker lifecycle, event stream, governance handoff, and
+  governance approval artifacts with stale or mismatched auditor-roster
+  bindings now become invalid in the emitted JSON summary instead of only
+  blocking the top-level rollout status.
+- Worker lifecycle, event stream, and governance handoff artifacts now also
+  become invalid when they bind to no valid failure-capture evidence bundle.
+  Required-kind validity is computed after these cross-artifact checks, so
+  `required[*].valid` matches the fail-closed process result.
+- Extended focused negative coverage for stale auditor-roster anchoring,
+  mismatched worker roster binding, mismatched governance-handoff failure
+  binding, and stale failure-capture anchoring. Updated the SF-8b repair plan,
+  localized mirrors, and roadmap wording to document the stricter roster and
+  failure-bundle summary contract.
+- Validation status:
+  - `git diff --check -- docs/source/sorafs_repair_plan.md docs/source/sorafs_repair_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the SF-8b repair
+    verifier and test files
+  - anchored conflict-marker scan across the touched SF-8b repair verifier,
+    tests, docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SF-8b repair verifier, tests,
+    docs, roadmap, and status files
+  - mirror consistency check for 20 localized SF-8b repair docs: `0/20`
+    mismatches
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` produced no output
+  - Python `py_compile`/pytest were deferred because unrelated active
+    `cargo`/`rustc` processes were present in the process guard; no processes
+    were interrupted.
+
+## 2026-06-25 SoraFS orderbook contract summary binding
+
+- Tightened `scripts/check_sorafs_orderbook_rollout_evidence.py` so matcher,
+  settlement, API gateway, event stream, SDK release, observability, and
+  reconciliation artifacts that point at the wrong contract digest now become
+  invalid in the emitted JSON summary instead of only blocking the top-level
+  rollout status.
+- Required-kind validity is now computed after contract-surface binding checks,
+  so an invalid or stale contract-surface artifact cannot anchor downstream
+  orderbook evidence and `required[*].valid` matches the fail-closed process
+  result.
+- Extended focused negative coverage for mismatched API contract binding and
+  stale contract-surface anchoring to assert per-artifact invalid summary
+  state. Updated the SFM-2 orderbook plan, localized mirrors, and roadmap
+  wording to document the stricter contract summary contract.
+- Validation status:
+  - `git diff --check -- docs/source/sorafs_orderbook_plan.md docs/source/sorafs_orderbook_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the SFM-2 orderbook
+    verifier and test files
+  - anchored conflict-marker scan across the touched SFM-2 orderbook verifier,
+    tests, docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-2 orderbook verifier,
+    tests, docs, roadmap, and status files
+  - mirror consistency check for 20 localized SFM-2 orderbook docs: `0/20`
+    mismatches
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` produced no output
+  - Python `py_compile`/pytest were deferred because an unrelated active
+    `cargo test` process was present in the process guard; no processes were
+    interrupted.
+
+## 2026-06-25 Nexus merge stale-catalog hardening
+
+- Merge-candidate synthesis now revalidates merge-admissible cached lane relays
+  against the active Nexus lane catalog before selecting snapshots, so stale
+  runtime cache entries for removed lanes, rebound dataspaces, or missing
+  dataspace catalog entries cannot produce cross-lane replay candidates.
+- `State::commit_merge_entry` now independently requires `nexus.enabled=true`
+  and checks each QC-backed snapshot against the current lane/dataspace binding
+  and dataspace catalog before trusting cached relay material, updating merge
+  metadata, persisting the entry, or burning Nexus fee receipts.
+- State now maintains a latest merged snapshot index per
+  `(lane_id, dataspace_id)` across active-only merge entries. Candidate
+  synthesis uses it to avoid reintroducing unchanged lanes omitted from the
+  newest entry, and merge commit validation requires each lane snapshot to
+  advance beyond that remembered height before fee settlement.
+- Lane retirement, lane/dataspace rebinding, and fresh lane-id additions now
+  reset remembered merge snapshot height alongside relay, DA, pin-intent, and
+  emergency-validator caches, so a destroyed and recreated lane can start fresh
+  without being blocked by its previous incarnation's merge height, including
+  after startup rehydrates historical merge entries from Kura.
+- Added adversarial coverage for cached relays injected outside
+  `record_lane_relay`: candidate synthesis ignores unknown-lane and
+  dataspace-mismatch cache entries plus missing dataspace catalog entries,
+  while direct merge commits reject disabled Nexus, unknown catalog lanes, stale
+  dataspace bindings, and missing dataspace catalog entries without appending to
+  the merge ledger.
+- Added higher-epoch replay coverage proving direct merge commits reject
+  equal-height lane snapshot replays, lower-height regressions, and replays for
+  lanes omitted from the latest active-only entry without appending another
+  merge entry or burning fees a second time.
+- Extended lifecycle prune coverage to commit a lane snapshot, retire the lane,
+  recreate it at a lower block height in the same runtime and after Kura-backed
+  restart, and prove candidate synthesis plus merge commit accept the new
+  incarnation after the old merge-history checkpoint is reset.
+- Added direct `State::set_nexus` config-swap coverage for the same
+  Kura-rehydrated recreate path, proving fresh lane additions reset historical
+  merge checkpoints outside the lifecycle helper as well.
+- Focused validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib set_nexus_ -- --nocapture` (43 tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib apply_lane_lifecycle_ -- --nocapture` (25 tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib commit_merge_entry -- --nocapture` (16 tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib merge_candidate -- --nocapture` (23 tests)
+
+## 2026-06-25 SoraFS gateway compliance bundle summary binding
+
+- Tightened `scripts/check_sorafs_gateway_compliance_rollout_evidence.py` so
+  reload, enforcement, honey-audit, appeal, transparency, observability, and
+  governance artifacts that bind to the wrong denylist bundle now become
+  invalid in the emitted JSON summary instead of only blocking the top-level
+  rollout status.
+- Required-kind validity is now computed after feed-promotion bundle binding
+  checks, so an invalid or stale feed-promotion artifact cannot anchor
+  downstream evidence and `required[*].valid` matches the fail-closed process
+  result.
+- Extended focused negative coverage for mismatched enforcement bundle binding
+  and stale feed-promotion anchoring to assert per-artifact invalid summary
+  state. Updated the SFM-4 gateway compliance plan, localized mirrors, and
+  roadmap wording to document the stricter bundle summary contract.
+- Validation status:
+  - `git diff --check -- docs/source/sorafs_gateway_compliance_plan.md docs/source/sorafs_gateway_compliance_plan.*.md roadmap.md`
+  - `git diff --check --no-index -- /dev/null ...` for the SFM-4 gateway
+    compliance verifier and test files
+  - anchored conflict-marker scan across the touched SFM-4 gateway compliance
+    verifier, tests, docs, and roadmap files
+  - trailing-whitespace scan across the touched SFM-4 gateway compliance
+    verifier, tests, docs, and roadmap files
+  - mirror consistency check for 20 localized SFM-4 gateway compliance docs:
+    `0/20` mismatches
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` produced no output
+  - Python `py_compile`/pytest were deferred because unrelated active
+    `cargo`/`rustc` processes were present in the process guard; no processes
+    were interrupted.
+
+## 2026-06-25 SoraFS PoP credential root summary binding
+
+- Tightened `scripts/check_sorafs_pop_credentials_rollout_evidence.py` so
+  issuer-bundle, commitment-root, and revocation-registry disagreement marks
+  the offending anchor artifacts invalid in the emitted summary before valid
+  root or revocation anchors are derived.
+- Juror-client, verifier-service, moderation-integration, metrics/alert, and
+  governance artifacts now become invalid when they bind to no valid
+  issuer/commitment root or issuer/revocation registry tuple, so
+  `required[*].valid` matches the fail-closed rollout decision.
+- Extended focused negative coverage for mismatched commitment roots, juror
+  root binding mismatch, and governance revocation-list mismatch to assert the
+  summary root/revocation anchors and per-artifact invalid state. Updated the
+  SFM-4b1 PoP credential plan, localized mirrors, and roadmap wording to
+  document the stricter root/revocation summary contract.
+- Validation status:
+  - `git diff --check -- docs/source/sorafs_pop_credentials_plan.md docs/source/sorafs_pop_credentials_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the SFM-4b1 PoP
+    credential verifier and test files
+  - anchored conflict-marker scan across the touched SFM-4b1 verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-4b1 verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SFM-4b1 PoP credential docs:
+    `0/20` mismatches
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` produced no output
+  - Python `py_compile`/pytest have not yet been started because an unrelated
+    cargo process remained active through the process guard; no processes were
+    interrupted.
+
+## 2026-06-25 SoraFS AI pre-screen artifact-valid summaries
+
+- Tightened `scripts/check_sorafs_ai_prescreen_rollout_evidence.py` so
+  runner-bound committee mismatches and workflow-bound operator/notification/
+  executor/transparency/Governance DAG mismatches mark the offending artifact
+  invalid in the emitted summary, rather than only blocking the top-level
+  rollout status.
+- Required-kind validity is now computed after cross-artifact runner/workflow
+  binding checks, so `required[*].valid` matches the fail-closed decision that
+  operators see from the process exit status.
+- Extended focused negative coverage for mismatched committee runner bindings
+  and mismatched transparency workflow bindings to assert both top-level
+  blocking and per-artifact invalid summary state. Updated the SFM-4a
+  AI pre-screen plan, localized mirrors, and roadmap wording to document the
+  stricter summary contract.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py docs/source/sorafs_ai_prescreen_plan.md docs/source/sorafs_ai_prescreen_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the SFM-4a
+    AI pre-screen verifier and test files
+  - anchored conflict-marker scan across the touched SFM-4a verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-4a verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SFM-4a AI pre-screen docs:
+    `0/20` mismatches
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` produced no output
+  - Python `py_compile`/pytest have not yet been started because an unrelated
+    cargo process remained active through the process guard; no processes were
+    interrupted.
+
+## 2026-06-25 SoraFS moderation panel chained anchors
+
+- Tightened `scripts/check_sorafs_moderation_panel_rollout_evidence.py` so
+  sortition roster anchors are promoted only after matching a valid
+  appeal-intake `case_digest_hex`, and commit/reveal tally anchors are promoted
+  only after matching a valid case-bound sortition
+  `case_digest_hex`/`roster_hash_hex` pair.
+- Cross-artifact binding failures now mark the offending artifacts invalid in
+  the emitted summary. Roster-bound artifacts must bind to a valid case-bound
+  sortition roster, and tally-bound artifacts must bind to a valid roster-bound
+  commit/reveal tuple rather than any structurally valid upstream artifact.
+- Added regression coverage for a sortition roster whose case digest does not
+  match the appeal intake while downstream commit/reveal and decision evidence
+  match that invalid roster. Updated the SFM-4b moderation panel plan,
+  localized mirrors, and roadmap wording to document the stricter chained
+  anchor contract.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py docs/source/sorafs_moderation_panel_plan.md docs/source/sorafs_moderation_panel_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the SFM-4b moderation
+    panel verifier and test files
+  - anchored conflict-marker scan across the touched SFM-4b verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-4b verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SFM-4b moderation panel docs:
+    `0/20` mismatches
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` produced no output
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS transparency source-bound cycle anchors
+
+- Tightened `scripts/check_sorafs_transparency_rollout_evidence.py` so
+  publication `cycle_digest_hex` values become valid rollout anchors only after
+  the publication artifact also binds to a valid source-entry
+  `source_batch_digest_hex`.
+- Cross-artifact binding failures now mark the offending artifact invalid in
+  the emitted summary, and privacy aggregate, proof-token issuance, and
+  explorer artifacts must bind to a source-bound publication cycle rather than
+  any structurally valid publication artifact.
+- Added regression coverage for a publication whose cycle digest matches
+  downstream evidence but whose source batch does not match the source-entry
+  canary. Updated the SFM-4c transparency plan, localized mirrors, and roadmap
+  wording to document the stricter source-bound cycle-anchor contract.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_transparency_rollout_evidence.py scripts/tests/check_sorafs_transparency_rollout_evidence_test.py docs/source/sorafs_transparency_plan.md docs/source/sorafs_transparency_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the SFM-4c
+    transparency verifier and test files
+  - anchored conflict-marker scan across the touched SFM-4c verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-4c verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SFM-4c transparency docs:
+    `0/20` mismatches
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` produced no output
+  - Python `py_compile`/pytest have not yet been started because an unrelated
+    `cargo test` process remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS localized plan mirror guard
+
+- Refreshed localized `docs/source/sorafs_*_plan.*.md` mirrors from their
+  English source bodies while preserving localized metadata, removing the
+  duplicated inner YAML front-matter blocks that had drifted into many SoraFS
+  plan mirrors.
+- Extended `scripts/tests/check_sorafs_rollout_gate_contract_test.py` with a
+  static guard that rejects localized SoraFS plan mirrors whose body starts
+  with a second `---` front-matter block, and a source/hash guard that rejects
+  mirrors whose `source` path is missing or whose `source_hash` no longer
+  matches the English source document.
+- Validation status:
+  - `git diff --check -- 'docs/source/sorafs_*_plan.*.md' status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the rollout gate
+    contract test file
+  - anchored conflict-marker scan across the localized SoraFS plan docs,
+    rollout gate contract test, and status file
+  - trailing-whitespace scan across the localized SoraFS plan docs, rollout
+    gate contract test, and status file
+  - duplicate-front-matter scan across localized SoraFS plan mirrors:
+    `0` violations
+  - source/hash consistency scan across localized SoraFS plan mirrors:
+    `0/660` mismatches
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS PDP shipped-gate wording guard
+
+- Updated `docs/source/sorafs_pdp_plan.md` and localized mirrors so the
+  fail-closed SF-13 PDP rollout evidence gate and collection planner are
+  described as shipped local foundations with proof-summary digest binding,
+  not as a task to add.
+- Extended `scripts/tests/check_sorafs_rollout_gate_contract_test.py` with a
+  static guard that rejects TODO-style `Add fail-closed ... rollout evidence
+  gate` wording in SoraFS plan docs, preventing shipped rollout gates from
+  drifting back into remaining-work lists.
+- Validation status:
+  - `git diff --check -- scripts/tests/check_sorafs_rollout_gate_contract_test.py docs/source/sorafs_pdp_plan.md docs/source/sorafs_pdp_plan.*.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the rollout gate
+    contract test file
+  - anchored conflict-marker scan across the touched PDP plan docs, rollout
+    gate contract test, and status file
+  - trailing-whitespace scan across the touched PDP plan docs, rollout gate
+    contract test, and status file
+  - mirror consistency check for 20 localized SF-13 PDP docs
+  - shell scan confirming no SoraFS plan doc still contains
+    `Add fail-closed ... rollout evidence gate`
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS reserve/rent rollout tuple binding
+
+- Tightened `scripts/check_sorafs_reserve_rent_rollout_evidence.py` so quote
+  matrices must bind to a valid policy config digest, ledger digests must bind
+  to that policy/matrix tuple, and lifecycle, signed-route, movement,
+  credit-line, appeal, metrics, provider-bake, and governance evidence must
+  carry the same payload-free
+  `policy_digest_hex`/`matrix_digest_hex`/`ledger_digest_hex` tuple.
+- The SFM-6 rollout gate now reports valid policy, policy/matrix, and
+  policy/matrix/ledger bindings in its summary and fails closed when
+  ledger-bound subset gates are provided without a valid policy, quote-matrix,
+  and ledger anchor.
+- Added focused negative coverage for missing ledger matrix binding, mismatched
+  reserve-movement ledger binding, and a ledger-bound subset gate without a
+  ledger anchor. Updated the SFM-6 reserve/rent plan, localized mirror
+  metadata/bodies, and roadmap to document the stricter cross-artifact evidence
+  contract.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py docs/source/sorafs_reserve_rent_plan.md docs/source/sorafs_reserve_rent_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the SFM-6 reserve/rent
+    verifier and test files
+  - anchored conflict-marker scan across the touched SFM-6 verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-6 verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SFM-6 reserve/rent docs
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 Nexus internal autoscale lifecycle guardrails
+
+- Hardened the private autoscale lifecycle path so autoscale-owned additions
+  must have deterministic public elastic-lane shape in the configured default
+  dataspace: exact `autoscale.managed = true`, positive
+  `autoscale.created_height`, and `elastic-lane-{id}` alias.
+- Internal autoscale retirement now refuses unmanaged/manual lanes, malformed
+  autoscale-owned lanes, and managed lanes outside the default dataspace before
+  catalog mutation, while public/manual lifecycle paths still reject attempts to
+  retire autoscale-owned lanes.
+- Preserved autoscale-managed lanes in `State::set_nexus` are now revalidated
+  for deterministic elastic shape and default-dataspace ownership, so a
+  corrupted current snapshot cannot be silently carried forward by a config
+  swap.
+- Direct `State::set_nexus` swaps now trim valid padded XOR fee asset
+  selectors to the parser-normalized value, preventing fee-budget proof
+  registration from comparing against an unnormalized selector that only actual
+  config callers could install.
+- Validation passed:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib internal_autoscale -- --nocapture` (9 passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib set_nexus_ -- --nocapture` (42 passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib apply_lane_lifecycle_ -- --nocapture` (24 passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture` (61 passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib nexus_fee -- --nocapture` (48 passed)
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-25 SoraFS reputation snapshot-root binding
+
+- Tightened `scripts/check_sorafs_reputation_rollout_evidence.py` so metrics,
+  SSE/WebSocket transport, and routing/incentive consumption canaries must carry
+  payload-free `merkle_root_hex` alongside `snapshot_id_hex`.
+- The SFM-3 rollout gate now records valid publish/latest
+  `snapshot_id_hex`/`merkle_root_hex` anchors and rejects provider, event, proof
+  replay, metrics, transport, or consumption evidence whose snapshot tuple does
+  not match a valid publish/latest artifact in the same rollout bundle.
+- Added focused negative coverage for missing metrics Merkle-root binding and a
+  transport Merkle-root mismatch. Updated the SFM-3 reputation plan, localized
+  mirror metadata/bodies, and roadmap to document the stricter cross-artifact
+  evidence contract.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py docs/source/sorafs_reputation_plan.md docs/source/sorafs_reputation_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the SFM-3 reputation
+    verifier and test files
+  - anchored conflict-marker scan across the touched SFM-3 verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-3 verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SFM-3 reputation docs
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS transparency rollout binding
+
+- Tightened `scripts/check_sorafs_transparency_rollout_evidence.py` so
+  source-entry canaries must carry a payload-free `source_batch_digest_hex`,
+  publication canaries must carry that source-batch digest plus a
+  `cycle_digest_hex`, and privacy aggregate, proof-token issuance, and explorer
+  canaries must carry the publication `cycle_digest_hex`.
+- The SFM-4c rollout gate now records valid source-entry batches and
+  publication cycles, rejects publication evidence that does not match a valid
+  source-entry batch, and rejects privacy aggregate, proof-token issuance, or
+  explorer evidence that does not match a valid publication cycle in the same
+  rollout bundle.
+- Added focused negative coverage for missing publication source-batch binding,
+  mismatched explorer cycle binding, and a cycle-bound subset gate without a
+  publication anchor. Updated the SFM-4c transparency plan, localized mirror
+  metadata/bodies, and roadmap to document the stricter cross-artifact evidence
+  contract.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_transparency_rollout_evidence.py scripts/tests/check_sorafs_transparency_rollout_evidence_test.py docs/source/sorafs_transparency_plan.md docs/source/sorafs_transparency_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the SFM-4c
+    transparency verifier and test files
+  - anchored conflict-marker scan across the touched SFM-4c verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-4c verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SFM-4c transparency docs
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 Nexus autoscale lifecycle state-boundary hardening
+
+- `State::set_nexus` now mirrors the user-config parser for Nexus fee-shape
+  invariants: fee assets must be the canonical XOR definition or
+  `xor#universal`/`xor#universal.universal`, fee sinks cannot be blank, blank
+  canonical sponsors are normalized to absence, and sponsored contract
+  allowlist entries must set a target plus non-empty entrypoints.
+- Queue and merge-fee test fixtures now use the default canonical Nexus XOR fee
+  selector, keeping autoscale, direct-fee, and lane-relay-burn coverage aligned
+  with the production invariant.
+- Validation passed:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_config --test autoscale_config -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib set_nexus_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib nexus_fee -- --nocapture`
+
+## 2026-06-25 SoraFS hedging/billing cycle binding
+
+- Tightened `scripts/check_sorafs_hedging_rollout_evidence.py` so
+  statement-publication, reconciliation, metrics/alert, and governance-approval
+  artifacts must carry payload-free `statement_bundle_digest_hex` and
+  `reconciliation_digest_hex` fields.
+- The SFM-5 rollout gate now records valid billing-cycle
+  statement/reconciliation digest tuples and rejects downstream publication,
+  reconciliation, dashboard, or governance evidence whose tuple does not match
+  a valid staged billing cycle in the same rollout bundle. Narrowed subset
+  gates for cycle-bound artifacts also fail closed without a valid
+  billing-cycle anchor.
+- Added focused negative coverage for missing statement-publication binding,
+  mismatched reconciliation binding, and a cycle-bound subset gate without a
+  billing-cycle anchor. Updated the SFM-5 hedging/billing plan, localized mirror
+  metadata/bodies, and roadmap to document the stricter cross-artifact evidence
+  contract.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_hedging_rollout_evidence.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py docs/source/sorafs_hedging_plan.md docs/source/sorafs_hedging_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the SFM-5
+    hedging/billing verifier and test files
+  - anchored conflict-marker scan across the touched SFM-5 verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-5 verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SFM-5 hedging/billing docs
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS moderation-panel evidence binding
+
+- Tightened `scripts/check_sorafs_moderation_panel_rollout_evidence.py` so
+  SFM-4b promotion packets must stay bound to one appeal/panel run. The gate
+  now records valid appeal-intake `case_digest_hex` values, valid sortition
+  `case_digest_hex`/`roster_hash_hex` pairs, and valid commit/reveal
+  `case_digest_hex`/`roster_hash_hex`/`tally_digest_hex` tuples.
+- Sortition, viewer, operator, notification, voting, publication, settlement,
+  transparency/reputation, metrics, end-to-end, and governance artifacts now
+  fail closed when their `case_digest_hex` does not match a valid appeal-intake
+  artifact. Roster-bound artifacts must also match the valid sortition roster
+  tuple, and tally-bound artifacts must match the valid commit/reveal tally
+  tuple.
+- Added focused negative coverage for missing sortition case binding,
+  mismatched commit/reveal roster binding, and mismatched decision-publication
+  tally binding. Updated the SFM-4b moderation-panel plan, localized mirror
+  metadata/bodies, and roadmap to document the stricter cross-artifact evidence
+  contract.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py docs/source/sorafs_moderation_panel_plan.md docs/source/sorafs_moderation_panel_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the SFM-4b
+    moderation-panel verifier and test files
+  - anchored conflict-marker scan across the touched SFM-4b verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-4b verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SFM-4b moderation-panel docs
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS AI pre-screen workflow binding
+
+- Tightened `scripts/check_sorafs_ai_prescreen_rollout_evidence.py` so
+  committee evidence must match a valid runner artifact's manifest id, runner
+  hash, and subject digest.
+- Operator workflow, notification transport, commit/reveal executor,
+  transparency publication, and Governance DAG evidence now carry a
+  payload-free `workflow_digest_hex`, and the full SFM-4a gate rejects
+  workflow-bound artifacts whose digest does not match a valid
+  `sorafs.moderation.end_to_end_rollout.v1` artifact in the same bundle. This
+  blocks promotion packets that mix screening, operator, executor,
+  transparency, or governance evidence from different deployed moderation
+  workflow runs.
+- Added focused negative coverage for mismatched committee runner binding,
+  missing operator workflow digest binding, and mismatched transparency
+  workflow binding. Updated the SFM-4a AI pre-screen plan, localized mirror
+  metadata/bodies, and roadmap to document the stricter cross-artifact evidence
+  contract.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py docs/source/sorafs_ai_prescreen_plan.md docs/source/sorafs_ai_prescreen_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the untracked SFM-4a
+    AI pre-screen verifier and test files
+  - anchored conflict-marker scan across the touched SFM-4a verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-4a verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SFM-4a AI pre-screen docs
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS Governance DAG public-head binding
+
+- Tightened `scripts/check_sorafs_governance_dag_rollout_evidence.py` so mirror
+  datastore, operator recovery, dashboard API, observability, IPFS/IPNS
+  end-to-end, and governance approval evidence must carry a payload-free
+  `public_head_cid_hex`.
+- The full SF-12 rollout gate now records valid publisher-service public head
+  CIDs and rejects head-bound artifacts whose CID does not match a valid
+  `sorafs.governance_dag.publisher_service_canary.v1` artifact in the same
+  bundle. This blocks promotion packets that mix mirror state, recovery
+  checkpoints, dashboard routes, public IPFS/IPNS replay, observability, or
+  governance approval from different signed DAG heads.
+- Added focused negative coverage for missing dashboard public-head binding and
+  mismatched IPFS/IPNS public-head binding. Updated the SF-12 Governance DAG
+  plan, localized mirror metadata/bodies, and roadmap to document the stricter
+  cross-artifact evidence contract.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/tests/check_sorafs_governance_dag_rollout_evidence_test.py docs/source/sorafs_governance_dag_plan.md docs/source/sorafs_governance_dag_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the untracked SF-12
+    Governance DAG verifier and test files
+  - anchored conflict-marker scan across the touched SF-12 verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SF-12 verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SF-12 Governance DAG docs
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS gateway compliance bundle binding
+
+- Tightened `scripts/check_sorafs_gateway_compliance_rollout_evidence.py` so
+  gateway reload, enforcement probe, honey-audit, appeal override,
+  transparency publication, observability, and governance approval evidence
+  must carry a payload-free `bundle_digest_hex`.
+- The full SFM-4 gateway compliance gate now records valid feed-promotion
+  bundle digests and rejects bundle-bound artifacts whose digest does not match
+  a valid `sorafs.gateway_compliance.feed_promotion_canary.v1` artifact in the
+  same bundle. This blocks promotion packets that mix reload acknowledgements,
+  enforcement probes, audit reports, appeal overrides, transparency
+  publications, dashboards, or governance approval from different denylist
+  bundle runs.
+- Added focused negative coverage for missing gateway-reload bundle binding and
+  mismatched enforcement-probe bundle binding. Updated the SFM-4 gateway
+  compliance plan, localized mirror metadata/bodies, and roadmap to document
+  the stricter cross-artifact evidence contract.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py docs/source/sorafs_gateway_compliance_plan.md docs/source/sorafs_gateway_compliance_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the untracked SFM-4
+    gateway compliance verifier and test files
+  - anchored conflict-marker scan across the touched SFM-4 verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-4 verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SFM-4 gateway compliance docs
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS PoP credential root binding
+
+- Tightened `scripts/check_sorafs_pop_credentials_rollout_evidence.py` so the
+  issuer bundle and published commitment-root/revocation-registry artifacts
+  must agree on the active `root_digest_hex` and
+  `revocation_list_digest_hex`.
+- Juror client, verifier service, moderation integration, metrics/alert, and
+  governance approval evidence now carry payload-free root/revocation binding
+  fields and the full SFM-4b1 gate rejects artifacts whose digests do not match
+  the valid issuer/publication pair in the same bundle. This blocks PoP
+  promotion packets that mix credentials, verifier probes, moderation
+  sortition, dashboards, or governance approval from different credential
+  publication runs.
+- Added focused negative coverage for missing verifier-service root binding,
+  mismatched commitment-root source binding, mismatched juror root binding, and
+  mismatched governance revocation binding. Updated the SFM-4b1 PoP credentials
+  plan, localized mirror metadata/bodies, and roadmap to document the stricter
+  cross-artifact evidence contract.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py docs/source/sorafs_pop_credentials_plan.md docs/source/sorafs_pop_credentials_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the untracked SFM-4b1
+    PoP verifier and test files
+  - anchored conflict-marker scan across the touched SFM-4b1 verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-4b1 verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SFM-4b1 PoP credentials docs
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 Nexus disabled-profile state guard
+
+- `State::set_nexus` now enforces the same disabled-profile invariant as the
+  user config parser: `nexus.enabled=false` can only carry the default
+  single-lane catalog, default dataspace catalog, and default routing policy.
+  Direct actual-config swaps can no longer bypass TOML validation and install
+  multi-lane or custom routing state while Nexus is disabled.
+- The same state boundary now rejects disabled Nexus configs that enable
+  lane-relay emergency overrides or the relay worker. Relay worker configs also
+  fail closed unless fees use lane-relay-burn settlement with a canonical
+  sponsor account, matching the TOML parser's dependent-feature checks.
+- Activated lane-relay-burn fee receipts now require a canonical sponsor even
+  when the relay worker is disabled, and lane-relay emergency multisig
+  thresholds cannot exceed member count at the state boundary.
+- Per-dataspace fee sponsor maps now fail closed at `State::set_nexus` unless
+  fee sponsorship is enabled, Nexus is enabled, and every sponsored dataspace key
+  exists in the active dataspace catalog.
+- Added runtime negative coverage for disabled Nexus configs with a multi-lane
+  catalog, non-default routing policy, lane-relay emergency, disabled relay
+  worker, relay worker without lane-relay-burn settlement, and relay worker
+  without a canonical sponsor. Added lane-relay-burn receipt and emergency
+  threshold negative coverage, fee-sponsor negative coverage for disabled
+  sponsorship, disabled Nexus, and unknown dataspaces, plus positive controls for
+  correctly configured relay worker, disabled receipt activation, and fee sponsor
+  maps.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib set_nexus_rejects_disabled -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib relay_worker -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib dataspace_fee_sponsor -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib lane_relay_burn -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib lane_relay_emergency -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib set_nexus_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+
+## 2026-06-25 SoraFS PoTR receipt summary binding
+
+- Tightened `scripts/check_sorafs_potr_rollout_evidence.py` so receipt
+  validation, proof-stream replay, reputation integration, observability, and
+  governance approval evidence must carry a payload-free
+  `receipt_summary_digest_hex`.
+- The full SF-14 rollout gate now records valid multi-provider probe receipt
+  summary digests and rejects receipt-bound artifacts whose digest does not
+  match a valid `sorafs.potr.multi_provider_probe_canary.v1` artifact in the
+  same bundle. This blocks promotion packets that mix validation,
+  proof-stream, reputation, dashboard, or governance evidence from a different
+  receipt capture run.
+- Added focused negative coverage for missing receipt-validation receipt
+  summary binding and mismatched reputation receipt summary binding. Updated
+  the SF-14 PoTR plan, localized mirror metadata/bodies, and roadmap to
+  document the stricter cross-artifact PoTR evidence contract.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_potr_rollout_evidence.py scripts/tests/check_sorafs_potr_rollout_evidence_test.py docs/source/sorafs_potr_plan.md docs/source/sorafs_potr_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the untracked SF-14
+    PoTR verifier and test files
+  - anchored conflict-marker scan across the touched SF-14 verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SF-14 verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SF-14 PoTR docs
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS PoR seed replay binding
+
+- Tightened `scripts/check_sorafs_por_rollout_evidence.py` so scheduler
+  runtime, validator replay, reporting/archive, observability, and governance
+  approval evidence must carry a payload-free `seed_replay_digest_hex`.
+- The full SF-9 rollout gate now records valid randomness seed replay digests
+  and rejects seed-bound artifacts whose digest does not match a valid
+  `sorafs.por.randomness_canary.v1` artifact in the same bundle. This blocks
+  promotion packets that mix runtime, replay, report/archive, dashboard, or
+  governance evidence from a different drand/VRF seed set.
+- Added focused negative coverage for missing scheduler seed binding and
+  mismatched reporting/archive seed binding. Updated the SF-9 PoR scheduler and
+  reporting plans, localized mirror metadata/bodies, and roadmap to document
+  the stricter cross-artifact PoR evidence contract.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_por_rollout_evidence.py scripts/tests/check_sorafs_por_rollout_evidence_test.py docs/source/sorafs_por_plan.md docs/source/sorafs_por_plan.*.md docs/source/sorafs_por_reporting_plan.md docs/source/sorafs_por_reporting_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the untracked SF-9 PoR
+    verifier and test files
+  - anchored conflict-marker scan across the touched SF-9 verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SF-9 verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SF-9 PoR scheduler docs and 20
+    localized SF-9 PoR reporting docs
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS PDP proof-summary binding
+
+- Tightened `scripts/check_sorafs_pdp_rollout_evidence.py` so validator replay,
+  governance/repair, observability, and governance approval evidence must carry
+  a payload-free `proof_summary_digest_hex`.
+- The full SF-13 rollout gate now records valid proof-generation summary
+  digests and rejects proof-summary-bound artifacts whose digest does not match
+  a valid `sorafs.pdp.proof_generation_canary.v1` artifact in the same bundle.
+  This blocks promotion packets that mix replay, repair/governance,
+  observability, or approval evidence from a different PDP proof-generation
+  run.
+- Added focused negative coverage for missing validator replay proof-summary
+  binding and mismatched governance/repair proof-summary binding. Updated the
+  SF-13 PDP plan, localized mirror metadata/bodies, and roadmap to document the
+  stricter cross-artifact PDP evidence contract.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_pdp_rollout_evidence.py scripts/tests/check_sorafs_pdp_rollout_evidence_test.py docs/source/sorafs_pdp_plan.md docs/source/sorafs_pdp_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the untracked SF-13 PDP
+    verifier and test files
+  - anchored conflict-marker scan across the touched SF-13 verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SF-13 verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SF-13 PDP docs
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS reference SDK release manifest binding
+
+- Tightened `scripts/check_sorafs_reference_sdk_release_evidence.py` so
+  release archive, downstream binding, cookbook smoke, FFI/header contract, and
+  governance approval evidence must carry a payload-free
+  `release_manifest_digest_hex`.
+- The full SF-11 release evidence gate now records valid signed-manifest
+  digests and rejects release-bound artifacts whose digest does not match a
+  valid `sorafs.reference_sdk.signed_manifest_canary.v1` artifact in the same
+  bundle. This blocks promotion packets that mix archives, SDK packages,
+  header-contract evidence, smoke output, or governance approval from different
+  release manifests.
+- Added focused negative coverage for missing downstream release-manifest
+  binding and mismatched release archive manifest binding. Updated the SF-11
+  reference SDK plan, localized mirror metadata/bodies, and roadmap to document
+  the stricter cross-artifact release evidence contract.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_reference_sdk_release_evidence.py scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py docs/source/sorafs_reference_sdk_plan.md docs/source/sorafs_reference_sdk_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the untracked SF-11
+    reference SDK release verifier and test files
+  - anchored conflict-marker scan across the touched SF-11 verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SF-11 verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SF-11 reference SDK docs
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS appeal finance config binding
+
+- Tightened `scripts/check_sorafs_appeal_finance_rollout_evidence.py` so quote
+  API, deposit lifecycle, settlement execution, settlement submitter, moderation
+  worker, Governance DAG publication, dashboard metrics, multi-peer
+  reconciliation, and governance approval evidence must carry a payload-free
+  `config_digest_hex`.
+- The full SFM-4b2 rollout gate now records valid pricing-config digests and
+  rejects config-bound artifacts whose digest does not match a valid
+  `sorafs.appeal_finance.pricing_config_canary.v1` artifact in the same bundle.
+  This blocks promotion packets that mix quote/deposit/settlement/dashboard or
+  governance evidence produced against a different pricing and settlement
+  configuration.
+- Added focused negative coverage for missing quote API config binding and
+  mismatched settlement execution config binding. Updated the SFM-4b2 appeal
+  pricing plan, localized mirror metadata/bodies, and roadmap to document the
+  stricter cross-artifact evidence contract.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py docs/source/sorafs_appeal_pricing_plan.md docs/source/sorafs_appeal_pricing_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the untracked SFM-4b2
+    appeal finance verifier and test files
+  - anchored conflict-marker scan across the touched SFM-4b2 verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-4b2 verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SFM-4b2 appeal pricing docs
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS repair rollout roster binding
+
+- Tightened `scripts/check_sorafs_repair_rollout_evidence.py` so signed auditor
+  API, worker lifecycle, repair event stream, governance handoff, and
+  governance approval evidence must carry a payload-free `roster_digest_hex`
+  matching a valid `sorafs.repair.auditor_roster_canary.v1` artifact in the
+  same rollout bundle.
+- The full SF-8b rollout gate now also requires worker lifecycle, event stream,
+  and governance handoff artifacts to carry an `evidence_bundle_digest_hex`
+  matching a valid PoR/PoTR failure-capture artifact. This blocks repair
+  promotion packets that mix a stale auditor roster or unrelated failure bundle
+  with otherwise valid worker/governance evidence.
+- Added focused negative coverage for missing auditor API roster binding,
+  mismatched worker roster binding, and mismatched governance handoff failure
+  bundle binding. Updated the SF-8b docs, localized mirror metadata/bodies, and
+  roadmap to document the stricter cross-artifact repair evidence contract.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_repair_rollout_evidence.py scripts/tests/check_sorafs_repair_rollout_evidence_test.py docs/source/sorafs_repair_plan.md docs/source/sorafs_repair_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the untracked SF-8b
+    repair verifier and test files
+  - anchored conflict-marker scan across the touched SF-8b verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SF-8b verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SF-8b repair docs
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS orderbook rollout contract binding
+
+- Tightened `scripts/check_sorafs_orderbook_rollout_evidence.py` so matcher,
+  settlement, API gateway, event stream, SDK release, observability, and
+  reconciliation evidence must carry a payload-free `contract_digest_hex`.
+- The full SFM-2 rollout gate now records valid contract-surface digests and
+  rejects contract-bound artifacts whose digest does not match a valid
+  `sorafs.orderbook.contract_surface_canary.v1` artifact in the same rollout
+  bundle. This prevents a staged promotion packet from mixing matcher/API/
+  stream evidence produced against a different contract deployment.
+- Added focused negative coverage for missing matcher contract binding and
+  mismatched API contract binding. Updated the SFM-2 docs, localized mirror
+  metadata/bodies, and roadmap to document the stricter cross-artifact
+  contract-digest rule.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_orderbook_rollout_evidence.py scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py docs/source/sorafs_orderbook_plan.md docs/source/sorafs_orderbook_plan.*.md roadmap.md status.md`
+  - `git diff --check --no-index -- /dev/null ...` for the untracked SFM-2
+    orderbook verifier and test files
+  - anchored conflict-marker scan across the touched SFM-2 verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-2 verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SFM-2 orderbook docs
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 Nexus autoscale config metadata guard
+
+- Static Nexus TOML parsing now rejects user-supplied lane metadata that claims
+  the reserved `autoscale.managed` ownership key. Startup already failed closed
+  through `State::set_nexus`; this moves the operator-facing error earlier in
+  the config parse path while keeping runtime config swaps guarded by state.
+- Added config-level negative coverage for a lane catalog entry that tries to
+  set `"autoscale.managed" = "true"` manually.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_config --test autoscale_config -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+
+## 2026-06-25 SoraFS hedging billing-cycle reference binding
+
+- Tightened `scripts/check_sorafs_hedging_rollout_evidence.py` so
+  `sorafs.billing.cycle_canary.v1` staged billing-cycle evidence must include
+  payload-free line-item root, statement-bundle digest, reconciliation digest,
+  reference-price binding, and a reference decision id. Statement digest arrays
+  must be unique and match the signed statement count.
+- The full SFM-5 rollout gate now records valid reference-price decision ids and
+  rejects billing cycles that reference a missing or invalid reference-price
+  artifact from the same evidence bundle. The sensitive-field denylist now also
+  rejects raw billing statements, raw line items, raw statements, and embedded
+  reference-price payloads.
+- Added focused negative coverage for missing reference-decision binding,
+  mismatched reference decisions, and statement digest count drift. Updated the
+  SFM-5 docs, localized mirror metadata/bodies, and roadmap to document the
+  stricter digest-only staged billing contract.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_hedging_rollout_evidence.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py docs/source/sorafs_hedging_plan.md docs/source/sorafs_hedging_plan.*.md roadmap.md status.md`
+  - anchored conflict-marker scan across the touched SFM-5 verifier, tests,
+    docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-5 verifier, tests, docs,
+    roadmap, and status files
+  - mirror consistency check for 20 localized SFM-5 hedging docs
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS evidence-viewer rollout digest contract
+
+- Tightened the SFM-4b moderation-panel rollout verifier so
+  `sorafs.moderation_panel.evidence_viewer_canary.v1` canary evidence must
+  include payload-free digest hashes for the role-scoped session manifest,
+  watermark metadata, append-only access log, legal-hold receipt,
+  transparency report, and audit digest, plus Governance DAG and
+  transparency-ledger export-target coverage, transparency report export, and
+  daily digest publication.
+- Expanded the sensitive-field denylist for the same gate to reject raw access
+  logs, audit-log entries, legal-hold receipt payloads, transparency report
+  payloads, and watermark keys in addition to signed URLs, session tokens,
+  watermark secrets, response bodies, and raw evidence.
+- Added focused negative coverage for missing digest coverage, missing
+  transparency export-target coverage, and raw access-log leakage. Updated the
+  SFM-4b and SFM-4b3 docs, localized mirror metadata/bodies, and roadmap to
+  document the stricter payload-free evidence-viewer promotion contract.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py docs/source/sorafs_evidence_viewer_plan.md docs/source/sorafs_evidence_viewer_plan.*.md docs/source/sorafs_moderation_panel_plan.md docs/source/sorafs_moderation_panel_plan.*.md roadmap.md status.md`
+  - anchored conflict-marker scan across the touched SFM-4b/SFM-4b3 verifier,
+    tests, docs, roadmap, and status files
+  - trailing-whitespace scan across the touched SFM-4b/SFM-4b3 verifier, tests,
+    docs, roadmap, and status files
+  - mirror consistency check for 20 localized SFM-4b moderation-panel docs and
+    20 localized SFM-4b3 evidence-viewer docs
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS rollout runner operator examples
+
+- Extended `scripts/tests/check_sorafs_rollout_gate_contract_test.py` so the
+  static rollout/release evidence contract also requires every checker and
+  collection runner to keep a checked-in operator `@ARGFILE` example, requires
+  runner examples to document a `--dry-run` review invocation, and requires
+  checker/runner examples to carry runtime-only/payload-free evidence handling
+  guidance.
+- Updated the SF-13 PDP, SF-9 PoR, SF-14 PoTR, and SF-11 reference SDK
+  collection argument examples to show the exact dry-run commands now enforced
+  by that contract, and updated the sparse AI prescreen, PDP, PoR, PoTR, and
+  reference SDK direct checker examples with explicit secret/raw-payload
+  handling warnings.
+- Validation status:
+  - `git diff --check -- scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/examples/sorafs_pdp_rollout_collection.args.example scripts/examples/sorafs_por_rollout_collection.args.example scripts/examples/sorafs_potr_rollout_collection.args.example scripts/examples/sorafs_reference_sdk_release_collection.args.example status.md roadmap.md`
+  - anchored conflict-marker scan across the touched rollout contract,
+    examples, roadmap, and status files
+  - trailing-whitespace scan across the touched rollout contract, examples,
+    roadmap, and status files
+  - shell-level checker/runner example coverage check: no missing operator
+    examples, runner `--dry-run` notes, or runtime-only/payload-free evidence
+    notes
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 Nexus autoscale disable guard for owned lanes
+
+- Autoscale-managed lanes now require `nexus.autoscale.enabled = true` while
+  they exist. Internal managed-lane lifecycle additions fail closed when the
+  autoscaler is disabled, and config swaps cannot preserve owned elastic lanes
+  while disabling the only component allowed to retire them.
+- Added negative coverage for internal managed-lane addition with autoscale
+  disabled and for a config swap that preserves `elastic-lane-1` but flips
+  `autoscale.enabled` to false.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib when_disabled -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib set_nexus_rejects_preserved_autoscale_managed_lane_when_autoscale_disabled -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib apply_lane_lifecycle_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+
+## 2026-06-25 SoraFS rollout checker response-file parity
+
+- Added shell-style `@ARGFILE` expansion to
+  `scripts/check_sorafs_reputation_rollout_evidence.py` and
+  `scripts/check_sorafs_transparency_rollout_evidence.py`, bringing the SFM-3
+  and SFM-4c checkers in line with the newer rollout gates and their
+  response-file-aware collection planners.
+- Added focused checker regressions for direct response-file invocation. This
+  is local operator tooling hardening. The transparency gate now also reports a
+  missing evidence directory explicitly in the summary before checking required
+  artifact coverage. Both gates now reject bearer tokens, private keys, signed
+  transactions, raw/provider payloads, and request bodies in addition to their
+  existing payload/response-body leak checks. Deployed reputation
+  transport/consumer evidence and SFM-4c live producer/publication evidence
+  still need to be captured before their gates can satisfy production
+  promotion.
+- Added `scripts/tests/check_sorafs_rollout_gate_contract_test.py` as a static
+  contract guard for every SoraFS rollout/release evidence checker and runner:
+  each checker must keep reviewed response-file support, fail-closed missing
+  evidence directory diagnostics, and the common sensitive-field denylist
+  entries for authorization material, private keys, response bodies, and
+  secrets, including explicit `bearer_token` fields; each runner must keep
+  response-file support, dry-run command plans, and required-file preflight
+  checks before live commands can run.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/check_sorafs_transparency_rollout_evidence.py scripts/tests/check_sorafs_transparency_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py docs/source/sorafs_reputation_plan.md docs/source/sorafs_reputation_plan.*.md docs/source/sorafs_transparency_plan.md docs/source/sorafs_transparency_plan.*.md roadmap.md status.md`
+  - anchored conflict-marker scan across touched SFM-3/SFM-4c rollout
+    evidence, docs, roadmap, and status files
+  - trailing-whitespace scan across touched SFM-3/SFM-4c rollout evidence,
+    docs, roadmap, and status files
+  - mirror consistency check for 20 localized SFM-3 reputation docs and 20
+    localized SFM-4c transparency docs
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS hedging rollout checker response files
+
+- Added shell-style `@ARGFILE` expansion to
+  `scripts/check_sorafs_hedging_rollout_evidence.py` so the SFM-5 checker
+  accepts the same reviewed response-file workflow as its collection planner
+  and checked-in operator example.
+- Added a regression for checker response files and updated the SFM-5
+  hedging/billing plan, localized mirror metadata, roadmap, and evidence
+  example command text. This is local operator tooling hardening; the live
+  collector, pricing/exposure engine, billing aggregator, statement publisher,
+  signed APIs, dashboards, alerts, and staged billing evidence remain open.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_hedging_rollout_evidence.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/examples/sorafs_hedging_rollout_evidence.args.example docs/source/sorafs_hedging_plan.md docs/source/sorafs_hedging_plan.*.md roadmap.md status.md`
+  - anchored conflict-marker scan across touched SFM-5 rollout evidence,
+    example, docs, roadmap, and status files
+  - trailing-whitespace scan across touched SFM-5 rollout evidence, example,
+    docs, roadmap, and status files
+  - mirror consistency check for 20 localized SFM-5 hedging docs
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 Nexus autoscale managed-lane range invariant
+
+- Autoscale-owned lanes now must stay inside the configured
+  `nexus.autoscale.min_lanes..nexus.autoscale.max_lanes` ID range. The internal
+  autoscale lifecycle rejects managed additions outside that range, and config
+  swaps reject even exactly preserved autoscale-managed lanes if the new range
+  would strand them outside the autoscaler's create/retire window.
+- Added negative coverage for both entry points: internal managed-lane addition
+  at `LaneId(8)` with the default `[1, 8)` range, and a config swap that raises
+  `min_lanes` above an existing preserved `elastic-lane-1`.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib outside_range -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib set_nexus_rejects_preserved_autoscale_managed_lane_outside_new_range -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib apply_lane_lifecycle_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+
+## 2026-06-25 Nexus autoscale default-route scale-out bound
+
+- Autoscale scale-out eligibility now uses default-route autoscale capacity
+  instead of total lane-catalog length. Hot default traffic can therefore grow
+  managed elastic capacity even when unrelated manual/governance/zk lanes
+  already make the catalog length reach `nexus.autoscale.max_lanes`.
+- Added a regression with the default lane plus unmanaged higher-id lanes
+  already present; the hot window still creates `elastic-lane-1` and records
+  the autoscale transition height.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_scale_out_ignores_unmanaged_capacity_lanes -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH bash scripts/formal/sumeragi_tlc.sh autoscale-transition-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH bash scripts/formal/sumeragi_apalache.sh autoscale-transition-fast`
+
+## 2026-06-25 Nexus autoscale AXT cache refresh
+
+- Block-local autoscale lane lifecycle now refreshes the AXT policy cache after
+  automated catalog changes. Scale-in therefore prunes lane-relay and
+  emergency-validator state, retargets Space Directory-derived entries, and
+  removes explicit policy entries that would otherwise keep pointing at a
+  retired autoscale-managed lane.
+- Added an adversarial autoscale regression that seeds a stale AXT cache entry
+  for a managed elastic lane, triggers deterministic scale-in, and asserts the
+  block overlay refreshes the policy back to the surviving default lane with
+  manifest-derived minima.
+- Added no-directory coverage for explicit AXT policy entries: autoscale
+  scale-in now removes an explicit policy whose target lane was retired while
+  preserving explicit policies that still target surviving lanes.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_refreshes_axt_policy_after_retiring_target_lane -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_removes_explicit_stale_axt_policy_after_retiring_target_lane -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib axt_policy -- --nocapture`
+
+## 2026-06-25 SoraFS gateway compliance rollout evidence gate
+
+- Added `scripts/check_sorafs_gateway_compliance_rollout_evidence.py` as the
+  SFM-4 promotion gate for deployed gateway compliance evidence. The checker
+  requires payload-free feed promotion, gateway reload, enforcement probe,
+  honey-audit, appeal override, transparency publication, observability, and
+  governance-approval artifacts before reporting `ready`.
+- The gate fails closed on stale artifacts, missing multi-gateway
+  acknowledgements, missing denylist reason coverage, excessive route/reload
+  latency, insufficient honey probes, critical observability alerts,
+  non-`iroha_config` governance sources, and raw denylist feeds, probe
+  responses, GAR receipts, appeal payloads, signed transactions, tokens,
+  secrets, or response bodies.
+- Added `scripts/run_sorafs_gateway_compliance_rollout_evidence.py`, focused
+  checker/runner tests, and payload-free operator `@ARGFILE` examples under
+  `scripts/examples/`. Updated the gateway compliance plan, localized mirror
+  metadata, and roadmap to count the local gate and collection planner as
+  shipped while keeping central controller, persisted production catalog state,
+  moderation toggle/override services, deployed SFM-4c receipt publication, and
+  captured staged multi-gateway evidence open.
+- Validation status:
+  - `git diff --check -- scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/run_sorafs_gateway_compliance_rollout_evidence.py scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/run_sorafs_gateway_compliance_rollout_evidence_test.py scripts/examples/sorafs_gateway_compliance_rollout_evidence.args.example scripts/examples/sorafs_gateway_compliance_rollout_collection.args.example docs/source/sorafs_gateway_compliance_plan.md docs/source/sorafs_gateway_compliance_plan.*.md roadmap.md status.md`
+  - anchored conflict-marker scan across touched SFM-4 gateway rollout
+    evidence, example, docs, roadmap, and status files
+  - trailing-whitespace scan across touched SFM-4 gateway rollout evidence,
+    example, docs, roadmap, and status files
+  - mirror consistency check for 20 localized SFM-4 gateway compliance docs
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS commit-reveal rollout canary hardening
+
+- Hardened the existing SFM-4b moderation-panel `commit_reveal` rollout
+  artifact so SFM-4b4 promotion evidence must cover commit digest
+  recomputation, duplicate-commit rejection, mismatched-reveal rejection, late
+  commit/reveal rejection, missed-quorum detection, no-show failover, juror
+  penalty planning, deterministic tally replay, contested challenge coverage,
+  governance event digest binding, event-lag bounds, and absence of raw
+  commit/reveal payloads.
+- Added targeted checker tests for mismatched-reveal rejection and required
+  negative-scenario coverage, and updated the commit-reveal plan, moderation
+  panel plan, localized mirror metadata, and roadmap. The durable ballot
+  orchestrator, juror portal/CLI, contract-backed workflow, and deployed
+  evidence remain open.
+- Validation status:
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS evidence-viewer rollout canary hardening
+
+- Hardened the existing SFM-4b moderation-panel `evidence_viewer` rollout
+  artifact so SFM-4b3 promotion evidence must cover role-scoped manifests,
+  short-lived segment URLs, attested and logged sessions, strict CSP, disabled
+  offline mode, watermark overlay/metadata hashing, append-only access logs,
+  anomaly events, legal-hold binding, audit digest export, and full
+  view/seek/pause/screenshot-attempt/download-attempt/annotation event coverage.
+- Extended the payload-safety guard to reject signed URLs, session tokens,
+  URL signatures, WebAuthn assertions, and watermark secrets in rollout
+  evidence, while retaining the raw evidence/response-body denial checks.
+- Updated the SFM-4b3 evidence-viewer plan, SFM-4b moderation-panel plan,
+  localized mirror metadata, roadmap, and targeted checker tests. The browser
+  viewer, streaming backend, watermark engine, attestation flow, and access-log
+  service remain unshipped until deployed service evidence passes this gate.
+- Validation status:
+  - Python `py_compile`/pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+
+## 2026-06-25 SoraFS PoP production verifier fail-closed boundary
+
+- Split the SFM-4b1 membership verifier surface so the production
+  `verify_pop_membership_proof_v1` API rejects `TranscriptDigestV1` with a
+  stable policy error instead of accepting transcript-digest-only proofs as
+  production proof-of-personhood evidence.
+- Preserved the deterministic local checks under
+  `verify_pop_membership_transcript_policy_v1` for fixtures and reference
+  tooling. That helper still validates transcript binding, expiry, active
+  commitment-root/revocation material, revoked nonces, and nullifier replay.
+- Updated the PoP reference diagnostic mapper, crate exports, unit coverage,
+  PoP plan/localized mirror metadata, and roadmap so the remaining production
+  work is explicit: select and implement the privacy-preserving proof backend,
+  then wire it into the production verifier.
+- Validation status:
+  - Rust formatting/tests and Python validation have not yet been started
+    because unrelated cargo/rustc processes remained active through the process
+    guard; no processes were interrupted.
+
+## 2026-06-25 SoraFS PoR manual trigger route retirement
+
+- Added an explicit Torii `POST /v1/sorafs/por/trigger` route for the legacy
+  manual PoR trigger surface. The route runs through the app access path and
+  returns fail-closed `410 Gone` JSON with
+  `error = "manual_por_trigger_retired"`, `route_state = "retired"`, and the
+  governed replacement route `/v1/sorafs/capacity/por-challenge`.
+- Updated the SoraFS OpenAPI entry, CLI docs, PoR validator/reporting plans, and
+  roadmap so operators see this as a deliberate production decision rather than
+  an accidentally missing route. `sorafs_cli por trigger` still constructs and
+  submits the legacy Norito request shape, but live challenge admission must go
+  through governed `PorChallengeV1` submission or the scheduler runtime.
+- Added focused Torii handler coverage for the retirement response and an
+  OpenAPI path-presence assertion for the retired route. Rust compilation/test
+  validation is deferred while existing `cargo`/`rustc` processes are active in
+  the workspace.
+
+## 2026-06-25 SoraFS PDP rollout evidence gate and collection planner
+
+- Added `scripts/check_sorafs_pdp_rollout_evidence.py` as the SF-13 promotion
+  gate for deployed PDP evidence. The checker requires payload-free
+  provider-transport, proof-generation, validator-replay, governance/repair,
+  observability, and governance-approval artifacts before reporting `ready`.
+- The gate fails closed on raw challenge/proof bytes, request/response bodies,
+  Merkle paths, signed transactions, bearer tokens, secrets, stale evidence,
+  missing provider routes, missing Torii PDP guard removal, route authz or
+  Norito validation gaps, under-sized provider/challenge/proof samples, slow
+  proof generation, missing provider signatures, missing manifest or commitment
+  binding, missing segment or hot-leaf Merkle-path verification, missing
+  expanded negative fixture replay, missing Governance DAG archive or repair
+  handoff, missing PDP metrics/alerts, critical alerts, and governance packets
+  not bound to `iroha_config`.
+- Added `scripts/run_sorafs_pdp_rollout_evidence.py` as the matching collection
+  planner/runner. It accepts explicit reviewed evidence paths for every SF-13
+  evidence kind, supports shell-style `@ARGFILE` inputs, forwards evidence-age,
+  route-latency, proof-latency, provider, challenge, and proof-count thresholds,
+  emits a dry-run command plan, and invokes the checker with a reproducible
+  summary path.
+- Added focused checker and runner tests plus
+  `scripts/examples/sorafs_pdp_rollout_evidence.args.example` and
+  `scripts/examples/sorafs_pdp_rollout_collection.args.example` as payload-free
+  operator templates.
+- Updated the PDP plan, localized mirror metadata, and roadmap to count the
+  rollout evidence gate as shipped while keeping provider transport, live
+  signature/inclusion verification, regenerated negative fixture artifacts,
+  governance archival, repair handoff, OpenAPI/portal updates, and passing
+  deployed evidence open.
+- Validation status:
+  - Python `py_compile` and pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - anchored conflict-marker scan across the touched PDP rollout evidence,
+    collection planner, tests, examples, roadmap, status, and PDP plan files.
+
+## 2026-06-25 SoraFS PDP Merkle-path validation hardening
+
+- Hardened `PdpProofV1` validation so segment witnesses must carry non-empty
+  segment Merkle paths and hot-leaf witnesses must carry non-empty hot-leaf
+  Merkle paths; both failures now report deterministic PDP validation errors
+  through the reference outcome contract.
+- Added focused PDP tests for missing segment paths, missing hot-leaf paths,
+  late proofs, wrong providers, wrong manifests, and witness coverage mismatch
+  cases in challenge/proof pair validation.
+- Extended `generate_pdp_fixtures` so the expanded negative PDP fixture set is
+  reproducible for bad paths, deadline overruns, wrong provider ids, wrong
+  manifest digests, and coverage mismatches once fixture generation can run.
+- Updated the PDP plan, localized mirror metadata, roadmap, and fixture README
+  to keep SF-13 status aligned with the new validator behavior while preserving
+  the fail-closed Torii PDP proof-stream guard until the provider protocol,
+  live signature/inclusion verification, governance archival, repair handoff,
+  and regenerated negative fixture artifacts land.
+- Validation status:
+  - Cargo/rustfmt/test execution and PDP fixture regeneration have not yet been
+    started because unrelated cargo/rustc processes remained active through the
+    process guard; no processes were interrupted.
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - anchored conflict-marker scan across the touched PDP validator, generator,
+    fixture README, roadmap, status, and PDP plan files.
+
+## 2026-06-25 SoraFS reference SDK release evidence gate and collection planner
+
+- Added `scripts/check_sorafs_reference_sdk_release_evidence.py` as the SF-11
+  promotion gate for published SoraFS reference SDK and `sorafs-validate`
+  release evidence. The checker requires payload-free release-archive,
+  signed-manifest, downstream-bindings, cookbook-smoke, FFI/header-contract,
+  and governance-approval artifacts before reporting `ready`.
+- The gate fails closed on raw archive, binary, manifest, package,
+  smoke-output, transaction, token, secret, or private-key material, stale
+  evidence, missing x86_64/aarch64 macOS and Linux release targets, missing
+  binary/archive checksums, missing deterministic-archive proof, tracked
+  generated `dist/*` artifacts beyond `dist/.gitkeep`, unsigned or unverified
+  release manifests, missing governed release-key fingerprints, missing
+  JavaScript/Python/Kotlin/JVM/Java Android/Swift package publication evidence,
+  SDK export or `ValidationOutcomeV1` drift, missing native bridge/header
+  binding, failed published-archive cookbook smoke, missing fixture bundle or
+  manifest/CAR replay, smoke duration above threshold, FFI header drift, and
+  governance packets not bound to the governed release key roster, targets,
+  downstream packages, and smoke evidence.
+- Added `scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py`
+  with coverage for complete release evidence, response-file arguments, missing
+  release archives, stale evidence, raw archive leakage, missing release
+  targets, under-sized target counts, private-key presence, missing downstream
+  packages, under-sized package counts, excessive smoke duration, failed FFI
+  header guard evidence, wrong governance source, explicit unknown schemas,
+  ignored unknown directory artifacts in subset mode, invalid recognized
+  optional artifacts in subset mode, and unknown required evidence kinds.
+- Added `scripts/run_sorafs_reference_sdk_release_evidence.py` as the matching
+  collection planner/runner. It accepts explicit reviewed evidence paths for
+  every SF-11 evidence kind, supports shell-style `@ARGFILE` inputs, forwards
+  evidence-age, release-target, downstream-package, and smoke-duration
+  thresholds, emits a dry-run command plan, and invokes the checker with a
+  reproducible summary path.
+- Added `scripts/tests/run_sorafs_reference_sdk_release_evidence_test.py` with
+  coverage for the complete dry-run command plan, response-file parsing,
+  split-token response files, missing required evidence, missing file checks,
+  subset gates, and unknown required evidence kinds.
+- Added `scripts/examples/sorafs_reference_sdk_release_evidence.args.example`
+  and `scripts/examples/sorafs_reference_sdk_release_collection.args.example`
+  as payload-free operator templates for checking and collecting staged SF-11
+  release evidence.
+- Updated the SF-11 reference SDK plan, localized mirror metadata, and roadmap
+  to count the release evidence gate and collection planner as shipped while
+  keeping per-target published archives, signed release manifests, downstream
+  SDK package publication, and live operator smoke evidence open until they
+  pass the gate.
+- Validation status:
+  - Python `py_compile` and pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - anchored conflict-marker scan across the touched SF-11 release evidence,
+    collection planner, examples, roadmap, status, and reference SDK plan files.
+
+## 2026-06-25 SoraFS PoTR rollout evidence gate and collection planner
+
+- Added `scripts/check_sorafs_potr_rollout_evidence.py` as the SF-14 promotion
+  gate for deployed PoTR evidence. The checker requires payload-free
+  multi-provider-probe, receipt-validation, proof-stream,
+  reputation-integration, observability, and governance-approval artifacts
+  before reporting `ready`.
+- The gate fails closed on raw receipt/fetch transcript material, response
+  bodies, signed transactions, bearer tokens, secrets, stale evidence,
+  under-sized provider or receipt samples, missing hot/warm tier coverage,
+  hot/warm latency above threshold, missing gateway or provider signature
+  validation, missing governed ML-DSA provider key evidence, non-Norito
+  proof-stream routes, missing proof-stream filters, missing reputation-weight
+  governance, missing PoTR metrics or deadline-breach alert checks, critical
+  alerts, and governance packets that are not bound to `iroha_config`.
+- Added `scripts/tests/check_sorafs_potr_rollout_evidence_test.py` with
+  coverage for complete staged evidence, response-file arguments, missing probe
+  evidence, stale evidence, raw receipt leakage, missing hot/warm tier coverage,
+  under-sized provider and receipt samples, hot latency above threshold, missing
+  PQ key-roster evidence, non-Norito proof-stream routes, ungoverned reputation
+  weights, critical alerts, explicit unknown schemas, ignored unknown directory
+  artifacts in subset mode, invalid recognized optional artifacts in subset
+  mode, and unknown required evidence kinds.
+- Added `scripts/run_sorafs_potr_rollout_evidence.py` as the matching
+  collection planner/runner. It accepts explicit reviewed evidence paths for
+  every SF-14 evidence kind, supports shell-style `@ARGFILE` inputs, forwards
+  evidence-age, route-latency, hot/warm deadline, provider-count, and
+  receipt-count thresholds, emits a dry-run command plan, and invokes the
+  checker with a reproducible summary path.
+- Added `scripts/tests/run_sorafs_potr_rollout_evidence_test.py` with coverage
+  for the complete dry-run command plan, response-file parsing, split-token
+  response files, missing required evidence, missing file checks, subset gates,
+  and unknown required evidence kinds.
+- Added `scripts/examples/sorafs_potr_rollout_evidence.args.example` and
+  `scripts/examples/sorafs_potr_rollout_collection.args.example` as
+  payload-free operator templates for checking and collecting staged SF-14
+  evidence.
+- Updated the SF-14 PoTR plan, localized mirror metadata, and roadmap to count
+  the rollout evidence gate and collection planner as shipped while keeping live
+  multi-provider receipt evidence, governed provider ML-DSA key distribution,
+  reputation weighting evidence, and governance approval open until they pass
+  the gate.
+- Validation status:
+  - Python `py_compile` and pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - anchored conflict-marker scan across the touched SF-14 rollout evidence,
+    collection planner, examples, roadmap, status, and PoTR plan files.
+
+## 2026-06-25 SoraFS PoR rollout evidence gate and collection planner
+
+- Added `scripts/check_sorafs_por_rollout_evidence.py` as the SF-9 promotion
+  gate for deployed Proof-of-Replication evidence. The checker requires
+  payload-free randomness, scheduler-runtime, validator-replay,
+  reporting/archive, manual-trigger route-state, observability, and
+  governance-approval artifacts before reporting `ready`.
+- The gate fails closed on raw challenge/proof bytes, raw drand or VRF material,
+  raw report/export payloads, response bodies, signed transactions, bearer
+  tokens, secrets, stale evidence, under-sized provider/challenge samples,
+  unauthenticated or non-Norito routes, route latency above threshold,
+  scheduler lag above threshold, missing deterministic seed replay, missing
+  drand/VRF validation, missing repair/governance handoff, missing
+  `sorafs-validate por` replay, missing manual-trigger route-state evidence,
+  report latency above threshold, missing PoR metrics or alert checks, critical
+  alerts, and governance packets that are not bound to `iroha_config`.
+- Added `scripts/tests/check_sorafs_por_rollout_evidence_test.py` with coverage
+  for complete staged evidence, response-file arguments, missing randomness
+  evidence, stale evidence, raw randomness leakage, under-sized provider and
+  challenge samples, excessive scheduler lag, unauthenticated runtime routes,
+  missing Merkle replay, missing manual-trigger route-state evidence, report
+  latency above threshold, critical alerts, explicit unknown schemas, ignored unknown
+  directory artifacts in subset mode, invalid recognized optional artifacts in
+  subset mode, and unknown required evidence kinds.
+- Added `scripts/run_sorafs_por_rollout_evidence.py` as the matching collection
+  planner/runner. It accepts explicit reviewed evidence paths for every SF-9
+  evidence kind, supports shell-style `@ARGFILE` inputs, forwards evidence-age,
+  route-latency, scheduler-lag, report-latency, provider-count, and
+  challenge-count thresholds, emits a dry-run command plan, and invokes the
+  checker with a reproducible summary path.
+- Added `scripts/tests/run_sorafs_por_rollout_evidence_test.py` with coverage
+  for the complete dry-run command plan, response-file parsing, split-token
+  response files, missing required evidence, missing file checks, subset gates,
+  and unknown required evidence kinds.
+- Added `scripts/examples/sorafs_por_rollout_evidence.args.example` and
+  `scripts/examples/sorafs_por_rollout_collection.args.example` as payload-free
+  operator templates for checking and collecting staged SF-9 evidence.
+- Updated the SF-9a scheduler plan, SF-9b validator/reporting plan, localized
+  mirror metadata, and roadmap to count the rollout evidence gate and
+  collection planner as shipped while keeping live drand/VRF/auditor evidence,
+  deployment-specific archive decisions, governance archive handoff evidence,
+  and deployed manual-trigger route-state evidence open until they pass the gate.
+- Validation status:
+  - Python `py_compile` and pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard; no
+    processes were interrupted.
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - anchored conflict-marker scan across the touched SF-9 rollout evidence,
+    collection planner, examples, roadmap, status, and PoR plan files.
+
+## 2026-06-25 SoraFS repair rollout evidence gate and collection planner
+
+- Added `scripts/check_sorafs_repair_rollout_evidence.py` as the SF-8b
+  promotion gate for deployed repair automation evidence. The checker requires
+  payload-free auditor-roster, failure-capture, auditor-API, worker-lifecycle,
+  event-stream, governance-handoff, observability, and governance-approval
+  artifacts before reporting `ready`.
+- The gate fails closed on raw PoR/PoTR evidence, raw repair payloads, signed
+  auditor requests, response bodies, signed transactions, secrets, raw ledgers,
+  stale evidence, under-sized auditor rosters, missing PoR/PoTR replay,
+  unauthenticated or unsigned repair routes, route latency above threshold,
+  event lag above threshold, repair latency above threshold, missing lifecycle
+  status coverage, missing governance/reserve/transparency/reputation handoff,
+  critical alerts, and governance packets that are not bound to `iroha_config`.
+- Added `scripts/tests/check_sorafs_repair_rollout_evidence_test.py` with
+  coverage for complete staged evidence, response-file arguments, missing
+  failure-capture evidence, stale auditor roster evidence, raw evidence leakage,
+  under-sized auditor rosters, unauthenticated auditor API routes, excessive
+  repair latency, missing escalation lifecycle status, stale event streams,
+  critical alerts, explicit unknown schemas, ignored unknown directory artifacts
+  in subset mode, invalid recognized optional artifacts in subset mode, and
+  unknown required evidence kinds.
+- Added `scripts/run_sorafs_repair_rollout_evidence.py` as the matching
+  collection planner/runner. It accepts explicit reviewed evidence paths for
+  every SF-8b evidence kind, supports shell-style `@ARGFILE` inputs, forwards
+  evidence-age, route-latency, event-lag, repair-latency, and auditor-count
+  thresholds, emits a dry-run command plan, and invokes the checker with a
+  reproducible summary path.
+- Added `scripts/tests/run_sorafs_repair_rollout_evidence_test.py` with
+  coverage for the complete dry-run command plan, response-file parsing,
+  split-token response files, missing required evidence, missing file checks,
+  subset gates, and unknown required evidence kinds.
+- Added `scripts/examples/sorafs_repair_rollout_evidence.args.example` and
+  `scripts/examples/sorafs_repair_rollout_collection.args.example` as
+  payload-free operator templates for checking and collecting staged SF-8b
+  evidence.
+- Updated the SF-8b repair plan, localized mirror metadata, and roadmap to
+  count the rollout evidence gate and collection planner as shipped while
+  keeping live production PoR/PoTR failure, repair, escalation, and governance
+  handoff evidence with the deployed auditor roster and SF-9 coordinator open
+  until that evidence passes the gate.
+- Validation status:
+  - Python `py_compile` and pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard, including
+    `cargo test -p iroha_core --lib autoscale_transition -- --nocapture` and
+    `cargo test -p integration_tests --test nexus_and_streaming autoscale_transition_ -- --nocapture`
+    with child `rustc` work; no processes were interrupted.
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - anchored conflict-marker scan across the touched SF-8b rollout evidence,
+    collection planner, examples, roadmap, status, and repair plan files.
+
+## 2026-06-25 SoraFS Governance DAG rollout evidence gate and collection planner
+
+- Added `scripts/check_sorafs_governance_dag_rollout_evidence.py` as the
+  SF-12 promotion gate for deployed Governance DAG evidence. The checker
+  requires payload-free ingest-service, publisher-service, mirror-datastore,
+  operator-recovery, dashboard-API, observability, IPFS/IPNS end-to-end, and
+  governance-approval artifacts before reporting `ready`.
+- The gate fails closed on raw DAG blocks, raw heads, CAR payloads, node
+  payloads, response bodies, private keys, bearer tokens, signed transactions,
+  raw ledgers, stale evidence, missing publisher signature validation, missing
+  digest dedupe/quarantine controls, public head age above threshold, IPFS pin
+  lag above threshold, route latency above threshold, mirror drift, missing
+  public checkpoint recovery, critical alerts, insufficient public block or
+  payload-kind coverage, and governance packets that are not bound to
+  `iroha_config`.
+- Added `scripts/tests/check_sorafs_governance_dag_rollout_evidence_test.py`
+  with coverage for complete staged evidence, response-file arguments, missing
+  publisher evidence, stale ingest evidence, raw payload leakage, stale public
+  heads, dashboard route failures, dashboard route latency, mirror drift,
+  insufficient IPFS/IPNS block coverage, critical alerts, explicit unknown
+  schemas, ignored unknown directory artifacts in subset mode, invalid
+  recognized optional artifacts in subset mode, and unknown required evidence
+  kinds.
+- Added `scripts/run_sorafs_governance_dag_rollout_evidence.py` as the matching
+  collection planner/runner. It accepts explicit reviewed evidence paths for
+  every SF-12 evidence kind, supports shell-style `@ARGFILE` inputs, forwards
+  evidence-age, route-latency, pin-lag, head-age, block-count, and payload-kind
+  thresholds, emits a dry-run command plan, and invokes the checker with a
+  reproducible summary path.
+- Added `scripts/tests/run_sorafs_governance_dag_rollout_evidence_test.py`
+  with coverage for the complete dry-run command plan, response-file parsing,
+  split-token response files, missing required evidence, missing file checks,
+  subset gates, and unknown required evidence kinds.
+- Added
+  `scripts/examples/sorafs_governance_dag_rollout_evidence.args.example` and
+  `scripts/examples/sorafs_governance_dag_rollout_collection.args.example` as
+  payload-free operator templates for checking and collecting staged SF-12
+  evidence.
+- Updated the Governance DAG plan, localized mirror metadata, and roadmap to
+  count the rollout evidence gate and collection planner as shipped while
+  keeping the always-on ingest/publisher services, IPFS/IPNS publication,
+  runtime RocksDB/IPLD mirror datastore and query service, live-head/public
+  checkpoint publication/recovery commands, runtime/IPFS-backed dashboard API,
+  live public IPFS/IPNS head and pin/mirror metric emission, IPFS-backed tests,
+  and staged/live evidence that passes this gate open.
+- Validation status:
+  - Python `py_compile` and pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard, including
+    `cargo test -p iroha_core --lib autoscale_transition -- --nocapture` and
+    `cargo test -p iroha_torii --lib moderation_quarantine_object_endpoint -- --nocapture`
+    with child `rustc` work; no processes were interrupted.
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - anchored conflict-marker scan across the touched SF-12 rollout evidence,
+    collection planner, examples, roadmap, status, and Governance DAG plan
+    files.
+
+## 2026-06-25 SoraFS orderbook rollout evidence gate and collection planner
+
+- Added `scripts/check_sorafs_orderbook_rollout_evidence.py` as the SFM-2
+  promotion gate for deployed orderbook and streaming-settlement evidence. The
+  checker requires payload-free contract-surface, matcher-service,
+  settlement-service, API-gateway, event-stream, SDK-release, observability,
+  reconciliation, and governance-approval artifacts before reporting `ready`.
+- The gate fails closed on raw order payloads, receipt payloads, raw snapshots,
+  raw contract state, response bodies, signed transactions, secrets, raw
+  ledgers, stale evidence, unauthenticated or unsigned API routes, route latency
+  above threshold, stream lag above threshold, matcher lag above threshold,
+  under-sized reconciliation peer sets, contract/mirror divergence, critical
+  alerts, incomplete SDK language coverage, and governance packets that are not
+  bound to `iroha_config`.
+- Added `scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py` with
+  coverage for complete staged evidence, response-file arguments, missing
+  matcher evidence, stale contract evidence, payload leakage, unauthenticated
+  API routes, matcher lag, stream lag, under-sized reconciliation, reconciliation
+  mismatches, critical alerts, explicit unknown schemas, ignored unknown
+  directory artifacts in subset mode, invalid recognized optional artifacts in
+  subset mode, and unknown required evidence kinds.
+- Added `scripts/run_sorafs_orderbook_rollout_evidence.py` as the matching
+  collection planner/runner. It accepts explicit reviewed evidence paths for
+  every SFM-2 evidence kind, supports shell-style `@ARGFILE` inputs, forwards
+  evidence-age, route-latency, stream-lag, matcher-lag, and reconciliation-peer
+  thresholds, emits a dry-run command plan, and invokes the checker with a
+  reproducible summary path.
+- Added `scripts/tests/run_sorafs_orderbook_rollout_evidence_test.py` with
+  coverage for the complete dry-run command plan, response-file parsing,
+  split-token response files, missing required evidence, missing file checks,
+  subset gates, and unknown required evidence kinds.
+- Added `scripts/examples/sorafs_orderbook_rollout_evidence.args.example` and
+  `scripts/examples/sorafs_orderbook_rollout_collection.args.example` as
+  payload-free operator templates for checking and collecting staged SFM-2
+  evidence.
+- Updated the SFM-2 orderbook plan, localized mirror metadata, and roadmap to
+  count the rollout evidence gate and collection planner as shipped while
+  keeping the on-chain contract surface, durable matcher service, daemonized
+  settlement receipt service with escrow custody mutation, on-chain/governance
+  policy, contract forwarding, durable contract/matcher streams, SDK release
+  artifacts/live smoke evidence, live dashboards/alerts, contract/mirror
+  reconciliation tests, and staged/live evidence that passes this gate open.
+- Validation status:
+  - Python `py_compile` and pytest have not yet been started because unrelated
+    cargo/rustc processes were active through the process guard when this
+    status entry was added; no processes were interrupted.
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - anchored conflict-marker scan across the touched SFM-2 rollout evidence,
+    collection planner, examples, roadmap, status, and orderbook plan files.
+
+## 2026-06-25 SoraFS moderation panel rollout evidence gate and collection planner
+
+- Added `scripts/check_sorafs_moderation_panel_rollout_evidence.py` as the
+  SFM-4b promotion gate for deployed moderation-panel evidence. The checker
+  requires payload-free appeal-intake, sortition-roster, evidence-viewer,
+  operator-workflow, juror-notification, commit/reveal, decision-publication,
+  settlement-integration, transparency/reputation-handoff, metrics/alerts,
+  end-to-end panel, and governance-approval artifacts before reporting
+  `ready`.
+- The gate fails closed on raw evidence payloads, private commit/reveal
+  payloads, message bodies, response bodies, signed transactions, secrets, raw
+  ledgers, stale canaries, stale event publication, route latency above
+  threshold, unauthenticated or unsigned moderation routes, under-sized panels,
+  under-sized multi-peer simulations, missing settlement or
+  transparency/reputation coverage, firing critical alerts, and governance
+  packets that are not bound to `iroha_config`. The evidence-viewer canary now
+  additionally requires role-scoped manifests, short-lived URLs,
+  attested/logged sessions, strict CSP, disabled offline mode, watermark
+  overlay/metadata hashing, append-only access logs, anomaly events,
+  legal-hold binding, audit digest export, and full viewer event-class
+  coverage without signed URLs, session tokens, watermark secrets, raw
+  evidence, or response bodies. The commit/reveal canary now additionally
+  requires commit digest recomputation, duplicate-commit rejection,
+  mismatched-reveal rejection, late commit/reveal rejection, missed-quorum
+  detection, no-show failover, juror penalty planning, deterministic tally
+  replay, contested challenge coverage, governance event digest binding, and
+  full negative-scenario coverage without raw commit/reveal payloads.
+- Added `scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py`
+  with coverage for complete staged evidence, response-file arguments, missing
+  commit/reveal evidence, stale juror notifications, payload leakage,
+  unauthenticated evidence-viewer routes, under-sized panels, under-sized
+  multi-peer simulations, explicit unknown schemas, ignored unknown directory
+  artifacts in subset mode, invalid recognized optional artifacts in subset
+  mode, and unknown required evidence kinds.
+- Added `scripts/run_sorafs_moderation_panel_rollout_evidence.py` as the
+  matching collection planner/runner. It accepts explicit reviewed evidence
+  paths for every SFM-4b evidence kind, supports shell-style `@ARGFILE` inputs,
+  forwards freshness, event-lag, route-latency, panel-size, and peer-count
+  thresholds, emits a dry-run command plan, and invokes the checker with a
+  reproducible summary path.
+- Added `scripts/tests/run_sorafs_moderation_panel_rollout_evidence_test.py`
+  with coverage for the complete dry-run command plan, response-file parsing,
+  split-token response files, missing required evidence, missing file checks,
+  subset gates, and unknown required evidence kinds.
+- Added
+  `scripts/examples/sorafs_moderation_panel_rollout_evidence.args.example` and
+  `scripts/examples/sorafs_moderation_panel_rollout_collection.args.example` as
+  payload-free operator templates for checking and collecting staged SFM-4b
+  evidence.
+- Updated the SFM-4b moderation panel plan, localized mirror metadata, and
+  roadmap to count the rollout evidence gate and collection planner as shipped
+  while keeping durable or contract-backed orchestration, on-chain or ledger
+  recording, production juror portal flows, public decision/challenge DAG
+  rollout, end-to-end panel simulations, and deployed evidence that passes this
+  gate open.
+- Validation status:
+  - Python `py_compile` and pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard, including
+    `cargo test -p iroha_core --lib autoscale_transition -- --nocapture`,
+    `cargo test -p sorafs_node --lib moderation_quarantine_object_store -- --nocapture`,
+    and
+    `cargo test -p iroha_core --lib reroute_pending_transactions_with_state_rejects_pending_transactions_that_no_longer_route -- --nocapture`
+    with child `rustc` work; no processes were interrupted.
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - anchored conflict-marker scan across the touched SFM-4b rollout evidence,
+    collection planner, examples, roadmap, status, and moderation panel plan
+    files.
+
+## 2026-06-25 SoraFS appeal finance rollout evidence gate and collection planner
+
+- Added `scripts/check_sorafs_appeal_finance_rollout_evidence.py` as the
+  SFM-4b2 promotion gate for deployed appeal finance evidence. The checker
+  requires payload-free pricing-config, quote-api, deposit-lifecycle,
+  settlement-execution, settlement-submitter, moderation-worker, Governance DAG
+  publication, dashboard/metrics, multi-peer reconciliation, and
+  governance-approval artifacts before reporting `ready`.
+- The gate fails closed on raw instructions, signed transactions, response
+  bodies, private signer material, raw reports/rollups/receipts, raw ledgers,
+  stale canaries, stale hosted dashboard evidence, missing appeal class,
+  urgency, settlement outcome, reconciliation-status, payload-kind, or metric
+  coverage, unsigned or unauthenticated deposit/settlement routes, settlement
+  lag above threshold, critical alerts, fewer than four reconciliation peers,
+  and governance packets that are not bound to `iroha_config`.
+- Added `scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py`
+  with coverage for complete staged evidence, response-file arguments, missing
+  multi-peer reconciliation, stale dashboard metrics, payload leakage, missing
+  required metrics, missing deposit authz enforcement, under-sized multi-peer
+  reconciliation, explicit unknown schemas, ignored unknown directory artifacts
+  in subset mode, invalid recognized optional artifacts in subset mode, and
+  unknown required evidence kinds.
+- Added `scripts/run_sorafs_appeal_finance_rollout_evidence.py` as the matching
+  collection planner/runner. It accepts explicit payload-free evidence paths for
+  every SFM-4b2 evidence kind, supports shell-style `@ARGFILE` inputs, forwards
+  freshness, dashboard-age, route-latency, settlement-lag, and peer-count
+  thresholds, emits a dry-run command plan, and invokes the checker with a
+  reproducible summary path.
+- Added `scripts/tests/run_sorafs_appeal_finance_rollout_evidence_test.py` with
+  coverage for the complete dry-run command plan, response-file parsing,
+  split-token response files, missing required evidence, missing file checks,
+  subset gates, and unknown required evidence kinds.
+- Added `scripts/examples/sorafs_appeal_finance_rollout_evidence.args.example`
+  and `scripts/examples/sorafs_appeal_finance_rollout_collection.args.example`
+  as payload-free operator templates for checking and collecting staged SFM-4b2
+  evidence.
+- Updated the SFM-4b2 appeal pricing plan, localized mirror metadata, and
+  roadmap to count the rollout evidence gate and collection planner as shipped
+  while keeping hosted live/public dashboard evidence and multi-peer
+  end-to-end ledger reconciliation evidence open.
+- Validation status:
+  - Python `py_compile` and pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard, including
+    `cargo test -p iroha_core --lib autoscale_transition -- --nocapture` and
+    `cargo test -p iroha_cli moderation_operator_service -- --nocapture` with
+    child `rustc` work; no processes were interrupted.
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - anchored conflict-marker scan across the touched SFM-4b2 rollout evidence,
+    collection planner, examples, roadmap, status, and appeal pricing plan files.
+
+## 2026-06-25 SoraFS reserve/rent rollout evidence gate
+
+- Added `scripts/check_sorafs_reserve_rent_rollout_evidence.py` as the SFM-6
+  promotion gate for deployed reserve/rent lifecycle evidence. The checker
+  requires payload-free policy-config, quote-matrix, ledger-digest,
+  lifecycle-service, signed-route, reserve-movement, credit-line, appeal-policy,
+  metrics/alert, provider-bake, and governance-approval artifacts before
+  reporting `ready`.
+- The gate fails closed on raw ledgers, quotes, transfer instructions, signed
+  transactions, response bodies, secrets, stale ledger digests, stale provider
+  bakes, missing policy matrix coverage, unsigned or wrong-account route
+  acceptance, missing reserve movement/credit-line/appeal controls, firing
+  critical alerts, and governance packets that are not bound to `iroha_config`.
+- Added `scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py` with
+  coverage for complete staged evidence, response-file arguments, missing signed
+  routes, stale ledger digests, payload leakage, missing required metrics,
+  unsigned/wrong-account route probes, failed provider bakes, explicit unknown
+  schemas, ignored unknown directory artifacts in subset mode, invalid
+  recognized optional artifacts in subset mode, and unknown required evidence
+  kinds.
+- Added `scripts/examples/sorafs_reserve_rent_rollout_evidence.args.example` as
+  a payload-free operator template for replaying staged SFM-6 evidence.
+- Added `scripts/run_sorafs_reserve_rent_rollout_evidence.py` as the matching
+  collection planner/runner. It accepts explicit payload-free policy-config,
+  quote-matrix, ledger-digest, lifecycle-service, signed-route,
+  reserve-movement, credit-line, appeal-policy, metrics/alerts, provider-bake,
+  and governance-approval evidence paths, supports shell-style `@ARGFILE`
+  inputs, forwards gate thresholds, emits a dry-run command plan, and invokes
+  the checker with a reproducible summary path.
+- Added `scripts/tests/run_sorafs_reserve_rent_rollout_evidence_test.py` with
+  coverage for the complete dry-run command plan, response-file parsing,
+  split-token response files, missing required evidence, missing file checks,
+  subset gates, and unknown required evidence kinds.
+- Added `scripts/examples/sorafs_reserve_rent_rollout_collection.args.example`
+  as the reviewed operator template for the collection planner.
+- Updated the SFM-6 reserve/rent plan, localized mirror metadata, and roadmap to
+  count the rollout evidence gate and collection planner as shipped while
+  keeping the signed reserve lifecycle service/API, runtime reserve movements,
+  live credit-line mutation/accrual, appeal/policy-update service surface, and
+  staged provider bake evidence open.
+- Validation status:
+  - Python `py_compile` and pytest have not yet been started because unrelated
+    cargo/rustc processes remained active through the process guard, including
+    `cargo test -p iroha_core --lib autoscale_transition -- --nocapture`,
+    `cargo test -p iroha --lib sorafs_moderation_quarantine_operator_panel_sends_signed_get_request -- --nocapture`,
+    and
+    `cargo test -p iroha_core --lib set_nexus_rejects_external_autoscale_managed_lane -- --nocapture`
+    with child `rustc` work; no processes were interrupted.
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - anchored conflict-marker scan across the touched SFM-6 rollout evidence,
+    collection planner, examples, roadmap, status, and reserve/rent plan files.
+
+## 2026-06-25 SoraFS PoP credential rollout evidence gate
+
+- Added `scripts/check_sorafs_pop_credentials_rollout_evidence.py` as the
+  SFM-4b1 promotion gate for deployed proof-of-personhood credential service
+  evidence. The checker requires payload-free issuer-bundle,
+  commitment-root-publication, revocation-registry, enrollment-portal,
+  juror-client, verifier-service, moderation-integration, metrics/alert, and
+  governance-approval artifacts before reporting `ready`.
+- The gate fails closed on raw credentials, proofs, holder identities, secrets,
+  response bodies, stale root/revocation publications, missing enrollment or
+  verifier routes, missing client proof-generation/revocation-sync evidence,
+  missing moderation sortition/commit-reveal binding, firing critical alerts,
+  missing `iroha_config` governance binding, and governance that still points
+  at the local `transcript_digest_v1` proof foundation instead of a production
+  privacy-preserving backend. The production
+  `verify_pop_membership_proof_v1` API now rejects that policy-only proof
+  system directly, while local transcript checks remain under
+  `verify_pop_membership_transcript_policy_v1`.
+- Added `scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py`
+  with coverage for complete evidence, shell-style response-file arguments,
+  missing verifier evidence, transcript-digest governance rejection, payload
+  leakage, stale revocation publications, missing required metrics, explicit
+  unknown schemas, ignored unknown directory artifacts in subset mode, invalid
+  recognized optional artifacts in subset mode, and unknown required evidence
+  kinds.
+- Added `scripts/examples/sorafs_pop_credentials_rollout_evidence.args.example`
+  as a payload-free operator template for replaying staged SFM-4b1 evidence.
+- Added `scripts/run_sorafs_pop_credentials_rollout_evidence.py` as the
+  matching collection planner/runner. It accepts explicit payload-free
+  issuer-bundle, commitment-root, revocation-registry, enrollment-portal,
+  juror-client, verifier-service, moderation-integration, metrics/alerts, and
+  governance-approval evidence paths, supports shell-style `@ARGFILE` inputs,
+  forwards gate thresholds, emits a dry-run command plan, and invokes the
+  checker with a reproducible summary path.
+- Added `scripts/tests/run_sorafs_pop_credentials_rollout_evidence_test.py`
+  with coverage for complete dry-run plans, response-file parsing, split-token
+  response files, missing required evidence, missing file checks, subset gates,
+  and unknown required evidence kinds.
+- Added `scripts/examples/sorafs_pop_credentials_rollout_collection.args.example`
+  as the reviewed operator template for the collection planner.
+- Updated the SFM-4b1 PoP credential plan and roadmap to count the rollout
+  evidence gate and collection planner as shipped while keeping the production
+  privacy-proof backend, issuer/registry services, juror client storage/proof
+  generation, moderation sortition/commit-reveal integration, service CLI/API
+  surfaces, and captured deployed evidence open.
+- Validation status:
+  - Python `py_compile` and pytest have not yet been started because unrelated
+    `cargo test -p iroha_core --lib autoscale_transition -- --nocapture`
+    and `cargo test -p iroha_data_model --lib lane_lifecycle -- --nocapture`
+    processes, with child `rustc` work, remained active through the process
+    guard; no processes were interrupted.
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - anchored conflict-marker scan across the touched SFM-4b1 rollout evidence,
+    example, roadmap, status, and PoP plan files.
+
+## 2026-06-25 SoraFS AI pre-screening rollout evidence gate and collection planner
+
+- Added `scripts/check_sorafs_ai_prescreen_rollout_evidence.py` as the SFM-4a
+  promotion gate for deployed AI pre-screening and quarantine rollout
+  artifacts. The checker requires payload-free runner, committee, operator
+  workflow, juror notification transport, commit/reveal executor, moderation
+  transparency source-entry, Governance DAG, and end-to-end workflow evidence
+  before reporting `ready`.
+- The gate fails closed on payload-bearing or secret-looking fields, non-2xx
+  operator/transport/transparency probes, missing operator workflow routes,
+  missing execution summaries, incomplete moderation transparency source-kind
+  coverage, missing `iroha_config` governance binding, and incomplete
+  ingest/quarantine/release/appeal/transparency workflow steps.
+- Added `scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py`
+  with coverage for complete evidence, missing executor evidence, runner status
+  drift, missing juror-notification operator route, failed notification
+  transport probes, missing executor execution summaries, transparency
+  source-kind gaps, governance config drift, incomplete end-to-end workflow
+  evidence, payload leakage, explicit unknown schemas, ignored unknown
+  directory artifacts in subset mode, response-file arguments, and invalid
+  recognized optional artifacts in subset mode.
+- Added `scripts/run_sorafs_ai_prescreen_rollout_evidence.py` as the matching
+  collection planner/runner. It composes the existing runner, committee,
+  operator workflow, juror notification transport, commit/reveal executor, and
+  moderation transparency source-entry canaries, then invokes the checker with
+  the required external Governance DAG and end-to-end workflow evidence files.
+- Added `scripts/tests/run_sorafs_ai_prescreen_rollout_evidence_test.py` with
+  dry-run plan coverage, response-file parsing, missing transparency source
+  coverage, missing file checks, and quorum validation.
+- Added `scripts/examples/sorafs_ai_prescreen_rollout_evidence.args.example`
+  and `scripts/examples/sorafs_ai_prescreen_rollout_collection.args.example`
+  as payload-free operator templates for checking and collecting staged
+  evidence.
+- Updated the SFM-4a AI pre-screening plan, localized mirror metadata, and
+  roadmap to count the evidence gate and collection planner as shipped while
+  keeping captured deployed notification transport evidence, captured deployed
+  executor job evidence, and the live end-to-end evidence bundle open.
+- Validation completed:
+  - waited for an already-running unrelated
+    `cargo test -p iroha_data_model --lib lane_lifecycle -- --nocapture` and
+    child `rustc` job to finish before Python validation; no processes were
+    interrupted.
+  - `python3 -m py_compile scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/run_sorafs_ai_prescreen_rollout_evidence.py scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/run_sorafs_ai_prescreen_rollout_evidence_test.py`
+  - `python3 -m pytest -q scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/run_sorafs_ai_prescreen_rollout_evidence_test.py`
+
+## 2026-06-25 SoraFS hedging rollout evidence collection planner
+
+- Added `scripts/run_sorafs_hedging_rollout_evidence.py` as the SFM-5
+  collection planner/runner for reviewed staged hedging and billing evidence.
+  It accepts explicit feed-collector, reference-price, billing-cycle,
+  statement-publication, reconciliation, metrics/alerts, native-bridge-release,
+  and governance-approval artifacts, supports shell-style `@ARGFILE` inputs,
+  forwards the gate thresholds, emits a dry-run command plan, and invokes
+  `scripts/check_sorafs_hedging_rollout_evidence.py` with a reproducible
+  summary path.
+- Added `scripts/tests/run_sorafs_hedging_rollout_evidence_test.py` with
+  coverage for the complete dry-run command plan, response-file parsing,
+  split-token response files, missing required evidence, missing file checks,
+  staged billing-cycle minimum enforcement, subset gates, and unknown required
+  evidence kinds.
+- Added `scripts/examples/sorafs_hedging_rollout_collection.args.example` as
+  the reviewed operator template for collecting and checking payload-free SFM-5
+  staged evidence.
+- Updated the SFM-5 hedging plan, localized mirror metadata, and roadmap to
+  count the collection planner as shipped while keeping the collector service,
+  daemonized pricing/exposure engine, billing aggregator, statement publisher,
+  signed APIs, runtime CLI helpers, released native artifacts, fixtures,
+  dashboards, alerts, reconciliation tests, governance approval flow, and live
+  staged-cycle evidence open.
+- Validation status:
+  - Python `py_compile` and pytest were intentionally not started because an
+    already-running unrelated
+    `cargo test -p iroha_core --lib autoscale_transition -- --nocapture`
+    process remained active through repeated guard checks; no processes were
+    interrupted.
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - anchored conflict-marker scan across the touched SFM-5 collection planner,
+    example, roadmap, status, and hedging plan files.
+
+## 2026-06-25 SoraFS hedging rollout evidence gate
+
+- Added `scripts/check_sorafs_hedging_rollout_evidence.py` as the SFM-5
+  promotion gate for hedging/billing rollout artifacts. The checker requires
+  feed-collector, reference-price, billing-cycle, statement-publication,
+  reconciliation, metrics/alert, native-bridge-release, and governance-approval
+  evidence before reporting `ready`.
+- The gate fails closed on payload-bearing or secret-looking evidence fields,
+  stale feed decisions, high divergence, billing reconciliation mismatches,
+  missing statement-publication routes, firing critical alerts, native bridge
+  ABI versions below 12, and missing governance/config bindings. By default it
+  requires at least two distinct successful staged billing cycles.
+- Added `scripts/tests/check_sorafs_hedging_rollout_evidence_test.py` with
+  coverage for complete evidence, missing second staged cycle, stale feed lag,
+  divergent reference price, statement-body leakage, reconciliation mismatch,
+  critical alerts, stale native bridge ABI, invalid duplicate artifacts, invalid
+  optional artifacts in subset mode, and explicit unknown schemas.
+- Added `scripts/examples/sorafs_hedging_rollout_evidence.args.example` as a
+  payload-free operator template for running the gate over staged evidence.
+- Updated the SFM-5 hedging plan, localized mirror metadata, and roadmap to
+  count the evidence gate as shipped while keeping the collector service,
+  daemonized pricing/exposure engine, billing aggregator, statement publisher,
+  signed APIs, runtime CLI helpers, released native artifacts, fixtures,
+  dashboards, alerts, reconciliation tests, governance approval flow, and live
+  staged-cycle evidence open.
+- Validation completed:
+  - waited for already-running unrelated
+    `cargo test -p iroha_core --lib autoscale -- --nocapture` and child
+    `rustc` jobs to finish before Python validation; no processes were
+    interrupted.
+  - `python3 -m py_compile scripts/check_sorafs_hedging_rollout_evidence.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py`
+  - `python3 -m pytest -q scripts/tests/check_sorafs_hedging_rollout_evidence_test.py`
+
+## 2026-06-25 SoraFS hedging SDK and FFI bridge surface
+
+- Extended the SFM-5 hedging reference validator into the shared FFI and SDK
+  surfaces. `sorafs_manifest::reference_ffi` now exports
+  `SORAFS_REFERENCE_HEDGING_KIND_*` selectors plus
+  `sorafs_reference_validate_hedging_json` for feed, reference-price decision,
+  billing-line, and billing-statement payloads.
+- Added `connect_norito_sorafs_reference_validate_hedging_json` to
+  `connect_norito_bridge`, bumped the bridge ABI to 12, and added JNI entry
+  points for both Kotlin/JVM and legacy Android Java package names. The bridge
+  release notes call out that native artifacts must be regenerated before SDK
+  releases depend on this ABI.
+- Added hedging payload-kind enums and `validateHedgingPayloadJson` /
+  `validateHedgingPayloadJSON` wrappers to Kotlin/JVM, Java Android, and Swift,
+  with pre-native validation for labels and timestamps. The Java Android
+  main-based SoraFS validator test is now registered in `GradleHarnessTests` so
+  focused `ANDROID_HARNESS_MAINS` runs can exercise it.
+- Extended the public bridge header checker so
+  `ci/check_connect_norito_bridge_header.sh` now guards the SoraFS reference
+  export/header set, including the new hedging validator symbol.
+- Updated the SFM-5 hedging plan, localized mirror metadata, and roadmap to
+  count the SDK/FFI source bridge surface as shipped while keeping released
+  native artifacts, runtime collectors/services, dashboards, alerts,
+  reconciliation tests, and staged billing-cycle evidence open.
+- Validation completed:
+  - waited for an already-running unrelated
+    `cargo test -p iroha_core --lib proposal_queue_reconfigures_pending_default_route_to_autoscaled_elastic_lane -- --nocapture`
+    and child `rustc` job to finish before starting further validation; no
+    processes were interrupted.
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-hedging-bridge cargo test -j 1 -p sorafs_manifest hedging -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-hedging-connect cargo test -j 1 -p connect_norito_bridge sorafs_reference_hedging_validator_via_bridge_ffi -- --nocapture`
+  - `ci/check_sorafs_reference_ffi_header.sh`
+  - `ci/check_connect_norito_bridge_header.sh`
+  - `scripts/check_no_legacy_codec.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sorafs.SorafsReferenceValidatorsTest --console=plain`
+    first failed because no Java runtime was on the default PATH; the OpenJDK
+    21 retry then failed with Kotlin compiler heap exhaustion.
+  - `GRADLE_OPTS='-Xmx4096m -Dorg.gradle.jvmargs=-Xmx4096m -Dkotlin.daemon.jvmargs=-Xmx4096m' JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew --no-daemon :core-jvm:test --tests org.hyperledger.iroha.sdk.sorafs.SorafsReferenceValidatorsTest --console=plain -Dkotlin.daemon.jvmargs=-Xmx4096m`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sorafs.SorafsReferenceValidatorsTests JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew --no-daemon :core:test --console=plain`
+    first failed because the SoraFS main test was not registered in
+    `GradleHarnessTests`; after adding the harness entry, the same command
+    passed.
+  - `swift test --filter SorafsReferenceValidatorsTests` is blocked in this
+    checkout because `dist/NoritoBridge.xcframework` and
+    `dist/NoritoBridge.xcframework.zip` are absent, so the Swift package
+    manifest fails before test discovery.
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - anchored conflict-marker scan across the touched SFM-5 bridge, SDK, and
+    documentation files.
+
+## 2026-06-25 Nexus autoscale and lifecycle transition coverage
+
+- Added direct state-level regression coverage for deterministic Nexus
+  autoscale transitions. Hot one-block windows now prove the runtime path adds
+  an internally managed `elastic-lane-{id}` with the expected default
+  dataspace, metadata, creation height, and cooldown marker.
+- Added public-profile scale-out coverage for deterministic Nexus autoscale.
+  A three-lane base catalog (`core`, `governance`, `zk`) with
+  `min_lanes = 3` and `max_lanes = 5` now proves a hot window creates
+  `elastic-lane-3` with managed ownership metadata instead of only covering the
+  single-lane base case.
+- Added the matching cold-window transition test for scale-in. The setup seeds
+  the managed lane only through the internal autoscale-allowed lifecycle path,
+  preserving the external-config guard that rejects user-provided
+  `autoscale.managed` metadata, then proves the runtime retire path removes the
+  elastic lane and records the transition height.
+- Added an adversarial lifecycle regression for explicit routing rules: a plan
+  that retires and re-adds a rule lane under a different dataspace now proves
+  policy validation rejects the stale rule binding and leaves both the catalog
+  and rule dataspace unchanged.
+- Added queue reconfiguration coverage for committed autoscale catalogs. A
+  pending default-route transaction that initially used stale single-lane
+  routing is rerouted onto a managed elastic lane after the queue refreshes its
+  router/catalogs from committed Nexus state.
+- Extended the retired-lane queue rejection regression with telemetry-gated
+  TEU assertions. The test now proves a transaction queued on a retired lane is
+  removed from per-transaction TEU metadata, the retired lane no longer has a
+  backlog bucket, and remaining active lane/dataspace TEU buckets are reset to
+  zero after reroute rejection.
+- Cleaned the queue router autoscale metadata imports so the reserved-key
+  constants are test-only at that call site. The grouped Nexus integration
+  helper build now compiles without the unused-import warning that the
+  filtered autoscale-transition run exposed.
+- Added `iroha_config` autoscale parsing coverage for valid operator overrides
+  plus fail-closed rejection of zero sizing fields, inverted lane bounds, and
+  missing scale-in/scale-out hysteresis gaps.
+- Centralized the autoscale-managed elastic lane predicate on
+  `iroha_data_model::nexus::LaneConfig`, covering the reserved metadata key,
+  exact managed value, public visibility, deterministic alias, and positive
+  creation height in one place for routing, capacity accounting, retire
+  selection, and external-config rejection.
+- Hardened lane rebind cleanup so `set_nexus` and runtime lifecycle plans prune
+  lane-relay emergency validator overrides when a lane keeps the same `LaneId`
+  but moves to another dataspace. This prevents stale emergency trust roots
+  from surviving lane identity changes.
+- Hardened `LaneCatalog::apply_lifecycle` so a retire request must reference a
+  lane that already exists in the current catalog. An adversarial plan can no
+  longer add and retire the same previously unknown `LaneId` to forge the
+  retire precondition.
+- Extended autoscale-managed ownership checks to lane destruction: manual
+  lifecycle plans reject attempts to retire valid autoscale-managed elastic
+  lanes, while the internal consensus autoscaler can still retire those lanes
+  through its private lifecycle path. Invalid autoscale-owned lanes are now
+  removable through explicit repair retires.
+- Extended the same ownership protection to full Nexus config swaps. Candidate
+  configs may preserve active autoscale-managed lanes unchanged, but `set_nexus`
+  now rejects attempts to add, mutate, omit, or replace those lanes atomically
+  instead of allowing an external operator path to retire or convert them.
+- Fixed the autoscale scale-in deadlock exposed by the transition regression:
+  `StateBlock` now applies internal autoscale lifecycle changes through a
+  block-local helper that reuses the already-open world transaction for
+  lane-emergency-validator pruning instead of opening a nested world
+  transaction.
+- Extended the autoscale scale-in transition regression to seed a
+  lane-emergency-validator override on the managed elastic lane, commit the
+  `StateBlock`, and prove the block-local cleanup removes the override along
+  with the lane.
+- Validation completed:
+  - `cargo fmt --all`
+  - a default-target `cargo test -p iroha_core --lib autoscale_transition -- --nocapture`
+    run exposed the pre-fix scale-in deadlock; the process was sampled for the
+    blocking stack and not interrupted.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_data_model --lib lane_lifecycle -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib apply_lane_lifecycle_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib set_nexus_rejects_external_autoscale_managed_lane -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib set_nexus_allows_preserving_existing_autoscale_managed_lane -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_config --test autoscale_config -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_config --test fixtures minimal_config_snapshot -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale_transition_adds_managed_elastic_lane_for_public_base_profile -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib reroute_pending_transactions_with_state_rejects_pending_transactions_that_no_longer_route -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib --features telemetry reroute_pending_transactions_with_state_rejects_pending_transactions_that_no_longer_route -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib proposal_queue_reconfigures_pending_default_route_to_autoscaled_elastic_lane -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib autoscale -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p iroha_core --lib queue::router -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-lifecycle cargo test -p integration_tests --test nexus_and_streaming autoscale_transition_ -- --nocapture`
+  - `bash scripts/formal/install_apalache.sh 0.52.2`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH bash scripts/formal/sumeragi_tlc.sh autoscale-transition-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH bash scripts/formal/sumeragi_apalache.sh autoscale-transition-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH` autoscale-transition Apalache expected-failure loop for:
+    `autoscale-transition-bug-skip-matching-transition`,
+    `autoscale-transition-bug-ignore-enabled`,
+    `autoscale-transition-bug-ignore-height`,
+    `autoscale-transition-bug-off-by-one-previous`,
+    `autoscale-transition-bug-off-by-one-next`,
+    `autoscale-transition-bug-skip-success-reconfigure`,
+    `autoscale-transition-bug-reconfigure-failed-commit`,
+    `autoscale-transition-bug-reconfigure-without-transition`, and
+    `autoscale-transition-bug-wrong-reported-height`.
+  - `cargo test -p iroha_data_model --lib lane_config_identifies_only_valid_autoscale_managed_elastic_lanes -- --nocapture`
+  - `cargo test -p iroha_data_model --lib nexus::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib autoscale_transition -- --nocapture`
+  - `cargo test -p iroha_core --lib autoscale -- --nocapture`
+  - `cargo test -p iroha_core --lib apply_lane_lifecycle_rejects_rebinding_explicit_rule_dataspace_without_policy_update -- --nocapture`
+  - `cargo test -p iroha_core --lib apply_lane_lifecycle_ -- --nocapture`
+  - `cargo test -p iroha_core --lib set_nexus_prunes_lane_state_when_lane_dataspace_changes -- --nocapture`
+  - `cargo test -p iroha_core --lib apply_lane_lifecycle_prunes_lane_state_when_lane_dataspace_changes -- --nocapture`
+  - `cargo test -p iroha_core --lib proposal_queue_reconfigures_pending_default_route_to_autoscaled_elastic_lane -- --nocapture`
+  - `cargo test -p iroha_core --lib proposal_queue_syncs_stale_router_from_committed_nexus -- --nocapture`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-25 SoraFS hedging reference-validator gate
+
+- Extended the SoraFS reference validator with `HedgingValidationPayloadKindV1`
+  and `validate_hedging_payload_bytes` for SFM-5 feed, reference-price
+  decision, billing-line, and billing-statement payloads. The validator decodes
+  canonical Norito bytes, replays the deterministic payload validation, emits
+  stable `ValidationOutcomeV1` telemetry tags/context, and distinguishes
+  malformed payloads, stale/future/rejected feed policy failures,
+  replay/digest mismatches, and internal arithmetic/serialization failures.
+- Added `sorafs-validate hedging` with `billing` as an alias. Operators can now
+  validate local `--feed`, `--decision`, `--line`, and `--statement` artifacts,
+  or use `--kind <payload-kind> --input <path>`, with the same table/JSON/YAML
+  outcome behavior as the existing SoraFS validator commands.
+- Updated the SFM-5 hedging plan, localized mirror metadata, and roadmap to
+  count this reference-validator/CLI gate as shipped while leaving daemonized
+  collectors, billing services, APIs, SDK bridge wrappers, fixtures,
+  dashboards, alerts, reconciliation tests, and staged billing-cycle evidence
+  open.
+- Validation completed:
+  - waited for an already-running unrelated
+    `cargo test -p iroha_core --lib native_amx -- --nocapture` and child
+    `rustc` jobs to finish before formatting or testing; no processes were
+    interrupted.
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-hedging-reference cargo test -j 1 -p sorafs_manifest hedging -- --nocapture`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - anchored conflict-marker scan across the touched SFM-5 validator, payload,
+    and documentation files.
+  - localized mirror `source_hash`/`source_last_modified` scan for
+    `docs/source/sorafs_hedging_plan.*.md`.
+
+## 2026-06-25 SoraFS hedging and billing payload foundation
+
+- Added `sorafs_manifest::hedging` as the local SFM-5 payload/math
+  foundation. It defines canonical Norito/JSON payloads for normalized XOR/USD
+  feed samples, reference-price decisions, billing line items, and billing
+  statements, with deterministic BLAKE3 ids over canonical bodies.
+- Added pure helpers that replay weighted fixed-point reference-price
+  aggregation, reject stale/future/rejected/duplicate feeds, flag degraded or
+  divergent feeds, convert micro-XOR to USD micro-units with deterministic
+  ceiling rounding, and validate statement totals against a bound reference
+  price.
+- Updated the SoraFS hedging plan and roadmap to count the local payload/math
+  foundation as shipped while keeping collector services, daemonized exposure
+  tracking, hedge execution, billing aggregators, statement publishers, APIs,
+  CLI helpers, fixtures, dashboards, alerts, reconciliation tests, and staged
+  billing-cycle evidence open.
+- Validation completed:
+  - waited for an already-running unrelated
+    `cargo test -p iroha_core --lib aggregate_votes_to_qc -- --nocapture` and
+    child `rustc` jobs to finish before formatting or testing; no processes
+    were interrupted.
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-hedging cargo test -j 1 -p sorafs_manifest hedging -- --nocapture`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - anchored conflict-marker scan across the touched SFM-5 payload and
+    documentation files.
+  - localized mirror `source_hash`/`source_last_modified` scan for
+    `docs/source/sorafs_hedging_plan.*.md`.
+
+## 2026-06-25 Native AMX vote ingress exactness
+
+- Hardened native AMX control-plane vote admission with a stateless
+  `NativeAmxVoteV1::validate_ingress` prefilter. Remote vote messages now fail
+  closed when the message variant phase differs from the signed attestation
+  body, the authenticated sender does not match the vote signer, the signer is
+  not BLS-normal, or the individual BLS signature does not verify. Sumeragi
+  still performs the live-PoP world-state check immediately before inserting
+  the vote into the exact-body proposer session cache.
+- Hardened native AMX QC assembly so polluted direct inputs are rejected before
+  aggregation: every vote signer must be BLS-normal and every individual vote
+  signature must verify against the canonical attestation preimage before the
+  aggregate signature and signer bitmap are emitted.
+- Bounded the native AMX proposer vote cache within each session. The cache was
+  already bounded by session count; it now also caps exact attestation-body
+  buckets per source/plan and evicts the oldest bucket FIFO, preventing a valid
+  signer from retaining unbounded retried or adversarial bodies under one
+  session key.
+- Moved native AMX proposer cache sizing into Sumeragi configuration. Operators
+  can tune `sumeragi.advanced.native_amx.session_cache_max` and
+  `sumeragi.advanced.native_amx.session_body_bucket_max`, with defaults of
+  `1024` sessions and `256` exact-body buckets per session.
+- Added focused adversarial coverage for valid BLS votes, phase/variant
+  mismatch, sender/signer mismatch, non-BLS signer identities, and malformed
+  signatures at ingress and QC assembly, plus per-session cache bucket
+  eviction under a retried-body flood. Added config coverage for non-default
+  TOML overrides and zero-value rejection of native AMX cache limits.
+- Validation completed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_config --test native_amx_config -- --nocapture`
+  - `cargo test -p iroha_config --test fixtures minimal_config_snapshot -- --nocapture`
+  - `cargo test -p iroha_core --lib vote_ingress_validation -- --nocapture`
+  - `cargo test -p iroha_core --lib aggregate_votes_to_qc -- --nocapture`
+  - `cargo test -p iroha_core --lib native_amx -- --nocapture`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-25 SoraFS reputation rollout evidence collection harness
+
+- Added `scripts/run_sorafs_reputation_rollout_evidence.py` as the SFM-3
+  deployed collection harness. It runs bounded `sorafs_cli reputation
+  publish`, `snapshot`, `fetch`, `verify`, and `watch` commands, validates
+  provider/proof coverage before contacting Torii, supports shell-style
+  `@ARGFILE` response files, and invokes the existing rollout gate with metrics,
+  transport, and routing/incentive evidence.
+- Added `scripts/examples/sorafs_reputation_rollout_evidence.args.example` as a
+  payload-free operator template and documented the helper in the SoraFS
+  reputation operator runbook, SFM-3 plan, and roadmap.
+- Validation completed:
+  - process scan showed no active `cargo`/`rustc` work apart from the scan and
+    the current Codex session before Python validation; no processes were
+    interrupted.
+  - `python3 -m py_compile scripts/run_sorafs_reputation_rollout_evidence.py scripts/tests/run_sorafs_reputation_rollout_evidence_test.py`
+  - `python3 -m pytest -q scripts/tests/run_sorafs_reputation_rollout_evidence_test.py`
+  - `python3 -m py_compile scripts/check_sorafs_reputation_rollout_evidence.py scripts/run_sorafs_reputation_rollout_evidence.py scripts/check_sorafs_transparency_rollout_evidence.py scripts/run_sorafs_transparency_rollout_evidence.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/run_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_transparency_rollout_evidence_test.py scripts/tests/run_sorafs_transparency_rollout_evidence_test.py`
+  - `python3 -m pytest -q scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/run_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_transparency_rollout_evidence_test.py scripts/tests/run_sorafs_transparency_rollout_evidence_test.py`
+
+## 2026-06-25 SoraFS reputation rollout evidence gate hardening
+
+- Hardened `scripts/check_sorafs_reputation_rollout_evidence.py` so the SFM-3
+  rollout gate fails closed when any recognized evidence artifact is invalid,
+  even if another duplicate artifact for the same required kind is valid. This
+  also rejects invalid optional artifacts when operators run a narrowed
+  `--require-kind` subset, preventing stale or payload-bearing JSON files in an
+  evidence directory from being silently ignored.
+- Added regression coverage for stale duplicate latest evidence and invalid
+  optional transport evidence in subset-gate mode.
+- Updated the SoraFS reputation plan and roadmap to document the stricter
+  production gate.
+- Validation completed:
+  - waited for an already-running unrelated
+    `cargo test -p iroha_data_model --lib set_transaction_results_records_committed_fragment_count -- --nocapture`
+    and child `rustc` job to finish before Python validation; no processes were
+    interrupted.
+  - `python3 -m py_compile scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py`
+  - `python3 -m pytest -q scripts/tests/check_sorafs_reputation_rollout_evidence_test.py`
+  - `python3 -m py_compile scripts/check_sorafs_reputation_rollout_evidence.py scripts/check_sorafs_transparency_rollout_evidence.py scripts/run_sorafs_transparency_rollout_evidence.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_transparency_rollout_evidence_test.py scripts/tests/run_sorafs_transparency_rollout_evidence_test.py`
+  - `python3 -m pytest -q scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_transparency_rollout_evidence_test.py scripts/tests/run_sorafs_transparency_rollout_evidence_test.py`
+
+## 2026-06-25 SoraFS PoP bridge validator surface
+
+- Extended the SFM-4b1 PoP reference validator from local Rust/CLI use into
+  the shared bridge surfaces. `sorafs_manifest::reference_ffi` now exports
+  `SORAFS_REFERENCE_POP_KIND_*` selectors plus
+  `sorafs_reference_validate_pop_json`, returning canonical
+  `ValidationOutcomeV1` JSON for credentials, commitment roots, revocation
+  lists, enrollment requests, renewal requests, and membership proofs.
+- Added `PopIssuedCredentialBundleV1` and
+  `issue_pop_credential_bundle_ed25519_v1` as the local SFM-4b1 issuer
+  publication bundle. The helper signs the credential, commitment-root, and
+  revocation-list payloads with the existing deterministic Ed25519 digests,
+  then validates issuer id/public key, root, tree, and revocation consistency,
+  and rejects already revoked credential nonces.
+- Extended `validate_pop_payload_bytes`, `sorafs-validate pop`, the FFI PoP
+  selector table, and Kotlin/JVM, Java Android, and Swift `SorafsPopPayloadKind`
+  enums with append-only selector `7` for issued-credential bundles.
+- Mirrored the PoP selector constants and
+  `sorafs_reference_validate_pop_json` prototype into the public
+  `crates/sorafs_manifest/include/sorafs_reference.h` C header, and extended
+  `ci/check_sorafs_reference_ffi_header.sh` so future header-contract checks
+  cover the PoP validator signature.
+- Added `connect_norito_sorafs_reference_validate_pop_json` to
+  `connect_norito_bridge`, bumped the bridge ABI to 11, and added JNI entry
+  points for both Kotlin/JVM and legacy Android Java package names. The bridge
+  release notes now flag that native artifacts must be regenerated before SDK
+  releases depend on the PoP selector surface.
+- Added `SorafsPopPayloadKind` and `validatePopPayloadJson` wrappers for
+  Kotlin/JVM and Java Android, plus `SorafsPopPayloadKind`,
+  `validatePopPayloadJSON`, and dynamic symbol resolution in Swift. The mobile
+  wrappers validate labels and timestamps before native dispatch.
+- Updated the SFM-4b1 plan, localized mirrors, and roadmap to count the
+  SDK/bridge reference gate as shipped while keeping issuer/registry services,
+  juror storage/proof generation, privacy-preserving ZK verification, service
+  CLI/API surfaces, and deployed rollout evidence open.
+- Validation completed:
+  - waited for an already-running unrelated `cargo test -p iroha_core --lib
+    apply_lane_lifecycle_ -- --nocapture`/`rustc` job to finish before starting
+    cargo validation; no processes were interrupted.
+  - before the issued-credential-bundle helper was added: `cargo fmt --all`
+  - before the issued-credential-bundle helper was added:
+    `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-pop-bridge cargo test -j 1 -p sorafs_manifest pop -- --nocapture`
+    passed with 18 PoP library tests and 4 `sorafs-validate pop` parser tests.
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - anchored conflict-marker scan across the touched SFM-4b1 bridge, SDK, and
+    documentation files.
+  - stale ABI-10 scan across the bridge and SDK wrappers.
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - localized mirror `source_hash` scan for
+    `docs/source/sorafs_pop_credentials_plan*.md`.
+  - `git diff --check -- crates/sorafs_manifest/include/sorafs_reference.h ci/check_sorafs_reference_ffi_header.sh status.md roadmap.md`
+  - anchored conflict-marker scan for the touched SoraFS reference header and
+    header-contract checker.
+  - static selector scan confirmed the existing PoP selector values remained
+    stable (`credential=1`, `commitment_root=2`, `revocation_list=3`,
+    `enrollment_request=4`, `renewal_request=5`, `membership_proof=6`) and the
+    issued-credential bundle was appended as selector `7` across Rust FFI,
+    `sorafs_reference.h`, Kotlin/JVM, Java Android, and Swift.
+  - refreshed 20 `docs/source/sorafs_pop_credentials_plan.*.md` mirrors to
+    source hash
+    `9c884eef3833b31336185381330adf9b4880e3df6c74d241288a3140a8fc5eff`.
+  - for the issued-credential-bundle helper: `cargo fmt --all`.
+  - `ci/check_sorafs_reference_ffi_header.sh` passed and reported
+    `sorafs_reference.h declares 20 FFI symbols and 47 selector constants`.
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-pop-bundle cargo test -j 1 -p sorafs_manifest pop -- --nocapture`
+    passed with 21 PoP library tests and 5 `sorafs-validate pop` parser tests.
+  - after waiting for an unrelated
+    `cargo test -p iroha_core --lib autoscale_block_work_count -- --nocapture`
+    and child `rustc` job to finish under the repo process guard, with no
+    processes interrupted:
+    `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-pop-bundle cargo test -j 1 -p connect_norito_bridge sorafs_reference_pop -- --nocapture`
+    passed with the `sorafs_reference_pop_validator_via_bridge_ffi` test.
+
+## 2026-06-25 SoraFS PoP reference validator gate
+
+- Added `PopValidationPayloadKindV1` and `validate_pop_payload_bytes` to
+  `sorafs_manifest` so the SFM-4b1 PoP credential payloads can be consumed by
+  the shared SoraFS reference validation outcome model.
+- Added `sorafs-validate pop` with `--credential`, `--root`,
+  `--revocations`, `--enrollment`, `--renewal`, and `--proof` aliases. Signed
+  issuer publications require Ed25519 verification; enrollment, renewal, and
+  membership-proof payloads use deterministic structural/transcript checks.
+- Updated the SFM-4b1 plan, localized mirrors, and roadmap to count the local
+  reference/CI gate as shipped while keeping issuer/registry services, juror
+  client proof generation, privacy-preserving ZK verification, service CLI/API
+  surfaces, and deployed rollout evidence open.
+- Validation completed:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-pop-validator cargo test -j 1 -p sorafs_manifest pop -- --nocapture`
+  - localized mirror consistency check for
+    `docs/source/sorafs_pop_credentials_plan*.md`
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check -- crates/sorafs_manifest/src/reference.rs crates/sorafs_manifest/src/lib.rs crates/sorafs_manifest/src/bin/sorafs-validate.rs docs/source/sorafs_pop_credentials_plan*.md roadmap.md status.md`
+  - anchored conflict-marker scan for touched SFM-4b1 files
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-25 SoraFS PoP credential payload foundation
+
+- Added `sorafs_manifest::pop_credentials` as the SFM-4b1 local payload
+  foundation for proof-of-personhood credentials. The module defines
+  `PopCredentialV1`, commitment-root, revocation-list, enrollment, renewal, and
+  membership-proof payloads with canonical Norito schemas and structural
+  validators.
+- Added domain-separated Ed25519 signing and verification helpers for
+  credentials, commitment roots, and revocation lists. Membership proof
+  validation now covers transcript digest binding, expiry, root/tree-version
+  consistency, issuer consistency, stale or future revocation-list versions,
+  revoked nonces, and replayed nullifiers.
+- Updated the SFM-4b1 PoP credential plan, localized mirrors, and roadmap to
+  count the local payload/signature foundation as shipped while keeping the
+  privacy-preserving membership proof backend, issuer/registry services, juror
+  client, moderation integration, CLI/API surfaces, and deployed rollout
+  evidence open.
+- Validation completed:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-pop cargo test -j 1 -p sorafs_manifest pop_credentials -- --nocapture`
+  - localized mirror consistency check for
+    `docs/source/sorafs_pop_credentials_plan*.md`
+  - anchored conflict-marker scan for touched SFM-4b1 files
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - `git diff --check`
+
+## 2026-06-25 SoraFS reputation rollout evidence gate
+
+- Added `scripts/check_sorafs_reputation_rollout_evidence.py` as the SFM-3
+  production promotion gate for deployed reputation publishers. The verifier
+  accepts the existing `sorafs_cli reputation publish`, `snapshot`, `fetch`,
+  `watch`, and `verify` JSON artifacts plus metrics, SSE/WebSocket transport,
+  and routing/incentive consumption canary evidence.
+- The gate requires one fresh, consistent snapshot id/root across the bundle,
+  positive provider counts, bounded snapshot age and ingest lag, provider proof
+  coverage, proof replay, sequenced event delivery, SSE and WebSocket event
+  observation, and downstream routing/incentive consumption before reporting
+  `sorafs.reputation.rollout_evidence_gate.v1` as `ready`.
+- Evidence validation rejects raw snapshot/proof bytes, response bodies,
+  payload fields, private keys, bearer-token material, and any `*_included:
+  true` leakage so production rollout archives stay payload-free.
+- Updated the SFM-3 reputation plan, localized mirrors, the operator runbook,
+  and the roadmap to count the verifier as shipped while keeping deployed
+  ingest/publisher rollout and a live `ready` evidence summary as open gates.
+- Validation completed:
+  - `python3 -m py_compile scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_reputation_rollout_evidence_test.py`
+  - localized mirror consistency check for
+    `docs/source/sorafs_reputation_plan*.md`
+  - conflict-marker scan for touched SFM-3 files
+  - `git diff --name-only -- Cargo.lock`
+  - `git diff --check`
+
+## 2026-06-25 SoraFS reserve lifecycle projection
+
+- Added deterministic SFM-6 lifecycle projection to the shared SoraFS reserve
+  data model. `ReserveQuote::lifecycle_projection` now reports provider stage,
+  overdue window metadata, rent/reserve/top-up shortfalls, automatic capped
+  credit draw, remaining credit availability, uncovered rent, prorated
+  post-grace interest, total remaining due after credit, and the policy flags
+  used to restrict manifests, disable adverts, notify governance, or require
+  manual credit approval.
+- Added `iroha app sorafs reserve lifecycle --quote <path>
+  --days-past-due <days> --grace-days <days> --default-after-days <days>` so
+  operators can turn an existing reserve quote artifact into the same
+  deterministic lifecycle/credit snapshot without reimplementing the formulas.
+- Updated the SFM-6 reserve/rent plan, all localized mirrors, and the roadmap
+  to count local lifecycle projection and CLI output as shipped while keeping
+  signed Torii routes, authenticated reserve movement, persisted lifecycle
+  service state, live credit-line mutation/accrual, appeals, and provider bake
+  evidence as open rollout work.
+- Validation completed:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reserve-lifecycle cargo test -j 1 -p iroha_data_model lifecycle_projection --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reserve-lifecycle cargo test -j 1 -p iroha_cli --bin iroha reserve_lifecycle_builder -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reserve-lifecycle cargo test -j 1 -p iroha_cli sorafs_reserve_lifecycle --test cli_smoke -- --nocapture`
+  - localized mirror consistency check for
+    `docs/source/sorafs_reserve_rent_plan*.md`
+  - conflict-marker scan for touched Rust/docs files
+  - `git diff --name-only -- Cargo.lock`
+  - `git diff --check`
+
+## 2026-06-25 Nexus autoscale default-lane sharding
+
+- Autoscale-managed elastic lanes for the default dataspace now participate in
+  default no-target transaction routing. The router builds a deterministic
+  candidate set from the configured default lane plus lanes with valid
+  `autoscale.managed = true`, `elastic-lane-{id}` alias, and positive
+  `autoscale.created_height`, while requiring public lane visibility, then
+  selects a lane from the transaction hash so validation and proposal routing
+  agree across nodes.
+- Scale-out now creates consensus-managed elastic lanes in the configured
+  `routing_policy.default_dataspace` instead of hard-coding the universal
+  dataspace, so non-universal default-dataspace deployments get usable elastic
+  lanes immediately after the lifecycle transition commits.
+- Autoscale utilization samples now count committed fragments with external
+  transaction envelopes as the floor, so detached internal work cannot make
+  current or historical decision windows look idle. Block results persist the
+  committed-fragment total, historical autoscale samples read that value from
+  Kura, and validation rejects forged non-zero committed-fragment totals that
+  do not match re-execution. The utilization denominator now uses only
+  default-route capacity (default lane plus valid managed elastic lanes in the
+  default dataspace), and scale-in retire selection ignores managed-looking
+  lanes outside that dataspace or lanes with restricted visibility.
+- Explicit routing rules, dataspace-targeted writes, settlement routes, and
+  permission-scope routes keep precedence over elastic default sharding. Spoofed
+  elastic metadata, malformed creation heights, alias mismatches, and
+  non-default dataspaces are excluded from the candidate set.
+- Runtime lane lifecycle reconfiguration now rejects queued transactions that
+  become unrouteable after a lane retirement or catalog change. The cleanup path
+  removes the pending transaction, decrements queue/per-user counters, clears
+  cached routing decisions/plans, removes plan-journal entries, and scrubs the
+  global routing ledger so retired-lane metadata cannot leak into proposal,
+  gossip, or replay hints.
+- Enabled Nexus config swaps and lane lifecycle plans now reject unresolved
+  routing policy targets before mutating catalogs. The default route, explicit
+  rule lanes, and explicit rule dataspaces must resolve against the candidate
+  lane/dataspace catalogs, so adversarial scale-in plans cannot retire or rebind
+  active policy lanes while leaving admission to fail later.
+- External Nexus config swaps and manual lane lifecycle additions now reject the
+  reserved `autoscale.managed` metadata key; only the internal consensus
+  autoscaler can mint autoscale-owned elastic lanes.
+- Block validation now has adversarial coverage for stale durable execution
+  contexts that claim the default lane after transaction-hash sharding derives
+  an autoscale elastic lane.
+- Block validation now also has adversarial coverage for forged committed
+  fragment counts in block results, preventing peers from inflating or
+  suppressing autoscale load history with non-matching result metadata.
+- Cleared the stale native-AMX routing note: participant descriptors are
+  already carried by `RoutingPlan::NativeAmx`, proposal execution contexts, and
+  coordinator block receipts, while the router merge helper only decides when a
+  universal coordinator route is required.
+- Fixed the stale `SccpRouteManifest` test fixture in `state.rs` to include the
+  required `deployment_evidence_sha256` field so `iroha_core` lib tests compile.
+- Validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib set_nexus_ -- --nocapture`
+  - `cargo test -p iroha_core --lib reroute_pending_transactions_with_state_rejects_pending_transactions_that_no_longer_route -- --nocapture`
+  - `cargo test -p iroha_core --lib apply_lane_lifecycle_ -- --nocapture`
+  - `cargo test -p iroha_core --lib queue::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib default_route_ -- --nocapture`
+  - `cargo test -p iroha_core --lib explicit_rule_overrides_autoscaled_default_sharding -- --nocapture`
+  - `cargo test -p iroha_core --lib collect_autoscale_samples_reads_persisted_historical_fragment_counts -- --nocapture`
+  - `cargo test -p iroha_core --lib autoscale -- --nocapture`
+  - `cargo test -p iroha_core --lib queue::router -- --nocapture`
+  - `cargo test -p iroha_core --lib validate_static_state_dependent_rejects_stale_default_context_for_elastic_route -- --nocapture`
+  - `cargo test -p iroha_data_model --lib set_transaction_results_records_committed_fragment_count -- --nocapture`
+  - `cargo test -p iroha_core --lib validate_keep_voting_block_rejects_forged_committed_fragment_count -- --nocapture`
+  - `cargo test -p iroha_core --lib zk_policy_hash_ignores_sccp_destination_rollouts_route_allowlists_and_route_manifests -- --nocapture`
+
+## 2026-06-25 SoraFS transparency rollout evidence verifier
+
+- Added `scripts/check_sorafs_transparency_rollout_evidence.py` to validate
+  collected SFM-4c rollout canary artifacts before production promotion. The
+  verifier recognizes source-entry, publication, privacy aggregate,
+  proof-token issuance, and explorer canary schemas, emits
+  `sorafs.transparency.rollout_evidence_gate.v1` summaries, requires every
+  required artifact to pass, checks all supported source-entry producer kinds,
+  requires publication list plus cycle-detail coverage, checks publication
+  anchor/publisher/verification signals, requires both privacy aggregate
+  source-event and publish-due probe coverage, requires explorer snapshot/UI/
+  proof-token index route coverage, and rejects raw payload/body/proof-token/
+  private digest-key fields.
+- Added `scripts/run_sorafs_transparency_rollout_evidence.py` as the operator
+  collection harness. It assembles the required `iroha sorafs transparency`
+  canary commands, enforces all required source-entry kinds and live payload
+  inputs before submission, writes the five rollout artifacts under `--out-dir`,
+  and runs the verifier summary gate. Repeated `--iroha-arg ARG` values pass
+  runtime-only client config/signing options before `sorafs`, shell-style
+  `@ARGFILE` response files keep reviewed operator inputs reproducible without
+  embedding secrets, and `--dry-run` prints the command plan without contacting
+  live services.
+- Added `scripts/examples/sorafs_transparency_rollout_evidence.args.example`
+  as a reviewed operator input template covering all required source-entry
+  kinds, privacy aggregate source-event/publish-due payloads, proof-token
+  issuance payloads, cycle-detail ids, the public Torii URL, and a runtime-only
+  client config path without storing signing material.
+- Added focused tests in
+  `scripts/tests/check_sorafs_transparency_rollout_evidence_test.py` covering
+  complete ready evidence, missing required artifacts, failed aggregate
+  publish-due coverage, missing publication publisher identity signals,
+  missing publication cycle-detail coverage, missing source-entry kind
+  coverage, missing explorer route coverage, explicit unknown schemas, and
+  leaked response bodies.
+- Added focused dry-run/input tests in
+  `scripts/tests/run_sorafs_transparency_rollout_evidence_test.py` covering
+  complete collection plans, missing source-entry kind coverage, missing payload
+  files, missing publication cycle ids, global `iroha` argument pass-through,
+  and response-file parsing.
+- SFM-4c docs and roadmap now count the rollout evidence verifier as shipped
+  while keeping live deployed evidence collection and a `ready` verifier
+  summary as open production gates.
+- Validation completed:
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_transparency_plan*.md`
+  - Mirror consistency check for 20 localized SFM-4c docs
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Manual line-length scan for the new verifier, harness, tests, and example
+    argument file
+  - Exact conflict-marker scan across touched SFM-4c script/docs/status/example
+    files
+  - Stale SFM-4c rollout verifier wording scan across
+    `docs/source/sorafs_transparency_plan.md`, `roadmap.md`, and `status.md`
+  - `git diff --name-only -- Cargo.lock`
+- Validation completed after unrelated Cargo/Rust jobs cleared:
+  - `python3 -m py_compile scripts/check_sorafs_transparency_rollout_evidence.py scripts/tests/check_sorafs_transparency_rollout_evidence_test.py scripts/run_sorafs_transparency_rollout_evidence.py scripts/tests/run_sorafs_transparency_rollout_evidence_test.py`
+  - `python3 -m pytest scripts/tests/check_sorafs_transparency_rollout_evidence_test.py scripts/tests/run_sorafs_transparency_rollout_evidence_test.py`
+
+## 2026-06-25 SoraFS transparency publication canary
+
+- `iroha sorafs transparency publication-canary [--cycle-id HEX...]
+  [--limit N] [--torii-url URL] [--out PATH]` now probes deployed/public cycle
+  list and optional cycle-detail readback routes, checks anchor metadata and
+  verification flags, requires publisher identity fields unless explicitly
+  waived, and emits `sorafs.transparency.publication_canary.v1` evidence with
+  response sizes, statuses, and BLAKE3 hashes without archiving publication
+  bodies, source entries, or private payload material.
+- SFM-4c docs and roadmap now count local publication readback rollout canary
+  tooling as shipped while keeping deployed publisher identity, anchoring, and
+  service rollout evidence open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli transparency_publication_canary -- --nocapture`
+  - Generated mirror metadata/body refresh for
+    `docs/source/sorafs_transparency_plan*.md`
+  - Mirror consistency check for 20 localized SFM-4c docs
+  - `scripts/check_no_legacy_codec.sh`
+  - `git diff --check`
+  - Exact conflict-marker scan across touched SFM-4c code/docs/status files
+  - Stale SFM-4c publication canary wording scan across
+    `docs/source/sorafs_transparency_plan.md`, `roadmap.md`, and `status.md`
+  - `git diff --name-only -- Cargo.lock`
 
 ## 2026-06-25 SoraFS proof-token issuance producer tooling
 

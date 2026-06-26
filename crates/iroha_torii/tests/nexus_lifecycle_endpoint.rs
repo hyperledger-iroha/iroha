@@ -2,12 +2,13 @@
 //! Router-level regression tests for `/v1/nexus/lifecycle`.
 #![cfg(feature = "app_api")]
 
-use std::sync::Arc;
+use std::{num::NonZeroU32, sync::Arc};
 
 use axum::{
     Router,
     body::Body,
     http::{Request, StatusCode},
+    response::Response,
 };
 use http_body_util::BodyExt as _;
 use iroha_config::parameters::actual::Queue as QueueConfig;
@@ -20,8 +21,12 @@ use iroha_core::{
     state::State,
 };
 use iroha_crypto::KeyPair;
+use iroha_data_model::nexus::{
+    AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId,
+    DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
+};
 use iroha_torii::Torii;
-use iroha_torii_shared::uri::NEXUS_LANE_LIFECYCLE;
+use iroha_torii_shared::{ErrorEnvelope, uri::NEXUS_LANE_LIFECYCLE};
 use tower::ServiceExt as _;
 
 #[path = "fixtures.rs"]
@@ -32,14 +37,37 @@ fn decode_norito_json(bytes: &[u8]) -> norito::json::Value {
     norito::json::from_str(&decoded).expect("parse JSON payload")
 }
 
+async fn post_lifecycle(harness: &NexusHarness, body: &str) -> Response {
+    let req = fixtures::operator_signed_request(
+        &harness.key_pair,
+        Request::builder()
+            .method("POST")
+            .uri(NEXUS_LANE_LIFECYCLE)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_owned()))
+            .unwrap(),
+        body.as_bytes(),
+    );
+    harness.app.clone().oneshot(req).await.unwrap()
+}
+
 struct NexusHarness {
     app: Router,
     key_pair: KeyPair,
+    state: Arc<State>,
 }
 
 fn build_app(nexus_enabled: bool) -> NexusHarness {
+    build_app_with_nexus(nexus_enabled, |_| {})
+}
+
+fn build_app_with_nexus(
+    nexus_enabled: bool,
+    configure_nexus: impl FnOnce(&mut iroha_config::parameters::actual::Nexus),
+) -> NexusHarness {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.nexus.enabled = nexus_enabled;
+    configure_nexus(&mut cfg.nexus);
     let key_pair = cfg.common.key_pair.clone();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
@@ -77,8 +105,10 @@ fn build_app(nexus_enabled: bool) -> NexusHarness {
         &dataspace_catalog,
         None,
     ));
-    let view = state.view();
-    queue.reconfigure_nexus(&state.nexus_snapshot(), &view, None);
+    {
+        let view = state.view();
+        queue.reconfigure_nexus(&state.nexus_snapshot(), &view, None);
+    }
 
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
@@ -122,7 +152,93 @@ fn build_app(nexus_enabled: bool) -> NexusHarness {
     NexusHarness {
         app: torii.api_router_for_tests(),
         key_pair,
+        state,
     }
+}
+
+fn seed_valid_autoscale_lane(harness: &NexusHarness, lane_id: LaneId, created_height: u64) {
+    seed_valid_autoscale_lane_with_autoscale(harness, lane_id, created_height, true);
+}
+
+fn seed_valid_autoscale_lane_with_autoscale(
+    harness: &NexusHarness,
+    lane_id: LaneId,
+    created_height: u64,
+    autoscale_enabled: bool,
+) {
+    seed_autoscale_lane(
+        harness,
+        lane_id,
+        DataSpaceId::UNIVERSAL,
+        created_height.to_string(),
+        autoscale_enabled,
+    );
+}
+
+fn seed_valid_autoscale_lane_in_dataspace(
+    harness: &NexusHarness,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    created_height: u64,
+) {
+    seed_autoscale_lane(
+        harness,
+        lane_id,
+        dataspace_id,
+        created_height.to_string(),
+        true,
+    );
+}
+
+fn seed_invalid_autoscale_lane_with_height(harness: &NexusHarness, lane_id: LaneId, height: &str) {
+    seed_autoscale_lane(
+        harness,
+        lane_id,
+        DataSpaceId::UNIVERSAL,
+        height.to_owned(),
+        true,
+    );
+}
+
+fn seed_autoscale_lane(
+    harness: &NexusHarness,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    created_height: String,
+    autoscale_enabled: bool,
+) {
+    let mut lane = LaneConfig {
+        id: lane_id,
+        dataspace_id,
+        alias: format!("elastic-lane-{}", lane_id.as_u32()),
+        ..LaneConfig::default()
+    };
+    lane.metadata
+        .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+    lane.metadata
+        .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), created_height);
+    let lane_count =
+        NonZeroU32::new(lane_id.as_u32().saturating_add(1)).expect("lane count is non-zero");
+    let lane_catalog = LaneCatalog::new(lane_count, vec![LaneConfig::default(), lane])
+        .expect("valid lane catalog");
+
+    let mut nexus = harness.state.nexus.write();
+    nexus.autoscale.enabled = autoscale_enabled;
+    if dataspace_id != DataSpaceId::UNIVERSAL {
+        nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: dataspace_id,
+                alias: format!("test-dataspace-{}", dataspace_id.as_u64()),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("valid dataspace catalog");
+    }
+    nexus.lane_catalog = lane_catalog;
+    nexus.lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
 }
 
 #[tokio::test]
@@ -163,6 +279,271 @@ async fn nexus_lifecycle_rejects_when_disabled() {
     );
     let resp = harness.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn nexus_lifecycle_rejects_duplicate_additions_without_mutating_catalog() {
+    let valid_add = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+
+    for (body, expected_message) in [
+        (
+            r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}},{"id":1,"dataspace_id":0,"alias":"gamma","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#,
+            "duplicate lane id 1",
+        ),
+        (
+            r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}},{"id":2,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#,
+            "duplicate lane alias beta",
+        ),
+    ] {
+        let harness = build_app(true);
+        let resp = post_lifecycle(&harness, body).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let payload =
+            norito::decode_from_bytes::<ErrorEnvelope>(&bytes).expect("decode error payload");
+        assert_eq!(payload.code, "lane_lifecycle_error");
+        assert!(
+            payload.message.contains(expected_message),
+            "expected error message to contain {expected_message:?}, got {:?}",
+            payload.message
+        );
+
+        let valid_resp = post_lifecycle(&harness, valid_add).await;
+        assert_eq!(valid_resp.status(), StatusCode::ACCEPTED);
+        let bytes = valid_resp.into_body().collect().await.unwrap().to_bytes();
+        let payload = decode_norito_json(&bytes);
+        assert_eq!(payload["lane_count"].as_u64(), Some(2));
+    }
+}
+
+#[tokio::test]
+async fn nexus_lifecycle_rejects_reserved_autoscale_metadata() {
+    let harness = build_app_with_nexus(true, |nexus| {
+        nexus.autoscale.enabled = true;
+    });
+    let rejected = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"spoofed-autoscale-owner","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"autoscale.managed":"false"}}],"retire":[]}"#;
+
+    let resp = post_lifecycle(&harness, rejected).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&bytes).expect("decode error payload");
+    assert_eq!(payload.code, "lane_lifecycle_error");
+    assert!(
+        payload
+            .message
+            .contains("lane 8 uses reserved autoscale-managed metadata"),
+        "expected reserved autoscale metadata error, got {:?}",
+        payload.message
+    );
+
+    let accepted = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-manual","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let resp = post_lifecycle(&harness, accepted).await;
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = decode_norito_json(&bytes);
+    assert_eq!(payload["lane_count"].as_u64(), Some(9));
+}
+
+#[tokio::test]
+async fn nexus_lifecycle_rejects_manual_retire_of_valid_autoscale_lane() {
+    let harness = build_app_with_nexus(true, |nexus| {
+        nexus.autoscale.enabled = true;
+    });
+    seed_valid_autoscale_lane(&harness, LaneId::new(1), 2);
+
+    let rejected = r#"{"additions":[],"retire":[1]}"#;
+    let resp = post_lifecycle(&harness, rejected).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&bytes).expect("decode error payload");
+    assert_eq!(payload.code, "lane_lifecycle_error");
+    assert!(
+        payload
+            .message
+            .contains("lane 1 uses reserved autoscale-managed metadata"),
+        "expected reserved autoscale metadata error, got {:?}",
+        payload.message
+    );
+
+    let accepted = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-manual","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let resp = post_lifecycle(&harness, accepted).await;
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = decode_norito_json(&bytes);
+    assert_eq!(payload["lane_count"].as_u64(), Some(9));
+}
+
+#[tokio::test]
+async fn nexus_lifecycle_rejects_manual_lane_inside_active_autoscale_range() {
+    let harness = build_app_with_nexus(true, |nexus| {
+        nexus.autoscale.enabled = true;
+    });
+    let rejected = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"manual-elastic-range","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+
+    let resp = post_lifecycle(&harness, rejected).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&bytes).expect("decode error payload");
+    assert_eq!(payload.code, "lane_lifecycle_error");
+    assert!(
+        payload
+            .message
+            .contains("reserved autoscale elastic lane id range [1, 8)"),
+        "expected reserved range error, got {:?}",
+        payload.message
+    );
+
+    let accepted = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-manual","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let resp = post_lifecycle(&harness, accepted).await;
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = decode_norito_json(&bytes);
+    assert_eq!(payload["lane_count"].as_u64(), Some(9));
+}
+
+#[tokio::test]
+async fn nexus_lifecycle_allows_repair_retire_of_invalid_autoscale_lane() {
+    let harness = build_app_with_nexus(true, |nexus| {
+        nexus.autoscale.enabled = true;
+    });
+    seed_invalid_autoscale_lane_with_height(&harness, LaneId::new(1), "0");
+
+    let unrelated = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-before-repair","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let resp = post_lifecycle(&harness, unrelated).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&bytes).expect("decode error payload");
+    assert_eq!(payload.code, "lane_lifecycle_error");
+    assert!(
+        payload
+            .message
+            .contains("autoscale.created_height must be a positive integer"),
+        "expected invalid autoscale metadata error, got {:?}",
+        payload.message
+    );
+
+    let repair = r#"{"additions":[],"retire":[1]}"#;
+    let resp = post_lifecycle(&harness, repair).await;
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = decode_norito_json(&bytes);
+    assert_eq!(payload["lane_count"].as_u64(), Some(1));
+
+    let accepted = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-manual","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let resp = post_lifecycle(&harness, accepted).await;
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = decode_norito_json(&bytes);
+    assert_eq!(payload["lane_count"].as_u64(), Some(9));
+}
+
+#[tokio::test]
+async fn nexus_lifecycle_allows_repair_retire_of_out_of_range_autoscale_lane() {
+    let harness = build_app_with_nexus(true, |nexus| {
+        nexus.autoscale.enabled = true;
+    });
+    seed_valid_autoscale_lane(&harness, LaneId::new(8), 2);
+
+    let unrelated = r#"{"additions":[{"id":9,"dataspace_id":0,"alias":"outside-range-before-repair","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let resp = post_lifecycle(&harness, unrelated).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&bytes).expect("decode error payload");
+    assert_eq!(payload.code, "lane_lifecycle_error");
+    assert!(
+        payload.message.contains(
+            "autoscale-managed lane 8 is outside configured autoscale lane id range [1, 8)"
+        ),
+        "expected out-of-range autoscale metadata error, got {:?}",
+        payload.message
+    );
+
+    let repair = r#"{"additions":[],"retire":[8]}"#;
+    let resp = post_lifecycle(&harness, repair).await;
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = decode_norito_json(&bytes);
+    assert_eq!(payload["lane_count"].as_u64(), Some(1));
+
+    let accepted = r#"{"additions":[{"id":9,"dataspace_id":0,"alias":"outside-range-manual","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let resp = post_lifecycle(&harness, accepted).await;
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = decode_norito_json(&bytes);
+    assert_eq!(payload["lane_count"].as_u64(), Some(10));
+}
+
+#[tokio::test]
+async fn nexus_lifecycle_allows_repair_retire_of_off_default_autoscale_lane() {
+    let harness = build_app_with_nexus(true, |nexus| {
+        nexus.autoscale.enabled = true;
+    });
+    let off_default_dataspace = DataSpaceId::new(9);
+    seed_valid_autoscale_lane_in_dataspace(&harness, LaneId::new(1), off_default_dataspace, 2);
+
+    let unrelated = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-before-repair","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let resp = post_lifecycle(&harness, unrelated).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&bytes).expect("decode error payload");
+    assert_eq!(payload.code, "lane_lifecycle_error");
+    assert!(
+        payload
+            .message
+            .contains("autoscale owns only default dataspace"),
+        "expected off-default autoscale ownership error, got {:?}",
+        payload.message
+    );
+
+    let repair = r#"{"additions":[],"retire":[1]}"#;
+    let resp = post_lifecycle(&harness, repair).await;
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = decode_norito_json(&bytes);
+    assert_eq!(payload["lane_count"].as_u64(), Some(1));
+
+    let accepted = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-manual","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let resp = post_lifecycle(&harness, accepted).await;
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = decode_norito_json(&bytes);
+    assert_eq!(payload["lane_count"].as_u64(), Some(9));
+}
+
+#[tokio::test]
+async fn nexus_lifecycle_allows_repair_retire_of_disabled_autoscale_owned_lane() {
+    let harness = build_app_with_nexus(true, |nexus| {
+        nexus.autoscale.enabled = false;
+    });
+    seed_valid_autoscale_lane_with_autoscale(&harness, LaneId::new(1), 2, false);
+
+    let unrelated = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-before-repair","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let resp = post_lifecycle(&harness, unrelated).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&bytes).expect("decode error payload");
+    assert_eq!(payload.code, "lane_lifecycle_error");
+    assert!(
+        payload
+            .message
+            .contains("autoscale-managed lane 1 requires nexus.autoscale.enabled=true"),
+        "expected disabled autoscale ownership error, got {:?}",
+        payload.message
+    );
+
+    let repair = r#"{"additions":[],"retire":[1]}"#;
+    let resp = post_lifecycle(&harness, repair).await;
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = decode_norito_json(&bytes);
+    assert_eq!(payload["lane_count"].as_u64(), Some(1));
+
+    let accepted = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-manual","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let resp = post_lifecycle(&harness, accepted).await;
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = decode_norito_json(&bytes);
+    assert_eq!(payload["lane_count"].as_u64(), Some(9));
 }
 
 #[tokio::test]

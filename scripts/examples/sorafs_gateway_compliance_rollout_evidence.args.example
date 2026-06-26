@@ -1,0 +1,26 @@
+# Example:
+#   python3 scripts/check_sorafs_gateway_compliance_rollout_evidence.py \
+#     @scripts/examples/sorafs_gateway_compliance_rollout_evidence.args.example
+#
+# Keep denylist feeds, raw probe responses, GAR receipts, response bodies,
+# appeal payloads, tokens, and signing material out of these evidence files.
+# The checker accepts payload-free canary summaries only.
+
+--evidence-dir
+dist/sorafs-gateway-compliance-rollout-evidence
+--summary-out
+dist/sorafs-gateway-compliance-rollout-evidence/rollout-summary.json
+--now-unix
+1800009000
+--max-evidence-age-secs
+86400
+--max-route-latency-ms
+1500
+--max-reload-latency-ms
+300000
+--min-gateways
+3
+--min-denylist-entries
+5
+--min-honey-probes
+4

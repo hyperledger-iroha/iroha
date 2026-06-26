@@ -1,0 +1,49 @@
+# Example arguments for the SFM-4c transparency rollout evidence collection planner.
+# Run with:
+#   python3 scripts/run_sorafs_transparency_rollout_evidence.py \
+#     @scripts/examples/sorafs_transparency_rollout_collection.args.example \
+#     --dry-run
+#
+# Keep signing keys, bearer tokens, raw source-entry payloads, proof-token
+# frames, response bodies, and operator secrets in runtime-only files. This
+# example passes only the path to a runtime client config and payload-free
+# canary request files.
+
+--iroha-bin
+target/debug/iroha
+--iroha-arg
+--config
+--iroha-arg
+/runtime/sorafs-transparency-client.toml
+--torii-url
+https://torii.example.invalid
+--out-dir
+artifacts/sorafs/transparency/staged
+--summary-out
+artifacts/sorafs/transparency/staged/rollout-summary.json
+--limit
+50
+--timeout-secs
+30
+--source-entry
+gar-enforcement-receipt=/runtime/sft/gar.json
+--source-entry
+moderation-ballot-governance-event=/runtime/sft/moderation-ballot.json
+--source-entry
+appeal-finance-report=/runtime/sft/appeal-report.json
+--source-entry
+appeal-finance-settlement-receipt=/runtime/sft/appeal-settlement.json
+--source-entry
+legal-hold-notice=/runtime/sft/legal-hold.json
+--source-entry
+redaction-notice=/runtime/sft/redaction.json
+--source-entry
+evidence-access-summary=/runtime/sft/evidence-access.json
+--privacy-source-event
+/runtime/sft/privacy-source-event.json
+--privacy-publish-due
+/runtime/sft/privacy-publish-due.json
+--proof-token-issuance
+/runtime/sft/proof-token-issuance.json
+--cycle-id
+4f1d2c3b5a69788796a5b4c3d2e1f0aa

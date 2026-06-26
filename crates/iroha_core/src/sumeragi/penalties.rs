@@ -728,10 +728,11 @@ mod tests {
     use iroha_config::parameters::actual::{
         AdaptiveObservability, ConsensusMode, NodeRole, ProofPolicy, Sumeragi as SumeragiConfig,
         SumeragiBlock, SumeragiCollectors, SumeragiDa, SumeragiDebug, SumeragiDebugRbc,
-        SumeragiFinality, SumeragiGating, SumeragiKeys, SumeragiModeFlip, SumeragiNpos,
-        SumeragiNposElection, SumeragiNposReconfig, SumeragiNposTimeoutOverrides, SumeragiNposVrf,
-        SumeragiPacemaker, SumeragiPacingGovernor, SumeragiPersistence, SumeragiQueues,
-        SumeragiRbc, SumeragiRecovery, SumeragiResilience, SumeragiVNext, SumeragiWorker,
+        SumeragiFinality, SumeragiGating, SumeragiKeys, SumeragiModeFlip, SumeragiNativeAmx,
+        SumeragiNpos, SumeragiNposElection, SumeragiNposReconfig, SumeragiNposTimeoutOverrides,
+        SumeragiNposVrf, SumeragiPacemaker, SumeragiPacingGovernor, SumeragiPersistence,
+        SumeragiQueues, SumeragiRbc, SumeragiRecovery, SumeragiResilience, SumeragiVNext,
+        SumeragiWorker,
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -1010,6 +1011,12 @@ mod tests {
                 store_soft_bytes: 0,
                 disk_store_ttl: Duration::from_secs(0),
                 disk_store_max_bytes: 0,
+            },
+            native_amx: SumeragiNativeAmx {
+                session_cache_max:
+                    iroha_config::parameters::defaults::sumeragi::NATIVE_AMX_SESSION_CACHE_MAX,
+                session_body_bucket_max:
+                    iroha_config::parameters::defaults::sumeragi::NATIVE_AMX_SESSION_BODY_BUCKET_MAX,
             },
             finality: SumeragiFinality {
                 proof_policy: ProofPolicy::Off,

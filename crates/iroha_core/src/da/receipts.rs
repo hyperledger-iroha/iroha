@@ -462,6 +462,12 @@ impl DaReceiptCursorIndex {
             .map(|cursor| cursor.sequence)
     }
 
+    /// Drop all receipt cursors for retired or reset lanes.
+    pub fn prune_lanes(&mut self, lanes: &BTreeSet<LaneId>) {
+        self.by_lane_epoch
+            .retain(|lane_epoch, _| !lanes.contains(&lane_epoch.lane_id));
+    }
+
     /// Snapshot the internal map for downstream planning.
     #[must_use]
     pub fn snapshot(&self) -> BTreeMap<LaneEpoch, u64> {
@@ -1249,6 +1255,29 @@ mod tests {
                 .last_block_height,
             1
         );
+    }
+
+    #[test]
+    fn receipt_cursor_prune_lanes_drops_only_reset_lanes() {
+        let retained = LaneEpoch::new(LaneId::new(0), 1);
+        let reset_epoch1 = LaneEpoch::new(LaneId::new(1), 1);
+        let reset_epoch2 = LaneEpoch::new(LaneId::new(1), 2);
+        let mut index = DaReceiptCursorIndex::default();
+        index
+            .record(retained, 2, 3)
+            .expect("record retained lane cursor");
+        index
+            .record(reset_epoch1, 5, 4)
+            .expect("record reset lane cursor");
+        index
+            .record(reset_epoch2, 0, 5)
+            .expect("record reset lane cursor in another epoch");
+
+        index.prune_lanes(&BTreeSet::from([LaneId::new(1)]));
+
+        assert_eq!(index.highest(retained), Some(2));
+        assert_eq!(index.highest(reset_epoch1), None);
+        assert_eq!(index.highest(reset_epoch2), None);
     }
 
     #[test]

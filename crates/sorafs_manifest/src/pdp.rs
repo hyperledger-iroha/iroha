@@ -288,6 +288,11 @@ impl PdpHotLeafProofV1 {
                 leaf_index: self.leaf_index,
             });
         }
+        if self.leaf_merkle_path.is_empty() {
+            return Err(PdpProofValidationError::MissingLeafMerklePath {
+                leaf_index: self.leaf_index,
+            });
+        }
         Ok(())
     }
 }
@@ -309,6 +314,11 @@ impl PdpProofLeafV1 {
     fn validate(&self) -> Result<(), PdpProofValidationError> {
         if self.segment_hash.iter().all(|byte| *byte == 0) {
             return Err(PdpProofValidationError::InvalidSegmentDigest {
+                segment_index: self.segment_index,
+            });
+        }
+        if self.segment_merkle_path.is_empty() {
+            return Err(PdpProofValidationError::MissingSegmentMerklePath {
                 segment_index: self.segment_index,
             });
         }
@@ -402,12 +412,18 @@ pub enum PdpProofValidationError {
     /// Segment digest must be non-zero.
     #[error("segment {segment_index} digest must be non-zero")]
     InvalidSegmentDigest { segment_index: u32 },
+    /// Segment witness must include a non-empty Merkle path.
+    #[error("segment {segment_index} is missing its segment Merkle path")]
+    MissingSegmentMerklePath { segment_index: u32 },
     /// Segment witness missing hot leaf proofs.
     #[error("segment {segment_index} is missing hot-leaf proofs")]
     MissingHotLeafProofs { segment_index: u32 },
     /// Hot leaf digest must be non-zero.
     #[error("leaf {leaf_index} digest must be non-zero")]
     InvalidLeafDigest { leaf_index: u32 },
+    /// Hot leaf witness must include a non-empty Merkle path.
+    #[error("leaf {leaf_index} is missing its hot-leaf Merkle path")]
+    MissingLeafMerklePath { leaf_index: u32 },
     /// Proof signature missing.
     #[error("proof signature must be present")]
     MissingSignature,

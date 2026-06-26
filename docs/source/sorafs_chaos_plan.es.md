@@ -4,107 +4,109 @@ direction: ltr
 source: docs/source/sorafs_chaos_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 43dfc53b7a951ec0b036a56941335a4fd05657da91c7a3f727e3846b8c647d23
-source_last_modified: "2025-11-08T02:24:51.340739+00:00"
+source_hash: df845444d67f36e55734bd1d1d095fb4bad84badbdd0d5bfa7498ccdc9ef2068
+source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: "2026-01-30"
 ---
 
-# Plan de simulacros de caos y playbook de incidentes de SoraFS
+# SoraFS Chaos Drill & Incident Playbook Plan
 
-## Escenarios de caos (iniciales)
+## Chaos Scenarios (Initial)
 
-1. **Caída de gateway**
-   - Simular una falla de gateway a nivel de región.
-   - Respuesta esperada: el orquestador reruta, se disparan alertas y se declara el incidente.
-2. **Aumento de fallos de pruebas**
-   - Inyectar pruebas corruptas en el gateway.
-   - Esperado: alertas por fallos de pruebas, cuarentenas automatizadas, respuesta de incidentes.
-3. **Retraso de replicación**
-   - Retrasar respuestas de chunks para simular un proveedor lento.
-   - Monitorear reintentos del orquestador y alarmas de utilización de capacidad.
-4. **Desajuste de admisión**
-   - Eliminar o expirar el sobre de admisión; verificar que se emita la telemetría de rechazo.
+1. **Gateway outage**
+   - Simulate region-level gateway failure.
+   - Expected response: orchestrator reroutes, alerts trigger, incident declared.
+2. **Proof failure surge**
+   - Inject corrupted proofs at gateway.
+   - Expected: proof failure alerts, automated quarantines, incident response.
+3. **Replication lag**
+   - Delay chunk responses to simulate slow provider.
+   - Monitor orchestrator retries, capacity utilisation alarms.
+4. **Admission mismatch**
+   - Remove/expire admission envelope; ensure refusal telemetry fires.
 
-## Componentes del playbook
+## Playbook Components
 
-- **Checklist de incidente** (a quién avisar, canales de comunicación).
-- **Runbook** por escenario con pasos de contención/remediación.
-- **Plantilla de postmortem** con impacto en SLO y acciones correctivas.
-- **Runlog** que capture cronología, snapshots de métricas y puntos de decisión.
+- **Incident checklist** (who to page, communication channels).
+- **Runbook** per scenario with containment/remediation steps.
+- **Postmortem template** with SLO impact, corrective actions.
+- **Runlog** capturing timeline, metrics snapshots, decision points.
 
-## Cadencia y seguimiento de los simulacros
+## Drill Cadence & Tracking
 
-| Frecuencia | Paquete de escenarios | Participantes | Notas |
-|-----------|------------------------|--------------|-------|
-| Trimestral | Caída de gateway + tormenta de reintentos del orquestador | SRE de almacenamiento, líder de observabilidad, enlace de gobernanza | Ejecutar primero en staging; el ensayo en producción queda condicionado a éxito en staging. |
-| Semestral | Aumento de fallos de pruebas (PoR + PoTR) | SRE de almacenamiento, Crypto WG, herramientas | Validar tooling de replay de pruebas y notificaciones de gobernanza. |
-| Mensual | Revisión puntual de retraso de replicación | Rotación de SRE de almacenamiento | Usar manifiestos de staging y registrar tiempo de recuperación del backlog. |
+| Frequency | Scenario Bundle | Participants | Notes |
+|-----------|-----------------|--------------|-------|
+| Quarterly | Gateway outage + orchestrator retry storm | Storage SRE, Observability TL, Governance liaison | Execute in staging first; production rehearsal gated on staging success. |
+| Biannual | Proof failure surge (PoR + PoTR) | Storage SRE, Crypto WG, Tooling | Validate proof replay tooling and governance notifications. |
+| Monthly | Replication lag spot-check | Storage SRE rotation | Use staging manifests and record backlog recovery time. |
 
-Después de cada ejercicio, añade el resultado en `ops/drill-log.md` usando
-`scripts/telemetry/log_sorafs_drill.sh` y registra la lista de acciones en la plantilla
-de postmortem. Ejecuta `scripts/telemetry/validate_drill_log.sh` durante la revisión para
-asegurar que el log permanezca bien formado. Usa `--status scheduled` para simulacros
-planificados, `pass`/`fail` una vez finalice el ensayo, y `follow-up` cuando queden
-acciones pendientes. El helper también acepta `--log <path>` para que pruebas en seco o
-tests automatizados apunten a ubicaciones temporales sin tocar `ops/drill-log.md`.
+After every exercise, append the outcome to `ops/drill-log.md` using
+`scripts/telemetry/log_sorafs_drill.sh` and file a follow-up action list in the
+postmortem template. Run `scripts/telemetry/validate_drill_log.sh` during review
+to ensure the log stays well-formed. Use `--status scheduled` for planned drills,
+`pass`/`fail` once the rehearsal completes, and `follow-up` when additional action
+items remain. The helper also accepts `--log <path>` so dry-runs or automated
+tests can target throwaway locations without touching `ops/drill-log.md`.
 
-Los simulacros de TLS/ECH también deben ejecutar `cargo xtask sorafs-gateway-probe` con
-las nuevas flags `--drill-*`, `--summary-json` y `--pagerduty-*` para que la sonda del
-gateway registre automáticamente la corrida, emita evidencia JSON bajo
-`artifacts/sorafs_gateway_probe/` y (cuando se solicita) levante un incidente de
-entrenamiento en PagerDuty si hay desvíos de encabezados o de políticas GAR. El helper
-de telemetría (`scripts/telemetry/run_sorafs_gateway_probe.sh`) ahora reenvía estas flags,
-por lo que los runbooks existentes pueden adoptar logging/paging nativo sin scripts
-adicionales.
+TLS/ECH drills should also execute `cargo xtask sorafs-gateway-probe` with the
+new `--drill-*`, `--summary-json`, and `--pagerduty-*` flags so the gateway probe
+automatically records the run, emits JSON evidence under
+`artifacts/sorafs_gateway_probe/`, and (when requested) raises a PagerDuty
+training incident the moment headers or GAR policy drift. The telemetry helper
+(`scripts/telemetry/run_sorafs_gateway_probe.sh`) now forwards these flags, so
+existing runbooks can opt into the native logging/paging hooks without extra
+shell glue.
 
-## Herramientas
+## Tooling
 
-- Controlador del harness (del plan de proveedor simulado) para inyectar fallos.
-- Dashboards de observabilidad del plan de métricas usados durante los simulacros.
-- Puntuación automatizada para evaluar tiempos de respuesta y completitud.
+- Harness controller (from mock provider plan) to inject failures.
+- Observability dashboards from metrics plan used during drills.
+- Automated scoring to assess response time and completeness.
 
-## Flujo de comunicación
+## Communication Workflow
 
-- **Canales de incidente**
-  - Primario: canal de Slack `#sorafs-incident` (auto-creado por incidente con el bot `inc-bot`).
-  - Escalamiento: servicio de PagerDuty “SoraFS On-Call”. Alertas críticas paginan a L1; si no se reconoce en 5 minutos, se escala al líder L2.
-  - Actualizaciones de estado: canal `#sorafs-status` en Slack para partes interesadas; mensajes plantilla generados por el bot.
+- **Incident channels**
+  - Primary: `#sorafs-incident` Slack channel (auto-created per incident using bot `inc-bot`).
+  - Escalation: PagerDuty service “SoraFS On-Call”. Critical alerts auto-page L1 engineer; if not acknowledged within 5 minutes, escalate to L2 lead.
+  - Status updates: `#sorafs-status` Slack channel for stakeholder updates; template messages generated by bot.
 - **Roles**
-  - Incident Commander (IC): ingeniero on-call que reconoce la alerta de PagerDuty.
-  - Communications Lead (CL): PM/DevRel designado para manejar actualizaciones internas/externas.
-  - Scribe: rota por incidente; registra la cronología en `runbooks/incident_log.md`.
-- **Checklist (por incidente)**
-  1. Se dispara la alerta de PagerDuty → el IC la reconoce en 5 minutos.
-  2. El IC abre el canal de incidente en Slack (comando `/incident create`).
-  3. El CL publica el primer estado en `#sorafs-status` en 10 minutos.
-  4. El Scribe inicia el documento de cronología en Notion (`Incident YYYY-MM-DD`). Se sincroniza al repositorio semanalmente.
-  5. Cada 30 minutos, el IC publica actualización (estado, acciones, próximos pasos) hasta resolver.
-  6. Tras la resolución, programar postmortem en 3 días hábiles.
-- **Notificaciones de simulacros**
-  - Los simulacros se anuncian previamente; el bot publica “DRILL – Sin impacto al cliente” para evitar confusiones.
-  - PagerDuty usa modo “training” para evitar paginar al on-call real salvo intención explícita.
+  - Incident Commander (IC): on-call engineer who acknowledges PagerDuty alert.
+  - Communications Lead (CL): designated PM/DevRel to handle external/internal updates.
+  - Scribe: rotates per incident; records timeline in `runbooks/incident_log.md`.
+- **Checklist (per incident)**
+  1. PagerDuty alert fires → IC acknowledges within 5 minutes.
+  2. IC opens incident Slack channel (`/incident create` command).
+  3. CL posts initial status to `#sorafs-status` within 10 minutes.
+  4. Scribe starts timeline doc in Notion (`Incident YYYY-MM-DD`). Auto-synced to repo weekly.
+  5. Every 30 minutes, IC posts update (status, actions, next steps). Continue until resolved.
+  6. After resolution, schedule postmortem meeting within 3 business days.
+- **Drill notifications**
+  - Chaos drills are pre-announced; bot posts “DRILL – No customer impact” message to avoid confusion.
+  - PagerDuty uses “training” mode to avoid paging real on-call unless purposeful.
 
-## Alineación con reportes de gobernanza
+## Governance Reporting Alignment
 
-- **Vínculos GAR**
-  - Cada escenario de caos se mapea a categorías del Governance Accountability Report (GAR). Ejemplo: la caída de gateway activa la métrica GAR de disponibilidad.
-  - Durante simulacros/incidentes, el IC registra si se incumplieron umbrales GAR. Si es así, genera el payload Norito `GarIncidentReportV1` con:
+- **GAR linkages**
+  - Each chaos scenario maps to Governance Accountability Report (GAR) categories. Example: gateway outage triggers GAR availability metric.
+  - During drills/incidents, IC records whether GAR thresholds breached. If yes, generate `GarIncidentReportV1` Norito payload with:
     - `incident_id`, `metric`, `duration`, `impact`.
-  - Los reportes se anexan al DAG de gobernanza para revisión mensual de cumplimiento.
-- **Dashboards de transparencia**
-  - Los resultados alimentan el plan de transparencia: métricas `sorafs_chaos_drill_duration_seconds` y `sorafs_gar_incidents_total`.
-  - El boletín de gobernanza incluye un resumen de simulacros con preparación y acciones pendientes.
+  - Reports appended to governance DAG enabling monthly compliance review.
+- **Transparency dashboards**
+  - Drill outcomes feed into transparency plan: metrics `sorafs_chaos_drill_duration_seconds` and `sorafs_gar_incidents_total`.
+  - Governance newsletter includes drill summary highlighting readiness and outstanding actions.
 
-## Integración de procedimientos de incidentes TLS/ECH
+## TLS/ECH Incident Procedures Integration
 
-- **Plan de referencia** `sorafs_gateway_tls_automation.md` (SF-5b). Los simulacros incluyen un escenario de fallo TLS/ECH:
-  - Simular certificados expirados, automatización TLS mal emitida o deriva de configuración ECH.
-  - Pasos del runbook:
-    1. Detectar mediante alerta `tls_cert_expiry` o métricas de handshake fallidas.
-    2. Disparar la canalización de renovación automática (`scripts/tls/renew_all.sh`) o recurrir a reemisión manual.
-    3. Validar con el comando CLI `sorafs tls verify`.
-    4. Documentar la rotación de ECH y confirmar la actualización de registros DNS.
-- **Coordinación**
-  - El equipo de seguridad participa en los simulacros TLS/ECH.
-  - Resultados se integran en el plan de cumplimiento para demostrar la adhesión a la gestión de certificados.
-  - El postmortem debe verificar que las mejoras de automatización (por ejemplo, probes sintéticos) se registren como acciones.
+- **Reference plan** `sorafs_gateway_tls_automation.md` (SF-5b). Chaos drills include TLS/ECH failure scenario:
+  - Simulate expired certificates, mis-issued TLS automation, or ECH config drift.
+  - Runbook steps:
+    1. Detect via `tls_cert_expiry` alert or failed handshake metrics.
+    2. Trigger automated renewal pipeline (`scripts/tls/renew_all.sh`) or fallback to manual cert re-issue.
+    3. Validate via `sorafs tls verify` CLI command.
+    4. Document ECH config rotation and confirm DNS records updated.
+- **Coordination**
+  - Security team participates in TLS/ECH drills.
+  - Results feed into compliance plan to show certificate management adherence.
+  - Postmortem requires verifying that automation improvements (e.g., adding synthetic probes) are tracked as action items.
+
+These additions complete the communication, governance, and TLS/ECH integration work for the chaos drill plan.

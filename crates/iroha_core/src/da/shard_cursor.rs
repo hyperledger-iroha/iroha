@@ -140,6 +140,24 @@ impl DaShardCursorIndex {
         self.cursors.get(&shard_id)
     }
 
+    /// Drop shard cursors owned only by retired or reset lanes.
+    pub fn prune_lanes(&mut self, lanes: &BTreeSet<LaneId>) {
+        let mut reset_shards = BTreeSet::new();
+        for (lane_id, shard_id) in &self.mapping {
+            if !lanes.contains(lane_id) {
+                continue;
+            }
+            let shared_with_retained_lane = self.mapping.iter().any(|(other_lane, other_shard)| {
+                other_shard == shard_id && !lanes.contains(other_lane)
+            });
+            if !shared_with_retained_lane {
+                reset_shards.insert(shard_id.as_u32());
+            }
+        }
+        self.cursors
+            .retain(|shard_id, _| !reset_shards.contains(shard_id));
+    }
+
     /// Advance the shard cursor using the supplied commitment.
     ///
     /// # Errors
@@ -1078,7 +1096,7 @@ fn sync_dir(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, BTreeSet},
         num::NonZeroU32,
         path::{Path, PathBuf},
     };
@@ -1380,6 +1398,47 @@ mod tests {
         let cursor = index.get(7).expect("cursor stored under new shard id");
         assert_eq!((cursor.epoch, cursor.sequence), (2, 0));
         assert_eq!(cursor.last_block_height, 4);
+    }
+
+    #[test]
+    fn prune_lanes_removes_unshared_reset_shards() {
+        let config = lane_config_with_mappings(&[(0, 0), (1, 1)]);
+        let mut index = DaShardCursorIndex::new(&config);
+        index
+            .record_records(
+                &config,
+                &[sample_record(0, 1, 0), sample_record(1, 1, 0)],
+                3,
+            )
+            .expect("seed lane shard cursors");
+
+        index.prune_lanes(&BTreeSet::from([LaneId::new(1)]));
+
+        assert!(index.get(0).is_some(), "retained lane shard should remain");
+        assert!(
+            index.get(1).is_none(),
+            "reset lane's unshared shard cursor should be cleared"
+        );
+    }
+
+    #[test]
+    fn prune_lanes_keeps_shared_retained_shards() {
+        let config = lane_config_with_mappings(&[(0, 7), (1, 7)]);
+        let mut index = DaShardCursorIndex::new(&config);
+        index
+            .record_records(
+                &config,
+                &[sample_record(0, 1, 0), sample_record(1, 1, 1)],
+                3,
+            )
+            .expect("seed shared shard cursor");
+
+        index.prune_lanes(&BTreeSet::from([LaneId::new(1)]));
+
+        let cursor = index
+            .get(7)
+            .expect("shared shard cursor must remain for retained lane");
+        assert_eq!((cursor.epoch, cursor.sequence), (1, 1));
     }
 
     #[test]

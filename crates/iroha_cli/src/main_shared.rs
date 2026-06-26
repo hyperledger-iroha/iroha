@@ -855,7 +855,9 @@ mod app {
         };
 
         match command {
-            SorafsCommand::Reserve(ReserveCommand::Quote(_) | ReserveCommand::Ledger(_)) => true,
+            SorafsCommand::Reserve(
+                ReserveCommand::Quote(_) | ReserveCommand::Ledger(_) | ReserveCommand::Lifecycle(_),
+            ) => true,
             SorafsCommand::Incentives(
                 IncentivesCommand::Compute(_)
                 | IncentivesCommand::OpenDispute(_)

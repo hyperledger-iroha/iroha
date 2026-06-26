@@ -4,14 +4,9 @@ direction: rtl
 source: docs/source/sorafs_observability_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 12d46b001105f2c7ef3844e833f604dfc5e226fea085b5c235a8c5dd4db9ebc1
-source_last_modified: "2026-01-21T16:34:05.958551+00:00"
+source_hash: dac46483635a9dd9f9da471e78f3b567b2e7e5d28af10a7173cc363b5131631a
+source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-01-30
----
-
----
-title: SoraFS Observability & SLO Plan
-summary: SF-7 telemetry schema, dashboards, and SLO enforcement for gateways and nodes.
 ---
 
 # SoraFS Observability & SLO Plan
@@ -186,6 +181,8 @@ Example lifecycle payload (redacted fields follow standard `iroha_logger` rules)
    - Defines the target SFM-2 dashboard for orderbook runtime metrics: order flow, depth, matching lag, settlement backlog, API error ratio, escrow runway, and contract/mirror divergence. `iroha_telemetry::metrics::Metrics` now registers the referenced `torii_sorafs_orderbook_*` families and helper methods; the matcher and settlement services still need to feed those helpers with live data before this dashboard becomes live evidence.
 7. **Governance DAG Publication** (`dashboards/grafana/sorafs_governance_dag.json`)
    - Tracks SF-12 local publication attempts, failures, published bytes, backlog, head age, and last-success age through `sorafs_governance_dag_*` metrics. Filesystem-backed evidence publishers emit local publication outcomes today; IPFS/IPNS public-head workers still need live emission before this dashboard becomes rollout evidence for the public DAG.
+8. **Appeal Finance Publication** (`dashboards/grafana/sorafs_appeal_finance.json`)
+   - Tracks appeal-finance report, weekly-rollup, and settlement-receipt publication throughput, freshness, failures, payload bytes, rollup lag, receipt/report lag, and Governance DAG backlog via `sorafs_governance_dag_*` metrics.
 
 ## Alerts
 
@@ -194,6 +191,7 @@ Example lifecycle payload (redacted fields follow standard `iroha_logger` rules)
 - `dashboards/alerts/sorafs_capacity_rules.yml` — capacity pressure, egress counter drift, repair SLA/backlog/lease-expiry, and GC/retention stall, blocked eviction, and GC error alerts.
 - `dashboards/alerts/sorafs_orderbook_rules.yml` — target SFM-2 matching lag, settlement backlog, contract/matcher divergence, API error ratio, and escrow runway alerts.
 - `dashboards/alerts/sorafs_governance_dag_rules.yml` — SF-12 local publication failures, backlog, stale head, and missing recent publication alerts.
+- `dashboards/alerts/sorafs_appeal_finance_rules.yml` — SFM-4b2 report/weekly-rollup/settlement-receipt publication failures, stale reports, stale weekly rollups, stale settlement receipts, rollup lag, and receipt/report lag alerts.
 - `dashboards/alerts/soranet_privacy_rules.yml` — downgrade spikes, bucket suppression, collector-idle detection, and disabled-collector alerts driven by `soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`, and poll failure counters.
 - `dashboards/alerts/soranet_policy_rules.yml` — anonymity brownout alarms tied to `sorafs_orchestrator_brownouts_total` so SNNet-5 default-on rollouts stay gated.
 - `dashboards/alerts/taikai_viewer_rules.yml` — Taikai viewer drift/ingest/CEK lag alarms plus the new SoraFS proof-health penalty/cooldown alerts derived from `torii_sorafs_proof_health_*`.

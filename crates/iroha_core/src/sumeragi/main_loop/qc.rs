@@ -160,35 +160,14 @@ fn signed_stake_for_world(
     world: &impl WorldReadOnly,
     roster: &[PeerId],
     signers: &BTreeSet<PeerId>,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
 ) -> Result<Numeric, super::stake_snapshot::StakeQuorumError> {
-    let fallback_stake = super::stake_snapshot::fallback_stake_for_world(world);
-    let mut stake_map = super::stake_snapshot::stake_map_from_world(world);
-    if stake_map.is_empty() {
-        for peer in roster {
-            stake_map.insert(peer.clone(), fallback_stake.clone());
-        }
-    } else {
-        for peer in roster {
-            stake_map
-                .entry(peer.clone())
-                .or_insert_with(|| fallback_stake.clone());
-        }
-    }
-
-    let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
-    let mut signed = Numeric::from(0_u64);
-    for peer in signers {
-        if !roster_set.contains(peer) {
-            return Err(super::stake_snapshot::StakeQuorumError::SignerOutOfRoster);
-        }
-        let Some(stake) = stake_map.get(peer) else {
-            return Err(super::stake_snapshot::StakeQuorumError::MissingStake);
-        };
-        signed = signed
-            .checked_add(stake.clone())
-            .ok_or(super::stake_snapshot::StakeQuorumError::Overflow)?;
-    }
-    Ok(signed)
+    super::stake_snapshot::signed_stake_for_world_with_active_lanes(
+        world,
+        roster,
+        signers,
+        active_lane_ids,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -202,6 +181,7 @@ pub(super) fn select_commit_root_signers_by_stake(
     signature_topology: &super::network_topology::Topology,
     world: &impl WorldReadOnly,
     stake_roster: &[PeerId],
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
 ) -> Result<
     (BTreeSet<crate::sumeragi::consensus::ValidatorIndex>, usize),
     super::stake_snapshot::StakeQuorumError,
@@ -220,7 +200,8 @@ pub(super) fn select_commit_root_signers_by_stake(
     for (root, group) in &groups {
         let signer_peers = signer_peers_for_topology(group, signature_topology)
             .map_err(|_| super::stake_snapshot::StakeQuorumError::SignerOutOfRoster)?;
-        let stake_weight = signed_stake_for_world(world, stake_roster, &signer_peers)?;
+        let stake_weight =
+            signed_stake_for_world(world, stake_roster, &signer_peers, active_lane_ids)?;
         let replace = match &selected {
             None => true,
             Some((best_root, _best_group, best_weight)) => {
@@ -371,10 +352,15 @@ impl Actor {
                         continue;
                     };
                     let world = self.state.world_view();
-                    super::stake_snapshot::stake_quorum_reached_for_world(
+                    let nexus = self.state.nexus_snapshot();
+                    let active_lane_ids = nexus
+                        .enabled
+                        .then(|| crate::state::nexus_active_lane_ids(&nexus));
+                    super::stake_snapshot::stake_quorum_reached_for_world_with_active_lanes(
                         &world,
                         stake_roster,
                         &signer_peers,
+                        active_lane_ids.as_ref(),
                     )
                     .unwrap_or(false)
                 }
@@ -494,6 +480,10 @@ impl Actor {
         if baseline_stake_roster.is_empty() {
             return Vec::new();
         }
+        let nexus = self.state.nexus_snapshot();
+        let active_lane_ids = nexus
+            .enabled
+            .then(|| crate::state::nexus_active_lane_ids(&nexus));
         super::roster::derive_active_topology_for_mode_from_world(
             &world,
             baseline_stake_roster.as_slice(),
@@ -501,6 +491,7 @@ impl Actor {
             self.common_config.trusted_peers.value(),
             self.common_config.peer.id(),
             ConsensusMode::Npos,
+            active_lane_ids.as_ref(),
         )
     }
 
@@ -657,7 +648,11 @@ impl Actor {
 
         let (validation, evidence) = {
             let world = self.state.world_view();
-            validate_qc_with_evidence(
+            let nexus = self.state.nexus_snapshot();
+            let active_lane_ids = nexus
+                .enabled
+                .then(|| crate::state::nexus_active_lane_ids(&nexus));
+            validate_qc_with_evidence_and_active_lanes(
                 &self.vote_log,
                 qc,
                 &topology,
@@ -669,6 +664,7 @@ impl Actor {
                 mode_tag,
                 prf_seed,
                 aggregate_ok.or(Some(true)),
+                active_lane_ids.as_ref(),
             )
         };
         let outcome = match validation {
@@ -4452,6 +4448,10 @@ impl Actor {
                         return;
                     };
                     let world = self.state.world_view();
+                    let nexus = self.state.nexus_snapshot();
+                    let active_lane_ids = nexus
+                        .enabled
+                        .then(|| crate::state::nexus_active_lane_ids(&nexus));
                     select_commit_root_signers_by_stake(
                         &snapshot.accepted_votes,
                         block_hash,
@@ -4462,6 +4462,7 @@ impl Actor {
                         &signature_topology,
                         &world,
                         stake_roster,
+                        active_lane_ids.as_ref(),
                     )
                 }
             };
@@ -4533,15 +4534,20 @@ impl Actor {
                         return;
                     };
                     let world = self.state.world_view();
+                    let nexus = self.state.nexus_snapshot();
+                    let active_lane_ids = nexus
+                        .enabled
+                        .then(|| crate::state::nexus_active_lane_ids(&nexus));
                     groups
                         .iter()
                         .filter_map(|(highest_qc, group)| {
                             let signer_peers =
                                 signer_peers_for_topology(&group, &signature_topology).ok()?;
-                            let quorum = super::stake_snapshot::stake_quorum_reached_for_world(
+                            let quorum = super::stake_snapshot::stake_quorum_reached_for_world_with_active_lanes(
                                 &world,
                                 stake_roster,
                                 &signer_peers,
+                                active_lane_ids.as_ref(),
                             )
                             .ok()?;
                             quorum.then_some((*highest_qc, group.clone()))
@@ -4665,10 +4671,15 @@ impl Actor {
                     return;
                 };
                 let world = self.state.world_view();
-                match super::stake_snapshot::stake_quorum_reached_for_world(
+                let nexus = self.state.nexus_snapshot();
+                let active_lane_ids = nexus
+                    .enabled
+                    .then(|| crate::state::nexus_active_lane_ids(&nexus));
+                match super::stake_snapshot::stake_quorum_reached_for_world_with_active_lanes(
                     &world,
                     stake_roster,
                     &signer_peers,
+                    active_lane_ids.as_ref(),
                 ) {
                     Ok(result) => result,
                     Err(err) => {
@@ -5891,10 +5902,20 @@ impl Actor {
                     return false;
                 }
                 let world = self.state.world_view();
+                let nexus = self.state.nexus_snapshot();
+                let active_lane_ids = nexus
+                    .enabled
+                    .then(|| crate::state::nexus_active_lane_ids(&nexus));
                 let Some(stake_snapshot) = self
                     .roster_validation_cache
                     .stake_snapshot_for_roster(stake_roster.as_slice())
-                    .or_else(|| CommitStakeSnapshot::from_roster(&world, stake_roster.as_slice()))
+                    .or_else(|| {
+                        CommitStakeSnapshot::from_roster_with_active_lanes(
+                            &world,
+                            stake_roster.as_slice(),
+                            active_lane_ids.as_ref(),
+                        )
+                    })
                 else {
                     return false;
                 };
@@ -7213,15 +7234,25 @@ impl Actor {
                 (stake_snapshot, validation, None)
             } else {
                 let world = self.state.world_view();
+                let nexus = self.state.nexus_snapshot();
+                let active_lane_ids = nexus
+                    .enabled
+                    .then(|| crate::state::nexus_active_lane_ids(&nexus));
                 let stake_snapshot = match consensus_mode {
                     ConsensusMode::Permissioned => None,
                     ConsensusMode::Npos => stake_snapshot_hint
                         .as_ref()
                         .filter(|snapshot| snapshot.matches_roster(topology.as_ref()))
                         .cloned()
-                        .or_else(|| CommitStakeSnapshot::from_roster(&world, topology.as_ref())),
+                        .or_else(|| {
+                            CommitStakeSnapshot::from_roster_with_active_lanes(
+                                &world,
+                                topology.as_ref(),
+                                active_lane_ids.as_ref(),
+                            )
+                        }),
                 };
-                let (validation, evidence) = validate_qc_with_evidence(
+                let (validation, evidence) = validate_qc_with_evidence_and_active_lanes(
                     &self.vote_log,
                     &qc,
                     &topology,
@@ -7233,6 +7264,7 @@ impl Actor {
                     mode_tag,
                     prf_seed,
                     aggregate_ok,
+                    active_lane_ids.as_ref(),
                 );
                 (stake_snapshot, validation, evidence)
             };
@@ -8375,6 +8407,7 @@ mod tests {
             &topology,
             &world,
             &peers,
+            None,
         )
         .expect("stake root selection should succeed");
 

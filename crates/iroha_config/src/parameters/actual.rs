@@ -4936,6 +4936,15 @@ pub struct SumeragiRbc {
     pub disk_store_max_bytes: u64,
 }
 
+/// Native AMX control-plane cache limits.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiNativeAmx {
+    /// Native AMX vote sessions retained while proposer collection is in progress.
+    pub session_cache_max: NonZeroUsize,
+    /// Exact attestation-body buckets retained per native AMX vote session.
+    pub session_body_bucket_max: NonZeroUsize,
+}
+
 impl SumeragiRbc {
     /// Effective RS16 data shards used by the runtime.
     ///
@@ -5068,6 +5077,8 @@ pub struct Sumeragi {
     pub gating: SumeragiGating,
     /// RBC (reliable broadcast) configuration.
     pub rbc: SumeragiRbc,
+    /// Native AMX control-plane cache limits.
+    pub native_amx: SumeragiNativeAmx,
     /// Finality/proof configuration.
     pub finality: SumeragiFinality,
     /// Consensus key-rotation configuration.

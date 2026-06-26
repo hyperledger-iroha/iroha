@@ -1,0 +1,18 @@
+# Example:
+#   python3 scripts/check_sorafs_hedging_rollout_evidence.py \
+#     @scripts/examples/sorafs_hedging_rollout_evidence.args.example
+#
+# Use runtime artifact locations; do not store secrets or raw billing payloads
+# in this file.
+--evidence-dir
+artifacts/sorafs/hedging-billing/staged
+--summary-out
+artifacts/sorafs/hedging-billing/staged/rollout-summary.json
+--min-billing-cycles
+2
+--max-feed-lag-secs
+900
+--max-cycle-age-secs
+3888000
+--max-divergence-bps
+500

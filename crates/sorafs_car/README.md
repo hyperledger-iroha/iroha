@@ -54,6 +54,7 @@ the PoR tree, and sampled proofs in JSON:
 cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
   --profile=sorafs.sf1@1.0.0 \
   --json-out=chunk_report.json \
+  --chunk-dir-out=chunk_payloads \
   --por-json-out=por_tree.json \
   --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json \
   payload.tar
@@ -64,6 +65,11 @@ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
 
 - Pass `--chunk-fetch-plan-out=path` to persist the canonical `chunk_fetch_specs` JSON so
   other tools (or `sorafs_fetch`) can reuse the plan without invoking the manifest stub.
+- Pass `--chunk-dir-out=dir` to persist deterministic `chunk_00000.bin` payload
+  files through the same disk-backed chunk sink used by `ChunkStore`; the target
+  directory must be absent or empty, and the JSON report includes a
+  `persisted_chunks` record with file names, offsets, lengths, and BLAKE3
+  digests.
 
 List the registered chunker profiles:
 

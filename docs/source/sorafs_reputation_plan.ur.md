@@ -3,14 +3,9 @@ lang: ur
 direction: rtl
 source: docs/source/sorafs_reputation_plan.md
 status: needs-update
-source_hash: 406a6219066b03d850e4e40666dd48a0b4b1a747bf77282281f336694eaa18a8
-source_last_modified: "2026-06-21T12:32:18+00:00"
-translation_last_reviewed: 2026-06-21
----
-
----
-title: SoraFS Provider Reputation Oracle
-summary: SFM-3 implementation status for reputation V1 scoring, proofs, Torii APIs, SDK helpers, observability, and remaining live publisher rollout.
+source_hash: 9fb6bb3647b0bdf40180b53f4f8fda8928d12bd62c5f13bf565b0e0b234ead1e
+source_last_modified: "2026-06-25T18:04:39+00:00"
+translation_last_reviewed: 2026-06-25
 ---
 
 # SoraFS Provider Reputation Oracle
@@ -22,8 +17,9 @@ schemas, fixed-point scoring, trust-edge iteration, degradation flags, Merkle
 proofs, Governance DAG payload validation, local Torii publication/read APIs,
 CLI verification and publication helpers, SDK convenience clients, and
 observability assets. Remaining rollout work is deploying the live
-ingest/publisher service and archiving production evidence, not the local
-scoring, proof, API, CLI, SDK, or dashboard foundations.
+ingest/publisher service and archiving production evidence that passes the
+rollout evidence gate, not the local scoring, proof, API, CLI, SDK, dashboard,
+or verifier foundations.
 
 ## Goals & Scope
 - Produce deterministic, governance-auditable reputation scores for each SoraFS provider to inform routing, incentives, staking, and compliance decisions.
@@ -198,6 +194,28 @@ CREATE TABLE reputation_snapshots (
   hard-excluding low-score providers. The `sorafs_fetch --telemetry-json` parser
   accepts the same `reputation_score_bps` field and rejects values outside
   `0..=10000`.
+- `scripts/check_sorafs_reputation_rollout_evidence.py` verifies the production
+  evidence bundle before routing/incentive enforcement. The gate accepts the
+  existing `sorafs_cli reputation publish|snapshot|fetch|watch|verify` JSON
+  artifacts plus deployed metrics, SSE/WebSocket transport, and
+  routing/incentive consumption evidence; it requires one fresh publish/latest
+  snapshot anchor and requires provider, event, proof replay, metrics,
+  transport, and routing/incentive consumption artifacts to bind to that
+  `snapshot_id_hex`/`merkle_root_hex` tuple. It also requires bounded ingest
+  lag, provider proof coverage, proof replay, transport event delivery, and
+  downstream consumption. Snapshot binding failures are recorded on the
+  offending artifact before required-kind validity is finalized, so the JSON
+  summary matches the fail-closed rollout decision. It rejects raw snapshot/proof
+  bytes, raw provider records, request or
+  response bodies, bearer tokens, signed transactions, private keys, and other
+  payload-bearing fields. The checker supports shell-style `@ARGFILE` inputs
+  for direct replay of reviewed evidence directories and explicit artifacts.
+- `scripts/run_sorafs_reputation_rollout_evidence.py` collects the deployed
+  rollout bundle with bounded `sorafs_cli reputation publish|snapshot|fetch|watch|verify`
+  commands, supports shell-style `@ARGFILE` response files, checks provider
+  proof coverage before touching a live Torii endpoint, and then runs the
+  evidence gate. `scripts/examples/sorafs_reputation_rollout_evidence.args.example`
+  provides a payload-free operator template.
 - Operator workflow notes live in
   `docs/source/sorafs/reputation_operator.md`.
 
@@ -206,12 +224,14 @@ CREATE TABLE reputation_snapshots (
   - Implemented locally: `POST /v1/sorafs/reputation/latest` accepts a
     canonical `ReputationSnapshotV1`, validates it, persists configured
     governance artifacts, and caches it as latest.
-  - Implemented locally: `GET /v1/sorafs/reputation/latest` returns full latest
-    snapshot metadata and provider scores.
+  - Implemented locally: `GET /v1/sorafs/reputation/latest` returns latest
+    snapshot metadata plus a `limit`-bounded provider-score array while
+    preserving the total `provider_count`.
   - Implemented locally: `GET /v1/sorafs/reputation/providers/{provider_id}`
     returns the provider entry with Merkle proof.
   - Implemented locally: `GET /v1/sorafs/reputation/snapshots/{snapshot_id_hex}`
-    returns a previously accepted snapshot by 16-byte id.
+    returns a previously accepted snapshot by 16-byte id with the same
+    `limit`-bounded provider-score readback.
   - Implemented locally: `GET /v1/sorafs/reputation/weights` returns the
     weights and smoothing parameters from the latest snapshot.
   - Implemented locally: `GET /v1/sorafs/reputation/events` returns sequenced
@@ -321,13 +341,24 @@ Completed local foundations:
   and SSE consumption.
 - Scheduler consumption through `reputation_score_bps`.
 - Grafana dashboard and Prometheus alert rules for accepted snapshot health.
+- Rollout evidence summary gate for fresh snapshot, publisher, provider proof,
+  event delivery, metrics, SSE/WebSocket, and routing/incentive consumption
+  artifacts. The gate now fails closed when any recognized artifact is invalid,
+  including stale duplicate artifacts or optional artifacts outside the required
+  subset.
+- Rollout evidence collection harness that publishes, reads back, watches, proof
+  replays, and verifies the deployed reputation evidence bundle from one
+  response-file driven operator command.
 
 Remaining production gates:
 
 - Deploy the live ingest/publisher service against production proof, dispute,
   settlement, and reserve/rent event sources.
 - Capture live run evidence for snapshot freshness, ingest lag, low-score
-  handling, SSE/WebSocket event delivery, and routing/incentive consumption.
+  handling, SSE/WebSocket event delivery, and routing/incentive consumption,
+  then publish a `ready` summary from
+  `scripts/run_sorafs_reputation_rollout_evidence.py` or the direct
+  `scripts/check_sorafs_reputation_rollout_evidence.py` gate.
 - Publish governance-approved weights and the first production snapshot with
   archived `.to`/JSON artifacts and proof replay evidence.
 - Exercise rollback/stale-snapshot procedures before routing or incentives rely

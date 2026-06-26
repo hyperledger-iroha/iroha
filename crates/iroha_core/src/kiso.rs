@@ -1370,6 +1370,12 @@ mod tests {
                     disk_store_max_bytes:
                         iroha_config::parameters::defaults::sumeragi::RBC_DISK_STORE_MAX_BYTES,
                 },
+                native_amx: iroha_config::parameters::actual::SumeragiNativeAmx {
+                    session_cache_max:
+                        iroha_config::parameters::defaults::sumeragi::NATIVE_AMX_SESSION_CACHE_MAX,
+                    session_body_bucket_max:
+                        iroha_config::parameters::defaults::sumeragi::NATIVE_AMX_SESSION_BODY_BUCKET_MAX,
+                },
                 finality: iroha_config::parameters::actual::SumeragiFinality {
                     proof_policy: iroha_config::parameters::actual::ProofPolicy::Off,
                     commit_cert_history_cap:

@@ -4,14 +4,9 @@ direction: rtl
 source: docs/source/sorafs_por_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 876a4d8556515611ca194aac7208bf2cddf1de606464bcbf8f5d738f4ed438e1
-source_last_modified: "2026-01-03T18:07:58.684377+00:00"
-translation_last_reviewed: 2026-01-30
----
-
----
-title: SoraFS PoR Challenge Scheduler & Randomness Integration
-summary: SF-9a implementation status for PoR randomness, scheduler runtime wiring, telemetry, persistence, and remaining rollout evidence.
+source_hash: fc411c85ecf1d053e51e65518736d616639281acbb445ad77a2cd82f4440db20
+source_last_modified: "2026-06-25T17:41:33+00:00"
+translation_last_reviewed: 2026-06-25
 ---
 
 # SoraFS PoR Challenge Scheduler & Randomness Integration
@@ -33,7 +28,16 @@ fixtures. The reference validator also provides
 
 Remaining SF-9a rollout work is live deployment evidence for external drand,
 VRF, and auditor feeds, plus any production governance archive handoff required
-by the operator.
+by the operator. `scripts/check_sorafs_por_rollout_evidence.py` now provides
+the fail-closed SF-9 rollout evidence gate for deployed PoR scheduler,
+randomness, validator, reporting, archive, observability, and governance
+promotion packets, and `scripts/run_sorafs_por_rollout_evidence.py` provides
+the matching reviewed collection planner/runner. The gate now also requires
+scheduler runtime, validator replay, reporting/archive, observability, and
+governance approval artifacts to carry a `seed_replay_digest_hex` matching a
+valid randomness artifact in the same evidence bundle. Seed-replay mismatches
+are recorded on the offending artifact in the JSON summary before required-kind
+validity is reported.
 
 ## Randomness Model
 1. **Epoch cadence:** 1-hour epochs (`epoch_id = floor(unix_time / 3600)`).
@@ -220,17 +224,19 @@ CREATE TABLE sorafs_vrf_history (
 - **Storage hooks:** The runtime uses `sorafs_node::NodeHandle` as its `PorStorage`, plans
   challenges from the local manifest/capacity state, records accepted challenges, and leaves
   proof/verdict persistence to the existing Torii PoR submission routes. The ingestion status
-  endpoint (`GET /v1/sorafs/por/ingestion/{manifest_digest_hex}`) reports backlog depth,
-  oldest epoch/deadline, and last success/failure timestamps.
+  endpoint (`GET /v1/sorafs/por/ingestion/{manifest_digest_hex}?limit=N`) reports
+  backlog depth, oldest epoch/deadline, and last success/failure timestamps with
+  `limit`-bounded provider status entries and total provider counts.
 - **Governance events:** Published challenges and weekly reports are materialised by
   `FilesystemGovernancePublisher` under the configured governance DAG directory. Status,
   export, and report endpoints expose the coordinator history as canonical Norito payloads.
 - **Alerts:** `dashboards/alerts/sorafs_por_rules.yml` covers scheduler failures, forced
   challenges, ingestion backlog, and duplicate sample spikes.
 
-Implementation status: Torii exposes `/v1/sorafs/por/ingestion/{manifest_digest_hex}`, which
-delegates to `sorafs_node::NodeHandle::por_ingestion_status` for backlog depth, oldest epoch/deadline,
-and last verdict timestamps. A dedicated sampler (`SharedAppState::spawn_por_ingestion_metrics_worker`)
+Implementation status: Torii exposes `/v1/sorafs/por/ingestion/{manifest_digest_hex}?limit=N`,
+which delegates to `sorafs_node::NodeHandle::por_ingestion_status` for backlog
+depth, oldest epoch/deadline, and last verdict timestamps while bounding the
+returned provider status array. A dedicated sampler (`SharedAppState::spawn_por_ingestion_metrics_worker`)
 collects `por_ingestion_overview` snapshots every 30 seconds and drives the
 `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` gauges so dashboards and
 alerts stay fresh even when providers are idle; stale providers are zeroed out whenever they drop
@@ -265,6 +271,44 @@ archive handoff required by the deployment operator.
   - Fixture replay verifying `PorProofV1`.
 - Trybuild UI tests ensure compile-time errors for malformed Norito payloads.
 
+The rollout evidence scripts have focused Python coverage in:
+
+- `scripts/tests/check_sorafs_por_rollout_evidence_test.py`
+- `scripts/tests/run_sorafs_por_rollout_evidence_test.py`
+
+## Rollout Evidence Gate
+
+Operators should keep SF-9 promotion fail-closed until the payload-free
+deployment evidence passes the checked-in gate:
+
+```bash
+python3 scripts/check_sorafs_por_rollout_evidence.py \
+  @scripts/examples/sorafs_por_rollout_evidence.args.example
+```
+
+For reviewed collection planning, use the runner in dry-run mode before
+executing it against captured evidence paths:
+
+```bash
+python3 scripts/run_sorafs_por_rollout_evidence.py \
+  @scripts/examples/sorafs_por_rollout_collection.args.example \
+  --dry-run
+```
+
+The checker recognizes `sorafs.por.*` SF-9 rollout schemas for randomness,
+scheduler runtime, validator replay, reporting/archive handoff, observability,
+and governance approval. It fails closed on stale evidence, raw challenge/proof,
+drand, VRF, report, export, response-body, transaction, token, secret, and key
+material, under-sized provider or challenge samples, unauthenticated or
+non-Norito routes, route latency above threshold, scheduler lag above threshold,
+missing deterministic seed replay, missing drand/VRF validation, missing
+repair/governance handoff, missing `sorafs-validate por` replay, unresolved
+manual-trigger route policy, report latency above threshold, missing PoR metrics
+or alerts, critical alerts, seed replay digest drift across runtime/replay/
+reporting/observability/governance artifacts, and governance packets not bound
+to `iroha_config`. Seed-replay binding failures are attached to the offending
+artifact in the emitted summary.
+
 ## Rollout Status
 Implemented locally:
 - `sorafs_manifest::por` challenge, proof, status, manual challenge, provider
@@ -277,10 +321,17 @@ Implemented locally:
 - Scheduler, forced-challenge, duplicate-sample, and ingestion telemetry with
   checked-in dashboard and alert fixtures.
 - `generate_por_fixtures` and `sorafs-validate por` reference validation.
+- Fail-closed SF-9 rollout evidence gate, collection planner, operator argfile
+  templates, and focused tests, including cross-artifact seed replay digest
+  binding with per-artifact summary invalidation.
 
 Remaining production gates:
 - Archive a live drand/VRF/auditor run showing deterministic challenge
-  generation and verdict replay.
+  generation and verdict replay that passes the SF-9 rollout evidence gate with
+  all runtime/replay/reporting/governance evidence bound to the same seed replay
+  digest and any binding failure marked on the offending artifact in the emitted
+  summary.
 - Decide whether each deployment needs the SQL/Parquet warehouse layer in
   addition to the node-local Norito snapshot.
-- Capture governance DAG archive handoff evidence for production operators.
+- Capture governance DAG archive handoff evidence for production operators and
+  include it in the SF-9 reporting/archive evidence packet.

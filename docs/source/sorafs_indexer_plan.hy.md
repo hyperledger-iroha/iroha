@@ -4,14 +4,9 @@ direction: ltr
 source: docs/source/sorafs_indexer_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1d12b9997f92e9b45ddccf6d8e5f0142d30f9b8bf5386fda8359f2d99875c6f3
-source_last_modified: "2025-12-29T18:16:36.164891+00:00"
+source_hash: 0a8a3d1d36a0a2b37c6d9f2add236a38ca46ebd3e80773058f1be760be968c8b
+source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-02-07
-title: Sora Network Indexer & Delegated Routing Plan
-summary: SFM-1 indexer architecture, implemented provider-discovery baseline, and future delegated-routing rollout.
----
-
----
 title: Sora Network Indexer & Delegated Routing Plan
 summary: SFM-1 indexer architecture, implemented provider-discovery baseline, and future delegated-routing rollout.
 ---
@@ -21,7 +16,9 @@ summary: SFM-1 indexer architecture, implemented provider-discovery baseline, an
 > **Status (Jun 2026):** The local provider-discovery baseline is implemented:
 > Torii ingests signed `ProviderAdvertV1` payloads at
 > `/v1/sorafs/providers/advert`, serves the current in-memory advert cache at
-> `/v1/sorafs/providers`, validates chunk-range capability metadata, and exports
+> `/v1/sorafs/providers`, exposes configured gateway/pin Torii peers at
+> `/v1/sorafs/storage/peers`, bounds both local readback arrays with `limit`,
+> validates chunk-range capability metadata, and exports
 > range-capability telemetry. The IPNI-compatible `/routing/v1/*` delegated
 > routing indexer described below remains a future service/deployment track, not
 > a local Torii endpoint available today.
@@ -33,7 +30,9 @@ summary: SFM-1 indexer architecture, implemented provider-discovery baseline, an
 
 ## Components
 - Implemented baseline: Torii provider advert ingest/list endpoints,
-  in-memory TTL pruning, capability validation, and range-capability metrics.
+  in-memory TTL pruning, capability validation, range-capability metrics, and
+  `limit`-bounded provider/configured-peer list readback with full counts plus
+  returned-count/truncation metadata.
 - Future service: governance-DAG ingest pipeline for adverts/proofs.
 - Future service: API endpoints (`/routing/v1/find`, etc.).
 - Future service: durable caching layer and regional TTL policies.

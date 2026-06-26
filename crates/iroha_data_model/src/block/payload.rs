@@ -102,6 +102,12 @@ mod model {
         pub result_merkle: MerkleTree<TransactionResult>,
         /// Transaction execution results, with indices aligned to the entrypoint Merkle tree.
         pub transaction_results: Vec<TransactionResult>,
+        /// Number of successful execution fragments committed while executing this block.
+        ///
+        /// This includes external transactions, time triggers, and deterministic internal
+        /// fragments folded into a block execution result.
+        #[norito(default)]
+        pub committed_fragment_count: u64,
         /// FASTPQ transfer transcripts grouped by transaction entrypoint hash.
         pub fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>,
         /// Completed AXT envelopes recorded while executing the block.
@@ -200,6 +206,7 @@ impl PartialEq for BlockResult {
             && self.merkle == other.merkle
             && self.result_merkle == other.result_merkle
             && self.transaction_results == other.transaction_results
+            && self.committed_fragment_count == other.committed_fragment_count
             && self.fastpq_transcripts == other.fastpq_transcripts
             && self.axt_envelopes == other.axt_envelopes
             && self.trigger_completions == other.trigger_completions
@@ -222,6 +229,7 @@ impl Ord for BlockResult {
             &self.merkle,
             &self.result_merkle,
             &self.transaction_results,
+            &self.committed_fragment_count,
             &self.fastpq_transcripts,
             &self.axt_envelopes,
             &self.trigger_completions,
@@ -232,6 +240,7 @@ impl Ord for BlockResult {
                 &other.merkle,
                 &other.result_merkle,
                 &other.transaction_results,
+                &other.committed_fragment_count,
                 &other.fastpq_transcripts,
                 &other.axt_envelopes,
                 &other.trigger_completions,

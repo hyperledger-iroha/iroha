@@ -15,7 +15,16 @@ local ballot lifecycle events can also be materialized into the SoraFS
 Governance DAG filesystem publisher and optional signed runtime DAG. The
 repository does not yet ship the SoraFS moderation voting contract, durable
 ballot orchestrator, juror CLI, challenge monitor, or production service needed
-to run appeal-panel ballots end to end.
+to run appeal-panel ballots end to end. The shared SFM-4b moderation-panel
+rollout evidence gate now validates a dedicated
+`sorafs.moderation_panel.commit_reveal_canary.v1` artifact for this boundary,
+including authenticated commit/reveal routes, digest recomputation, duplicate
+commit rejection, mismatched reveal rejection, late commit/reveal rejection,
+missed-quorum detection, no-show failover, juror penalty planning,
+deterministic tally replay, contested challenge coverage, governance event
+digest binding, event-lag limits, and absence of raw commit/reveal payloads.
+That gate blocks deployed promotion evidence; it does not replace the missing
+durable service or contract-backed workflow.
 
 ## Shipped Foundations
 
@@ -53,6 +62,11 @@ to run appeal-panel ballots end to end.
   commit-accepted, reveal-accepted, and tally events into the local
   `publish-index.json`, CAR queue, and optional signed runtime DAG when a
   governance publisher is configured.
+- `scripts/check_sorafs_moderation_panel_rollout_evidence.py` validates
+  payload-free commit/reveal rollout evidence and rejects canaries that omit
+  duplicate-commit, mismatched-reveal, late-submission, missed-quorum,
+  no-show-failover, contested-challenge, deterministic-replay, or governance
+  digest-binding coverage.
 - Example policy-jury fixtures live in `docs/examples/ministry/`.
 
 These types currently model policy-jury choices (`approve`, `reject`,
@@ -90,12 +104,17 @@ The production service still targets this flow:
   rollout evidence.
 - Add end-to-end simulations with no-shows, duplicate commits, mismatched
   reveals, missed quorum, contested challenges, and successful decisions.
+- Collect a passing payload-free `commit_reveal` canary through the SFM-4b
+  rollout evidence gate after the durable service exists.
 
 ## Validation
 
 The current foundation is covered by policy-jury data-model tests:
 
 ```sh
+python3 scripts/check_sorafs_moderation_panel_rollout_evidence.py \
+  @scripts/examples/sorafs_moderation_panel_rollout_evidence.args.example \
+  --require-kind commit_reveal
 cargo test -p iroha_data_model policy_jury
 cargo test -p iroha_data_model sorafs_moderation_ballot
 cargo test -p sorafs_node moderation_ballot
