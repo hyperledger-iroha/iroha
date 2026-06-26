@@ -28,17 +28,12 @@ import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.client.PlatformHttpTransportExecutor
 import org.hyperledger.iroha.sdk.client.TransportSecurity
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
-import org.hyperledger.iroha.sdk.core.model.Executable
-import org.hyperledger.iroha.sdk.core.model.InstructionBox
-import org.hyperledger.iroha.sdk.core.model.JsonValue
-import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.crypto.Signer
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
-import org.hyperledger.iroha.sdk.tx.TransactionBuilder
 import org.hyperledger.iroha.sdk.tx.norito.NoritoCodecAdapter
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
@@ -1196,48 +1191,34 @@ class ToriiOfflineNoteOutcomeProvider @JvmOverloads constructor(
         headers.keys.firstOrNull { it.equals(name, ignoreCase = true) }
 }
 
-/** Transaction submitter that wraps Offline instructions in signed Iroha transactions. */
+/** Compatibility submitter that rejects retired classic Offline Note payment transactions. */
+@Suppress("UNUSED_PARAMETER")
 class IrohaOfflineNoteTransactionSubmitter @JvmOverloads constructor(
-    private val client: IrohaClient,
-    private val signer: Signer,
-    private val chainId: String,
-    private val authority: String,
-    private val codecAdapter: NoritoCodecAdapter = NoritoJavaCodecAdapter(),
-    private val clock: LongSupplier = LongSupplier { System.currentTimeMillis() },
+    client: IrohaClient,
+    signer: Signer,
+    chainId: String,
+    authority: String,
+    codecAdapter: NoritoCodecAdapter = NoritoJavaCodecAdapter(),
+    clock: LongSupplier = LongSupplier { System.currentTimeMillis() },
     transactionMetadata: Map<String, String> = emptyMap(),
 ) : OfflineNoteTransactionSubmitter {
-    private val transactionBuilder = TransactionBuilder(codecAdapter)
-    private val transactionMetadata: Map<String, String> = transactionMetadata.toMap()
-
     override fun submitAudit(audit: OfflineNote.AuditBundle): CompletableFuture<ClientResponse> =
-        submit(OfflineNote.auditInstruction(audit))
+        retiredOfflineNotePaymentFuture()
 
     override fun submitRedeem(redemption: OfflineNote.Redeem): CompletableFuture<ClientResponse> =
-        submit(OfflineNote.redeemInstruction(redemption))
+        retiredOfflineNotePaymentFuture()
 
     override fun submitDefund(
         redemption: OfflineNote.Redeem,
         bearerAuditTrail: List<OfflineNote.AuditBundle>,
     ): CompletableFuture<ClientResponse> =
-        submit(bearerAuditTrail.map { OfflineNote.auditInstruction(it) } + OfflineNote.redeemInstruction(redemption))
-
-    private fun submit(instruction: InstructionBox): CompletableFuture<ClientResponse> =
-        submit(listOf(instruction))
-
-    private fun submit(instructions: List<InstructionBox>): CompletableFuture<ClientResponse> {
-        val payload = TransactionPayload(
-            chainId = chainId,
-            authority = authority,
-            creationTimeMs = clock.getAsLong(),
-            executable = Executable.instructions(instructions),
-            metadata = transactionMetadata.mapValues { JsonValue.string(it.value) },
-        )
-        return client.submitTransaction(transactionBuilder.encodeAndSign(payload, signer))
-    }
+        retiredOfflineNotePaymentFuture()
 
     companion object {
         const val GAS_ASSET_ID_METADATA_KEY: String = "gas_asset_id"
         const val FEE_SPONSOR_METADATA_KEY: String = "fee_sponsor"
+        const val RETIRED_OFFLINE_NOTE_PAYMENT_MESSAGE: String =
+            "Classic Offline Note payment transactions are retired; use Kagemusha payment flows."
 
         @JvmStatic
         fun gasAssetMetadata(gasAssetId: String): Map<String, String> =
@@ -1258,6 +1239,9 @@ class IrohaOfflineNoteTransactionSubmitter @JvmOverloads constructor(
             require(trimmed.isNotEmpty()) { "$field must not be blank" }
             return trimmed
         }
+
+        private fun retiredOfflineNotePaymentFuture(): CompletableFuture<ClientResponse> =
+            failedFuture(IllegalStateException(RETIRED_OFFLINE_NOTE_PAYMENT_MESSAGE))
     }
 }
 

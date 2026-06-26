@@ -507,6 +507,9 @@ export interface MultisigProposeRequest extends MultisigAccountSelector {
   publicKeyHex?: string | null;
   signatureB64?: string | null;
   creationTimeMs?: number | string | bigint | null;
+  validationFeePolicyVersion?: number | string | bigint | null;
+  validationFeePolicyHash?: string | null;
+  validationFeeInstructionIndex?: number | string | bigint | null;
   privateKey?: string | BinaryLike | null;
   privateKeyHex?: string | null;
   privateKeyMultihash?: string | null;
@@ -519,6 +522,9 @@ export interface MultisigProposeRequest extends MultisigAccountSelector {
   public_key_hex?: string | null;
   signature_b64?: string | null;
   creation_time_ms?: number | string | bigint | null;
+  validation_fee_policy_version?: number | string | bigint | null;
+  validation_fee_policy_hash?: string | null;
+  validation_fee_instruction_index?: number | string | bigint | null;
   private_key?: string | BinaryLike | null;
   private_key_hex?: string | null;
   private_key_multihash?: string | null;
@@ -535,6 +541,9 @@ export interface MultisigProposePayload {
   public_key_hex?: string;
   signature_b64?: string;
   creation_time_ms?: number;
+  validation_fee_policy_version?: string;
+  validation_fee_policy_hash?: string;
+  validation_fee_instruction_index?: string;
   private_key?: string | BinaryLike;
 }
 
@@ -9973,11 +9982,15 @@ export interface PermissionedIterableOptions {
   canonicalAuth?: CanonicalRequestAuth;
 }
 
+export type ToriiCountMode = "bounded" | "exact";
+
 export interface IterableListOptions extends PermissionedIterableOptions {
   limit?: NumericLike;
   offset?: NumericLike;
   filter?: string | Record<string, unknown>;
   sort?: string | ReadonlyArray<{ key: string; order?: "asc" | "desc" }>;
+  countMode?: ToriiCountMode;
+  count_mode?: ToriiCountMode;
   signal?: AbortSignal;
 }
 
@@ -10018,9 +10031,10 @@ export interface AssetHolderListOptions extends IterableListOptions {
 }
 
 export interface IterableQueryOptions extends IterableListOptions {
-  fetchSize?: NumericLike;
+  fetch_size?: NumericLike;
   queryName?: string;
-  select?: ReadonlyArray<Record<string, unknown>>;
+  query_name?: string;
+  select?: ReadonlyArray<string | Record<string, unknown>>;
 }
 
 export interface TransactionQueryOptions extends IterableQueryOptions {
@@ -10211,6 +10225,21 @@ export interface AliasLookupByAccountResponse {
 export interface AliasLookupByAccountOptions extends CanonicalRequestOptions {
   dataspace?: string;
   domain?: string;
+}
+
+export interface RetailRecipientLookupRequest {
+  accountId?: string;
+  account_id?: string;
+  aliasFqn?: string;
+  alias_fqn?: string;
+}
+
+export interface RetailRecipientLookupResponse {
+  resolved: boolean;
+  account_id?: string;
+  alias_fqn?: string;
+  fi_id?: string;
+  full_name?: string;
 }
 
 export interface AliasVoprfEvaluateResponse {
@@ -13138,12 +13167,22 @@ export interface SubscriptionActionResponse {
 }
 
 export interface ToriiOfflineReadinessResponse {
-  offline_note: boolean;
-  offline_one_use_keys: boolean;
-  offline_recursive_note_proof: boolean;
-  offline_fountain_qr: boolean;
-  offline_sync_optional: boolean;
+  offline_kagemusha_abi7: boolean;
+  offline_kagemusha_abi7_mode: string;
+  offline_kagemusha_abi7_bridge_abi_version: number;
+  offline_kagemusha_abi7_circuit_id: string;
+  offline_kagemusha_abi7_artifacts: boolean;
+  offline_kagemusha_recursive_compact_available: boolean;
+  offline_kagemusha_recursive_compact_mode: string;
+  offline_kagemusha_recursive_compact_required_native_bridge_abi_version: number;
+  offline_kagemusha_recursive_compact_circuit_id: string;
+  offline_kagemusha_recursive_compact_artifacts_available: boolean;
   offline_telemetry: boolean;
+  offline_note?: boolean;
+  offline_one_use_keys?: boolean;
+  offline_recursive_note_proof?: boolean;
+  offline_fountain_qr?: boolean;
+  offline_sync_optional?: boolean;
   [key: string]: unknown;
 }
 
@@ -17748,6 +17787,10 @@ export declare class ToriiClient {
     accountId: string,
     options?: AliasLookupByAccountOptions,
   ): Promise<AliasLookupByAccountResponse | null>;
+  lookupRetailRecipient(
+    request: RetailRecipientLookupRequest,
+    options?: CanonicalRequestOptions,
+  ): Promise<RetailRecipientLookupResponse>;
   listRamLfeProgramPolicies(options?: {
     signal?: AbortSignal;
   }): Promise<{ total: number; items: Array<Record<string, unknown>> }>;
@@ -19255,6 +19298,8 @@ export interface KagemushaRecursiveSpendBundleSummary {
   readonly final_root: Buffer;
   readonly currentNote: KagemushaRecursiveSpendableNoteDescriptor;
   readonly current_note: KagemushaRecursiveSpendableNoteDescriptor;
+  readonly topupAnchorNullifiers: readonly Buffer[];
+  readonly topup_anchor_nullifiers: readonly Buffer[];
 }
 export function buildKagemushaRecursiveSpendableNoteDescriptor(
   input: KagemushaRecursiveSpendableNoteDescriptorInput,
@@ -19380,6 +19425,8 @@ export interface MultisigProposeNoritoRequest {
   validationFeePolicyVersion?: string | null;
   validation_fee_policy_hash?: string | null;
   validationFeePolicyHash?: string | null;
+  validation_fee_instruction_index?: string | null;
+  validationFeeInstructionIndex?: string | null;
   instructions: Array<object | string | ArrayBufferView | ArrayBuffer | Buffer>;
 }
 export function noritoEncodeMultisigProposeRequest(

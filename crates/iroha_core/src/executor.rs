@@ -8183,9 +8183,17 @@ mod tests {
         authority_kp: &KeyPair,
         instruction: InstructionBox,
     ) -> SignedTransaction {
+        signed_fee_policy_batch_transaction(authority_id, authority_kp, vec![instruction])
+    }
+
+    fn signed_fee_policy_batch_transaction(
+        authority_id: AccountId,
+        authority_kp: &KeyPair,
+        instructions: Vec<InstructionBox>,
+    ) -> SignedTransaction {
         let chain: ChainId = "fee-policy-chain".parse().unwrap();
         TransactionBuilder::new(chain, authority_id)
-            .with_executable(Executable::from(core::iter::once(instruction)))
+            .with_executable(Executable::from(instructions))
             .sign(authority_kp.private_key())
     }
 
@@ -9305,6 +9313,34 @@ mod tests {
     }
 
     #[test]
+    fn nexus_fee_kagemusha_transfer_batch_is_fee_exempt_offline_offline() {
+        let (state, authority_id, authority_kp, asset_def_id) =
+            nexus_fee_lane_relay_burn_admission_fixture();
+        let first = iroha_data_model::isi::offline::KagemushaTransfer::new(
+            asset_def_id.clone(),
+            vec![[0x11; 32]],
+            vec![[0x22; 32]],
+            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-transfer-first"),
+            Some([0x33; 32]),
+        );
+        let second = iroha_data_model::isi::offline::KagemushaTransfer::new(
+            asset_def_id,
+            vec![[0x44; 32]],
+            vec![[0x55; 32]],
+            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-transfer-second"),
+            Some([0x66; 32]),
+        );
+        let tx = signed_fee_policy_batch_transaction(
+            authority_id,
+            &authority_kp,
+            vec![InstructionBox::from(first), InstructionBox::from(second)],
+        );
+        let view = state.view();
+        check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 2, None)
+            .expect("pure offline-offline Kagemusha transfer batch must not require a fee budget");
+    }
+
+    #[test]
     fn nexus_fee_online_to_offline_shield_requires_fee_budget() {
         let (state, authority_id, authority_kp, asset_def_id) =
             nexus_fee_lane_relay_burn_admission_fixture();
@@ -9316,6 +9352,32 @@ mod tests {
             iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
         );
         let tx = signed_fee_policy_transaction(authority_id, &authority_kp, shield.into());
+        assert_lane_relay_burn_requires_fee_budget(&state, &tx);
+    }
+
+    #[test]
+    fn nexus_fee_kagemusha_mixed_with_online_topup_requires_fee_budget() {
+        let (state, authority_id, authority_kp, asset_def_id) =
+            nexus_fee_lane_relay_burn_admission_fixture();
+        let transfer = iroha_data_model::isi::offline::KagemushaTransfer::new(
+            asset_def_id.clone(),
+            vec![[0x11; 32]],
+            vec![[0x22; 32]],
+            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-transfer-mixed"),
+            Some([0x33; 32]),
+        );
+        let shield = iroha_data_model::isi::zk::Shield::new(
+            asset_def_id,
+            authority_id.clone(),
+            1,
+            [0x44; 32],
+            iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
+        );
+        let tx = signed_fee_policy_batch_transaction(
+            authority_id,
+            &authority_kp,
+            vec![InstructionBox::from(transfer), shield.into()],
+        );
         assert_lane_relay_burn_requires_fee_budget(&state, &tx);
     }
 

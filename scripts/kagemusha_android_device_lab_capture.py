@@ -13,6 +13,7 @@ import secrets
 import subprocess
 import stat
 import sys
+import time
 from typing import Any, Callable, Sequence
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -61,6 +62,16 @@ EXTRA_D2D_TRANSCRIPTS: tuple[tuple[str, Path], ...] = (
 )
 
 Runner = Callable[..., subprocess.CompletedProcess[Any]]
+
+
+def _timeout_arg(timeout_seconds: int) -> int | None:
+    return None if timeout_seconds == 0 else timeout_seconds
+
+
+def _timeout_error(label: str, timeout_seconds: int) -> str:
+    if timeout_seconds == 0:
+        return f"{label} timed out"
+    return f"{label} timed out after {timeout_seconds} seconds"
 
 
 def _json_dumps(payload: dict[str, Any]) -> str:
@@ -544,11 +555,11 @@ def _run_step(
             list(command),
             cwd=str(cwd) if cwd is not None else None,
             env=env,
-            timeout=timeout_seconds,
+            timeout=_timeout_arg(timeout_seconds),
             check=False,
         )
     except subprocess.TimeoutExpired:
-        return [f"{label} timed out after {timeout_seconds} seconds"]
+        return [_timeout_error(label, timeout_seconds)]
     except OSError:
         return [f"{label} could not be started"]
     if result.returncode != 0:
@@ -697,9 +708,14 @@ def _validate_attestation_result_for_capture(
     return errors
 
 
-def _capture_env(args: argparse.Namespace) -> dict[str, str]:
+def _capture_env(
+    args: argparse.Namespace,
+    *,
+    include_serial: bool = True,
+) -> dict[str, str]:
     env = os.environ.copy()
-    env["ANDROID_SERIAL"] = args.serial
+    if include_serial:
+        env["ANDROID_SERIAL"] = args.serial
     if args.java_home is not None:
         env["JAVA_HOME"] = args.java_home
     if args.android_home is not None:
@@ -837,6 +853,48 @@ def _safe_adb_devices_output_display(value: object) -> str:
     return f"rows={row_count}; states={state_summary}"
 
 
+def _adb_visible_device_serials(value: object) -> tuple[list[str], str, list[str]]:
+    summary = _safe_adb_devices_output_display(value)
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("utf-8")
+        except UnicodeDecodeError:
+            return [], summary, ["ADB auto-serial resolution returned non-UTF-8 output"]
+    if not isinstance(value, str):
+        return [], summary, ["ADB auto-serial resolution output is missing"]
+    serials: list[str] = []
+    row_count = 0
+    unsafe_serial = False
+    for raw_line in value.splitlines():
+        line = raw_line.strip()
+        if not line or line == "List of devices attached" or line.startswith("* daemon"):
+            continue
+        row_count += 1
+        fields = line.split()
+        if len(fields) < 2 or fields[1] != "device":
+            continue
+        serial = fields[0]
+        if (
+            not serial
+            or serial != serial.strip()
+            or device_lab._contains_control_character(serial)
+            or device_lab.SECRET_RE.search(serial)
+        ):
+            unsafe_serial = True
+            continue
+        serials.append(serial)
+    if unsafe_serial:
+        return [], summary, ["ADB auto-serial resolution saw an unsafe serial"]
+    if row_count == 0:
+        return [], summary, [f"ADB auto-serial resolution found no visible devices: {summary}"]
+    if row_count != 1 or len(serials) != 1:
+        return [], summary, [
+            "ADB auto-serial resolution requires exactly one visible device, "
+            f"got {summary}"
+        ]
+    return serials, summary, []
+
+
 def _safe_adb_failure_detail(
     result: subprocess.CompletedProcess[Any],
     *,
@@ -869,14 +927,14 @@ def _run_adb_devices_diagnostic(
             command,
             cwd=str(args.repo_root),
             env=env,
-            timeout=args.adb_timeout_seconds,
+            timeout=_timeout_arg(args.adb_timeout_seconds),
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
     except subprocess.TimeoutExpired:
-        return f"{label} timed out after {args.adb_timeout_seconds} seconds"
+        return _timeout_error(label, args.adb_timeout_seconds)
     except OSError:
         return f"{label} could not be started"
     if result.returncode != 0:
@@ -907,14 +965,14 @@ def _run_adb_visibility_preflight(
             command,
             cwd=str(args.repo_root),
             env=env,
-            timeout=args.adb_timeout_seconds,
+            timeout=_timeout_arg(args.adb_timeout_seconds),
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
     except subprocess.TimeoutExpired:
-        return [f"{label} timed out after {args.adb_timeout_seconds} seconds"]
+        return [_timeout_error(label, args.adb_timeout_seconds)]
     except OSError:
         return [f"{label} could not be started"]
     if result.returncode != 0:
@@ -942,6 +1000,107 @@ def _run_adb_visibility_preflight(
     return []
 
 
+def _run_adb_auto_serial_once(
+    args: argparse.Namespace,
+    *,
+    env: dict[str, str],
+    runner: Runner,
+) -> tuple[str | None, list[str]]:
+    command = _adb_devices_command(args)
+    label = "ADB auto-serial resolution"
+    errors = _command_disruption_errors(command, label)
+    if errors:
+        return None, errors
+    try:
+        result = runner(
+            command,
+            cwd=str(args.repo_root),
+            env=env,
+            timeout=_timeout_arg(args.adb_timeout_seconds),
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except subprocess.TimeoutExpired:
+        return None, [_timeout_error(label, args.adb_timeout_seconds)]
+    except OSError:
+        return None, [f"{label} could not be started"]
+    if result.returncode != 0:
+        message = (
+            f"{label} failed with exit code {result.returncode}: "
+            f"{_safe_command_display(command)}"
+        )
+        detail = _safe_adb_failure_detail(result)
+        if detail:
+            message = f"{message} ({detail})"
+        return None, [message]
+    serials, _summary, errors = _adb_visible_device_serials(
+        getattr(result, "stdout", None)
+    )
+    if errors:
+        return None, errors
+    return serials[0], []
+
+
+def _resolve_auto_adb_serial(
+    args: argparse.Namespace,
+    *,
+    env: dict[str, str],
+    runner: Runner,
+) -> list[str]:
+    if args.serial != "auto":
+        return []
+    serial, errors = _run_adb_auto_serial_once(args, env=env, runner=runner)
+    if serial is not None:
+        args.serial = serial
+        return []
+    if args.adb_visibility_wait_seconds == 0:
+        return errors
+    deadline = time.monotonic() + args.adb_visibility_wait_seconds
+    last_errors = errors
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(float(args.adb_visibility_poll_interval_seconds), remaining))
+        serial, errors = _run_adb_auto_serial_once(args, env=env, runner=runner)
+        if serial is not None:
+            args.serial = serial
+            return []
+        last_errors = errors
+    return [
+        f"{last_errors[0]}; ADB auto-serial wait expired after "
+        f"{args.adb_visibility_wait_seconds} seconds"
+    ]
+
+
+def _run_adb_visibility_preflight_with_wait(
+    args: argparse.Namespace,
+    *,
+    env: dict[str, str],
+    runner: Runner,
+) -> list[str]:
+    errors = _run_adb_visibility_preflight(args, env=env, runner=runner)
+    if not errors or args.adb_visibility_wait_seconds == 0:
+        return errors
+    deadline = time.monotonic() + args.adb_visibility_wait_seconds
+    last_errors = errors
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(float(args.adb_visibility_poll_interval_seconds), remaining))
+        errors = _run_adb_visibility_preflight(args, env=env, runner=runner)
+        if not errors:
+            return []
+        last_errors = errors
+    return [
+        f"{last_errors[0]}; ADB device visibility wait expired after "
+        f"{args.adb_visibility_wait_seconds} seconds"
+    ]
+
+
 def _read_adb_identity_property(
     args: argparse.Namespace,
     *,
@@ -960,14 +1119,14 @@ def _read_adb_identity_property(
             command,
             cwd=str(args.repo_root),
             env=env,
-            timeout=args.adb_timeout_seconds,
+            timeout=_timeout_arg(args.adb_timeout_seconds),
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
     except subprocess.TimeoutExpired:
-        return None, [f"{label} timed out after {args.adb_timeout_seconds} seconds"]
+        return None, [_timeout_error(label, args.adb_timeout_seconds)]
     except OSError:
         return None, [f"{label} could not be started"]
     if result.returncode != 0:
@@ -1251,9 +1410,12 @@ def _validate_preflight(args: argparse.Namespace) -> list[str]:
         (args.instrumentation_timeout_seconds, "--instrumentation-timeout-seconds"),
         (args.adb_timeout_seconds, "--adb-timeout-seconds"),
         (args.helper_timeout_seconds, "--helper-timeout-seconds"),
+        (args.adb_visibility_wait_seconds, "--adb-visibility-wait-seconds"),
     ):
-        if seconds <= 0:
-            errors.append(f"{label} must be positive")
+        if seconds < 0:
+            errors.append(f"{label} must be non-negative")
+    if args.adb_visibility_poll_interval_seconds <= 0:
+        errors.append("--adb-visibility-poll-interval-seconds must be positive")
     return errors
 
 
@@ -1475,8 +1637,12 @@ def capture_device_lab_slot(
     if errors:
         return 1, None, errors
 
+    env = _capture_env(args, include_serial=args.serial != "auto")
+    errors = _resolve_auto_adb_serial(args, env=env, runner=runner)
+    if errors:
+        return 1, None, errors
     env = _capture_env(args)
-    errors = _run_adb_visibility_preflight(args, env=env, runner=runner)
+    errors = _run_adb_visibility_preflight_with_wait(args, env=env, runner=runner)
     if errors:
         return 1, None, errors
 
@@ -1626,7 +1792,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--adb", default="adb")
     parser.add_argument("--gradlew", default="./gradlew")
-    parser.add_argument("--serial", required=True)
+    parser.add_argument(
+        "--serial",
+        required=True,
+        help=(
+            "ADB serial to capture, or 'auto' to use exactly one visible "
+            "`adb devices -l` device row before the serial-scoped preflight."
+        ),
+    )
     parser.add_argument("--java-home")
     parser.add_argument("--android-home")
     parser.add_argument("--android-sdk-root")
@@ -1661,10 +1834,46 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--skip-build-install", action="store_true")
     parser.add_argument("--skip-instrumentation", action="store_true")
-    parser.add_argument("--gradle-timeout-seconds", type=int, default=1200)
-    parser.add_argument("--instrumentation-timeout-seconds", type=int, default=300)
-    parser.add_argument("--adb-timeout-seconds", type=int, default=120)
-    parser.add_argument("--helper-timeout-seconds", type=int, default=300)
+    parser.add_argument(
+        "--gradle-timeout-seconds",
+        type=int,
+        default=1200,
+        help="Gradle subprocess timeout in seconds; 0 disables the timeout.",
+    )
+    parser.add_argument(
+        "--instrumentation-timeout-seconds",
+        type=int,
+        default=300,
+        help="Instrumentation subprocess timeout in seconds; 0 disables the timeout.",
+    )
+    parser.add_argument(
+        "--adb-timeout-seconds",
+        type=int,
+        default=120,
+        help="ADB subprocess timeout in seconds; 0 disables the timeout.",
+    )
+    parser.add_argument(
+        "--adb-visibility-wait-seconds",
+        type=int,
+        default=0,
+        help=(
+            "Optional seconds to wait for the serial-scoped ADB state to become "
+            "device by polling non-disruptive ADB visibility commands; 0 disables "
+            "waiting."
+        ),
+    )
+    parser.add_argument(
+        "--adb-visibility-poll-interval-seconds",
+        type=int,
+        default=5,
+        help="Seconds between ADB visibility wait polls; must be positive.",
+    )
+    parser.add_argument(
+        "--helper-timeout-seconds",
+        type=int,
+        default=300,
+        help="Helper subprocess timeout in seconds; 0 disables the timeout.",
+    )
     return parser.parse_args(argv)
 
 

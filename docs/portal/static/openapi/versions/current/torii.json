@@ -2551,6 +2551,9 @@
                 },
                 "type": "array"
               },
+              "memo": {
+                "type": "string"
+              },
               "public_key_hex": {
                 "type": "string"
               },
@@ -7938,6 +7941,106 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/contracts/rollups/uranai/markets/history": {
+      "get": {
+        "description": "Replay committed Uranai market events in block order and return paginated DPM probability and XOR price points for one market.",
+        "parameters": [
+          {
+            "description": "Optional page size limit.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional starting offset (default 0).",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Count mode: `bounded` omits exact totals; `exact` includes an exact `total`.",
+            "in": "query",
+            "name": "count_mode",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Uranai market id whose committed DPM price history should be replayed.",
+            "in": "query",
+            "name": "market_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional canonical contract address for the Uranai market contract.",
+            "in": "query",
+            "name": "contract_address",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional contract alias for the Uranai market contract.",
+            "in": "query",
+            "name": "contract_alias",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Return replayed points whose timestamp is greater than or equal to this value.",
+            "in": "query",
+            "name": "since_timestamp_ms",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Return replayed points whose timestamp is less than or equal to this value.",
+            "in": "query",
+            "name": "until_timestamp_ms",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "List Uranai market price history.",
+        "tags": [
+          "Contracts"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/contracts/state": {
       "get": {
         "description": "Read smart contract state by exact path, path list, or prefix.",
@@ -12736,73 +12839,9 @@
         "x-iroha-tool-effect": "write"
       }
     },
-    "/v1/offline/keys/refill": {
-      "post": {
-        "description": "POST issuer key-refill material. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OfflineIssuerBodyAuthRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Refill Offline issuer keys.",
-        "tags": [
-          "Offline"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/offline/notes/issue": {
-      "post": {
-        "description": "POST an Offline note issuance request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OfflineIssuerBodyAuthRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Issue an Offline note.",
-        "tags": [
-          "Offline"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
     "/v1/offline/readiness": {
       "get": {
-        "description": "Returns readiness signals for device-bound one-use notes and Fountain QR transport.",
+        "description": "Returns readiness signals for the SDK-backed recursive compact Kagemusha native bridge runtime.",
         "responses": {
           "200": {
             "content": {
@@ -12824,7 +12863,7 @@
     },
     "/v1/offline/v2/audit": {
       "post": {
-        "description": "POST an Offline V2 audit request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+        "description": "Classic Offline V2 audit is retired and this compatibility route fails closed. Use Kagemusha payment flows. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -12847,7 +12886,7 @@
             "description": "Successful response"
           }
         },
-        "summary": "Submit an Offline V2 audit request.",
+        "summary": "Retired Offline V2 audit route.",
         "tags": [
           "Offline"
         ],
@@ -12888,7 +12927,7 @@
     },
     "/v1/offline/v2/notes/issue": {
       "post": {
-        "description": "POST an Offline V2 note issuance request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+        "description": "Classic Offline V2 note issuance is retired and this compatibility route fails closed. Use Kagemusha online-to-offline top-up flows. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -12911,7 +12950,7 @@
             "description": "Successful response"
           }
         },
-        "summary": "Issue an Offline V2 note.",
+        "summary": "Retired Offline V2 note issue route.",
         "tags": [
           "Offline"
         ],
@@ -12920,7 +12959,7 @@
     },
     "/v1/offline/v2/notes/redeem": {
       "post": {
-        "description": "POST an Offline V2 note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+        "description": "POST an Offline V2 note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint. Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64, compact_payment_token_norito_base64, or projection_verifier_record_norito_base64. Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive in redeem_request_norito_base64 with no surrounding whitespace. Optional amount and source_note_commitment echo fields, when present, must be canonical non-empty strings matching the archive. Once redeem_request_norito_base64 is present, compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields instead of being silently accepted.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -12952,7 +12991,7 @@
     },
     "/v1/offline/v2/readiness": {
       "get": {
-        "description": "Returns readiness signals for versioned Offline V2 notes, one-use keys, recursive proofs, and Fountain QR transport.",
+        "description": "Returns readiness signals for the SDK-backed recursive compact Kagemusha native bridge runtime.",
         "responses": {
           "200": {
             "content": {
@@ -15055,6 +15094,411 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/sorafs/appeals/finance/deposits": {
+      "post": {
+        "description": "Build a canonical native OpenAssetLock instruction for a SoraFS appeal deposit. The request requires X-Iroha canonical app authentication; the authenticated payer must sign and submit the returned transaction instruction through the normal ledger transaction path.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Build an appeal deposit asset-lock instruction.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/appeals/finance/deposits/confirm": {
+      "post": {
+        "description": "Verify that a submitted native OpenAssetLock record still matches the expected SoraFS appeal deposit parameters before moderation proceeds. The request requires X-Iroha canonical app authentication and the authenticated account must be the lock opener, destination, or release authority.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Confirm an appeal deposit asset lock.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/appeals/finance/deposits/reconcile": {
+      "post": {
+        "description": "Recompute the expected SoraFS appeal deposit settlement from confirmed deposit parameters and compare it with the current runtime native asset-lock ledger record after client-submitted DrawdownAssetLock/CancelAssetLock transactions. Responses include a deterministic reconciliation_digest_hex for audit and peer comparison.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Reconcile an appeal deposit settlement.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/appeals/finance/deposits/settle": {
+      "post": {
+        "description": "Confirm a SoraFS appeal deposit asset lock and compute ordered native DrawdownAssetLock/CancelAssetLock instructions for client-side signing according to the active baseline settlement config. Torii does not mutate ledger custody on its own authority.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Build appeal deposit settlement instructions.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/appeals/finance/deposits/{escrow_id_hex}": {
+      "get": {
+        "description": "Fetch a submitted native asset lock record for a SoraFS appeal deposit. The request requires X-Iroha canonical app authentication and the authenticated account must be the lock opener, destination, or release authority.",
+        "parameters": [
+          {
+            "description": "Canonical hex-encoded native lock identifier.",
+            "in": "path",
+            "name": "escrow_id_hex",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch an appeal deposit asset-lock status.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sorafs/appeals/finance/disburse": {
+      "post": {
+        "description": "Compute a stateless SoraFS appeal refund, treasury, held-funds, and juror payout plan using canonical account IDs. This endpoint does not mutate escrow or ledger state.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Compute an appeal disbursement plan.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/appeals/finance/reports": {
+      "get": {
+        "description": "Summarize locally published SoraFS appeal finance reports from the Governance DAG publish-index, including outcome counts, finance totals, and source entries.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "List appeal finance report publications.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      },
+      "post": {
+        "description": "Publish a validated SoraFS appeal finance report into the local Governance DAG pipeline. The request requires canonical app authentication and a configured governance publisher.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Publish an appeal finance report.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/appeals/finance/settle": {
+      "post": {
+        "description": "Compute a stateless SoraFS appeal settlement breakdown from deposit, outcome, and panel size using the active baseline settlement config. This endpoint does not mutate escrow or ledger state.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Compute an appeal settlement plan.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/appeals/finance/weekly-rollups": {
+      "get": {
+        "description": "Summarize locally published SoraFS appeal finance weekly rollups from the Governance DAG publish-index, including cycle counts, report totals, and source entries.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "List appeal finance weekly rollup publications.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      },
+      "post": {
+        "description": "Publish a validated SoraFS appeal finance weekly rollup into the local Governance DAG pipeline. The request requires canonical app authentication and a configured governance publisher.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Publish an appeal finance weekly rollup.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/appeals/pricing/config": {
+      "get": {
+        "description": "Fetch the active read-only SoraFS appeal pricing baseline used for quote calculation.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch appeal pricing config.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sorafs/appeals/pricing/quote": {
+      "post": {
+        "description": "Quote a deterministic SoraFS appeal deposit from class, backlog, evidence size, urgency, and panel size using the active baseline pricing config.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Quote an appeal deposit.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/appeals/pricing/status": {
+      "get": {
+        "description": "Fetch SoraFS appeal finance API readiness, including which mutating deposit, report, and settlement paths are still pending runtime escrow and ledger integration.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch appeal pricing readiness.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/sorafs/audit/repair/claim": {
       "post": {
         "description": "Claim a SoraFS repair ticket (requires manifest_digest_hex, idempotency key, and worker signature).",
@@ -15117,6 +15561,131 @@
           "SoraFS"
         ],
         "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/audit/repair/events": {
+      "get": {
+        "description": "List local SoraFS repair task transition events after an optional sequence cursor. Supports `If-None-Match` with `ETag` validators.",
+        "parameters": [
+          {
+            "description": "Return repair events with sequence greater than this cursor.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional page size limit.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "List repair events.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sorafs/audit/repair/events/stream": {
+      "get": {
+        "description": "Stream local SoraFS repair task transition events as server-sent events. The stream emits an optional backlog selected by `since` and `limit`, then live task transitions keyed by repair status.",
+        "parameters": [
+          {
+            "description": "Return repair events with sequence greater than this cursor.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional page size limit.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Server-sent repair task transition event stream."
+          }
+        },
+        "summary": "Stream repair events.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sorafs/audit/repair/events/ws": {
+      "get": {
+        "description": "Upgrade to a SoraFS repair event WebSocket. The stream emits JSON text frames with `event` set to the repair status for the optional `since`/`limit` backlog and for live task transitions; lag frames use `event = lagged`.",
+        "parameters": [
+          {
+            "description": "Return repair events with sequence greater than this cursor.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional page size limit.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "WebSocket upgrade accepted."
+          }
+        },
+        "summary": "Connect to the repair event WebSocket.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sorafs/audit/repair/fail": {
@@ -15682,6 +16251,240 @@
         "x-iroha-tool-effect": "write"
       }
     },
+    "/v1/sorafs/moderation/ballots": {
+      "get": {
+        "description": "List locally announced SoraFS moderation ballot records, including announcement context, accepted commits, reveals, and finalized tallies.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "List local moderation ballots.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      },
+      "post": {
+        "description": "Announce a local SoraFS moderation ballot and derive the panel roster hash when omitted. The request requires canonical app authentication plus a deposit_confirmation object that Torii confirms against the runtime native asset-lock ledger before the ballot is admitted.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Announce a local moderation ballot.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/moderation/ballots/commits": {
+      "post": {
+        "description": "Submit a base64 Norito SoraFsModerationBallotCommitV1 payload. The canonical request signer must match the canonical juror account id in the commitment.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Submit a moderation ballot commitment.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/moderation/ballots/events": {
+      "get": {
+        "description": "Fetch sequenced local SoraFS moderation ballot events with optional since and limit filters and ETag cache validation.",
+        "parameters": [
+          {
+            "description": "Return events with sequence greater than this value.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Maximum number of events to return.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch local moderation ballot events.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sorafs/moderation/ballots/reveals": {
+      "post": {
+        "description": "Submit a base64 Norito SoraFsModerationBallotRevealV1 payload. The canonical request signer must match the canonical juror account id in the reveal.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Submit a moderation ballot reveal.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/moderation/ballots/tally": {
+      "post": {
+        "description": "Finalize a local SoraFS moderation ballot tally after quorum and reveal-window checks. The request requires canonical app authentication.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Finalize a moderation ballot tally.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/moderation/ballots/{case_id}/{round_id}": {
+      "get": {
+        "description": "Fetch one locally announced SoraFS moderation ballot record by case id and round id.",
+        "parameters": [
+          {
+            "description": "Moderation or appeal case identifier.",
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Moderation ballot round identifier.",
+            "in": "path",
+            "name": "round_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch a local moderation ballot.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/sorafs/pin": {
       "get": {
         "description": "Fetch the SoraFS pin registry.",
@@ -15706,7 +16509,7 @@
     },
     "/v1/sorafs/pin/register": {
       "post": {
-        "description": "Submit a SoraFS manifest registration transaction. The request must include `content_length`; execution collects the public pin fee and records the committed fee receipt on-chain.",
+        "description": "Submit a SoraFS manifest registration transaction. The request must include `content_length`; optional `manifest_b64` carries a Norito `ManifestV1` for full Torii-side validation and is required when governance requires council signatures. Execution collects the public pin fee and records the committed fee receipt on-chain.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -15981,6 +16784,438 @@
           }
         },
         "summary": "List replication orders.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sorafs/reputation/events": {
+      "get": {
+        "description": "List SoraFS reputation snapshot publication events after an optional sequence cursor. Supports `If-None-Match` with `ETag` validators.",
+        "parameters": [
+          {
+            "description": "Return events with sequence greater than this cursor.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional page size limit.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional ETag validator from a previous reputation response.",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Reputation response cache policy.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Deterministic reputation representation validator.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Cached reputation representation is current.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Reputation response cache policy.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Deterministic reputation representation validator.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List reputation events.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sorafs/reputation/events/stream": {
+      "get": {
+        "description": "Stream SoraFS reputation snapshot events as server-sent events. The stream emits an optional backlog selected by `since` and `limit`, then live events as snapshots are accepted.",
+        "parameters": [
+          {
+            "description": "Emit backlog events with sequence greater than this cursor.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional backlog page size limit.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Server-sent reputation snapshot event stream."
+          }
+        },
+        "summary": "Stream reputation events.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sorafs/reputation/latest": {
+      "get": {
+        "description": "Fetch the latest SoraFS reputation snapshot summary. Supports `If-None-Match` with `ETag` validators.",
+        "parameters": [
+          {
+            "description": "Optional ETag validator from a previous reputation response.",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Reputation response cache policy.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Deterministic reputation representation validator.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Cached reputation representation is current.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Reputation response cache policy.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Deterministic reputation representation validator.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Fetch reputation snapshot.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      },
+      "post": {
+        "description": "Publish a validated SoraFS reputation snapshot.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Publish reputation snapshot.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/reputation/providers/{provider_id}": {
+      "get": {
+        "description": "Fetch a provider reputation record and Merkle proof from the latest SoraFS reputation snapshot. Supports `If-None-Match` with `ETag` validators.",
+        "parameters": [
+          {
+            "description": "SoraFS provider identifier.",
+            "in": "path",
+            "name": "provider_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional ETag validator from a previous reputation response.",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Reputation response cache policy.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Deterministic reputation representation validator.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Cached reputation representation is current.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Reputation response cache policy.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Deterministic reputation representation validator.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Fetch provider reputation proof.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sorafs/reputation/snapshots/{snapshot_id_hex}": {
+      "get": {
+        "description": "Fetch a SoraFS reputation snapshot summary by snapshot id. Supports `If-None-Match` with `ETag` validators.",
+        "parameters": [
+          {
+            "description": "Hex-encoded 16-byte reputation snapshot identifier.",
+            "in": "path",
+            "name": "snapshot_id_hex",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional ETag validator from a previous reputation response.",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Reputation response cache policy.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Deterministic reputation representation validator.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Cached reputation representation is current.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Reputation response cache policy.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Deterministic reputation representation validator.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Fetch historical reputation snapshot.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sorafs/reputation/weights": {
+      "get": {
+        "description": "Fetch the weights used by the latest SoraFS reputation snapshot. Supports `If-None-Match` with `ETag` validators.",
+        "parameters": [
+          {
+            "description": "Optional ETag validator from a previous reputation response.",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Reputation response cache policy.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Deterministic reputation representation validator.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Cached reputation representation is current.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Reputation response cache policy.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Deterministic reputation representation validator.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Fetch reputation weights.",
         "tags": [
           "SoraFS"
         ],
@@ -17122,7 +18357,7 @@
     },
     "/v1/sumeragi/rbc/delivered/{height}/{view}": {
       "get": {
-        "description": "Return RBC delivered status for a block height and view. The delivered flag is true only when matching evidence is non-invalid and has a positive complete chunk set; incomplete sessions remain visible as diagnostics.",
+        "description": "Return complete-delivery RBC status for a block height and view; delivered=true requires a non-invalid positive complete chunk summary.",
         "parameters": [
           {
             "description": "Block height to inspect (1-indexed).",
@@ -17198,7 +18433,7 @@
     },
     "/v1/sumeragi/rbc/sessions": {
       "get": {
-        "description": "Return RBC session snapshots.",
+        "description": "Return RBC session snapshots, including raw DELIVER and complete-delivery status.",
         "responses": {
           "200": {
             "content": {
@@ -18221,6 +19456,38 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/zk/merkle-path": {
+      "post": {
+        "description": "Fetch current confidential-v2 commitment inclusion paths.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch ZK Merkle paths.",
+        "tags": [
+          "ZK"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/zk/proof-tags/{backend}/{hash}": {
       "get": {
         "description": "Fetch proof tags by backend and hash.",
@@ -18537,6 +19804,43 @@
         "summary": "Compute ZK vote tally.",
         "tags": [
           "ZK"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/ws/reputation": {
+      "get": {
+        "description": "Upgrade to a SoraFS reputation WebSocket. The stream emits JSON text frames with `event = reputation_snapshot` for the optional `since`/`limit` backlog and for live snapshot publications; lag frames use `event = lagged`.",
+        "parameters": [
+          {
+            "description": "Emit backlog events with sequence greater than this cursor.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional backlog page size limit.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "WebSocket upgrade accepted."
+          }
+        },
+        "summary": "Connect to the reputation WebSocket.",
+        "tags": [
+          "SoraFS"
         ],
         "x-iroha-tool-effect": "read"
       }

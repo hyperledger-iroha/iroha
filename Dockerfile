@@ -12,6 +12,7 @@ RUN apt-get update -y && \
 COPY . .
 COPY dist/ /prebuilt-dist/
 ARG PROFILE="deploy"
+ARG CONFIG_PROFILE="single"
 ARG RUSTFLAGS=""
 ARG FEATURES=""
 ARG CARGOFLAGS=""
@@ -30,6 +31,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
             chmod 755 "/outbin/${bin}"; \
         done; \
     else \
+        effective_cargo_build_jobs="${CARGO_BUILD_JOBS}"; \
+        if [ "${CONFIG_PROFILE}" = "taira" ] && [ "${effective_cargo_build_jobs}" = "1" ]; then \
+            effective_cargo_build_jobs="2"; \
+        fi; \
         regular_bins=""; \
         build_kagami=0; \
         for bin in ${BINARIES}; do \
@@ -44,13 +49,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
             for bin in ${regular_bins}; do \
                 set -- "$@" --bin "$bin"; \
             done; \
-            CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" mold --run "$@"; \
+            CARGO_BUILD_JOBS="${effective_cargo_build_jobs}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" mold --run "$@"; \
             for bin in ${regular_bins}; do \
                 cp "/app/target/${PROFILE}/${bin}" "/outbin/${bin}"; \
             done; \
         fi; \
         if [ "${build_kagami}" = "1" ]; then \
-            CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" mold --run cargo ${CARGOFLAGS} build --profile "${PROFILE}" -p iroha_kagami --bin kagami; \
+            CARGO_BUILD_JOBS="${effective_cargo_build_jobs}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" mold --run cargo ${CARGOFLAGS} build --profile "${PROFILE}" --features "${FEATURES}" -p iroha_kagami --bin kagami; \
             cp "/app/target/${PROFILE}/kagami" "/outbin/kagami"; \
         fi; \
     fi

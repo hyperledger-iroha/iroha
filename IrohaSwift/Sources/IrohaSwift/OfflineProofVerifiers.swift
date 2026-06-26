@@ -85,9 +85,9 @@ public struct CounterpartyOfflineProofVerifier: CounterpartyOfflineProofVerifyin
         guard !trimmed.isEmpty, trimmed == value else {
             throw error
         }
-        switch value.lowercased() {
+        switch value {
         case "ios", "android":
-            return value.lowercased()
+            return value
         default:
             throw error
         }
@@ -128,7 +128,7 @@ public struct IosOfflineProofVerifier {
         }
         #endif
 
-        guard binding.platform.caseInsensitiveCompare(Self.platform) == .orderedSame else {
+        guard binding.platform == Self.platform else {
             throw OfflineProofVerifierError.invalidBinding("Unsupported offline device binding platform.")
         }
         guard !accountId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -192,7 +192,7 @@ public struct IosOfflineProofVerifier {
         }
         #endif
 
-        guard proof.platform.caseInsensitiveCompare(Self.platform) == .orderedSame else {
+        guard proof.platform == Self.platform else {
             throw OfflineProofVerifierError.invalidProof("Unsupported offline device proof platform.")
         }
         let metadata = try requireMetadata(binding)
@@ -678,7 +678,7 @@ public struct AndroidOfflineProofVerifier {
     }
 
     public func verifyDeviceBinding(_ binding: ToriiOfflineDeviceBinding) throws {
-        guard binding.platform.caseInsensitiveCompare(Self.platform) == .orderedSame else {
+        guard binding.platform == Self.platform else {
             throw OfflineProofVerifierError.invalidBinding("Unsupported offline device binding platform.")
         }
         guard !binding.attestationKeyId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -766,7 +766,7 @@ public struct AndroidOfflineProofVerifier {
         binding: ToriiOfflineDeviceBinding,
         proof: ToriiOfflineDeviceProof
     ) throws {
-        guard proof.platform.caseInsensitiveCompare(Self.platform) == .orderedSame else {
+        guard proof.platform == Self.platform else {
             throw OfflineProofVerifierError.invalidProof("Unsupported offline device proof platform.")
         }
         guard binding.attestationKeyId.caseInsensitiveCompare(proof.attestationKeyId) == .orderedSame else {

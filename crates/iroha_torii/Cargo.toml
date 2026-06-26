@@ -213,3 +213,13 @@ required-features = ["app_api"]
 name = "torii_zk"
 path = "tests/grouped/zk.rs"
 required-features = ["app_api"]
+
+[[test]]
+name = "offline_v2_kagemusha_redeem_smoke"
+path = "tests/offline_v2_kagemusha_redeem_smoke.rs"
+required-features = ["app_api"]
+
+[[test]]
+name = "offline_kagemusha_only_smoke"
+path = "tests/offline_kagemusha_only_smoke.rs"
+required-features = ["app_api"]

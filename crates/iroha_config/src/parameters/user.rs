@@ -18495,6 +18495,8 @@ pub struct Torii {
     pub ram_lfe: Option<ToriiRamLfe>,
     /// Optional transaction-history visibility/auth configuration for direct wallet reads.
     pub tx_history: Option<ToriiTxHistory>,
+    /// Retail recipient lookup routes used by Torii app API.
+    pub recipient_lookup: Option<ToriiRecipientLookup>,
 }
 
 /// Geo lookup configuration for peer telemetry.
@@ -19109,6 +19111,10 @@ impl Torii {
             offline_issuer: self.offline_issuer.and_then(ToriiOfflineIssuer::parse),
             ram_lfe: self.ram_lfe.and_then(ToriiRamLfe::parse),
             tx_history: self.tx_history.map(ToriiTxHistory::parse),
+            recipient_lookup: self
+                .recipient_lookup
+                .map(ToriiRecipientLookup::parse)
+                .unwrap_or_default(),
             app_api: actual::AppApi {
                 default_list_limit,
                 max_list_limit,
@@ -19196,6 +19202,99 @@ impl ToriiTxHistory {
             allowed_asset_definition_id,
             jwt: self.jwt.map(ToriiTxHistoryJwt::parse),
         }
+    }
+}
+
+/// Retail recipient lookup route configuration for Torii app API.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct ToriiRecipientLookup {
+    /// HTTP request timeout applied to configured bank Core API calls.
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::torii::recipient_lookup::REQUEST_TIMEOUT_MS))"
+    )]
+    pub request_timeout_ms: DurationMs,
+    /// Configured bank Core API routes keyed by canonical FI id.
+    #[config(default)]
+    pub routes: Vec<ToriiRecipientLookupRoute>,
+}
+
+impl ToriiRecipientLookup {
+    fn parse(self) -> actual::ToriiRecipientLookup {
+        actual::ToriiRecipientLookup {
+            request_timeout: self.request_timeout_ms.get(),
+            routes: self
+                .routes
+                .into_iter()
+                .enumerate()
+                .map(|(index, route)| route.parse(index))
+                .collect(),
+        }
+    }
+}
+
+/// Single bank Core API route used by the retail recipient lookup endpoint.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct ToriiRecipientLookupRoute {
+    /// Canonical FI identifier, for example `hbl.sbp` or `ubl.sbp`.
+    pub fi_id: String,
+    /// Bank Core API base URL.
+    pub base_url: Url,
+    /// Service bearer token used only by Torii when calling the bank Core API.
+    pub bearer_token: String,
+}
+
+impl ToriiRecipientLookupRoute {
+    fn parse(self, index: usize) -> actual::ToriiRecipientLookupRoute {
+        let fi_id = match self.fi_id.trim().to_ascii_lowercase().as_str() {
+            "hbl.sbp" => "hbl.sbp".to_owned(),
+            "ubl.sbp" => "ubl.sbp".to_owned(),
+            other => panic!(
+                "invalid torii.recipient_lookup.routes[{index}].fi_id `{other}`; expected `hbl.sbp` or `ubl.sbp`"
+            ),
+        };
+        let bearer_token = self.bearer_token.trim().to_owned();
+        if bearer_token.is_empty() {
+            panic!("torii.recipient_lookup.routes[{index}].bearer_token must not be empty");
+        }
+        actual::ToriiRecipientLookupRoute {
+            fi_id,
+            base_url: self.base_url,
+            bearer_token,
+        }
+    }
+}
+
+#[cfg(test)]
+mod torii_recipient_lookup_tests {
+    use super::*;
+
+    #[test]
+    fn torii_recipient_lookup_parse_accepts_canonical_fi_routes() {
+        let parsed = ToriiRecipientLookup {
+            request_timeout_ms: DurationMs(Duration::from_millis(750)),
+            routes: vec![ToriiRecipientLookupRoute {
+                fi_id: " HBL.SBP ".to_owned(),
+                base_url: Url::parse("https://core-api.example/hbl.sbp").expect("valid URL"),
+                bearer_token: " service-token ".to_owned(),
+            }],
+        }
+        .parse();
+
+        assert_eq!(parsed.request_timeout, Duration::from_millis(750));
+        assert_eq!(parsed.routes[0].fi_id, "hbl.sbp");
+        assert_eq!(parsed.routes[0].bearer_token, "service-token");
+    }
+
+    #[test]
+    fn torii_recipient_lookup_parse_rejects_short_fi_routes() {
+        let route = ToriiRecipientLookupRoute {
+            fi_id: "hbl".to_owned(),
+            base_url: Url::parse("https://core-api.example/hbl").expect("valid URL"),
+            bearer_token: "service-token".to_owned(),
+        };
+
+        let panic = std::panic::catch_unwind(|| route.parse(0));
+        assert!(panic.is_err(), "expected short FI id to panic");
     }
 }
 

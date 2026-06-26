@@ -14,6 +14,7 @@ import {
   TransactionTimeoutError,
   IsoMessageTimeoutError,
   buildRbcSampleRequest,
+  buildSorafsOrderbookEventsWebSocketUrl,
   statusLivenessElapsedMs,
   isStatusQueueStalled,
 } from "../src/toriiClient.js";
@@ -217,6 +218,9 @@ function assertMultisigProposeInstructionWireId(body, expectedWireId, label) {
     "signature_b64",
     "creation_time_ms",
     "fee_sponsor",
+    "memo",
+    "validation_fee_policy_version",
+    "validation_fee_policy_hash",
   ]) {
     offset = readNoritoFieldPayload(
       payload,
@@ -4485,6 +4489,23 @@ test("SoraFS orderbook WebSocket helper opens and normalizes event frames", asyn
 
   const receiptIdHex = "44".repeat(32);
   const client = new ToriiClient(BASE_URL);
+  const defaultWebSocketUrl = `${BASE_URL.replace("https:", "wss:")}/v1/sorafs/orderbook/events/ws`;
+  assert.equal(client.buildSorafsOrderbookEventsWebSocketUrl(), defaultWebSocketUrl);
+  assert.equal(buildSorafsOrderbookEventsWebSocketUrl(BASE_URL), defaultWebSocketUrl);
+
+  const defaultSocket = client.openSorafsOrderbookEventsWebSocket({
+    WebSocketImpl: FakeWebSocket,
+  });
+  assert.equal(defaultSocket.url, defaultWebSocketUrl);
+
+  const defaultStream = client.streamSorafsOrderbookEventsWebSocket({
+    WebSocketImpl: FakeWebSocket,
+  });
+  const defaultStreamSocket = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+  assert.equal(defaultStreamSocket.url, defaultWebSocketUrl);
+  await defaultStream.return();
+  FakeWebSocket.instances = [];
+
   assert.equal(
     client.buildSorafsOrderbookEventsWebSocketUrl({ since: 8, limit: 1 }),
     `${BASE_URL.replace("https:", "wss:")}/v1/sorafs/orderbook/events/ws?since=8&limit=1`,
@@ -16622,7 +16643,7 @@ test("queryDomains rejects non-object select entries", async () => {
       client.queryDomains({
         select: [{ id: true }, []],
       }),
-    /select\[1] must be a plain object/,
+    /select\[1] must be a field-path string or plain object/,
   );
   assert.equal(callCount, 0);
 });
@@ -18123,6 +18144,63 @@ test("queryVisibleTransactions builds convenience transaction filters", async ()
   ]);
   assert.equal(capturedBody.fetch_size, 25);
   assert.equal(capturedBody.query, "VisibleTransactions");
+});
+
+test("queryVisibleTransactions posts field-path select projections", async () => {
+  let capturedPath;
+  let capturedBody;
+  const fetchImpl = async (url, init) => {
+    const parsed = new URL(url);
+    capturedPath = parsed.pathname;
+    assert.equal(init.method, "POST");
+    capturedBody = JSON.parse(init.body);
+    return createResponse({
+      status: 200,
+      jsonData: { items: [], total: 0 },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await client.queryVisibleTransactions({
+    select: [" authority ", "metadata.amount", "metadata.from_account_id"],
+    queryName: "VisibleTransactionProjection",
+  });
+  assert.equal(capturedPath, "/v1/transactions/visible/query");
+  assert.deepEqual(capturedBody.select, [
+    "authority",
+    "metadata.amount",
+    "metadata.from_account_id",
+  ]);
+  assert.equal(capturedBody.query, "VisibleTransactionProjection");
+});
+
+test("queryVisibleTransactions rejects invalid select projection entries", async () => {
+  let callCount = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      callCount += 1;
+      return createResponse({
+        status: 200,
+        jsonData: { items: [], total: 0 },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.queryVisibleTransactions({
+        select: ["authority", 42],
+      }),
+    /select\[1] must be a field-path string or plain object/,
+  );
+  await assert.rejects(
+    () =>
+      client.queryVisibleTransactions({
+        select: ["authority", " "],
+      }),
+    /select\[1] must be a non-empty field path/,
+  );
+  assert.equal(callCount, 0);
 });
 
 test("queryAccountTransactions merges raw and convenience filters", async () => {
@@ -21251,6 +21329,9 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
     instructions: [instruction],
     feeSponsor: FIXTURE_BOB_ID,
     creationTimeMs: 123456,
+    validationFeePolicyVersion: 7,
+    validationFeePolicyHash: "AB".repeat(32),
+    validationFeeInstructionIndex: 1,
   });
   assert.equal(captured.url, `${BASE_URL}/v1/multisig/propose`);
   assert.equal(captured.init.headers["Content-Type"], "application/x-norito");
@@ -21270,12 +21351,18 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
       signerAccountId: FIXTURE_ALICE_ID,
       instructions: [instruction],
       feeSponsor: "sponsor@sbp",
+      validationFeePolicyVersion: 7,
+      validationFeePolicyHash: "AB".repeat(32),
+      validationFeeInstructionIndex: 1,
     }),
     {
       multisig_account_alias: "cbdc@banka",
       signer_account_id: FIXTURE_ALICE_ID,
       instructions: [instruction],
       fee_sponsor: "sponsor@sbp",
+      validation_fee_policy_version: "7",
+      validation_fee_policy_hash: "ab".repeat(32),
+      validation_fee_instruction_index: "1",
     },
   );
 });
@@ -21346,6 +21433,32 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
     /non-negative integer/,
   );
   await assert.rejects(
+    () =>
+      client.proposeMultisig({
+        ...request,
+        validationFeeInstructionIndex: 1,
+      }),
+    /requires policy metadata/,
+  );
+  await assert.rejects(
+    () =>
+      client.proposeMultisig({
+        ...request,
+        validationFeePolicyVersion: 7,
+      }),
+    /provided together/,
+  );
+  await assert.rejects(
+    () =>
+      client.proposeMultisig({
+        ...request,
+        validationFeePolicyVersion: 7,
+        validationFeePolicyHash: "ab".repeat(32),
+        validationFeeInstructionIndex: -1,
+      }),
+    /non-negative integer/,
+  );
+  await assert.rejects(
     () => client.proposeMultisig({ ...request, instructions: [Buffer.from("NRT0")] }),
     /overran payload/,
   );
@@ -21356,6 +21469,24 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
   assert.throws(
     () => buildMultisigProposeRequest({ ...request, instructions: [null] }),
     /multisigPropose\.instructions\[0\]/,
+  );
+  assert.throws(
+    () => buildMultisigProposeRequest({ ...request, validationFeeInstructionIndex: 1 }),
+    /requires policy metadata/,
+  );
+  assert.throws(
+    () => buildMultisigProposeRequest({ ...request, validationFeePolicyVersion: 7 }),
+    /provided together/,
+  );
+  assert.throws(
+    () =>
+      buildMultisigProposeRequest({
+        ...request,
+        validationFeePolicyVersion: 7,
+        validationFeePolicyHash: "ab".repeat(32),
+        validationFeeInstructionIndex: -1,
+      }),
+    /non-negative integer/,
   );
 });
 
@@ -22170,12 +22301,17 @@ test("queryTriggers rejects unsupported option keys", async () => {
 test("getOfflineReadiness fetches canonical readiness payload", async () => {
   let capturedRequest = null;
   const readiness = {
-    offline_note: true,
-    offline_one_use_keys: true,
-    offline_recursive_note_proof: false,
-    offline_fountain_qr: true,
-    offline_sync_optional: true,
     offline_telemetry: true,
+    offline_kagemusha_abi7: true,
+    offline_kagemusha_abi7_mode: "recursive_compact_v1",
+    offline_kagemusha_abi7_bridge_abi_version: 7,
+    offline_kagemusha_abi7_circuit_id: "kagemusha-recursive-compact-v1",
+    offline_kagemusha_abi7_artifacts: true,
+    offline_kagemusha_recursive_compact_available: true,
+    offline_kagemusha_recursive_compact_mode: "recursive_compact_v1",
+    offline_kagemusha_recursive_compact_required_native_bridge_abi_version: 7,
+    offline_kagemusha_recursive_compact_circuit_id: "kagemusha-recursive-compact-v1",
+    offline_kagemusha_recursive_compact_artifacts_available: true,
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async (url, init = {}) => {
@@ -22195,6 +22331,32 @@ test("getOfflineReadiness fetches canonical readiness payload", async () => {
   assert.equal(capturedRequest.init.method, "GET");
   assert.equal(capturedRequest.init.headers.Accept, "application/json");
   assert.deepEqual(response, readiness);
+  assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_note"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_one_use_keys"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_recursive_note_proof"), false);
+});
+
+test("getOfflineReadiness rejects legacy-only readiness payload", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          offline_note: true,
+          offline_one_use_keys: true,
+          offline_recursive_note_proof: true,
+          offline_fountain_qr: true,
+          offline_sync_optional: true,
+          offline_telemetry: true,
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+
+  await assert.rejects(
+    () => client.getOfflineReadiness(),
+    /offline readiness response\.offline_kagemusha_abi7 must be boolean/,
+  );
 });
 
 test("deleteTrigger tolerates missing records", async () => {

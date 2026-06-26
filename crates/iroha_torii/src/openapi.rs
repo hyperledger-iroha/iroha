@@ -491,6 +491,19 @@ fn plain_text_response(description: &str, example: Option<&str>) -> Value {
     Value::Object(body)
 }
 
+fn html_response(description: &str) -> Value {
+    let mut schema = Map::new();
+    schema.insert("type".into(), Value::String("string".to_owned()));
+    let mut media = Map::new();
+    media.insert("schema".into(), Value::Object(schema));
+    let mut content = Map::new();
+    content.insert("text/html".into(), Value::Object(media));
+    let mut body = Map::new();
+    body.insert("description".into(), Value::String(description.to_owned()));
+    body.insert("content".into(), Value::Object(content));
+    Value::Object(body)
+}
+
 fn event_stream_response(description: &str) -> Value {
     let mut schema = Map::new();
     schema.insert("type".into(), Value::String("string".to_owned()));
@@ -521,6 +534,10 @@ fn alias_paths() -> Map {
     paths.insert(
         "/v1/aliases/by_account".to_owned(),
         Value::Object(alias_lookup_by_account_operation()),
+    );
+    paths.insert(
+        "/v1/retail/recipients/lookup".to_owned(),
+        Value::Object(retail_recipient_lookup_operation()),
     );
     paths.insert(
         "/v1/assets/aliases/resolve".to_owned(),
@@ -687,18 +704,18 @@ fn offline_paths() -> Map {
         ),
         (
             "/v1/offline/v2/notes/issue",
-            "Issue an Offline V2 note.",
-            "POST an Offline V2 note issuance request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "Retired Offline V2 note issue route.",
+            "Classic Offline V2 note issuance is retired and this compatibility route fails closed. Use Kagemusha online-to-offline top-up flows. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
         (
             "/v1/offline/v2/notes/redeem",
             "Redeem an Offline V2 note.",
-            "POST an Offline V2 note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "POST an Offline V2 note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint. Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64, compact_payment_token_norito_base64, or projection_verifier_record_norito_base64. Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive in redeem_request_norito_base64 with no surrounding whitespace. Optional amount and source_note_commitment echo fields, when present, must be canonical non-empty strings matching the archive. Once redeem_request_norito_base64 is present, compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields instead of being silently accepted.",
         ),
         (
             "/v1/offline/v2/audit",
-            "Submit an Offline V2 audit request.",
-            "POST an Offline V2 audit request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "Retired Offline V2 audit route.",
+            "Classic Offline V2 audit is retired and this compatibility route fails closed. Use Kagemusha payment flows. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
     ] {
         paths.insert(
@@ -867,6 +884,15 @@ fn account_transactions_list_query_parameters() -> Vec<Value> {
     params.push(string_query_param(
         "asset_id",
         "Filter transactions by canonical Base58 asset id.",
+    ));
+    params
+}
+
+fn account_history_list_query_parameters() -> Vec<Value> {
+    let mut params = pagination_query_parameters();
+    params.push(string_query_param(
+        "asset_id",
+        "Filter activity by canonical Base58 asset id, asset definition id, or active asset alias.",
     ));
     params
 }
@@ -3324,6 +3350,23 @@ fn account_paths() -> Map {
         }),
     );
     paths.insert(
+        "/v1/accounts/{account_id}/history".to_owned(),
+        Value::Object({
+            let mut params = vec![string_path_param(
+                "account_id",
+                "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            )];
+            params.extend(account_history_list_query_parameters());
+            json_get_operation(
+                "Accounts",
+                "List indexed account history.",
+                "List indexed account activity for the selected account, including incoming and outgoing value movement plus raw affected transactions. Supports pagination and optional asset filtering.",
+                "#/components/schemas/JsonValue",
+                params,
+            )
+        }),
+    );
+    paths.insert(
         "/v1/accounts/{uaid}/portfolio".to_owned(),
         Value::Object({
             let mut params = vec![string_path_param("uaid", "User account identifier.")];
@@ -4590,6 +4633,14 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/sorafs/transparency/explorer/ui".to_owned(),
+        Value::Object(html_get_operation(
+            "SoraFS",
+            "Open the transparency explorer UI.",
+            "Return a static browser UI for the local SoraFS transparency explorer. The page fetches the payload-free `/v1/sorafs/transparency/explorer` JSON snapshot, renders published cycle and proof-token issuance summaries, and does not embed private proof-token digest keys or ledger payload bodies.",
+        )),
+    );
+    paths.insert(
         "/v1/sorafs/transparency/source-entries/{source_kind}".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
@@ -4834,7 +4885,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Mark a local moderation quarantine record reviewed.",
-            "Advance one pending local SFM-4a moderation quarantine record to reviewed state with deterministic operator metadata. The endpoint persists the local screening checkpoint when storage is enabled and requires X-Iroha canonical app authentication.",
+            "Advance one pending local SFM-4a moderation quarantine record to reviewed state with deterministic operator metadata. The endpoint persists the local screening checkpoint when storage is enabled and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             vec![string_path_param(
@@ -4848,7 +4899,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Release a reviewed local moderation quarantine record.",
-            "Advance one reviewed local SFM-4a moderation quarantine record to released state with deterministic release-authority metadata. The endpoint persists the local screening checkpoint when storage is enabled and requires X-Iroha canonical app authentication.",
+            "Advance one reviewed local SFM-4a moderation quarantine record to released state with deterministic release-authority metadata. The endpoint persists the local screening checkpoint when storage is enabled and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             vec![string_path_param(
@@ -4856,6 +4907,83 @@ fn sorafs_paths() -> Map {
                 "16-byte local quarantine id encoded as hexadecimal.",
             )],
         )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Build a reviewed-quarantine appeal finance handoff.",
+            "For a reviewed local SFM-4a quarantine record, compute a baseline appeal pricing quote, derive a quote-bound appeal finance deposit request, bind it to deterministic quarantine evidence, and return the native OpenAssetLock instruction ready for payer signing. The request requires X-Iroha canonical app authentication from the payer_account.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            vec![string_path_param(
+                "quarantine_id_hex",
+                "16-byte local quarantine id encoded as hexadecimal.",
+            )],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-ballot".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Announce a reviewed-quarantine appeal ballot.",
+            "For a reviewed local SFM-4a quarantine record, verify a confirmed appeal-finance asset-lock deposit, require that its evidence hashes include the deterministic quarantine handoff hash, and announce the local moderation ballot. The request requires X-Iroha canonical app authentication from an account that can see the confirmed deposit.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            vec![string_path_param(
+                "quarantine_id_hex",
+                "16-byte local quarantine id encoded as hexadecimal.",
+            )],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "Read a local moderation quarantine operator-panel workflow view.",
+            "Return one role-gated local SFM-4a quarantine operator-panel read model with the quarantine record, encrypted object metadata status, matching local appeal ballots, operator routes, and bounded next-action hints. The endpoint does not return quarantined payload bytes and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
+            "#/components/schemas/JsonValue",
+            vec![
+                string_path_param(
+                    "quarantine_id_hex",
+                    "16-byte local quarantine id encoded as hexadecimal.",
+                ),
+                integer_query_param(
+                    "limit",
+                    "Maximum number of matching ballots to return.",
+                    Some("uint64"),
+                ),
+            ],
+        )),
+    );
+    let mut quarantine_object = json_get_operation(
+        "SoraFS",
+        "Read a local encrypted quarantine payload object.",
+        "Read and decrypt one local SFM-4a quarantine payload object from the node-local encrypted object store. The endpoint verifies the object envelope, returns the payload as standard base64 for authorized operators, and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
+        "#/components/schemas/JsonValue",
+        vec![string_path_param(
+            "quarantine_id_hex",
+            "16-byte local quarantine id encoded as hexadecimal.",
+        )],
+    );
+    if let Some(Value::Object(post_operation)) = json_post_operation(
+        "SoraFS",
+        "Store a local encrypted quarantine payload object.",
+        "Seal one base64 quarantined payload into the node-local encrypted SFM-4a quarantine object store. The plaintext BLAKE3 digest must match the quarantine record subject digest, the object index is persisted when storage is enabled, and the endpoint requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
+        "#/components/schemas/JsonValue",
+        "#/components/schemas/JsonValue",
+        vec![string_path_param(
+            "quarantine_id_hex",
+            "16-byte local quarantine id encoded as hexadecimal.",
+        )],
+    )
+    .remove("post")
+    {
+        quarantine_object.insert("post".to_owned(), Value::Object(post_operation));
+    }
+    paths.insert(
+        "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object".to_owned(),
+        Value::Object(quarantine_object),
     );
     paths.insert(
         "/v1/sorafs/providers".to_owned(),
@@ -6928,6 +7056,22 @@ fn text_get_operation(tag: &str, summary: &str, description: &str, example: Opti
     methods
 }
 
+fn html_get_operation(tag: &str, summary: &str, description: &str) -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String(tag.to_owned())]),
+    );
+    operation.insert("summary".into(), Value::String(summary.to_owned()));
+    operation.insert("description".into(), Value::String(description.to_owned()));
+    let mut responses = Map::new();
+    responses.insert("200".to_owned(), html_response("Successful HTML response."));
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
 fn event_stream_get_operation(tag: &str, summary: &str, description: &str) -> Map {
     let mut operation = Map::new();
     operation.insert(
@@ -7621,6 +7765,7 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/aliases/by_account"
                     | "/v1/aliases/resolve"
                     | "/v1/aliases/resolve_index"
+                    | "/v1/retail/recipients/lookup"
                     | "/v1/assets/aliases/resolve"
                     | "/v1/assets/definitions/query"
                     | "/v1/assets/holders/query"
@@ -7905,6 +8050,70 @@ fn alias_lookup_by_account_operation() -> Map {
         "responses".into(),
         Value::Object(alias_lookup_by_account_responses()),
     );
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn retail_recipient_lookup_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Retail".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Lookup a retail recipient name through configured bank routes.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Verifies that the supplied alias is bound to the canonical account in Iroha, \
+             then calls the configured bank Core API route for HBL or UBL and returns the \
+             normalized recipient confirmation."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("retailRecipientLookup".to_owned()),
+    );
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_request_body(
+            "#/components/schemas/RetailRecipientLookupRequest",
+        )),
+    );
+    let mut responses = single_json_response("#/components/schemas/RetailRecipientLookupResponse");
+    responses.insert(
+        "400".to_owned(),
+        json_response(
+            "Malformed request or unsupported FI alias scope.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "502".to_owned(),
+        json_response(
+            "Configured bank recipient lookup route returned an invalid response.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "503".to_owned(),
+        json_response(
+            "Recipient lookup route is unavailable or not configured.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "504".to_owned(),
+        json_response(
+            "Recipient lookup route timed out.",
+            error_schema_reference(),
+        ),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
     let mut methods = Map::new();
     methods.insert("post".to_owned(), Value::Object(operation));
     methods
@@ -10704,6 +10913,59 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "RetailRecipientLookupRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_id", "alias_fqn"],
+            "additionalProperties": false,
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Canonical recipient account identifier encoded as an I105 literal."
+                },
+                "alias_fqn": {
+                    "type": "string",
+                    "description": "Canonical bank alias FQN, for example `payee@hbl.sbp`."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RetailRecipientLookupResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["resolved"],
+            "additionalProperties": false,
+            "properties": {
+                "resolved": {
+                    "type": "boolean",
+                    "description": "Whether the bank confirmed the account, alias, FI, and recipient name."
+                },
+                "account_id": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Canonical recipient account identifier."
+                },
+                "alias_fqn": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Canonical bank alias FQN."
+                },
+                "fi_id": {
+                    "type": "string",
+                    "nullable": true,
+                    "enum": ["hbl.sbp", "ubl.sbp"],
+                    "description": "Canonical FI identifier."
+                },
+                "full_name": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Human-readable recipient name confirmed by the bank."
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "AssetAliasResolveResponse".to_owned(),
         norito::json!({
             "type": "object",
@@ -12859,6 +13121,7 @@ mod tests {
         assert!(paths.contains_key("/v1/aliases/resolve"));
         assert!(paths.contains_key("/v1/aliases/resolve_index"));
         assert!(paths.contains_key("/v1/aliases/by_account"));
+        assert!(paths.contains_key("/v1/retail/recipients/lookup"));
         assert!(paths.contains_key("/v1/assets/aliases/resolve"));
         assert!(paths.contains_key("/v1/contracts/aliases"));
         assert!(paths.contains_key("/v1/contracts/aliases/resolve"));
@@ -13048,6 +13311,7 @@ mod tests {
             )
         );
         assert!(paths.contains_key("/v1/sorafs/transparency/explorer"));
+        assert!(paths.contains_key("/v1/sorafs/transparency/explorer/ui"));
         assert!(paths.contains_key("/v1/sorafs/transparency/source-entries/{source_kind}"));
         assert!(paths.contains_key("/v1/sorafs/transparency/privacy-aggregates/source-events"));
         assert!(paths.contains_key("/v1/sorafs/transparency/privacy-aggregates/publish-due"));
@@ -13067,6 +13331,21 @@ mod tests {
         assert!(paths.contains_key("/v1/sorafs/moderation/quarantine"));
         assert!(paths.contains_key("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review"));
         assert!(paths.contains_key("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release"));
+        assert!(
+            paths.contains_key(
+                "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff"
+            )
+        );
+        assert!(
+            paths
+                .contains_key("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-ballot")
+        );
+        assert!(
+            paths.contains_key(
+                "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel"
+            )
+        );
+        assert!(paths.contains_key("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object"));
         assert!(paths.contains_key("/v1/soradns/directory/latest"));
         assert!(paths.contains_key("/v1/content/{bundle}/{path}"));
         assert!(paths.contains_key("/v1/sns/names"));
@@ -13098,6 +13377,46 @@ mod tests {
             .expect("offline refill description");
         assert!(refill_description.contains("signature_base64 or witness_base64"));
         assert!(refill_description.contains("X-Iroha-* app-auth headers are rejected"));
+        let issue_post = paths
+            .get("/v1/offline/v2/notes/issue")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("offline issue post operation");
+        let issue_description = issue_post
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("offline issue description");
+        assert!(issue_description.contains("retired"));
+        assert!(issue_description.contains("Kagemusha online-to-offline top-up"));
+        let audit_post = paths
+            .get("/v1/offline/v2/audit")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("offline audit post operation");
+        let audit_description = audit_post
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("offline audit description");
+        assert!(audit_description.contains("retired"));
+        assert!(audit_description.contains("Kagemusha payment flows"));
+        let redeem_post = paths
+            .get("/v1/offline/v2/notes/redeem")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("offline redeem post operation");
+        let redeem_description = redeem_post
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("offline redeem description");
+        assert!(redeem_description.contains("redeem_request_norito_base64"));
+        assert!(redeem_description.contains("KagemushaRecursiveSpendRedeemRequestV1"));
+        assert!(redeem_description.contains("compact_payment_token_norito_base64"));
+        assert!(redeem_description.contains("projection_verifier_record_norito_base64"));
+        assert!(redeem_description.contains("source_note_commitment"));
+        assert!(redeem_description.contains("ignored auxiliary fields"));
         let refill_request_schema = refill_post
             .get("requestBody")
             .and_then(Value::as_object)

@@ -1128,7 +1128,8 @@ impl From<crate::isi::musubi::AssertMusubiReleaseExists> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-// Allow direct boxing of Offline note instructions.
+// Retain direct boxing for historical Offline Note fixtures; the default
+// registry does not admit these retired payment instructions.
 impl From<crate::isi::offline::IssueOfflineNote> for InstructionBox {
     fn from(i: crate::isi::offline::IssueOfflineNote) -> Self {
         InstructionBox(Box::new(i))
@@ -4736,6 +4737,17 @@ mod tests {
         use crate::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
 
         let registry = crate::instruction_registry::default();
+        for retired_type_name in [
+            std::any::type_name::<crate::isi::offline::IssueOfflineNote>(),
+            std::any::type_name::<crate::isi::offline::RedeemOfflineNote>(),
+            std::any::type_name::<crate::isi::offline::AuditOfflineNote>(),
+        ] {
+            assert!(
+                !registry.contains(retired_type_name),
+                "default registry must not contain retired offline payment instruction {retired_type_name}"
+            );
+        }
+
         let asset_definition_id = AssetDefinitionId::new(
             DomainId::try_new("offline", "universal").expect("domain id"),
             "xor".parse().expect("asset name"),

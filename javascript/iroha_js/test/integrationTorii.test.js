@@ -2521,12 +2521,21 @@ test(
     });
 
     const readiness = await client.getOfflineReadiness();
-    assert.equal(readiness.offline_note, true);
-    assert.equal(readiness.offline_one_use_keys, true);
-    assert.equal(typeof readiness.offline_recursive_note_proof, "boolean");
-    assert.equal(readiness.offline_fountain_qr, true);
-    assert.equal(readiness.offline_sync_optional, true);
+    assert.equal(readiness.offline_kagemusha_abi7, true);
+    assert.equal(readiness.offline_kagemusha_abi7_mode, "recursive_compact_v1");
+    assert.equal(readiness.offline_kagemusha_abi7_bridge_abi_version, 7);
+    assert.equal(readiness.offline_kagemusha_abi7_circuit_id, "kagemusha-recursive-compact-v1");
+    assert.equal(readiness.offline_kagemusha_abi7_artifacts, true);
+    assert.equal(readiness.offline_kagemusha_recursive_compact_available, true);
+    assert.equal(readiness.offline_kagemusha_recursive_compact_mode, "recursive_compact_v1");
+    assert.equal(readiness.offline_kagemusha_recursive_compact_required_native_bridge_abi_version, 7);
+    assert.equal(
+      readiness.offline_kagemusha_recursive_compact_circuit_id,
+      "kagemusha-recursive-compact-v1",
+    );
+    assert.equal(readiness.offline_kagemusha_recursive_compact_artifacts_available, true);
     assert.equal(readiness.offline_telemetry, true);
+    assert.equal(Object.prototype.hasOwnProperty.call(readiness, "offline_note"), false);
   },
 );
 

@@ -108,12 +108,58 @@ def _absolute_repo_root(repo_root: Path) -> Path:
     return repo_root if repo_root.is_absolute() else Path.cwd() / repo_root
 
 
-def _child_env_with_repo_binaries(repo_root: Path) -> dict[str, str]:
+def _absolute_path(path: Path) -> Path:
+    """Return ``path`` as an absolute path without resolving aliases."""
+
+    return path if path.is_absolute() else Path.cwd() / path
+
+
+def validate_iroha_bin_path(path: Path | None) -> list[str]:
+    """Reject unsafe explicit ``iroha`` binary paths before child launch."""
+
+    if path is None:
+        return []
+    secret_error = _secret_path_error(path, "--iroha-bin")
+    if secret_error is not None:
+        return [secret_error]
+    if path.name != "iroha":
+        return ["--iroha-bin must point to a binary named iroha"]
+    absolute = _absolute_path(path)
+    ancestor_errors = device_lab.validate_no_symlink_ancestors(
+        absolute,
+        "--iroha-bin ancestor directory",
+    )
+    if ancestor_errors:
+        return ancestor_errors
+    try:
+        mode = absolute.lstat().st_mode
+    except FileNotFoundError:
+        return ["--iroha-bin is missing"]
+    except OSError:
+        return ["--iroha-bin metadata could not be read"]
+    if stat.S_ISLNK(mode):
+        return ["--iroha-bin must not be a symlink"]
+    if not stat.S_ISREG(mode):
+        return ["--iroha-bin must be a regular file"]
+    if mode & 0o111 == 0:
+        return ["--iroha-bin must be executable"]
+    return []
+
+
+def _child_env_with_repo_binaries(
+    repo_root: Path,
+    *,
+    iroha_bin: Path | None = None,
+) -> dict[str, str]:
     """Return a child environment that can find locally built Iroha binaries."""
 
     env = os.environ.copy()
     absolute_repo_root = _absolute_repo_root(repo_root)
+    explicit_bins = []
+    if iroha_bin is not None:
+        explicit_bins.append(str(_absolute_path(iroha_bin).parent))
     local_bins = [
+        *explicit_bins,
         str(absolute_repo_root / "target" / "release"),
         str(absolute_repo_root / "target" / "debug"),
     ]
@@ -896,11 +942,12 @@ def _run_command_to_log(
     *,
     heartbeat_interval_seconds: float = STAGED_COMMAND_HEARTBEAT_SECONDS,
     executable_repo_root: Path | None = None,
+    iroha_bin: Path | None = None,
 ) -> int:
     """Run the canonical proof command with child output owned by ``log_path``."""
 
     child_env = (
-        _child_env_with_repo_binaries(executable_repo_root)
+        _child_env_with_repo_binaries(executable_repo_root, iroha_bin=iroha_bin)
         if executable_repo_root is not None
         else None
     )
@@ -1287,6 +1334,7 @@ def _run_lineage_key_artifact_command(
     profile: str,
     command: str,
     repo_root: Path,
+    iroha_bin: Path | None,
     staged_root: Path,
     staged_artifact_dir: Path,
     replace: bool,
@@ -1307,6 +1355,7 @@ def _run_lineage_key_artifact_command(
                 staged_root,
                 temp_log,
                 executable_repo_root=repo_root,
+                iroha_bin=iroha_bin,
             )
         )
     except OSError:
@@ -1404,6 +1453,7 @@ def run_staged_lineage_proof(
     """Run the canonical production proof and publish staging metadata."""
 
     staged_root, errors = _preflight_paths(args)
+    errors.extend(validate_iroha_bin_path(args.iroha_bin))
     errors.extend(
         readiness.validate_lineage_proof_command(
             DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND,
@@ -1453,6 +1503,7 @@ def run_staged_lineage_proof(
             profile=profile,
             command=command,
             repo_root=args.repo_root,
+            iroha_bin=args.iroha_bin,
             staged_root=staged_root,
             staged_artifact_dir=args.staged_artifact_dir,
             replace=args.replace or args.resume_key_artifacts,
@@ -1487,6 +1538,7 @@ def run_staged_lineage_proof(
                 args.repo_root,
                 temp_log,
                 executable_repo_root=args.repo_root,
+                iroha_bin=args.iroha_bin,
             )
         )
     except OSError:
@@ -1558,6 +1610,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         )
     )
     parser.add_argument("--repo-root", type=Path, default=Path("."))
+    parser.add_argument(
+        "--iroha-bin",
+        type=Path,
+        default=None,
+        help=(
+            "Optional explicit iroha binary whose directory is placed first on "
+            "the child PATH; the recorded command remains the canonical "
+            "`iroha app ...` invocation."
+        ),
+    )
     parser.add_argument("--staged-artifact-dir", type=Path, default=DEFAULT_STAGED_ARTIFACT_DIR)
     parser.add_argument("--exit-file", type=Path, default=DEFAULT_EXIT_FILE)
     parser.add_argument(

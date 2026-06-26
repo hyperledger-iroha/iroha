@@ -299,6 +299,12 @@ public struct KagemushaRecursiveSpendRedeemRequest: Equatable, Sendable {
             currentAmount: bundleSummary.currentNote.amount,
             hasChangeOutput: changeOutput != nil
         )
+        if let changeOutput {
+            try KagemushaRecursiveSpendRequestCodecs.requireRedeemChangeOutputNotReserved(
+                changeOutput,
+                bundleSummary: bundleSummary
+            )
+        }
         let finalIsLineage = KagemushaRecursiveSpendProver.isLineageProofCircuitId(
             bundleSummary.proofCircuitId
         )
@@ -346,6 +352,7 @@ public struct KagemushaRecursiveSpendBundleSummary: Equatable, Sendable {
     public let chainId: String
     public let initialRoot: Data
     public let finalRoot: Data
+    public let topupAnchorNullifiers: [Data]
     public let currentNote: KagemushaRecursiveSpendableNoteDescriptor
 }
 
@@ -374,6 +381,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
         "iroha_data_model::proof::VerifyingKeyRecord"
 
     static let requestFlags = NoritoHeader.compactLen
+    static let foldStepMaxInputs = 2
     static let pallasOpenEnvelopesSchemaHash: [UInt8] = [
         0xfe, 0x38, 0x26, 0x32,
         0x8f, 0x08, 0x17, 0x71,
@@ -561,6 +569,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
             chainId: accumulator.chainId,
             initialRoot: accumulator.initialRoot,
             finalRoot: accumulator.finalRoot,
+            topupAnchorNullifiers: accumulator.topupAnchorNullifiers,
             currentNote: accumulator.currentNote
         )
     }
@@ -598,6 +607,7 @@ private struct AccumulatorSummary {
     let asset: String
     let initialRoot: Data
     let finalRoot: Data
+    let topupAnchorNullifiers: [Data]
     let hopCount: Int
     let currentNote: KagemushaRecursiveSpendableNoteDescriptor
 }
@@ -790,13 +800,13 @@ extension KagemushaRecursiveSpendRequestCodecs {
               transcriptLabel.utf8.count <= pallasOpenEnvelopeMaxTranscriptLabelBytes else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
-        try readField(&reader) { child in
+        try readField(&reader, field: "\(field).vk_commitment") { child in
             try readRequiredMetadataOption(&child, field: "\(field).vk_commitment")
         }
-        try readField(&reader) { child in
+        try readField(&reader, field: "\(field).public_inputs_schema_hash") { child in
             try readRequiredMetadataOption(&child, field: "\(field).public_inputs_schema_hash")
         }
-        try readField(&reader) { child in
+        try readField(&reader, field: "\(field).domain_tag") { child in
             try readRequiredMetadataOption(&child, field: "\(field).domain_tag")
         }
         guard reader.remaining == 0 else {
@@ -835,7 +845,7 @@ extension KagemushaRecursiveSpendRequestCodecs {
         guard hCount == intN else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
-        try readField(&reader) { child in
+        _ = try readField(&reader) { child in
             try child.readFixedBytes(32)
         }
         guard reader.remaining == 0 else {
@@ -857,9 +867,9 @@ extension KagemushaRecursiveSpendRequestCodecs {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
         let n = try readField(&reader) { try $0.readUInt32LE() }
-        try readField(&reader) { try $0.readFixedBytes(32) }
-        try readField(&reader) { try $0.readFixedBytes(32) }
-        try readField(&reader) { try $0.readFixedBytes(32) }
+        _ = try readField(&reader) { try $0.readFixedBytes(32) }
+        _ = try readField(&reader) { try $0.readFixedBytes(32) }
+        _ = try readField(&reader) { try $0.readFixedBytes(32) }
         guard reader.remaining == 0 else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
@@ -885,8 +895,8 @@ extension KagemushaRecursiveSpendRequestCodecs {
               lCount == n.trailingZeroBitCount else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
-        try readField(&reader) { try $0.readFixedBytes(32) }
-        try readField(&reader) { try $0.readFixedBytes(32) }
+        _ = try readField(&reader) { try $0.readFixedBytes(32) }
+        _ = try readField(&reader) { try $0.readFixedBytes(32) }
         guard reader.remaining == 0 else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
@@ -896,39 +906,54 @@ extension KagemushaRecursiveSpendRequestCodecs {
         _ reader: inout CompactReader,
         field: String
     ) throws -> Int {
+        try readFixed32Sequence(&reader, field: field).count
+    }
+
+    private static func readFixed32Sequence(
+        _ reader: inout CompactReader,
+        field: String
+    ) throws -> [Data] {
         let count64 = try reader.readUInt64LE()
         guard count64 <= UInt64(Int.max) else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
         let count = Int(count64)
+        var values: [Data] = []
+        values.reserveCapacity(count)
         for _ in 0..<count {
-            try readField(&reader) { child in
-                try child.readFixedBytes(32)
-            }
+            values.append(try readField(&reader) { child in
+                try child.readFixed32Flexible()
+            })
         }
-        return count
+        return values
     }
 
     private static func readRequiredMetadataOption(
         _ reader: inout CompactReader,
         field: String
     ) throws {
-        guard let payload = try readOptionRawPayload(&reader),
+        guard let payload = try readOptionRawPayload(&reader, field: field),
               payload.count == 32,
               payload.contains(where: { $0 != 0 }) else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
     }
 
-    private static func readOptionRawPayload(_ reader: inout CompactReader) throws -> Data? {
+    private static func readOptionRawPayload(
+        _ reader: inout CompactReader,
+        field: String
+    ) throws -> Data? {
         switch try reader.readUInt8() {
         case 0:
             return nil
         case 1:
             let length = try reader.readLength()
+            guard reader.remaining >= length else {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
+            }
             return try reader.readBytes(length)
         default:
-            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("option")
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
     }
 
@@ -993,6 +1018,113 @@ extension KagemushaRecursiveSpendRequestCodecs {
             if comparison > 0 {
                 throw KagemushaRecursiveSpendRequestCodecError.invalidField("publicAmount")
             }
+        }
+    }
+
+    static func requireRedeemChangeOutputNotReserved(
+        _ changeOutput: Data,
+        bundleSummary: KagemushaRecursiveSpendBundleSummary
+    ) throws {
+        let reserved = [bundleSummary.currentNote.noteCommitment, bundleSummary.currentNote.spendNullifier]
+            + bundleSummary.topupAnchorNullifiers
+        guard !reserved.contains(changeOutput) else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidField("changeOutput")
+        }
+    }
+
+    private static func requireTopupAnchorNullifiers(
+        _ nullifiers: [Data],
+        currentNote: KagemushaRecursiveSpendableNoteDescriptor
+    ) throws {
+        let field = "bundle.accumulator.topup_anchor_nullifiers"
+        guard !nullifiers.isEmpty, nullifiers.count <= foldStepMaxInputs else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
+        }
+        for (index, nullifier) in nullifiers.enumerated() {
+            guard !nullifier.allSatisfy({ $0 == 0 }) else {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
+            }
+            if index > 0 {
+                guard nullifiers[index - 1].lexicographicallyPrecedes(nullifier) else {
+                    throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
+                }
+            }
+        }
+        guard !nullifiers.contains(currentNote.noteCommitment),
+              !nullifiers.contains(currentNote.spendNullifier)
+        else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
+        }
+    }
+
+    private static func requireAccumulatorRoots(initialRoot: Data, finalRoot: Data) throws {
+        guard initialRoot.contains(where: { $0 != 0 }) else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle.accumulator.initial_root")
+        }
+        guard finalRoot.contains(where: { $0 != 0 }),
+              finalRoot != initialRoot
+        else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle.accumulator.final_root")
+        }
+    }
+
+    private static func requireAccumulatorCorridor(
+        _ reader: inout CompactReader,
+        hopCount: Int
+    ) throws {
+        func readFixed32(_ field: String) throws -> Data {
+            try readField(&reader) { try $0.readFixed32Flexible() }
+        }
+
+        func requireNonzero(_ field: String) throws -> Data {
+            let value = try readFixed32(field)
+            guard value.contains(where: { $0 != 0 }) else {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle.accumulator.\(field)")
+            }
+            return value
+        }
+
+        let lineageDigest = try requireNonzero("lineage_digest")
+        let aggregationTranscriptDigest = try readFixed32("aggregation_transcript_digest")
+        guard aggregationTranscriptDigest.contains(where: { $0 != 0 }),
+              aggregationTranscriptDigest == lineageDigest
+        else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle.accumulator.aggregation_transcript_digest")
+        }
+        for field in [
+            "nullifier_digest",
+            "output_commitment_digest",
+            "fold_digest",
+            "recursive_proof_chain_digest",
+            "transition_profile_binding_digest",
+        ] {
+            _ = try requireNonzero(field)
+        }
+        let appendOpeningPreflightDigest = try readFixed32("append_opening_preflight_digest")
+        if appendOpeningPreflightDigest.contains(where: { $0 != 0 }), hopCount <= 1 {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle.accumulator.append_opening_preflight_digest")
+        }
+        let appendBoundaryDigest = try readFixed32("append_boundary_digest")
+        if appendBoundaryDigest.contains(where: { $0 != 0 }),
+           !appendOpeningPreflightDigest.contains(where: { $0 != 0 }) || hopCount <= 1
+        {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle.accumulator.append_boundary_digest")
+        }
+        for field in [
+            "verifier_params_fingerprint",
+            "fixed_window_table_schedule_digest",
+            "fixed_window_shared_table_manifest_digest",
+            "fixed_window_table_base_digest",
+            "verifier_witness_batch_digest",
+        ] {
+            _ = try requireNonzero(field)
+        }
+        let verifierOpeningLen = try Int(readField(
+            &reader,
+            field: "bundle.accumulator.verifier_opening_len"
+        ) { try $0.readUInt32LE() })
+        guard [2, 4, 8, 16, 32, 64, 128].contains(verifierOpeningLen) else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle.accumulator.verifier_opening_len")
         }
     }
 
@@ -1151,15 +1283,25 @@ extension KagemushaRecursiveSpendRequestCodecs {
             ?? "hex:\(assetBytes.map { String(format: "%02x", $0) }.joined())"
         let initialRoot = try readField(&reader) { try $0.readFixed32Flexible() }
         let finalRoot = try readField(&reader) { try $0.readFixed32Flexible() }
-        try skipFields(&reader, count: 1)
-        let hopCount = try Int(readField(&reader) { try $0.readUInt32LE() })
+        try requireAccumulatorRoots(initialRoot: initialRoot, finalRoot: finalRoot)
+        let topupAnchorNullifiers = try readField(&reader) { child in
+            try readFixed32Sequence(
+                &child,
+                field: "bundle.accumulator.topup_anchor_nullifiers"
+            )
+        }
+        let hopCount = try Int(readField(
+            &reader,
+            field: "bundle.accumulator.hop_count"
+        ) { try $0.readUInt32LE() })
         guard hopCount >= 1,
               hopCount <= Int(KagemushaRecursiveSpendProver.recursiveSpendLineageWitnesslessMaxHopsV1)
         else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle.accumulator.hop_count")
         }
-        try skipFields(&reader, count: 15)
+        try requireAccumulatorCorridor(&reader, hopCount: hopCount)
         let currentNote = try readField(&reader, readSpendableNote)
+        try requireTopupAnchorNullifiers(topupAnchorNullifiers, currentNote: currentNote)
         guard reader.remaining == 0 else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle")
         }
@@ -1168,32 +1310,76 @@ extension KagemushaRecursiveSpendRequestCodecs {
             asset: asset,
             initialRoot: initialRoot,
             finalRoot: finalRoot,
+            topupAnchorNullifiers: topupAnchorNullifiers,
             hopCount: hopCount,
             currentNote: currentNote
         )
     }
 
     private static func readChainIdPayload(_ reader: inout CompactReader) throws -> String {
+        let value: String
         do {
-            return try readField(&reader, readString)
+            value = try readField(&reader, readString)
         } catch {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle.accumulator.chain_id")
         }
+        try requirePortableId(value, field: "bundle.accumulator.chain_id")
+        return value
+    }
+
+    private struct RecursiveProofDecodeContext {
+        let trailingField: String
+        let verifierTrailingField: String
+        let verifierBackendField: String
+        let verifierNameField: String
+        let proofPublicInputsField: String
+        let proofPublicInputsHashField: String
+        let proofBackendField: String
+        let proofBytesField: String
+
+        static let bundle = RecursiveProofDecodeContext(
+            trailingField: "bundle",
+            verifierTrailingField: "bundle",
+            verifierBackendField: "verifierKeyId.backend",
+            verifierNameField: "verifierKeyId",
+            proofPublicInputsField: "bundle.proof_public_inputs",
+            proofPublicInputsHashField: "bundle.proof_public_inputs_hash",
+            proofBackendField: "bundle.proof_backend",
+            proofBytesField: "bundle.proof_bytes"
+        )
+
+        static let lineagePreviousProof = RecursiveProofDecodeContext(
+            trailingField: "lineageWitness.previousRecursiveProofs",
+            verifierTrailingField: "lineageWitness.previousRecursiveProofs.verifierKeyId",
+            verifierBackendField: "lineageWitness.previousRecursiveProofs.verifierKeyId.backend",
+            verifierNameField: "lineageWitness.previousRecursiveProofs.verifierKeyId.name",
+            proofPublicInputsField: "lineageWitness.previousRecursiveProofs.proof_public_inputs",
+            proofPublicInputsHashField: "lineageWitness.previousRecursiveProofs.proof_public_inputs_hash",
+            proofBackendField: "lineageWitness.previousRecursiveProofs.proof_backend",
+            proofBytesField: "lineageWitness.previousRecursiveProofs.proof_bytes"
+        )
     }
 
     private static func readRecursiveProofCircuitId(_ payload: Data) throws -> String {
+        try readRecursiveProofCircuitId(payload, context: .bundle)
+    }
+
+    private static func readRecursiveProofCircuitId(
+        _ payload: Data,
+        context: RecursiveProofDecodeContext
+    ) throws -> String {
         var reader = CompactReader(data: payload)
         let verifierKeyIdPayload = try reader.readField()
         let publicInputsPayload = try reader.readField()
         guard !publicInputsPayload.isEmpty else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
-                "bundle.proof_public_inputs"
+                context.proofPublicInputsField
             )
         }
         let publicInputsHash = try readField(&reader) { try $0.readFixed32Flexible() }
         guard publicInputsHash.contains(where: { $0 != 0 }) else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
-                "bundle.proof_public_inputs_hash"
+                context.proofPublicInputsHashField
             )
         }
         let publicInputsArchive = noritoEncode(
@@ -1203,32 +1389,34 @@ extension KagemushaRecursiveSpendRequestCodecs {
         )
         guard publicInputsHash == IrohaHash.hash(publicInputsArchive) else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
-                "bundle.proof_public_inputs_hash"
+                context.proofPublicInputsHashField
             )
         }
         let proofPayload = try reader.readField()
         guard reader.remaining == 0 else {
-            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle")
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(context.trailingField)
         }
         var verifierKeyId = CompactReader(data: verifierKeyIdPayload)
         let backend = try readField(&verifierKeyId, readString)
         let name = try readField(&verifierKeyId, readString)
         guard verifierKeyId.remaining == 0 else {
-            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle")
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
+                context.verifierTrailingField
+            )
         }
-        try requirePortableId(backend, field: "verifierKeyId.backend")
+        try requirePortableId(backend, field: context.verifierBackendField)
         guard backend == KagemushaRecursiveSpendProver.recursiveAggregationProofBackend else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
-                "bundle.proof_backend"
+                context.proofBackendField
             )
         }
-        let proofBackend = try readProofBoxBackend(proofPayload)
+        let proofBackend = try readProofBoxBackend(proofPayload, context: context)
         guard proofBackend == backend else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
-                "bundle.proof_backend"
+                context.proofBackendField
             )
         }
-        try requirePortableId(name, field: "verifierKeyId")
+        try requirePortableId(name, field: context.verifierNameField)
         return name
     }
 
@@ -1269,35 +1457,7 @@ extension KagemushaRecursiveSpendRequestCodecs {
     }
 
     private static func readPreviousRecursiveProofCircuitId(_ payload: Data) throws -> String {
-        var reader = CompactReader(data: payload)
-        let verifierKeyIdPayload = try reader.readField()
-        try skipFields(&reader, count: 3)
-        guard reader.remaining == 0 else {
-            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
-                "lineageWitness.previousRecursiveProofs"
-            )
-        }
-        var verifierKeyId = CompactReader(data: verifierKeyIdPayload)
-        let backend = try readField(&verifierKeyId, readString)
-        let name = try readField(&verifierKeyId, readString)
-        guard verifierKeyId.remaining == 0 else {
-            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
-                "lineageWitness.previousRecursiveProofs.verifierKeyId"
-            )
-        }
-        try requirePortableId(
-            backend,
-            field: "lineageWitness.previousRecursiveProofs.verifierKeyId.backend"
-        )
-        guard backend == KagemushaRecursiveSpendProver.recursiveAggregationProofBackend else {
-            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
-                "lineageWitness.previousRecursiveProofs.verifierKeyId.backend"
-            )
-        }
-        try requirePortableId(
-            name,
-            field: "lineageWitness.previousRecursiveProofs.verifierKeyId.name"
-        )
+        let name = try readRecursiveProofCircuitId(payload, context: .lineagePreviousProof)
         guard KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(name) else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
                 "lineageWitness.previousRecursiveProofs.verifierKeyId.name"
@@ -1306,22 +1466,25 @@ extension KagemushaRecursiveSpendRequestCodecs {
         return name
     }
 
-    private static func readProofBoxBackend(_ payload: Data) throws -> String {
+    private static func readProofBoxBackend(
+        _ payload: Data,
+        context: RecursiveProofDecodeContext
+    ) throws -> String {
         var reader = CompactReader(data: payload)
         let backend = try readField(&reader, readString)
         let proofBytes = try readField(&reader) { try $0.readByteVec() }
         guard reader.remaining == 0 else {
-            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle")
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(context.trailingField)
         }
         try requirePortableId(backend, field: "proof.backend")
         guard backend == KagemushaRecursiveSpendProver.recursiveAggregationProofBackend else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
-                "bundle.proof_backend"
+                context.proofBackendField
             )
         }
         guard !proofBytes.isEmpty else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
-                "bundle.proof_bytes"
+                context.proofBytesField
             )
         }
         return backend
@@ -1352,10 +1515,30 @@ extension KagemushaRecursiveSpendRequestCodecs {
 
     private static func decimalString(fromLittleEndianTwosComplement bytes: Data) -> String {
         guard !bytes.isEmpty else { return "0" }
+        let negative = (bytes.last ?? 0) & 0x80 != 0
+        let magnitudeBytes: Data
+        if negative {
+            var magnitude = bytes.map { ~$0 }
+            var carry = UInt16(1)
+            for index in magnitude.indices {
+                let sum = UInt16(magnitude[index]) + carry
+                magnitude[index] = UInt8(sum & 0xff)
+                carry = sum >> 8
+                if carry == 0 {
+                    break
+                }
+            }
+            magnitudeBytes = Data(magnitude)
+        } else {
+            magnitudeBytes = bytes
+        }
         var digits = "0"
-        for byte in bytes.reversed() {
+        for byte in magnitudeBytes.reversed() {
             digits = multiplyDecimalString(digits, by: 256)
             digits = addDecimalString(digits, UInt16(byte))
+        }
+        if negative, digits != "0" {
+            return "-\(digits)"
         }
         return digits
     }
@@ -1399,12 +1582,13 @@ extension KagemushaRecursiveSpendRequestCodecs {
 
     private static func readField<T>(
         _ reader: inout CompactReader,
+        field: String = "field",
         _ decode: (inout CompactReader) throws -> T
     ) throws -> T {
         var child = CompactReader(data: try reader.readField())
         let value = try decode(&child)
         guard child.remaining == 0 else {
-            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("field")
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
         return value
     }

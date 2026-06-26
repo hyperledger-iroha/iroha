@@ -33,11 +33,13 @@ pub use moderation::{
     ModerationBallotEvent, ModerationBallotEventKind, ModerationBallotRecord,
     ModerationBallotRevealOutcome, ModerationBallotRuntimeError, ModerationBallotTally,
     ModerationCorpusRegistryRecord, ModerationModelRegistryError, ModerationModelRegistrySnapshot,
-    ModerationQuarantineRecord, ModerationQuarantineReleaseInput, ModerationQuarantineReviewInput,
-    ModerationQuarantineState, ModerationReproRegistryRecord, ModerationScreeningError,
-    ModerationScreeningInput, ModerationScreeningOutcome, ModerationScreeningRecord,
-    ModerationScreeningSnapshot, ModerationScreeningVerdict, ModerationVoteCounts,
-    local_moderation_panel_roster_hash,
+    ModerationQuarantineObjectError, ModerationQuarantineObjectInput,
+    ModerationQuarantineObjectPayload, ModerationQuarantineObjectRecord,
+    ModerationQuarantineObjectSnapshot, ModerationQuarantineRecord,
+    ModerationQuarantineReleaseInput, ModerationQuarantineReviewInput, ModerationQuarantineState,
+    ModerationReproRegistryRecord, ModerationScreeningError, ModerationScreeningInput,
+    ModerationScreeningOutcome, ModerationScreeningRecord, ModerationScreeningSnapshot,
+    ModerationScreeningVerdict, ModerationVoteCounts, local_moderation_panel_roster_hash,
 };
 pub use orderbook::{
     OrderbookCancelOutcome, OrderbookEvent, OrderbookEventKind, OrderbookReceiptOutcome,
@@ -161,6 +163,9 @@ const MODERATION_MODEL_REGISTRY_DIR: &str = "moderation-model-registry";
 const MODERATION_MODEL_REGISTRY_SNAPSHOT_FILE: &str = "registry-snapshot.to";
 const MODERATION_SCREENING_DIR: &str = "moderation-screening";
 const MODERATION_SCREENING_SNAPSHOT_FILE: &str = "screening-snapshot.to";
+const MODERATION_QUARANTINE_OBJECT_STORE_DIR: &str = "moderation-quarantine-objects";
+const MODERATION_QUARANTINE_OBJECT_INDEX_FILE: &str = "object-index.to";
+const MODERATION_QUARANTINE_OBJECT_KEY_FILE: &str = "local-seal.key";
 const LOCAL_RUNTIME_SNAPSHOT_TMP_EXT: &str = "tmp";
 const PRIVACY_AGGREGATE_ENTRY_ID_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.privacy_aggregate.entry_id.v1";
@@ -205,6 +210,7 @@ use iroha_telemetry::metrics::{
 };
 use norito::codec::Encode;
 use norito::json::Value as JsonValue;
+use rand::{rand_core::TryRngCore as _, rngs::OsRng};
 pub use repair::{
     RepairManager, RepairSchedulerError, RepairTaskFilters, RepairTaskSnapshot,
     RepairWatchdogReport, RepairWorkerReport,
@@ -246,7 +252,12 @@ pub use transparency::{
 use crate::{
     governance::FilesystemGovernancePublisher,
     metering::{CapacityMeter, MeteringSnapshot, ReplicationUsageSample},
-    moderation::{ModerationBallotRuntime, ModerationModelRegistry, ModerationScreeningRuntime},
+    moderation::{
+        ModerationBallotRuntime, ModerationModelRegistry, ModerationQuarantineObjectEnvelopeV1,
+        ModerationQuarantineObjectRuntime, ModerationScreeningRuntime,
+        open_moderation_quarantine_object, seal_moderation_quarantine_object,
+        validate_relative_object_path,
+    },
     orderbook::OrderbookRuntime,
     potr::PotrTracker,
     scheduler::{StorageSchedulerConfig, StorageSchedulersRuntime},
@@ -357,6 +368,18 @@ fn moderation_screening_checkpoint_path(data_dir: &Path) -> PathBuf {
     data_dir
         .join(MODERATION_SCREENING_DIR)
         .join(MODERATION_SCREENING_SNAPSHOT_FILE)
+}
+
+fn moderation_quarantine_object_store_root(data_dir: &Path) -> PathBuf {
+    data_dir.join(MODERATION_QUARANTINE_OBJECT_STORE_DIR)
+}
+
+fn moderation_quarantine_object_index_path(data_dir: &Path) -> PathBuf {
+    moderation_quarantine_object_store_root(data_dir).join(MODERATION_QUARANTINE_OBJECT_INDEX_FILE)
+}
+
+fn moderation_quarantine_object_key_path(data_dir: &Path) -> PathBuf {
+    moderation_quarantine_object_store_root(data_dir).join(MODERATION_QUARANTINE_OBJECT_KEY_FILE)
 }
 
 fn write_local_checkpoint_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -1094,6 +1117,10 @@ pub struct NodeHandle {
     moderation_model_registry: Arc<RwLock<ModerationModelRegistry>>,
     moderation_screening_checkpoint_path: Option<PathBuf>,
     moderation_screening: Arc<RwLock<ModerationScreeningRuntime>>,
+    moderation_quarantine_object_root: Option<PathBuf>,
+    moderation_quarantine_object_index_path: Option<PathBuf>,
+    moderation_quarantine_object_key_path: Option<PathBuf>,
+    moderation_quarantine_objects: Arc<RwLock<ModerationQuarantineObjectRuntime>>,
     moderation: Arc<RwLock<ModerationBallotRuntime>>,
     moderation_events: Arc<RwLock<Vec<ModerationBallotEvent>>>,
     moderation_event_sender: broadcast::Sender<ModerationBallotEvent>,
@@ -1212,6 +1239,15 @@ impl NodeHandle {
         let moderation_screening_checkpoint_path = storage
             .as_ref()
             .map(|_| moderation_screening_checkpoint_path(config.data_dir()));
+        let moderation_quarantine_object_root = storage
+            .as_ref()
+            .map(|_| moderation_quarantine_object_store_root(config.data_dir()));
+        let moderation_quarantine_object_index_path = storage
+            .as_ref()
+            .map(|_| moderation_quarantine_object_index_path(config.data_dir()));
+        let moderation_quarantine_object_key_path = storage
+            .as_ref()
+            .map(|_| moderation_quarantine_object_key_path(config.data_dir()));
         let (repair_event_sender, _) = broadcast::channel(REPAIR_EVENT_CHANNEL_CAPACITY);
         let (reputation_event_sender, _) = broadcast::channel(REPUTATION_EVENT_CHANNEL_CAPACITY);
         let (orderbook_event_sender, _) = broadcast::channel(ORDERBOOK_EVENT_CHANNEL_CAPACITY);
@@ -1252,6 +1288,12 @@ impl NodeHandle {
             moderation_model_registry: Arc::new(RwLock::new(ModerationModelRegistry::default())),
             moderation_screening_checkpoint_path,
             moderation_screening: Arc::new(RwLock::new(ModerationScreeningRuntime::default())),
+            moderation_quarantine_object_root,
+            moderation_quarantine_object_index_path,
+            moderation_quarantine_object_key_path,
+            moderation_quarantine_objects: Arc::new(RwLock::new(
+                ModerationQuarantineObjectRuntime::default(),
+            )),
             moderation: Arc::new(RwLock::new(ModerationBallotRuntime::default())),
             moderation_events: Arc::new(RwLock::new(Vec::new())),
             moderation_event_sender,
@@ -1264,6 +1306,7 @@ impl NodeHandle {
             node.load_orderbook_checkpoint();
             node.load_moderation_model_registry_checkpoint();
             node.load_moderation_screening_checkpoint();
+            node.load_moderation_quarantine_object_index_checkpoint();
             if let Some(dir) = governance_dir.clone() {
                 match FilesystemGovernancePublisher::try_new(dir.clone()) {
                     Ok(publisher) => {
@@ -2443,6 +2486,169 @@ impl NodeHandle {
         Ok(())
     }
 
+    /// Seal and store quarantined payload bytes in the local encrypted object store.
+    ///
+    /// The plaintext BLAKE3 digest must match the referenced quarantine record
+    /// subject digest. Successful writes persist an encrypted Norito envelope
+    /// and update the local object index checkpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage is disabled, the quarantine id is unknown,
+    /// the payload digest does not match the quarantine record, encryption or
+    /// filesystem persistence fails, or the object index lock is poisoned.
+    pub fn store_moderation_quarantine_object(
+        &self,
+        input: ModerationQuarantineObjectInput,
+    ) -> Result<ModerationQuarantineObjectRecord, ModerationQuarantineObjectError> {
+        let root = self
+            .moderation_quarantine_object_root
+            .as_ref()
+            .ok_or(ModerationQuarantineObjectError::StorageDisabled)?;
+        let key_path = self
+            .moderation_quarantine_object_key_path
+            .as_ref()
+            .ok_or(ModerationQuarantineObjectError::StorageDisabled)?;
+        let quarantine = self.moderation_quarantine_record_for_object(&input.quarantine_id)?;
+        let payload_digest = *blake3::hash(&input.payload).as_bytes();
+        if payload_digest != quarantine.subject_digest {
+            return Err(ModerationQuarantineObjectError::DigestMismatch {
+                quarantine_id_hex: hex::encode(input.quarantine_id),
+                expected_digest_hex: hex::encode(quarantine.subject_digest),
+                actual_digest_hex: hex::encode(payload_digest),
+            });
+        }
+
+        let local_key = load_or_create_moderation_quarantine_object_key(key_path)?;
+        let (record, envelope_bytes) = seal_moderation_quarantine_object(input, local_key)?;
+        let envelope_path = self.resolve_moderation_quarantine_object_path(root, &record)?;
+
+        {
+            let objects = self
+                .moderation_quarantine_objects
+                .read()
+                .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?;
+            if let Some(existing) = objects.get(&record.quarantine_id) {
+                if existing != record {
+                    return Err(ModerationQuarantineObjectError::ConflictingObject {
+                        quarantine_id_hex: hex::encode(record.quarantine_id),
+                    });
+                }
+                if envelope_path.exists() {
+                    return Ok(existing);
+                }
+            }
+        }
+
+        write_local_checkpoint_atomic(&envelope_path, &envelope_bytes).map_err(|err| {
+            ModerationQuarantineObjectError::Io {
+                path: envelope_path.display().to_string(),
+                message: err.to_string(),
+            }
+        })?;
+
+        let stored = {
+            let mut objects = self
+                .moderation_quarantine_objects
+                .write()
+                .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?;
+            objects.insert(record)?
+        };
+        self.save_moderation_quarantine_object_index_checkpoint_result()?;
+        Ok(stored)
+    }
+
+    /// Read and decrypt a local quarantine payload object.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage is disabled, the quarantine/object record is
+    /// missing, the envelope cannot be read or decoded, authentication fails,
+    /// or the decrypted payload no longer matches the quarantine record digest.
+    pub fn read_moderation_quarantine_object(
+        &self,
+        quarantine_id: [u8; 16],
+    ) -> Result<ModerationQuarantineObjectPayload, ModerationQuarantineObjectError> {
+        let root = self
+            .moderation_quarantine_object_root
+            .as_ref()
+            .ok_or(ModerationQuarantineObjectError::StorageDisabled)?;
+        let key_path = self
+            .moderation_quarantine_object_key_path
+            .as_ref()
+            .ok_or(ModerationQuarantineObjectError::StorageDisabled)?;
+        let quarantine = self.moderation_quarantine_record_for_object(&quarantine_id)?;
+        let record = self
+            .moderation_quarantine_objects
+            .read()
+            .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?
+            .get(&quarantine_id)
+            .ok_or_else(|| ModerationQuarantineObjectError::MissingObject {
+                quarantine_id_hex: hex::encode(quarantine_id),
+            })?;
+        let envelope_path = self.resolve_moderation_quarantine_object_path(root, &record)?;
+        let envelope_bytes =
+            fs::read(&envelope_path).map_err(|err| ModerationQuarantineObjectError::Io {
+                path: envelope_path.display().to_string(),
+                message: err.to_string(),
+            })?;
+        let envelope =
+            norito::decode_from_bytes::<ModerationQuarantineObjectEnvelopeV1>(&envelope_bytes)
+                .map_err(|err| ModerationQuarantineObjectError::Codec {
+                    message: err.to_string(),
+                })?;
+        let local_key = load_moderation_quarantine_object_key(key_path)?;
+        let payload = open_moderation_quarantine_object(envelope, &record, local_key)?;
+        if *blake3::hash(&payload).as_bytes() != quarantine.subject_digest {
+            return Err(ModerationQuarantineObjectError::AuthenticationFailed {
+                quarantine_id_hex: hex::encode(quarantine_id),
+            });
+        }
+        Ok(ModerationQuarantineObjectPayload { record, payload })
+    }
+
+    /// Return a deterministic snapshot of the local quarantine object index.
+    #[must_use]
+    pub fn moderation_quarantine_object_snapshot(&self) -> ModerationQuarantineObjectSnapshot {
+        self.moderation_quarantine_objects.read().map_or_else(
+            |_| ModerationQuarantineObjectSnapshot::default(),
+            |guard| guard.snapshot(),
+        )
+    }
+
+    /// Export local quarantine object index state, reporting lock failures.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the object index lock is poisoned.
+    pub fn export_moderation_quarantine_object_snapshot(
+        &self,
+    ) -> Result<ModerationQuarantineObjectSnapshot, ModerationQuarantineObjectError> {
+        Ok(self
+            .moderation_quarantine_objects
+            .read()
+            .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?
+            .snapshot())
+    }
+
+    /// Replace the local quarantine object index from a validated snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the snapshot is internally inconsistent, references
+    /// an unknown quarantine id, or the object index lock is poisoned.
+    pub fn restore_moderation_quarantine_object_snapshot(
+        &self,
+        snapshot: ModerationQuarantineObjectSnapshot,
+    ) -> Result<(), ModerationQuarantineObjectError> {
+        self.validate_moderation_quarantine_object_snapshot_refs(&snapshot)?;
+        self.moderation_quarantine_objects
+            .write()
+            .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?
+            .restore_snapshot(snapshot)?;
+        self.save_moderation_quarantine_object_index_checkpoint_result()
+    }
+
     /// Return local moderation ballot events after `since_sequence`, capped by `limit`.
     #[must_use]
     pub fn moderation_ballot_events_since(
@@ -2975,6 +3181,133 @@ impl NodeHandle {
                 "failed to persist SoraFS moderation screening checkpoint"
             );
         }
+    }
+
+    fn load_moderation_quarantine_object_index_checkpoint(&self) {
+        let Some(path) = self.moderation_quarantine_object_index_path.as_ref() else {
+            return;
+        };
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == ErrorKind::NotFound => return,
+            Err(err) => {
+                iroha_logger::warn!(
+                    %err,
+                    path = %path.display(),
+                    "failed to read SoraFS moderation quarantine object index"
+                );
+                return;
+            }
+        };
+        let snapshot = match norito::decode_from_bytes::<ModerationQuarantineObjectSnapshot>(&bytes)
+        {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                iroha_logger::warn!(
+                    %err,
+                    path = %path.display(),
+                    "failed to decode SoraFS moderation quarantine object index"
+                );
+                return;
+            }
+        };
+        let object_count = snapshot.objects.len();
+        if let Err(err) = self.validate_moderation_quarantine_object_snapshot_refs(&snapshot) {
+            iroha_logger::warn!(
+                %err,
+                path = %path.display(),
+                "rejected SoraFS moderation quarantine object index"
+            );
+            return;
+        }
+        match self
+            .moderation_quarantine_objects
+            .write()
+            .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)
+            .and_then(|mut objects| objects.restore_snapshot(snapshot))
+        {
+            Ok(()) => {
+                iroha_logger::info!(
+                    path = %path.display(),
+                    object_count,
+                    "restored SoraFS moderation quarantine object index"
+                );
+            }
+            Err(err) => {
+                iroha_logger::warn!(
+                    %err,
+                    path = %path.display(),
+                    "rejected SoraFS moderation quarantine object index"
+                );
+            }
+        }
+    }
+
+    fn save_moderation_quarantine_object_index_checkpoint_result(
+        &self,
+    ) -> Result<(), ModerationQuarantineObjectError> {
+        let Some(path) = self.moderation_quarantine_object_index_path.as_ref() else {
+            return Ok(());
+        };
+        let snapshot = self.export_moderation_quarantine_object_snapshot()?;
+        let bytes =
+            norito::to_bytes(&snapshot).map_err(|err| ModerationQuarantineObjectError::Codec {
+                message: err.to_string(),
+            })?;
+        write_local_checkpoint_atomic(path, &bytes).map_err(|err| {
+            ModerationQuarantineObjectError::Io {
+                path: path.display().to_string(),
+                message: err.to_string(),
+            }
+        })
+    }
+
+    fn moderation_quarantine_record_for_object(
+        &self,
+        quarantine_id: &[u8; 16],
+    ) -> Result<ModerationQuarantineRecord, ModerationQuarantineObjectError> {
+        self.moderation_screening
+            .read()
+            .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?
+            .quarantine_record(quarantine_id)
+            .ok_or_else(|| ModerationQuarantineObjectError::UnknownQuarantine {
+                quarantine_id_hex: hex::encode(quarantine_id),
+            })
+    }
+
+    fn validate_moderation_quarantine_object_snapshot_refs(
+        &self,
+        snapshot: &ModerationQuarantineObjectSnapshot,
+    ) -> Result<(), ModerationQuarantineObjectError> {
+        let screening = self
+            .moderation_screening
+            .read()
+            .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?;
+        for record in &snapshot.objects {
+            let quarantine = screening
+                .quarantine_record(&record.quarantine_id)
+                .ok_or_else(|| ModerationQuarantineObjectError::UnknownQuarantine {
+                    quarantine_id_hex: hex::encode(record.quarantine_id),
+                })?;
+            if quarantine.subject_digest != record.payload_digest {
+                return Err(ModerationQuarantineObjectError::DigestMismatch {
+                    quarantine_id_hex: hex::encode(record.quarantine_id),
+                    expected_digest_hex: hex::encode(quarantine.subject_digest),
+                    actual_digest_hex: hex::encode(record.payload_digest),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve_moderation_quarantine_object_path(
+        &self,
+        root: &Path,
+        record: &ModerationQuarantineObjectRecord,
+    ) -> Result<PathBuf, ModerationQuarantineObjectError> {
+        validate_relative_object_path(&record.envelope_path)
+            .map_err(|message| ModerationQuarantineObjectError::InvalidSnapshot { message })?;
+        Ok(root.join(&record.envelope_path))
     }
 
     fn load_orderbook_checkpoint(&self) {
@@ -5311,6 +5644,66 @@ impl NodeHandle {
     }
 }
 
+fn load_or_create_moderation_quarantine_object_key(
+    path: &Path,
+) -> Result<[u8; 32], ModerationQuarantineObjectError> {
+    match fs::read(path) {
+        Ok(bytes) => decode_moderation_quarantine_object_key(path, bytes),
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            create_moderation_quarantine_object_key(path)
+        }
+        Err(err) => Err(ModerationQuarantineObjectError::Io {
+            path: path.display().to_string(),
+            message: err.to_string(),
+        }),
+    }
+}
+
+fn load_moderation_quarantine_object_key(
+    path: &Path,
+) -> Result<[u8; 32], ModerationQuarantineObjectError> {
+    let bytes = fs::read(path).map_err(|err| ModerationQuarantineObjectError::Io {
+        path: path.display().to_string(),
+        message: err.to_string(),
+    })?;
+    decode_moderation_quarantine_object_key(path, bytes)
+}
+
+fn create_moderation_quarantine_object_key(
+    path: &Path,
+) -> Result<[u8; 32], ModerationQuarantineObjectError> {
+    let mut key = [0u8; 32];
+    let mut rng = OsRng;
+    rng.try_fill_bytes(&mut key)
+        .map_err(|err| ModerationQuarantineObjectError::Io {
+            path: path.display().to_string(),
+            message: format!("failed to generate local sealing key: {err}"),
+        })?;
+    write_local_checkpoint_atomic(path, &key).map_err(|err| {
+        ModerationQuarantineObjectError::Io {
+            path: path.display().to_string(),
+            message: err.to_string(),
+        }
+    })?;
+    Ok(key)
+}
+
+fn decode_moderation_quarantine_object_key(
+    path: &Path,
+    bytes: Vec<u8>,
+) -> Result<[u8; 32], ModerationQuarantineObjectError> {
+    let key: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        ModerationQuarantineObjectError::InvalidInput {
+            message: format!(
+                "local quarantine object key `{}` must be 32 bytes, found {}",
+                path.display(),
+                bytes.len()
+            ),
+        }
+    })?;
+    Ok(key)
+}
+
 fn orderbook_provider_escrow_runways(
     snapshot: &OrderbookSnapshot,
     now_unix: u64,
@@ -6210,6 +6603,148 @@ mod tests {
             .expect("export restored screening snapshot");
         assert_eq!(snapshot.screening_records, vec![outcome.record]);
         assert_eq!(snapshot.quarantine_records, vec![released]);
+    }
+
+    #[test]
+    fn moderation_quarantine_object_store_persists_encrypted_payload_and_reloads() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let payload = b"quarantine payload bytes retained for operator review".to_vec();
+        let mut screening = moderation_screening_input_fixture(
+            "cid:bafy-object-store",
+            ModerationScreeningVerdict::Quarantine,
+        );
+        screening.subject_digest = *blake3::hash(&payload).as_bytes();
+        let source = NodeHandle::new(cfg.clone());
+        let outcome = source
+            .record_moderation_screening_result(screening)
+            .expect("record quarantine result");
+        let quarantine_id = outcome.quarantine.expect("quarantine record").quarantine_id;
+
+        let record = source
+            .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
+                quarantine_id,
+                payload: payload.clone(),
+                captured_at_unix: 1_800_000_080,
+                content_type: Some("application/octet-stream".to_string()),
+                notes: Some(" sealed locally ".to_string()),
+            })
+            .expect("store quarantine object");
+        assert_eq!(record.payload_digest, *blake3::hash(&payload).as_bytes());
+        assert_eq!(record.payload_len, payload.len() as u64);
+        assert_eq!(record.notes.as_deref(), Some("sealed locally"));
+
+        let envelope_path =
+            moderation_quarantine_object_store_root(cfg.data_dir()).join(&record.envelope_path);
+        let envelope_bytes = fs::read(&envelope_path).expect("read encrypted envelope");
+        assert!(
+            !envelope_bytes
+                .windows(payload.len())
+                .any(|window| window == payload.as_slice()),
+            "encrypted object envelope must not contain plaintext payload bytes"
+        );
+
+        let decrypted = source
+            .read_moderation_quarantine_object(quarantine_id)
+            .expect("read quarantine object");
+        assert_eq!(decrypted.record, record);
+        assert_eq!(decrypted.payload, payload);
+
+        let index_path = moderation_quarantine_object_index_path(cfg.data_dir());
+        let index_bytes = fs::read(&index_path).expect("read object index");
+        let index: ModerationQuarantineObjectSnapshot =
+            norito::decode_from_bytes(&index_bytes).expect("decode object index");
+        assert_eq!(index.objects, vec![record.clone()]);
+
+        let restored = NodeHandle::new(cfg);
+        assert_eq!(
+            restored
+                .export_moderation_quarantine_object_snapshot()
+                .expect("export restored object index")
+                .objects,
+            vec![record.clone()]
+        );
+        let restored_payload = restored
+            .read_moderation_quarantine_object(quarantine_id)
+            .expect("read restored object");
+        assert_eq!(restored_payload.record, record);
+        assert_eq!(restored_payload.payload, payload);
+    }
+
+    #[test]
+    fn moderation_quarantine_object_store_rejects_digest_mismatch() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let expected_payload = b"expected quarantined bytes".to_vec();
+        let mut screening = moderation_screening_input_fixture(
+            "cid:bafy-object-digest",
+            ModerationScreeningVerdict::Quarantine,
+        );
+        screening.subject_digest = *blake3::hash(&expected_payload).as_bytes();
+        let handle = NodeHandle::new(cfg);
+        let outcome = handle
+            .record_moderation_screening_result(screening)
+            .expect("record quarantine result");
+        let quarantine_id = outcome.quarantine.expect("quarantine record").quarantine_id;
+
+        let err = handle
+            .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
+                quarantine_id,
+                payload: b"different bytes".to_vec(),
+                captured_at_unix: 1_800_000_081,
+                content_type: None,
+                notes: None,
+            })
+            .expect_err("digest mismatch rejected");
+        assert!(matches!(
+            err,
+            ModerationQuarantineObjectError::DigestMismatch { .. }
+        ));
+        assert!(
+            handle
+                .moderation_quarantine_object_snapshot()
+                .objects
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn moderation_quarantine_object_read_rejects_tampered_envelope() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let payload = b"tamper-detected quarantine payload".to_vec();
+        let mut screening = moderation_screening_input_fixture(
+            "cid:bafy-object-tamper",
+            ModerationScreeningVerdict::Quarantine,
+        );
+        screening.subject_digest = *blake3::hash(&payload).as_bytes();
+        let handle = NodeHandle::new(cfg.clone());
+        let outcome = handle
+            .record_moderation_screening_result(screening)
+            .expect("record quarantine result");
+        let quarantine_id = outcome.quarantine.expect("quarantine record").quarantine_id;
+        let record = handle
+            .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
+                quarantine_id,
+                payload,
+                captured_at_unix: 1_800_000_082,
+                content_type: None,
+                notes: None,
+            })
+            .expect("store quarantine object");
+        let envelope_path =
+            moderation_quarantine_object_store_root(cfg.data_dir()).join(&record.envelope_path);
+        let envelope_bytes = fs::read(&envelope_path).expect("read envelope");
+        let mut envelope: crate::moderation::ModerationQuarantineObjectEnvelopeV1 =
+            norito::decode_from_bytes(&envelope_bytes).expect("decode envelope");
+        envelope.ciphertext[0] ^= 0x01;
+        let tampered_bytes = norito::to_bytes(&envelope).expect("encode tampered envelope");
+        fs::write(&envelope_path, tampered_bytes).expect("write tampered envelope");
+
+        let err = handle
+            .read_moderation_quarantine_object(quarantine_id)
+            .expect_err("tampered envelope rejected");
+        assert!(matches!(
+            err,
+            ModerationQuarantineObjectError::AuthenticationFailed { .. }
+        ));
     }
 
     #[test]

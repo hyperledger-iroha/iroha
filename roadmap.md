@@ -12,9 +12,13 @@ and completed history lives in [`status.md`](./status.md).
 **Status:** active.
 
 - Kagemusha is now the only active chain implementation for offline payments.
-  The remaining cleanup is to remove or clearly archive legacy Offline Note
-  helper APIs from SDKs and bridge utilities that still expose historical
-  issue/audit/redeem builders.
+  Bridge, Swift, Kotlin/JVM, and Java Android payment builders, issuer clients,
+  or submitters for legacy Offline Note issue/audit/redeem paths now fail
+  closed; remaining cleanup is to archive historical model/codec helpers in the
+  mobile SDKs that are still needed only for compatibility fixtures.
+- Snapshot-backed node restarts now target hash-journal validation for
+  historical blocks, keeping full Kura block-body loads only for suffix replay
+  and the existing latest-tip rollback repair path.
 - Offline Note V2 device attestation now supports both the centralized
   middleware certificate flow and a receiptless on-chain registration flow. The
   middleware path preserves signed receipt admission while rejecting
@@ -62,7 +66,10 @@ and completed history lives in [`status.md`](./status.md).
   control-character, surrounding-whitespace, backslash, and parent-segment
   `--exit-file` path strings before staged-directory metadata is read, and the
   lineage staged runner and finalizer apply the same preflight to
-  `--elapsed-seconds-file`. Their
+  `--elapsed-seconds-file`. Explicit `--iroha-bin` overrides must be named
+  `iroha`, regular, executable, non-symlinked, under non-symlink ancestors, and
+  free of secret-looking, control-character, surrounding-whitespace, backslash,
+  or parent-segment path material before child PATH construction. Their
   regression coverage exercises direct `subprocess.Popen(...)` launch failures,
   not only injected runner failures, so temporary child logs are removed and
   conventional staged-runner errors are preserved when the real process-launch
@@ -169,7 +176,16 @@ and completed history lives in [`status.md`](./status.md).
   `--repo-root`, `--device-lab-root`, `--trusted-signer-public-key`, and
   `--summary-out`; summary-output alias-shape failures now stop before
   readiness rollup construction or trusted signer key loading, not only before
-  output parent creation. The readiness rollup also rejects noncanonical
+  output parent creation. The same readiness CLI now accepts repeated
+  `--device-lab-root` values so operators can keep per-device or per-family
+  capture roots separate; each root is preflighted and scanned independently,
+  while the release-facing summary keeps the existing redacted
+  `<local-device-lab-root>` label and duplicate slot/binding checks. The
+  release-bundle packager accepts the same repeated roots and binds signed
+  evidence plus slot artifacts to the unique supplied root that contains each
+  slot, while preserving manifest slot/path validation under
+  `artifacts/android/<root>/<slot>/...`. The
+  readiness rollup also rejects noncanonical
   lineage proof, compact key, and localnet lifecycle evidence filenames before
   evidence-file ancestor validation, file metadata reads, or JSON loading, and
   localnet lifecycle evidence now has its own explicit JSON size cap instead of
@@ -202,7 +218,18 @@ and completed history lives in [`status.md`](./status.md).
   The Android capture wrapper rejects padded components in repo, Kotlin, raw,
   slot, summary-output, and offline-wallet APK paths before ADB preflight,
   Gradle, instrumentation, raw pulls, signer loading, or capture summary
-  writes.
+  writes. The capture wrapper, raw Android puller, and signed-slot assembler
+  also treat `--*-timeout-seconds 0` as explicit no-timeout mode for
+  operator-controlled captures where subprocess interruption is forbidden,
+  while negative timeout values fail before any ADB, Gradle, instrumentation,
+  or helper command is invoked. The capture wrapper now also has an opt-in
+  `--adb-visibility-wait-seconds` mode that retries only the serial-scoped
+  `adb get-state` preflight and bounded `adb devices -l` diagnostic at a
+  positive `--adb-visibility-poll-interval-seconds`, so newly attached physical
+  devices can become visible without restarting ADB or managing other jobs.
+  `--serial auto` now uses that same non-disruptive `adb devices -l` surface
+  only when exactly one safe `device` row is visible before returning to the
+  serial-scoped preflight.
   The raw Android slot puller rejects padded components in output-root and
   summary-output paths before ADB queries, tar pulls, output-root creation, or
   summary writes.
@@ -281,12 +308,19 @@ and completed history lives in [`status.md`](./status.md).
   archive copies, copied projected token outputs, optional-height verifier
   routing, invalid-height preflight, invalid local archive rejection before
   native dispatch, malformed native projection output rejection, and non-boolean
-  verifier output rejection. Python compact-projection tests now also pin
-  permissive malformed-probe rejection, copied mutable archive dispatch,
-  unsafe native projection output rejection, and non-boolean at-height verifier
-  rejection. Swift compact-projection tests now pin empty, malformed, and
-  empty-payload bundle/compact-token/verifier-record preflight plus nil, empty,
-  empty-payload, unavailable, and rejected native projection result mapping.
+  verifier output rejection. Kotlin/JVM and Android Java parity guards now pin
+  block-scoped compact-projection bundle/verifier-record archive preflight rows
+  so broad recursive-compact archive validation cannot hide missing projection
+  fail-closed cases; their plain recursive compact verifier tests also require
+  the exact `compactTokenArchive must not be empty` marker for empty token
+  inputs. Python compact-projection tests now also pin
+  empty, malformed, empty-payload, and oversized bundle/compact-token/verifier
+  record preflight before native dispatch, permissive malformed-probe
+  rejection, copied mutable archive dispatch, unsafe native projection output
+  rejection, and non-boolean at-height verifier rejection. Swift
+  compact-projection tests now pin empty, malformed, and empty-payload
+  bundle/compact-token/verifier-record preflight plus nil, empty, empty-payload,
+  unavailable, and rejected native projection result mapping.
   Kotlin/JVM and Android Java compact-projection tests now pin invalid Norito
   and empty-payload native projection outputs through the shared
   `KagemushaCompactPaymentTokenProver.requireNativeOutput(...)` guard. Their
@@ -294,15 +328,18 @@ and completed history lives in [`status.md`](./status.md).
   prover/verifier gate, so `recursiveSpendCompactPaymentTokenFromBundle(...)`
   probes and requires only the ABI-7 compact projection symbol.
   The SDK parity guard and workflow-routed negative controls must continue pinning those surfaces. Production-readiness negative controls also mutate the
-  JavaScript, Python, Swift, Kotlin/JVM, Java Android, and C# default selectors,
-  so ABI-7 compact availability cannot silently become the production default
-  outside the Rust selector. The production-readiness guard self-audits its
+  Rust data-model, JavaScript, Python, Swift, Kotlin/JVM, and Java Android
+  selectors back to the legacy recursive-spend fallback while leaving C# as a
+  Windows-machine TODO, so ABI-7 compact availability remains the protected
+  production default for editable SDKs. The production-readiness guard self-audits its
   negative-control handler list against the PR workflow and workflow
   requirements, including duplicate detection, so new hardening modes are not
   left unrouted or repeated. Release-bundle `--verify-existing` must also keep
   nested lineage/compact artifact entries and lineage proof-log entries bound
   to freshly recomputed bundle-relative paths, SHA-256 digests, and byte sizes
   before generic manifest drift can be used as a fallback.
+  TODO(C# Windows): promote the C# preferred-mode selector to the same
+  ABI-7 compact-first policy and certify it on a Windows host.
 - Kagemusha JS and Python SDKs now expose deterministic ABI-7 Pallas
   open-envelope archive builders for current-hop record bundles and previous
   recursive proof bundles. Keep the Node/PyO3 native symbols, JS source/dist,
@@ -349,16 +386,58 @@ and completed history lives in [`status.md`](./status.md).
   with Windows host execution still tracked below.
   JavaScript, Python, Swift, Kotlin/JVM, Android Java, and C# now also reject
   raw accumulator `chain_id` string payloads and require the ABI fixture's
-  nested Norito string shape.
+  nested Norito string shape. Editable non-C# bundle decoders and the JS
+  package-dist path also reject empty or surrounding-whitespace nested
+  accumulator `chain_id` values before returning bundle summaries. Editable
+  non-C# bundle decoders now require nested accumulator `chain_id` values to
+  use the same portable registry syntax as verifier and circuit identifiers,
+  and Kotlin/JVM plus Android Java apply that rule to SDK-built
+  `VerifiedFoldHopEvidence` chain ids before record-bundle serialization.
+  Editable non-C# bundle decoders and the JS package-dist path also pin padded
+  and mixed-case accumulator-domain strings,
+  so SDKs cannot trim or case-normalize
+  `iroha:kagemusha:v1:recursive-spend-accumulator` before trusting bundle
+  summaries.
   JavaScript, Python, Swift, Kotlin/JVM, Android Java, and C# also include
   proof-box-only backend vectors that mutate nested `ProofBox.backend` to
   `halo2/kzg` while leaving verifier metadata unchanged, so decoders prove the
-  proof bytes container is checked directly.
+  proof bytes container is checked directly. Editable non-C# decoders and the
+  JavaScript package-dist path now also keep a combined adversarial vector
+  where nested `ProofBox.backend = halo2/kzg` and `ProofBox.bytes` is empty;
+  that vector must report `bundle.proof_backend` before the empty-proof-bytes
+  diagnostic, so corridor violations cannot be masked by secondary proof-box
+  shape failures. The same editable non-C# suites and JavaScript package-dist
+  path now pin that precedence for lineage-witness previous recursive proofs,
+  requiring `lineageWitness.previousRecursiveProofs.proof_backend` before the
+  empty previous-proof diagnostic.
+  The non-C# SDK gates now also consume regenerated ABI-7 recursive-spend
+  archive fixtures after aligning data-model/core reserved recursive verifier
+  evidence to `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4`.
+  The Python native generator derives `verify_result` from the same typed
+  verify request context used by the committed fixture, and the policy guard
+  pins the regenerated archive hashes plus an ABI-7 archive-drift negative
+  control.
   Those same SDK decoders now also include trailing-field vectors that append a
   valid extra Norito field to the nested `verifierKeyId`, recursive-proof, and
   `ProofBox` objects, proving surplus proof metadata is rejected before native
   dispatch. Bundle-summary decoders also pin trailing-field vectors for the
-  top-level bundle, accumulator summary, and nested current note.
+  top-level bundle, accumulator summary, and nested current note. Kotlin/JVM
+  and Android Java request-codec tests must keep tampered bundle archives
+  failing with the structured Norito `Checksum mismatch: expected 0x... got
+  0x...` diagnostic, not only a broad decode or checksum substring failure.
+  Kotlin/JVM and Android Java now also assert exact bundle-summary diagnostics
+  for current-note zero/aliasing/fixed32/numeric/trailing-field failures and
+  accumulator domain, chain-id shape, fixed-size asset/root, hop-count, and
+  trailing-field failures. The SDK parity guard mutates those exact markers in
+  the current-note, accumulator field-length, hop-count, chain-id shape, and
+  domain negative controls so broad message checks cannot return silently.
+  Kotlin/JVM and Android Java also assert exact proof-metadata diagnostics for
+  unsupported previous-proof circuit ids, verifier-key backend mismatches,
+  proof-box backend mismatches, empty recursive proof bytes, empty recursive
+  proof public inputs, zero public-input hashes, and mismatched public-input
+  hashes. The dedicated proof-metadata exact-diagnostic negative control
+  mutates each JVM/Android assertion independently so vector coverage cannot
+  mask a broad substring regression.
   JavaScript, Python, Swift, Kotlin/JVM, Android Java, and C# verify-result
   decoders now also pin an ABI-7 archive with an extra field after
   `witnessless_redeem_supported` and `lineage_witness_required`.
@@ -366,6 +445,27 @@ and completed history lives in [`status.md`](./status.md).
   decoders now also pin trailing-field vectors for the top-level witness,
   previous-recursive-proof sequence, individual previous proof, and nested
   previous-proof verifier-key-id.
+  JavaScript, Python, Swift, Kotlin/JVM, and Android Java redeem preflight now
+  also validates previous recursive proof contents before treating a lineage
+  witness as Reserved-lineage material: empty public inputs, zero or mismatched
+  public-input hashes, unsupported proof-box backends, and empty proof bytes
+  fail before native dispatch, with JavaScript package-dist coverage and a
+  lineage-witness negative control pinning the non-C# vectors.
+  Kotlin/JVM and Android Java tests now assert exact verify-result,
+  lineage-witness, and nested proof-metadata trailing-byte diagnostics for
+  those vectors; the SDK parity guard and trailing-field negative controls
+  mutate those exact assertion markers so broad substring checks cannot return
+  silently.
+  TODO(C# Windows): certify matching exact C# verify-result, lineage-witness,
+  and nested proof-metadata trailing-field diagnostics on a Windows host.
+  TODO(C# Windows): certify matching exact C# bundle-summary current-note and
+  accumulator diagnostics on a Windows host, including malformed numeric
+  payloads, fixed32 field lengths, domain/checksum failures, raw chain-id
+  payloads, hop-count bounds, and trailing-field rejections.
+  TODO(C# Windows): certify matching exact C# bundle proof-metadata diagnostics
+  on a Windows host, including unsupported circuit ids, verifier/proof-box
+  backend failures, empty proof bytes, empty proof public inputs, zero
+  public-input hashes, and public-input hash mismatches.
   JavaScript, Python, Swift, Kotlin/JVM, Android Java, and C# current-note
   amount decoders also pin a nested `Numeric` payload with a valid
   mantissa/scale plus an extra trailing field.
@@ -428,6 +528,15 @@ and completed history lives in [`status.md`](./status.md).
   current-hop Pallas open-envelope vectors to contain exactly one valid envelope
   per hop, and require Reserved-lineage append `previous_proof_open_envelopes`
   to contain exactly one bounded Pallas envelope before native dispatch.
+  Those preflights also reject stale fixed-array encodings, trailing bytes,
+  declared option lengths that exceed the supplied payload, and unknown option
+  tags for Pallas `vk_commitment`,
+  `public_inputs_schema_hash`, and `domain_tag` `Option<[u8; 32]>` bodies; the
+  accepted shape is tag `1` plus the raw 32-byte value inside the option
+  payload, while tag `0` remains the required-field diagnostic. JavaScript
+  source/package-dist, Python, Swift, Kotlin/JVM, and Android Java vectors are
+  pinned by the SDK parity guard and the non-C# Pallas metadata option-shape
+  negative control.
   JavaScript source/dist, Python, Swift, Kotlin/JVM, and Android Java append
   constructors now also reject supplied previous-proof openings unless the
   selected output is the Reserved-lineage append circuit, and reject
@@ -445,9 +554,19 @@ and completed history lives in [`status.md`](./status.md).
   matching semantic lineage-witness summary negatives on a Windows host.
   TODO(C# Windows): add and certify the matching C# typed init/append Pallas
   open-envelope vector preflight on a Windows host, including wrong schema,
-  count mismatch, missing metadata, previous-proof count negatives, and
-  misplaced previous-proof opening and previous-lineage-record rejection on
-  aggregation append outputs.
+  count mismatch, missing metadata, stale fixed-array metadata, trailing
+  metadata-option bytes, declared metadata-option lengths that exceed the
+  supplied payload, unknown metadata-option tags, previous-proof count
+  negatives, and misplaced previous-proof opening and previous-lineage-record
+  rejection on aggregation append outputs.
+  Kotlin/JVM and Android Java typed init/verifier request constructors now also
+  assert exact diagnostics for missing init lineage verifier keys,
+  wrong-schema record bundles, and wrong-schema verifier-record archives before
+  native dispatch; the SDK parity guard mutates those exact assertion markers
+  under the init-lineage negative control.
+  TODO(C# Windows): confirm the C# typed init/verifier request path carries the
+  same exact missing-lineage-key and wrong-schema archive diagnostics on a
+  Windows host.
   Init and lineage-append requests must also keep lineage verifier/proving-key
   artifacts bound to the expected one-hop or append circuit and verifier-key
   commitment before serialization; wallet-facing constructors should prefer
@@ -470,6 +589,19 @@ and completed history lives in [`status.md`](./status.md).
   material before validating the nested `lineageProvingKeyArchive`, so
   malformed proving-key bytes on aggregation append outputs cannot mask the
   selection error.
+  Kotlin/JVM and Android Java typed request diagnostics now pin exact
+  top-level messages for current-hop Pallas count mismatches, raw init/append
+  lineage key artifact mismatches, wrong-profile typed artifacts, malformed
+  verifier keys, forged proving-key archives, auto-Pallas helper wrong-profile
+  typed artifacts, and missing append `previousProofOpenEnvelopes`. The SDK
+  parity guard tracks those exact lineage-key assertion markers, and the
+  init/init-auto-Pallas/append lineage-key negative controls mutate them so
+  substring-only diagnostics cannot return silently.
+  TODO(C# Windows): add and certify the matching exact C# diagnostics for
+  init/append raw lineage-key mismatches, wrong-profile typed artifacts,
+  malformed verifier/proving-key inputs, auto-Pallas helper wrong-profile
+  artifacts, current-hop Pallas count mismatches, and missing Reserved-lineage
+  append previous-proof openings on a Windows host.
   Swift, Kotlin/JVM, and Android Java append constructors now also reject an
   unselectable `outputProofCircuitId` before applying optional lineage-key
   material selection, matching JavaScript and Python constructor ordering. The
@@ -506,7 +638,11 @@ and completed history lives in [`status.md`](./status.md).
   payloads, and trailing bytes reject before public-input projection.
   Kotlin/JVM and Android Java hop-evidence test markers for those exact shape,
   root-transition, continuity, and chain/asset binding failures are now pinned
-  by the SDK parity guard and routed through the PR negative-control workflow.
+  by exact indexed diagnostics (`hop 0` / `hop 1`) in the SDK parity guard and
+  routed through the PR negative-control workflow.
+  TODO(C# Windows): certify matching C# exact indexed hop-evidence diagnostics
+  for transfer public-input shape, same-root rejection, multi-hop continuity,
+  chain-id mismatch, and asset mismatch on a Windows host.
 - Kagemusha Offline/Offline V2 readiness parsers must treat the legacy
   `offline_kagemusha_abi7*` key family and the
   `offline_kagemusha_recursive_compact_*` key family as aliases for the same
@@ -517,7 +653,8 @@ and completed history lives in [`status.md`](./status.md).
   JSON booleans, strings as non-empty unpadded strings, and bridge ABI values as
   exact integers or exact integer strings. The focused JVM SDK runner and SDK
   parity guard now pin the Kotlin/JVM Offline and Offline V2 readiness client
-  tests plus the Android Java Offline Torii client and parser harness tests.
+  tests plus the Android Java Offline Torii client and parser harness tests,
+  including exact conflict/type diagnostics for malformed alias bodies.
 - Confidential-v2 JVM/Android proof assembly now has typed transfer and
   unshield witness/request codecs for the production native bridge. Keep wallet
   integrations on these builders instead of raw witness bytes so canonical
@@ -526,8 +663,14 @@ and completed history lives in [`status.md`](./status.md).
   references, public-input schema constants, and the native Norito witness
   alignment padding remain pinned by SDK and Rust golden-vector tests.
   The SDK parity guard now pins the Kotlin/JVM and Android Java witness codec
-  sources plus the typed native-ready request tests, with a workflow-routed
-  negative control for confidential witness codec drift. The mobile harnesses
+  sources plus the typed native-ready request tests, with exact diagnostics for
+  verifier-ref mismatches, empty proofs, missing transfer outputs, transfer
+  outputs on unshield witnesses, duplicate input leaves, and out-of-range
+  leaves, plus native request-archive errors for empty inputs, oversize inputs,
+  and empty privacy request payloads, and privacy proof-request component errors
+  for null algorithm ids, empty public inputs, and oversized witness bytes. Its
+  workflow-routed negative control mutates those diagnostic markers so softened
+  witness-builder and proof-request assertions are caught. The mobile harnesses
   also exercise the unshield verify request builder, empty unshield-proof
   rejection, and transfer/unshield verifier-ref separation, and the privacy JVM
   runner compiles these Android privacy harnesses from the Android plus Norito
@@ -569,6 +712,19 @@ and completed history lives in [`status.md`](./status.md).
   - Confirm the Windows runner log prints `connect_norito_bridge native bridge:`
     and `connect_norito_bridge native bridge sha256:` for the freshly built
     `connect_norito_bridge.dll` before the P/Invoke tests start.
+  - Update and certify the C# shared ABI-6 archive fixture assertions for the
+    regenerated redeem request hash
+    `4fbfbe8b05b86c430a3743b0da68b819afca8c666357ef7b2e171b837f97f415` and
+    redeem instruction hash
+    `31cd92a5a2f8894634c531830621604937d4631f5f08b58cba01a45dc26e9eba`
+    instead of the legacy hashes, then rerun the C# SDK gate on Windows.
+  - Update and certify the C# shared ABI-7 archive fixture assertions for the
+    regenerated `64x4` profile hashes:
+    `append_bundle=b1d6fe2498b66a98df3021be6e6614a75c6305f7d8f9e802799931c0dcfd2b6f`,
+    `verify_request=fceab0847a6dfd51049a512a3eab0baf9efb0ac21ae17669f85fb01d1dbdfccf`,
+    `verify_result=67eb9b1f7c89bd842dbfb769bb802c60464fba510b4db0ac4c83bcfbd5626d15`,
+    `redeem_request=5a6bbbb16a4559f1bd96aa8c47ddd1203c3b56cf5f763ff19b8ee764e1eb32c8`, and
+    `redeem_instruction=8fc0d6ae8cc2a763e9813bd5a73a0495596577163dd1bf82597c4ed9c44e2589`.
   - Confirm the pass includes `KagemushaRecursiveSpendNativeTests`,
     `PrivacyNativeTests`, `TransactionBuilderTests`, `CanonicalRequestTests`,
     `ToriiClientTests`, `SignedQueryBuilderTests`, and
@@ -590,6 +746,13 @@ and completed history lives in [`status.md`](./status.md).
     accumulator `hop_count` vectors, missing recursive-proof public inputs,
     all-zero 32-byte public-input hashes, and public-input hash mismatches all
     reject before native dispatch.
+  - Add the C# SDK README/native-material alias parity follow-up on the Windows
+    machine: document generic proof-state, recursive/lineage proof-state,
+    aggregation-transcript, fixed-window table schedule/shared-manifest/base,
+    verifier-witness batch, transition-profile binding, append-opening
+    preflight, recursive verifier scalar-projection, and previous/resulting
+    accumulator aliases as native-owned C# material, then add the matching C#
+    branch to the SDK README native-material negative control.
   - Confirm the Windows C# pass includes the managed bundle-summary decoder
     vector that replaces accumulator field index 1 with a raw `chain_id`
     string payload and rejects it before native dispatch.
@@ -626,6 +789,11 @@ and completed history lives in [`status.md`](./status.md).
     negatives already covered on macOS: a 31-byte present change commitment and
     an all-zero 32-byte present change commitment both reject before P/Invoke
     dispatch or transaction-builder mutation.
+  - Confirm the Windows C# pass includes typed redeem `changeOutput`
+    reserved-collision negatives already covered on macOS for non-C# SDKs:
+    reusing the current note commitment, the current note spend nullifier, or
+    a top-up anchor nullifier must reject before P/Invoke dispatch or
+    transaction-builder mutation.
   - Confirm the C# ABI-7 Pallas open-envelope archive builders on Windows,
     matching the source-level wrappers and macOS-focused tests for current-hop
     record bundles and previous recursive proof bundles. The Windows pass should
@@ -764,8 +932,10 @@ and completed history lives in [`status.md`](./status.md).
   Android Java confidential witness codecs, typed witness-builder tests, and a
   workflow-routed negative control so transfer/unshield request builders,
   verifier references, public-input schemas, tree bounds, duplicate-input
-  guards, unshield verify requests, and public amount/change-output shape
-  cannot drift outside mobile CI. The privacy JVM direct `javac` harness now
+  guards, unshield verify requests, public amount/change-output shape, and the
+  exact negative-test diagnostics for ambiguous witness shapes and invalid
+  request archives/proof-request components cannot drift outside mobile CI. The
+  privacy JVM direct `javac` harness now
   compiles Android privacy tests through the Android main/test and Norito
   sourcepath, so typed witness-codec dependencies remain covered by the focused
   JVM/Android privacy runner.
@@ -818,7 +988,11 @@ and completed history lives in [`status.md`](./status.md).
   native bridge C/JNI builders for both archive shapes, release-package
   validation with a rebuilt `dist/NoritoBridge.xcframework` and
   `KAGEMUSHA_RECURSIVE_SPEND_SDK_PARITY_CHECK_DIST=1`, malformed/trailing
-  archive rejection, and nonnegative block-height guards
+  archive rejection, field-specific empty-archive diagnostics for
+  `requestArchive`, `profileArchive`, `bundleArchive`, and
+  `previousWitnessArchive`, recursive compact/projection empty diagnostics for
+  key-artifact, compact-token, verifier-key, and verifier-record archives, and
+  nonnegative block-height guards
   pinned in the focused JVM SDK runner and parity inventory. Kotlin/JVM and
   Android Java request tests must also keep malformed redeem `publicAmount`
   values and malformed spendable-note `amount` values rejected at construction
@@ -869,6 +1043,14 @@ and completed history lives in [`status.md`](./status.md).
   `--localnet-lifecycle-evidence
   artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json` explicitly so
   the localnet lifecycle gate is not hidden behind tooling defaults.
+- Current Kagemusha live production readiness is narrowed to evidence
+  collection: the current best rollup accepts the 4-peer production-localnet
+  lifecycle evidence and the current-key Pixel 6 multid2d Android slot, while
+  final release remains blocked on a completed Reserved-lineage proof evidence
+  packet, completed ABI-7 recursive compact key evidence, and physical Android
+  matrix coverage for Pixel 7, Pixel 8, Pixel Fold/Tablet, Samsung Galaxy S23,
+  and Samsung Galaxy S24. Keep further lineage and compact retries deferred
+  while live cargo/rustc or compact keygen jobs are still consuming the host.
 - Kagemusha JavaScript SDK validation must keep the focused Node 20 runner
   aligned with the parity inventory by executing the Kagemusha recursive spend,
   account-address exactness, Offline Cash issuer-key configuration snapshot,
@@ -909,6 +1091,11 @@ and completed history lives in [`status.md`](./status.md).
   must pin numeric negative zero as the exact `    -0,` array entry so the
   string `"-0"` vector cannot mask removal of the numeric `-0` adversarial
   case.
+  JavaScript
+  package-dist recursive-spend bundle tests must mirror source accumulator
+  field-length rejection for short and long asset, initial-root, and final-root
+  payloads before native dispatch, with the SDK accumulator field-length
+  negative control reporting package-dist drift separately from source drift.
   JavaScript
   package declarations must also keep recursive spend accumulator digests
   native-owned by denying prefixed declaration aliases such as
@@ -956,9 +1143,20 @@ and completed history lives in [`status.md`](./status.md).
   accumulator state directly. Its
   public-input negative-control fixtures must inject bare proof-chain,
   append-accumulator, recursive-accumulator, generic proof-state, and generic
-  accumulator-state aliases across non-C# SDK surfaces and TypeScript
-  declarations, so the scanner proves those material families stay
-  native-owned outside the package-declaration test too. The proof-chain,
+  accumulator-state aliases, plus aggregation-transcript, fixed-window table
+  schedule/manifest/base, verifier-witness batch, transition-profile binding,
+  append-opening preflight, recursive verifier scalar-projection, and
+  previous/resulting accumulator material aliases across non-C# SDK surfaces
+  and TypeScript declarations, so the scanner proves those material families
+  stay native-owned outside the package-declaration test too. Non-C# SDK
+  READMEs must document the same native-owned alias boundary, with a dedicated
+  negative control that mutates the Swift, Kotlin/JVM, Android Java,
+  JavaScript/TypeScript, and Python docs while leaving C# for the Windows pass.
+  That control must require exact diagnostics for every alias marker in every
+  mutated README so a single generic proof-state marker cannot mask narrower
+  documentation drift, and it must separately pin each SDK's "not request
+  fields" wording.
+  The proof-chain,
   digest, material, and
   boundary-digest negative controls must keep
   secondary scanned surfaces covered too, including Swift `NativeBridge`,
@@ -980,7 +1178,11 @@ and completed history lives in [`status.md`](./status.md).
   The GitHub JS SDK job must build the local native host with
   `npm run build:native --prefix javascript/iroha_js` after dependency install
   and before the focused runner, so clean workers do not depend on stale or
-  absent `iroha_js_host.node` artifacts. JavaScript package-dist recursive
+  absent `iroha_js_host.node` artifacts. The focused local JS SDK runner must
+  also checksum-verify an explicit `IROHA_JS_NATIVE_DIR` without fallback, and
+  when no override is supplied it must rebuild/copy/sign into a temporary
+  verified native directory instead of trusting stale ignored package artifacts.
+  JavaScript package-dist recursive
   spend availability tests must also reject every partial ABI-6 native surface,
   including missing transition-profile, append-boundary, lineage-witness,
   verify, and redeem helpers, and must reject broken ABI-version probes or
@@ -1152,6 +1354,52 @@ and completed history lives in [`status.md`](./status.md).
   mutate every one of those Kotlin/JVM and Android Java vector families and
   require exact missing-vector diagnostics for each SDK surface, not only the
   broad compact-projection vector labels.
+  Kotlin/JVM and Android Java spendable-note constructor tests must also pin
+  exact note-commitment and spend-nullifier diagnostics for short digests,
+  all-zero digests, and repeated commitment/nullifier material before the
+  amount-vector loop. The JVM note amount negative control mutates those digest
+  markers alongside the noncanonical amount vectors.
+  The same Kotlin/JVM and Android Java amount/publicAmount vectors must pin the
+  exact field-specific diagnostics for decimal syntax, zero, noncanonical
+  leading-zero forms, and u128 overflow, rather than only asserting that request
+  construction fails.
+  TODO(C# Windows): confirm the C# spendable-note request path reports the same
+  exact digest length, zero-value, and repeated-material diagnostics on a
+  Windows host, and confirm its amount/publicAmount invalid-value vectors carry
+  the same field-specific diagnostics.
+  Kotlin/JVM and Android Java typed verify request tests must also pin the
+  exact `blockHeight must be non-negative` diagnostic for signed negative
+  `Long` inputs, with the verify-lineage preflight negative control mutating
+  those assertion markers independently from the lineage-record cases. The
+  same tests must keep `verify_result` archives rejected as invalid bundle
+  archives through the exact `bundle must be a valid ... Norito archive`
+  diagnostic for both verify and redeem request construction. Redeem request
+  schema negatives must also reach and pin the exact `redeemProof must be a
+  valid ... Norito archive` and `lineageWitness must be a valid ... Norito
+  archive` diagnostics, instead of being satisfied by earlier missing-witness
+  failures.
+  Corrupted Pallas open-envelope archives in Kotlin/JVM and Android Java typed
+  init requests must keep the structured checksum diagnostic
+  `Checksum mismatch: expected 0x... got 0x...`, pinned by the verify-lineage
+  preflight negative control. Tampered recursive-spend bundle archives in those
+  SDKs must keep the same structured expected/got checksum shape, pinned by the
+  accumulator-domain guard and negative control.
+  Kotlin/JVM and Android Java typed request malformed Pallas archive tables must
+  also assert exact top-level diagnostics for init `pallasOpenEnvelopes` and
+  append `previousProofOpenEnvelopes` wrong schema, envelope-count mismatch,
+  invalid curve id, missing metadata, trailing bytes, and truncated payload
+  failures; the verify-lineage and append previous-proof-opening negative
+  controls mutate those exact table markers.
+  TODO(C# Windows): confirm the C# typed init/Pallas archive path reports the
+  same structured checksum and malformed archive diagnostics on a Windows host.
+  Kotlin/JVM and Android Java proof-output-only and evidence-builder tests must
+  also keep exact diagnostics for empty hop lists, proof-only recursive spend
+  helper rejection, rejected privacy build results, inactive unshield verifier
+  records, and unshield proofs used as transfer hops; the JVM Pallas-builder
+  negative control mutates those markers alongside the existing input guard.
+  TODO(C# Windows): confirm the C# proof-output/evidence-helper path carries
+  the same rejected privacy result and inactive verifier-record diagnostics on
+  a Windows host.
 - Kagemusha SDK README parity must keep the ABI-7 Pallas open-envelope builder
   helpers documented across Swift, Kotlin/JVM, Android Java, JavaScript/Node,
   Python, and C#. Those READMEs should name the current-hop record-bundle
@@ -1167,9 +1415,14 @@ and completed history lives in [`status.md`](./status.md).
   Swift and JavaScript builder input coverage to stay present. JavaScript and
   Python native-output regressions now also cover both builder helpers rejecting
   invalid archives and empty Norito payloads from native hosts, Java
-  Android/Kotlin tests pin the matching builder-specific native-output labels,
+  Android/Kotlin tests pin the matching builder-specific native-output labels
+  with exact diagnostics for missing, empty, oversized, malformed, and
+  empty-payload native outputs,
   and C# tests pin the same native-output labels through the shared P/Invoke
   output reader before the Windows host-certification follow-up above.
+  TODO(C# Windows): certify matching exact C# native-output diagnostics on a
+  Windows host for recursive-spend redeem output, Pallas open-envelope builder
+  output, previous-proof builder output, and compact projection output.
 - Kagemusha Swift SDK validation must keep the macOS parse runner aligned with
   the parity inventory by parsing every Kagemusha/Offline Note source and test
   file tracked for Swift, including canonical request auth helpers, recursive
@@ -1440,12 +1693,13 @@ and completed history lives in [`status.md`](./status.md).
   rejected ADB commands report that they `must not manage other running jobs`.
   Standalone ADB `getprop` reads also use
   `errors = _command_disruption_errors(command, f"ADB getprop {prop}")` before
-  execution, pin `DEFAULT_ADB_TIMEOUT_SECONDS = 120`, pass
-  `timeout=timeout_seconds`, report
+  execution, pin `DEFAULT_ADB_TIMEOUT_SECONDS = 120`, normalize timeouts through
+  `def _timeout_arg(timeout_seconds: int) -> int | None:`, pass
+  `timeout=_timeout_arg(timeout_seconds)`, report
   `ADB getprop {prop} timed out after {timeout_seconds} seconds`, route the
   assembler call through `adb_timeout_seconds=args.adb_timeout_seconds`, expose
-  `--adb-timeout-seconds`, and reject nonpositive values with
-  `--adb-timeout-seconds must be positive`. Its raw-summary,
+  `--adb-timeout-seconds`, accept zero as no-timeout mode, and reject negative
+  values with `--adb-timeout-seconds must be non-negative`. Its raw-summary,
   attestation-result, and challenge reads are bounded
   and opened-file identity-bound so local evidence swaps fail before report
   rendering. It independently requires raw `attestation/result.json` to
@@ -1784,7 +2038,13 @@ and completed history lives in [`status.md`](./status.md).
   The matrix summary also records `covered_d2d_payment_transports_by_family`
   and `missing_d2d_payment_transport_pairs`, and readiness blocks unless every
   standard Android device family has signed evidence for every required
-  offline D2D transport.
+  offline D2D transport. Release-bundle summary-input and manifest validators
+  now recompute the missing family/transport pair list from the covered-by-family
+  map and reject any forged or stale complement, so aggregate transport coverage
+  and the published per-family blocker list cannot drift independently. The
+  standalone Android scanner has a matching regression for the case where every
+  required transport is covered globally but still missing from at least one
+  standard device family.
   The direct scanner summary plus release-bundle summary, manifest-shape, and
   slot-artifact inventory path checks now mirror scanner artifact roots:
   release-bundle slot artifact paths must stay under
@@ -1811,6 +2071,12 @@ and completed history lives in [`status.md`](./status.md).
   `lineage-proof-staged-run.json` so the finalizer can bind the canonical
   command, exit code, elapsed seconds, proof-log filename, proof-log byte
   count, and init/append lineage-key-artifact log byte counts before publishing.
+  The lineage and compact-key staged runners now accept a validated
+  `--iroha-bin <path/to/iroha>` override, placing that regular, non-symlink
+  executable named `iroha` under non-symlink ancestors first on the child PATH
+  while preserving canonical recorded commands, so stale repo-local
+  `target/release/iroha` binaries cannot shadow a freshly built proof/keygen
+  binary during replacement runs.
   The readiness rollup now also rejects lineage and compact-key evidence
   `generated_at_utc` values with surrounding whitespace or control characters
   before timestamp parsing or freshness-window checks, and rejects canonical
@@ -2088,8 +2354,9 @@ and completed history lives in [`status.md`](./status.md).
   The runner can now resume at init/append key-artifact phase boundaries:
   `--resume-key-artifacts` reuses only phases whose artifacts, log, canonical
   zero-exit execution report, and log byte count validate, then reruns missing
-  or failed regular phase outputs while still rejecting symlinked or hardlinked
-  staged material. `--resume-key-artifacts` is mutually exclusive with
+  or failed regular phase outputs, including signal-style failures such as
+  `exit_code = -9`, while still rejecting symlinked or hardlinked staged
+  material. `--resume-key-artifacts` is mutually exclusive with
   `--replace`, so a caller cannot mix selective phase-boundary resume with full
   staged-output replacement.
   Staged metadata writes are now self-verifying: after the atomic rename the
@@ -2121,7 +2388,10 @@ and completed history lives in [`status.md`](./status.md).
   is now implemented for the one-hop and append circuits, the processed
   verifier-key bytes have been checked against the full circuits in explicit
   expensive equivalence tests, and the release CLI has been rebuilt with that
-  path. A replacement production-width staged run is in progress; the remaining
+  path. The 2026-06-25 stale staged attempts logged `windows=255 window_bits=1`;
+  the current replacement run must use a freshly rebuilt `target/release/iroha`
+  from the `64x4` profile source, passed explicitly with `--iroha-bin`, before
+  its evidence can satisfy the release gate. A replacement production-width staged run is in progress; the remaining
   lineage release blocker is successful init/append key-artifact generation plus
   the heavy ignored proof run, followed by finalization into
   `artifacts/kagemusha`.
@@ -2138,7 +2408,8 @@ and completed history lives in [`status.md`](./status.md).
   staged execution-report and run-report command fields now reject surrounding
   whitespace, control characters, and secret-looking material before canonical
   command matching. Failed or malformed regular
-  staged outputs are replaced and rerun, while unsafe aliases still fail closed.
+  staged outputs, including signal-style `exit_code = -9` attempts, are
+  replaced and rerun, while unsafe aliases still fail closed.
   `--resume-keygen` is mutually exclusive with `--replace`, so operators must
   choose validated resume or full staged-output replacement before cleanup.
   The runner also identity-binds the generator-log parent sync after log
@@ -2157,12 +2428,18 @@ and completed history lives in [`status.md`](./status.md).
   staging directory identity before cleanup.
   The previous staged production-width keygen attempt exited nonzero (`143`)
   after about 9h26m with no artifacts. A detached replacement retry is in
-  progress; the remaining compact-key release blocker is a successful rerun that
+  progress, but 2026-06-25 stale logs showed a `255x1` binary on some attempts;
+  the current replacement must use the freshly rebuilt `target/release/iroha`
+  `64x4` binary through `--iroha-bin`. The remaining compact-key release blocker is a successful rerun that
   produces artifacts and is finalized into `artifacts/kagemusha`.
 - Continue reducing local/CI compile memory after the WSL cargo-test hardening
   and Kagemusha record-bound compact preflight isolation: plain default tests no
   longer run the heavy ABI-7 recursive compact record-bound Pallas proof matrix
-  or the oversized private Sumeragi main-loop unit-test harness.
+  or the oversized private Sumeragi main-loop unit-test harness. The native
+  recursive compact FFI adversarial test also keeps minimum-sized random
+  invalid-proof backend verification behind an explicit ignored test, with SDK
+  parity guarding that the backend-heavy soft-invalid check cannot drift back
+  into the default bridge test.
   `iroha_data_model` still has a single stripped-debuginfo compile phase that
   can peak around `10.5 GiB` RSS, so future work should split or simplify that
   compile surface rather than reintroducing broad Cargo parallelism or
@@ -2632,9 +2909,10 @@ and completed history lives in [`status.md`](./status.md).
   `xtask sorafs-gateway-fixtures --verify` validates the envelope JSON shape,
   signer public key, manifest digest, chunk-plan digest, profile aliases, and
   signature, and the published fixture metadata now pins the envelope digest in
-  the aggregate bundle hash. The prior fixture-envelope TODO is closed; future
-  work should replace or add release governance key material only through the
-  normal signed release process, not by reintroducing placeholder signatures.
+  the aggregate bundle hash. The prior fixture-envelope placeholder is closed;
+  future work should replace or add release governance key material only through
+  the normal signed release process, not by reintroducing placeholder
+  signatures.
 - SoraFS SF-11 reference validator now has provider-advert,
   provider-admission-envelope, replication-order, orderbook payload, PoR
   challenge/proof, PDP commitment/challenge/proof, PoTR receipt, repair
@@ -2747,8 +3025,9 @@ and completed history lives in [`status.md`](./status.md).
   (`dashboards/grafana/sorafs_provider_admission.json`) plus Prometheus alert
   rules and test vectors for missing admission envelopes, stale admission
   material, policy-reject spikes, and downgrade warnings. The SF-2b dashboard
-  and alert TODO is closed; keep new admission failure reasons mirrored in the
-  dashboard variables, alert tests, and rollout docs when Torii adds labels.
+  and alert placeholder is closed; keep new admission failure reasons mirrored
+  in the dashboard variables, alert tests, and rollout docs when Torii adds
+  labels.
 - SoraFS SF-2d provider advert integration docs now reflect the implemented
   range-fetch state: provider discovery exposes parsed range metadata, CAR and
   chunk range endpoints enforce stream-token validation plus
@@ -2820,8 +3099,46 @@ and completed history lives in [`status.md`](./status.md).
   snapshot, rejects conflicting manifest ids, keys corpus entries by canonical
   Norito BLAKE3 digest, persists the snapshot as a Norito checkpoint when
   storage is enabled, reloads it on node startup, and exposes canonical-
-  authenticated Torii admission plus bounded readback endpoints under
-  `/v1/sorafs/moderation/model-registry`. `sorafs_node` also persists
+	  authenticated Torii admission plus bounded readback endpoints under
+	  `/v1/sorafs/moderation/model-registry`. `iroha sorafs moderation registry
+	  submit-repro|submit-corpus|list` now wraps local model-registry
+	  admission/readback, validates JSON or Norito manifest inputs, and sends
+	  canonical Norito manifest bytes through signed Torii requests.
+	  `sorafs_cli moderation registry-serve` now exposes a standalone persistent
+	  HTTP model-registry service backed by an atomic Norito checkpoint, with
+	  status, bounded snapshot readback, and base64 canonical Norito
+	  repro/corpus admission endpoints that reuse the data-model validators and
+	  reject conflicting manifest ids.
+  `iroha::client` and `iroha sorafs moderation ballots
+  list|get|events|commit|reveal|tally` now wrap the local moderation ballot
+  readback and signed committee lifecycle endpoints, validating JSON or Norito
+  commit/reveal payloads and submitting canonical Norito bytes to Torii.
+  `iroha::client` and `iroha sorafs transparency
+  cycles|explorer|tokens|source-entry` now wrap the local transparency
+  readback and signed source-entry ingest surface so operators can inspect
+  published cycles, entry proofs, explorer snapshots, proof-token issuance
+  indexes, and submit typed source-entry JSON for later publication.
+  `iroha::client` and `iroha sorafs appeals pricing
+  config|status|quote` plus `iroha sorafs appeals finance` now wrap the local
+  appeal pricing, asset-lock deposit, settlement, reconciliation, and finance
+  report readback endpoints. Pricing quote submission validates and
+  canonicalizes JSON; finance mutation and deposit readback calls use canonical
+  Iroha request signing; deposit get normalizes 32-byte escrow ids; finance
+  report, weekly-rollup, and settlement-receipt readbacks support bounded
+  `limit` queries. Torii, `iroha::client`, and `iroha sorafs moderation
+  quarantine appeal-handoff` now also expose local reviewed-quarantine appeal
+  handoff: pending/released records fail closed, reviewed records produce a
+  baseline pricing quote, quote-bound deposit request, and native
+  `OpenAssetLock` instruction for payer signing. Torii, `iroha::client`, and
+  `iroha sorafs moderation quarantine appeal-ballot` now also verify confirmed
+  handoff-bound appeal deposits and announce the existing local moderation
+  ballot, failing closed when the quarantine record is not reviewed or the
+  deposit evidence omits the deterministic quarantine handoff hash.
+  `sorafs_cli moderation run-local`
+  now validates governance-signed reproducibility manifests, reads payload
+  bytes, derives deterministic local model scores from the manifest
+  seed/material and payload digest, and emits Torii-compatible
+  screening-result JSON for local admission fixtures. `sorafs_node` also persists
   deterministic local screening-result records and pending local quarantine
   records under `moderation-screening/screening-snapshot.to`; `quarantine` and
   `escalate` verdicts enqueue pending review records, and Torii exposes
@@ -2829,15 +3146,155 @@ and completed history lives in [`status.md`](./status.md).
   bounded readback through `GET /v1/sorafs/moderation/screening-results` and
   `GET /v1/sorafs/moderation/quarantine`. The local quarantine queue now also
   advances records through reviewed and released states with checkpointed
-  operator metadata via canonical-authenticated
+  operator metadata via canonical-authenticated accounts assigned the
+  `sorafs_moderation_operator` role at
   `POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review` and
   `POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release`.
-  Remaining rollout work stays focused on the persistent production model
-  registry service, deterministic runner, committee service, encrypted
-  quarantine object store, CLI review/release commands, operator panel, and
-  live ingest/quarantine/appeal/transparency evidence rather than local
-  catalog, metadata readback, registry-admission/checkpoint/API hardening, or
-  local screening/quarantine evidence persistence and API state transitions.
+  `iroha sorafs moderation screening submit|list` now bridges deterministic
+  local runner output into the signed screening-result admission endpoint and
+  bounded readback endpoint, validating the runner JSON before submission.
+  `iroha sorafs moderation quarantine list|review|release` now wraps those
+  local queue endpoints, validates 16-byte quarantine ids, applies canonical
+  signing for review/release, and defaults operator identities to the CLI
+  account when omitted. `sorafs_node` now also seals quarantined payload bytes
+  into encrypted local Norito object envelopes under the storage data
+  directory, persists a separate object-index checkpoint, reloads it on
+  restart, and verifies plaintext digests plus envelope authentication before
+  returning payload bytes. Torii now exposes canonical-authenticated and
+  `sorafs_moderation_operator` role-gated local object store/readback at
+  `POST`/`GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object`,
+  accepting base64 payload bytes on store and returning `payload_b64` on
+  verified reads. `iroha sorafs moderation quarantine object store|read` now
+  wraps that local object API for operators, reading store payload bytes from
+  `--payload-file`, rejecting empty payload files, signing store/read requests,
+  and printing object metadata or payload readback JSON. Torii,
+  `iroha::client`, and
+  `iroha sorafs moderation quarantine operator-panel` now also expose a
+  `sorafs_moderation_operator` role-gated local workflow read model for one
+  quarantine record, bundling encrypted-object metadata status, matching local
+  appeal ballots, operator routes, and next-action hints without returning
+  payload bytes. `iroha sorafs moderation quarantine bridge-plan` now derives a
+  payload-free local automation plan from that read model, emitting ordered
+  handoff, ballot, tally, and transparency CLI actions while failing closed if
+  the panel response unexpectedly contains payload bytes.
+  `sorafs_cli moderation runner-serve` now promotes the deterministic local
+  runner into a locked-manifest HTTP service mode: status endpoints report the
+  active governance manifest and disabled outbound-network posture, while
+  `POST /v1/sorafs/moderation/runner/screen` returns the same
+  Torii-compatible screening-result JSON as `run-local` from explicit
+  request input. `sorafs_cli moderation runner-grpc-serve` now exposes the
+  production unary gRPC runner surface
+  (`sorafs.moderation.runner.v1.Runner/Status` and `/Screen`) over a
+  locked governance manifest, accepting payload bytes directly and returning
+  deterministic screening-result DTOs with outbound network disabled.
+  `iroha sorafs moderation quarantine operator-serve` now exposes a local
+  payload-free HTTP operator workflow service with a browser UI at `/` and
+  `/v1/sorafs/moderation/operator-panel/ui`, health/status, operator-panel, and
+  bridge-plan and juror-plan GET routes backed by the signed Torii
+  operator-panel read model; it rejects request bodies, validates 16-byte
+  quarantine ids, supports bounded ballot limits, and fails closed if the
+  upstream panel unexpectedly includes payload bytes. The juror-plan view
+  reports per-juror commit/reveal readiness, signing accounts, signed Torii
+  routes, and CLI command templates without embedding private commit or reveal
+  payload bytes. The companion juror-notifications view emits deterministic
+  operator-managed delivery records with dedup keys, subjects, message bodies,
+  signed Torii routes, and CLI command templates for external
+  mail/webhook/scheduler transport.
+  `iroha sorafs moderation quarantine notifications deliver --manifest PATH
+  [--out-dir DIR] [--webhook-url URL]` now validates those payload-free
+  notification manifests, writes canonical outbox JSON and/or POSTs each
+  notification to a webhook, rejects private-payload flags, and emits
+  payload-free delivery evidence with notification and response body hashes.
+  `iroha sorafs moderation quarantine notifications canary --manifest PATH
+  --webhook-url URL [--out PATH]` now probes deployed notification transport
+  webhooks with the same payload-free manifest, records passed/failed probe
+  status, notification body hashes, and response body hashes, and can write
+  `sorafs.moderation.juror_notifications.transport_canary.v1` evidence without
+  archiving message or response bodies.
+  The companion commit-reveal-status view
+  emits payload-free quorum readiness, missing-juror lists, next actions, and
+  tally-ready request templates. The same service now forwards signed review,
+  release,
+  appeal-handoff, appeal-ballot, and ballot-tally POST requests to Torii after
+  rejecting `payload_b64`, rejecting mutation query parameters, defaulting
+  review/release actors to the configured CLI account when omitted,
+  canonicalizing appeal JSON bodies before forwarding, and deriving tally
+  `case_id`/`round_id` values from the payload-free operator-panel ballot view
+  when they are not supplied explicitly.
+  `iroha sorafs moderation quarantine operator-canary` now captures
+  payload-free rollout evidence from a deployed operator workflow service by
+  probing health/status, browser UI, operator-panel, bridge-plan, juror-plan,
+  juror-notifications, and commit-reveal-status routes, verifying expected
+  schemas and UI markers, rejecting payload bytes, and archiving response
+  hashes instead of response bodies.
+  `iroha sorafs moderation ballots execute --status PATH
+  [--commit-payload PATH...] [--reveal-payload PATH...] [--submit-tally]` now
+  consumes the payload-free commit/reveal coordination status, validates local
+  commit/reveal payload files against pending juror lists, submits only pending
+  signed commit/reveal/tally requests through Torii, and emits response
+  status/body hashes without replaying private reveal payload internals.
+  `iroha sorafs moderation ballots executor-bundle --status PATH
+  --bundle-out DIR [--commit-payload PATH...] [--reveal-payload PATH...]
+  [--submit-tally]` now generates a payload-free scheduled executor job bundle
+  with `executor.env`, executable `run.sh`, systemd service/timer files,
+  launchd plist, README, and
+  `sorafs.moderation.ballots.executor_bundle.v1` metadata without copying
+  private commit/reveal payload files.
+  `iroha sorafs moderation ballots executor-canary --bundle DIR
+  [--execution-summary PATH] [--out PATH]` now verifies generated executor
+  bundles and optional payload-free `ballots execute` summaries, records
+  artifact hashes, scheduler checks, summary hashes, and pass/fail status, and
+  emits `sorafs.moderation.ballots.executor_canary.v1` evidence without
+  archiving private payload files or response bodies.
+  `sorafs_cli moderation runner-bundle` now generates the
+  supervised HTTP runner deployment bundle for a validated locked manifest,
+  including the manifest copy, `runner.env`, executable `run.sh`, systemd
+  unit, launchd plist, README, and
+  `sorafs.moderation.runner.bundle.v1` metadata JSON. `sorafs_cli moderation
+  runner-canary` now probes deployed locked-manifest HTTP runners, verifies
+  status and screening responses against the manifest id, runner hash, payload
+  digest, score range, and threshold-derived verdict, and emits payload-free
+  `sorafs.moderation.runner.rollout_evidence.v1` JSON for rollout archives.
+  `sorafs_cli moderation committee-run` now validates the same locked
+  reproducibility manifest, rejects payload-bearing runner outputs, verifies
+  manifest/runner/subject consistency and threshold-derived verdicts, and
+  emits payload-free `sorafs.moderation.committee.aggregate.v1` JSON using a
+  deterministic median score under the requested quorum. `sorafs_cli moderation
+  committee-serve` now locks that manifest and quorum into a bounded local HTTP
+  service with status and payload-free aggregation endpoints. `sorafs_cli
+  moderation committee-bundle` now generates supervised HTTP committee
+  deployment artifacts, and `sorafs_cli moderation committee-canary` verifies
+  deployed committee status plus payload-free aggregate responses against the
+  locked manifest and deterministic local aggregation.
+  Remaining rollout work stays focused on captured deployed juror notification
+  transport service rollout evidence, captured deployed commit/reveal executor
+  job rollout evidence, and live
+  ingest/quarantine/appeal/transparency evidence rather than local
+  catalog, metadata readback, registry-admission/checkpoint/API/CLI hardening,
+  standalone persistent model-registry service, local screening/quarantine
+  evidence persistence and API state transitions, deterministic local runner CLI
+  output, locked-manifest local HTTP runner service mode, supervised HTTP runner
+  bundle generation, production unary gRPC runner service, local committee
+  aggregation CLI, local committee aggregation HTTP service, HTTP runner canary
+  rollout evidence tooling, supervised committee bundle generation, HTTP
+  committee canary rollout evidence tooling, local moderation ballot
+  readback/commit/reveal/tally client and CLI
+  bridge, local transparency readback/source-entry client and CLI bridge, local
+  appeal pricing/deposit/readback client and CLI bridge, local
+  reviewed-quarantine appeal handoff and appeal-ballot API/CLI, local
+  screening-result submit/list CLI, local encrypted quarantine object
+  envelopes/API/CLI, local quarantine CLI queue/review/release commands, the
+  local operator-panel read model, local bridge-plan CLI, local payload-free
+  operator workflow service, local signed operator workflow mutation
+  forwarding, local payload-free juror notification planning, local
+  payload-free juror notification delivery manifests, local payload-free
+  juror notification outbox/webhook delivery CLI automation, local
+  payload-free juror notification transport canary evidence tooling, local
+  payload-free commit/reveal coordination status, local commit/reveal executor
+  CLI automation, local supervised commit/reveal executor job bundle
+  generation, local commit/reveal executor canary evidence tooling, local
+  operator workflow canary evidence tooling, the local quarantine operator role
+  gate, or the documented production role-provisioning runbook.
 - SFM-4c transparency ledger V1 data-model payloads are now shipped:
   `iroha_data_model::sorafs::transparency` defines
   `ModerationLedgerEntryV1`, `ModerationLedgerBlockV1`, and
@@ -2890,25 +3347,50 @@ and completed history lives in [`status.md`](./status.md).
   canonical-authenticated local feed boundary for those concrete source
   payloads plus public legal-hold/redaction/evidence-access summaries,
   returning only the derived public source-entry summary while routing accepted
-  entries into the duplicate-checked local worker. The remaining SFM-4c
-  production work is deployed producers for GAR, moderation, appeal,
-  legal-hold, redaction, and evidence-viewer events plus rollout evidence
-  around that feed boundary, deployed anchoring/publisher identities, deployed
-  proof API hardening beyond the local verifier throttle and bounded readback
-  arrays, deployed proof-token issuance producers/explorer linking, public
-  receipt explorer UI, and live privacy-safe moderation aggregate publisher.
+  entries into the duplicate-checked local worker. `iroha::client` and
+  `iroha sorafs transparency cycles|explorer|tokens|source-entry` now wrap the
+  local cycle/entry/explorer/token readback and signed source-entry ingest
+  surface for operator automation. `iroha sorafs transparency source-entry
+  canary --source-entry KIND=PATH [--source-entry KIND=PATH...] [--out PATH]`
+  now submits canary source-entry producer payloads through that signed feed,
+  records request/response sizes, status, and BLAKE3 hashes, and emits
+  `sorafs.transparency.source_entry.canary.v1` evidence without archiving source
+  payload fields or response bodies. The remaining SFM-4c production work is
+  deployed producers for GAR, moderation, appeal, legal-hold, redaction, and
+  evidence-viewer events plus captured rollout evidence using that canary,
+  deployed anchoring/publisher identities, deployed proof API hardening beyond
+  the local verifier throttle and bounded readback arrays, deployed proof-token
+  issuance producers/explorer-linking rollout evidence, deployed public receipt
+  explorer rollout evidence capture, and live privacy-safe moderation aggregate
+  publisher.
   Torii now also exposes
   `/v1/sorafs/transparency/tokens/issuances` as a canonical-authenticated local
   proof-token issuance feed; it accepts one URL-safe base64 `SFGT` frame, the
   Ed25519 signer public key, optional evidence/policy digests, and sorted public
   metadata, then verifies and publishes the derived `ProofTokenIssuanceV1`
   through the local Governance DAG publisher when configured, without accepting
-  blinded-digest keys. Torii now also exposes
+  blinded-digest keys. `iroha::Client` and `iroha sorafs transparency
+  token-issuance submit --payload PATH` now wrap that signed feed for deployed
+  producer automation, and `iroha sorafs transparency token-issuance canary
+  --issuance PATH [--issuance PATH...] [--out PATH]` emits payload-free
+  `sorafs.transparency.proof_token_issuance.canary.v1` rollout evidence with
+  request/response sizes, status, and BLAKE3 hashes, without archiving
+  proof-token frames, private digest-key material, or response bodies. Torii now
+  also exposes
   `/v1/sorafs/transparency/explorer` as a local read-only explorer snapshot over
   the Governance DAG publish-index, returning cycle summaries, proof-token
   issuance summaries, payload-kind counts, source paths, index digests, cache
-  validators, total/returned counts, and `limit`-bounded arrays for public UI
-  integration without exposing private proof-token digest keys. The
+  validators, total/returned counts, and `limit`-bounded arrays for local UI
+  integration without exposing private proof-token digest keys. Torii now also
+  exposes `/v1/sorafs/transparency/explorer/ui` as a static local browser
+  explorer that fetches that payload-free snapshot, renders cycle and
+  proof-token issuance summaries, ships `no-store`/`nosniff`/CSP headers, and
+  does not embed ledger payload bodies or private proof-token digest keys.
+  `iroha sorafs transparency explorer-canary` now probes deployed/public
+  explorer snapshot, browser UI, and proof-token issuance index routes, verifies
+  expected schemas/HTML markers, rejects ledger payload bodies and private
+  proof-token digest-key material, and emits payload-free rollout evidence with
+  response body hashes. The
   data-model foundation for that publisher is now shipped as
   `ModerationPrivacyAggregateV1` plus explicit
   `ModerationPrivacyParametersV1` epsilon/delta/suppression metadata,
@@ -2945,9 +3427,18 @@ and completed history lives in [`status.md`](./status.md).
   canonical-authenticated local trigger for configured due aggregate
   publication, with stale due event-backed window catch-up, runtime-only
   privacy policy/noise seed inputs, and structured
-  published/skipped/already-published outcomes. The remaining
-  aggregate work is deployed source-event producers, deployed scheduler jobs,
-  and rollout evidence around this worker.
+  published/skipped/already-published outcomes. `iroha::Client` and
+  `iroha sorafs transparency privacy-aggregate source-event|publish-due
+  --payload PATH` now wrap those signed routes for producer and scheduler
+  automation. `iroha sorafs transparency privacy-aggregate canary
+  --source-event PATH [--source-event PATH...] [--publish-due PATH...]
+  [--out PATH]` now submits canary source-event and publish-due payloads
+  through the signed routes, records request/response sizes, status, and BLAKE3
+  hashes, and emits `sorafs.transparency.privacy_aggregate.canary.v1`
+  evidence without archiving raw metric arrays, metric names, or response
+  bodies. The remaining aggregate work is deployed source-event producers,
+  deployed scheduler jobs, and captured rollout evidence using those wrappers
+  and the canary.
 - SoraFS economics/governance plan status is current for the remaining local
   production gaps: SFM-2 now has initial orderbook/streaming-settlement Norito
   payloads and validators in `sorafs_manifest::orderbook` plus Rust reference
@@ -3064,7 +3555,7 @@ and completed history lives in [`status.md`](./status.md).
   ballot lifecycle events now publish into the SoraFS Governance DAG filesystem publisher,
   `publish-index.json`, CAR queue, and optional signed runtime DAG, but still
   need durable or contract-backed orchestration, on-chain or ledger recording,
-  juror CLI/portal flows, public decision/challenge DAG rollout, and
+  production juror portal flows, public decision/challenge DAG rollout, and
   end-to-end panel simulations;
   SFM-5 hedging/billing is still a target
   architecture; SFM-6 currently ships the reserve policy, quote/ledger, matrix,
@@ -3624,7 +4115,7 @@ and completed history lives in [`status.md`](./status.md).
   `explorerHost` metadata, while disabled legacy drafts can be backfilled to
   the selected profile and contradictory explorer aliases still fail closed.
   Production-ready BSC manifests must also reject own-key and non-opaque string
-  handoff placeholders (`TODO`, `example`, `replace-me`, `changeme`, `sample`,
+  handoff placeholders (`to-do`, `example`, `replace-me`, `changeme`, `sample`,
   `stub`, `test-only`, `your-*`) before route-config rendering or canonical
   production-output publication. The same handoff-placeholder scan applies to
   canonical BSC deployment evidence and native prover bundle artifacts under
@@ -5058,7 +5549,8 @@ and completed history lives in [`status.md`](./status.md).
   `kagemusha-recursive-compact-v1` compact-token symbols now route one-hop
   LEN=4 record-backed Pallas openings through the compact verifier-slice proof
   path and route package-aware multi-hop compact proving through the append
-  verifier-slice loop while keeping production default selection reserved. Core projection tests bind
+  verifier-slice loop while keeping packaged-key and evidence gates explicit
+  for compact-first SDK selection. Core projection tests bind
   folded public-input hash limbs, transcript limbs, witness count, hop count,
   verifier-key CID/hash, verifier-record windows, the one-hop verifier-slice
   side column, and compact verifier-key shape; compact-token envelope
@@ -5093,7 +5585,8 @@ and completed history lives in [`status.md`](./status.md).
   archive or previous-proof parsing. Record-bound multi-hop compact archives
   now require explicit packaged compact key artifacts on package-backed native
   and SDK surfaces, preserving verifier-slice binding coverage while
-  production default selection remains reserved. Multi-hop
+  compact-first selector paths remain gated by advertised compact support and
+  packaged evidence. Multi-hop
   Pallas archives with missing openings, forged metadata, duplicated openings,
   or reordered openings reject as record-backed preflight drift before the
   proving path, while the native bridge maps exactly ordered valid multi-hop
@@ -5608,13 +6101,13 @@ and completed history lives in [`status.md`](./status.md).
 	  before the soft-invalid path.
   Remaining compact-token release work is to attach signed device-lab evidence
   and release evidence for packaged one-hop and append proving-key artifacts
-  before enabling SDK default selection. The
+  without weakening compact-first SDK selection's packaged-key gates. The
   production-readiness CI guard now treats that as the release contract and
   checks concrete ABI-7 core and bridge function bodies, not only loose marker
   text: ABI-6 Reserved-lineage may be advertised as the production
   offline-offline route, while ABI-7 recursive compact is implemented as an
-  explicit key-package-backed surface until release evidence opens default
-  selection.
+  explicit key-package-backed surface whose compact-first selector path still
+  requires advertised compact prover/verifier support.
 - Active BSC mainnet SCCP SDK hardening now directly gates malformed
   receipt-observed source-event logs: browser, Python, Swift, Kotlin/JVM, Java
   Android, and .NET tests reject matching BSC source-bridge logs with extra
@@ -6195,7 +6688,7 @@ and completed history lives in [`status.md`](./status.md).
 	  their owning features. SoraFS proof streaming rejects reserved
 	  `proof_kind=pdp` as `400 Bad Request` until the SF-13 provider protocol
 	  lands, and PoR/PDP proof-stream request envelopes cap `sample_count` at
-	  `500` before manifest lookup. The code-only placeholder/TODO sweep now
+	  `500` before manifest lookup. The code-only placeholder-marker sweep now
 	  leaves only intentional
 	  negative tests, fail-closed placeholder-material guards, fallback skeleton
 	  naming, manifest-derived source rendering, and telemetry peer compatibility
@@ -8229,17 +8722,42 @@ and completed history lives in [`status.md`](./status.md).
   percent-decoded ISO CLI paths plus live/archived response previews, regex-only
   bearer whitespace forms rejected in response previews, and non-ASCII or
   identifier-style secret-looking path material rejected before summary
-  emission, while requiring the
-  `blocked_schema_sources` review list to be recorded explicitly even when
-  empty and to match a current missing-schema fixture gap or, with a profile
-  catalog, a current profile-version gap,
+  emission, and direct XSD summary output paths forbidden from reusing or
+  hardlinking manifest/profile-catalog input files, while requiring the
+  `blocked_schema_sources` and `pending_schema_sources` review lists to be
+  recorded explicitly even when empty, use unique `message_def_id` values, and
+  match a current missing-schema fixture gap or, with a profile catalog, a
+  current profile-version gap,
   rejects XSD files with known restricted Standards
   Editor redistribution terms, parses the embedded default rail profile catalog
   on demand, and records which concrete advertised message versions are
   schema-backed while rejecting unknown profile/message catalog keys before
   release evidence is emitted; final production-readiness replay now recomputes
   those profile-version `schema_backed` flags from schema-backed XML fixture
-  message-definition IDs before accepting archived summaries; catalog
+  message-definition IDs before accepting archived summaries, and archived XSD
+  summaries bind a direct raw-derived unreviewed unique profile-message gap
+  count/list that readiness rechecks before emitting production blockers; the
+  checked-in manifest now records official ISO pending-source evidence,
+  including exact direct XSD download URLs, for the remaining
+  securities/collateral profile-only gaps, so current repository summaries
+  report zero unreviewed unique profile-message gaps while strict schema-backed
+  closure still fails; direct verification and readiness replay now pin those
+  known pending message definitions to their exact recorded ISO catalogue URLs,
+  direct download URLs, download type, message names, and submitting
+  organisations; pending direct download URLs must be unique within each summary
+  and across archived summary replay, pending official ISO catalogue/download
+  URLs must not contain percent escapes, archive catalogue URLs must use
+  canonical raw `page=<nonzero decimal>` queries, and pending source message
+  names must be unique and use canonical ISO-style CamelCase plus `VNN` suffixes
+  that match the corresponding `message_def_id` version segment;
+  pending submitting-organisation labels must be bounded canonical ISO-style
+  comma-space-separated names without URL/contact delimiters, semicolon path
+  parameters, placeholders, or path-like slash smuggling;
+  direct XSD summaries now also emit nested profile-catalog `versions`,
+  `missing_schema_versions`, and `skipped_family_versions` in canonical
+  profile/message/direction/version order, and final readiness rejects
+  digest-correct reordered nested catalog arrays;
+  catalog
   `versions` lists can skip schema-backed checks only for the exact
   message-family alias, not arbitrary strings, and
   runtime-required catalog fields are required while optional catalog fields are
@@ -8263,7 +8781,11 @@ and completed history lives in [`status.md`](./status.md).
   normalizes license-header whitespace and zero-width format characters before
   matching known restricted redistribution phrases, so copyright-only
   provenance or obfuscated restricted terms cannot satisfy missing-package
-  blocker evidence. The legacy
+  blocker evidence. Pending official ISO source evidence is reviewed
+  catalogue/download URL and message-name provenance only, with byte-stable
+  percent-free bounded official URLs, canonical raw archive page queries, unique
+  direct download URLs, and unique canonical message-name version suffixes bound
+  to the `message_def_id`, and never substitutes for checked-in XSD bytes. The legacy
   `colr.007` collateral parser and
   route are now local-compatibility only; operator receipt/evidence/readiness
   gates reject the explicit `--allow-legacy-colr007` override for production. An
@@ -8275,10 +8797,25 @@ and completed history lives in [`status.md`](./status.md).
   gate; remaining readiness work is making that gate pass without diagnostic
   overrides and with real provider evidence. Default-profile rail canary
   evidence must also carry an explicit `--default-rail-profile` binding so
-  `profile=null` receipts prove trust coverage for the configured fallback
+  `profile=null` receipts prove trust coverage for the configured fallback,
+  and custom-profile canary receipts must use a message family covered by the
+  matched trust profile's rail
   profile instead of relying on an implicit Torii default, and production
   readiness replays that binding against compact trust profiles before the
-  aggregate can pass.
+  aggregate can pass. Trust-bundle verifier summaries now canonicalize raw
+  bundle, DER-material, pin, and OID list order, direct evidence replay rejects
+  digest-correct raw trust-summary reordering, and final readiness blocks
+  digest-correct compact trust DER proof reordering. Canary command planning
+  now canonicalizes repeatable notary endpoint and verify receipt selectors,
+  while evidence replay rejects digest-correct child-command selector
+  reordering. Final readiness also canonicalizes top-level XSD/evidence summary
+  references plus blocker/reviewed-gap warning and nested diagnostic-entry order
+  before digesting release summaries and rejects XSD summary, manifest,
+  schema, fixture, blocked-source, and profile-catalog artifact paths replayed
+  under a different XSD material role, so a copied summary, manifest, catalog,
+  schema, fixture, or blocked-source path cannot satisfy another proof class,
+  and rejects those XSD artifact paths when replayed as evidence summary,
+  canary, trust, receipt, config, or bundle path material.
   Durable ISO state now has
   versioned per-record digests plus a local
   tamper-evident audit index exposed through the
@@ -8307,10 +8844,13 @@ and completed history lives in [`status.md`](./status.md).
 			  ancestors rejected, 64 MiB caps for anchor/index JSON artifacts,
 			  1 MiB caps for persisted record-source JSON artifacts, and local
 			  receipts that do
-			  not persist token material, reject secret-looking or control-bearing
-			  successful remote response bodies before receipt persistence, redact
-			  failed remote response previews and secret-looking or control-bearing
-			  transport errors, and preflight receipt output
+				  not persist token material, reject secret-looking or control-bearing
+				  successful remote response bodies before receipt persistence, redact
+				  failed remote response previews and secret-looking, control-bearing,
+					  oversized, non-ASCII, or unstringifiable transport errors, normalize
+					  non-standard, malformed, or oversized remote HTTP statuses, convert transport-open
+					  exceptions/failures, normal/HTTP-error close failures, response-read exceptions/failures, and malformed non-byte
+					  remote response bodies into bounded failed receipts, and preflight receipt output
 			  directories/leaves before input loading, publication, or Torii submission, rejecting
 		  control characters, whitespace, leading-dash segments, backslashes,
 		  semicolon parameters, URI/drive prefixes, malformed or smuggled percent escapes, empty segments, dot/parent traversal, symlinked existing
@@ -8361,6 +8901,7 @@ and completed history lives in [`status.md`](./status.md).
 	  read-only receipt verifier now gates those receipts for canary use and emits
 	  a digest-bound summary with per-receipt `receipt_sha256` entries while
 	  rejecting all-zero raw receipt self-digest placeholders and
+	  non-boolean direct policy flags before selector discovery,
 	  rejecting unused local verifier overrides for failed receipts, insecure/local
 	  endpoints, legacy `colr.007`, and missing rail profiles,
 		  closing raw receipt and notary source schemas including duplicate-free nested audit records,
@@ -8468,7 +9009,12 @@ and completed history lives in [`status.md`](./status.md).
 	  canaries, requiring the verify stage to select generated non-dry-run
 	  rail/notary receipt directories, requiring explicit
 	  notary and verify receipt-selector arrays under
-	  `--require-explicit-policy`, rejecting generated receipt verification when
+	  `--require-explicit-policy`, requiring rail/notary receipt directories to
+	  be explicit and non-overlapping with the rail inbox or notary audit-export
+	  root under that same production-policy flag, rejecting rail/notary receipt
+	  directories that overlap their configured bearer-token file paths, rejecting
+	  rail/notary bearer-token file paths that overlap stage source roots before
+	  child execution, rejecting generated receipt verification when
 	  `verify.require_source_files=false`, and capping runbook
 	  JSON at 64 KiB before parsing.
 	  The operator scripts reject duplicate JSON object keys, non-standard
@@ -8489,18 +9035,53 @@ and completed history lives in [`status.md`](./status.md).
 	  run-level preflight and again before parent creation or temporary output
 	  writes. Production-readiness direct `run(args)` calls now also preflight
 	  XSD summary, evidence summary, and summary-output path smuggling before
-	  input loading while keeping checked-in fixture summary inputs as structured
-	  release blockers; compact trust summaries with
+	  input loading, caps repeatable XSD/evidence summary path lists at 64 entries
+	  before loading any summary files, and final summary outputs cannot exactly reuse or hardlink
+	  XSD/evidence summary inputs before they are loaded, while keeping checked-in
+	  fixture summary inputs as structured release blockers; compact trust summaries with
 	  `allow_insecure_source_url=true` can replay `http://` or local/private
-	  trust-source URLs into blocker output instead of aborting as malformed.
+	  trust-source URLs into blocker output instead of aborting as malformed. Direct
+	  receipt-verifier `run(args)` calls now mirror CLI receipt selector
+	  path-smuggling preflights before discovery or file loading.
 	  Direct XSD/trust verifier `run(args)` calls also
 	  preflight manifest/profile-catalog, bundle, profile-output, and
-	  summary-output path smuggling before manifest or bundle loading, and
-	  direct canary/rail/notary adapter `run(args)` calls mirror their CLI
+	  summary-output path smuggling before manifest or bundle loading; direct
+		  trust-bundle summary/profile outputs also cannot exactly reuse or hardlink
+		  bundle inputs, and summary/profile output paths cannot alias each other
+			  before bundle loading; their existing ancestors and leaves are also
+			  preflighted without creating missing parents before bundle validation. Direct XSD summary outputs likewise cannot reuse or
+		  hardlink manifest/profile-catalog inputs or discovered schema/XML fixture
+			  inputs before writing, and preflight summary-output existing ancestors and
+			  leaves without creating missing parents before manifest loading or optional `xmllint` subprocess execution;
+	  direct operator evidence verifier `run(args)` calls reject
+	  `--summary-out` paths that exactly reuse or hardlink canary/trust summary
+	  or direct receipt inputs before those summaries are loaded, and reject
+	  summary outputs under supplied receipt archive directories, so aggregate evidence output
+	  cannot overwrite its source summaries. Evidence summary outputs now also
+	  reject symlinked existing ancestors plus symlink, hardlinked, or
+	  non-regular leaves without creating missing parents before summary loading
+	  or direct receipt-verifier subprocess execution. Final readiness summary
+	  outputs reject the same target shapes without creating missing parents
+	  before XSD or evidence summary loading.
+	  Direct canary/rail/notary adapter
+	  `run(args)` calls mirror their CLI
 	  path-smuggling guards before config, inbox/export, receipt, token, or
-	  network loading. Live rail/notary adapter runs also reject inbox/export
+	  network loading. Direct canary summary-output existing ancestors and leaves
+	  are preflighted without creating missing parents before runbook JSON
+	  loading, with parsed stage-artifact
+	  alias checks still running before child execution. Live rail/notary adapter runs also reject inbox/export
 	  roots under checked-in `fixtures/iso20022/` artifacts before discovery,
-	  fixture parsing, or network delivery. Direct CLI artifact paths for live rail inbox
+	  fixture parsing, or network delivery, and reject receipt output directories
+	  that exactly reuse or symlink back to the rail inbox or notary export root
+		  before source discovery. Direct rail/notary adapter receipt directories also
+		  reject overlap with explicit rail XML/sidecar source paths, rail/notary
+		  bearer-token file paths or directories containing those token files, and
+		  notary `latest.notary.json`, `anchors/`, or `messages.index.json` source
+		  material before source loading or delivery. Explicit receipt-directory
+		  symlink ancestors are rejected before source loading without creating
+		  missing output directories, and bearer-token file paths
+		  cannot overlap the rail inbox or notary export root before token loading.
+	  Direct CLI artifact paths for live rail inbox
   roots, live notary export roots, rail/notary bearer-token files, canary
   configs, trust bundles, XSD manifests/profile catalogs, receipt
 	  files/directories, canary/trust summaries, and XSD/evidence summaries reject
@@ -8510,8 +9091,9 @@ and completed history lives in [`status.md`](./status.md).
 			  path strings are capped at 4096 characters before secret scanning,
 			  filesystem expansion, summary emission, child command construction, or
 			  archive replay. Live rail/notary adapter timeouts also
-		  reject non-positive or non-finite CLI values, and byte caps reject
-		  non-positive values before local reads or network delivery. The receipt
+		  reject non-positive or non-finite CLI values, response-body retention
+		  caps above 4 MiB, and non-positive byte caps before local reads or
+		  network delivery. The receipt
 		  verifier caps raw receipt JSON at 4 MiB, notary anchor/index JSON at
 		  64 MiB, persisted notary record-source JSON at 1 MiB, rail source XML
 		  at 4 MiB, and rail source-sidecar JSON at 16 KiB before source replay,
@@ -8527,9 +9109,13 @@ and completed history lives in [`status.md`](./status.md).
   semicolon parameters, empty segments, dot/parent traversal, and symlinked
   receipt, summary, and emitted profile-override outputs before writing them.
   Canary summary outputs and runbook artifact paths
-  are preflighted before subprocess stages, and canary relative paths preserve
-  final leaves after parent containment checks so child scripts can still reject
-  symlinked leaves. Archived canary/trust summaries consumed by the evidence
+  are preflighted before subprocess stages, summary outputs cannot exactly
+  reuse or hardlink the runbook config input before config loading, cannot
+  reuse planned rail/notary bearer-token files, explicit rail message files, or
+  explicit verifier receipt files, and cannot be written under planned stage
+  artifact directories before child execution, and canary
+  relative paths preserve final leaves after parent containment checks so child
+  scripts can still reject symlinked leaves. Archived canary/trust summaries consumed by the evidence
 	  gate and XSD/evidence summaries consumed by the readiness gate are capped at
 	  4 MiB before parsing, optional `xmllint` stdout/stderr is capped at 64 KiB
 	  and runtime is bounded by positive finite `--xmllint-timeout-secs` capped
@@ -8552,7 +9138,8 @@ and completed history lives in [`status.md`](./status.md).
   canary/trust/receipt summary digests, rejects repeated or copied
   canary/trust summaries, rejects non-canonical or duplicate receipt paths or
   receipt digests, rejects duplicate archived trust profile IDs and bundle
-  digests plus copied compact trust profile JSON digests across trust summaries,
+  digests plus copied compact trust profile JSON digests across trust summaries
+  at evidence aggregation and readiness replay,
   rejects all-zero trust bundle, trust pin, trust DER summary, or emitted
   profile JSON digests,
   and rejects
@@ -8576,12 +9163,19 @@ and completed history lives in [`status.md`](./status.md).
 	  archival, and requires trust-summary and receipt-summary policy booleans,
 	  trust profile JSON emission booleans plus a digest recomputed from archived
 	  profile overrides, trust revocation booleans/counts, bundle SHA-256 values,
-	  duplicate-free supported receipt-kind lists and compact receipt entry kinds,
+	  canonical sorted duplicate-free supported receipt-kind lists and compact
+	  receipt entry kinds, canonical compact receipt-entry order by
+	  receipt kind, path, and digest, canonical top-level canary/trust summary
+	  order by compact path and digest, canonical `profile_id` order for compact
+	  trust profiles,
 	  per-receipt `ok=true` plus 2xx `status_code` success metadata,
 	  kind-specific compact notary anchor/index/count and rail
 	  message/profile/payload metadata,
 	  exact direct-archive receipt digest/kind/status/endpoint-policy/metadata binding to canary summaries, no copied
-	  receipt paths or digests reused across canary summaries,
+	  receipt paths or digests reused across canary summaries, no relabelled
+	  rail receipt `source_path`, `payload_sha256`, or `rail_message_id` reuse
+	  inside one compact receipt summary, with nullable `rail_message_id` never
+	  suppressing source path or payload digest replay checks,
 	  and plan-only status booleans to be
 	  present explicitly so omissions cannot become production defaults. Archived
 	  profile overrides must also keep
@@ -8686,11 +9280,53 @@ and completed history lives in [`status.md`](./status.md).
 		  `allow_canary_stage_receipts_only` policy flag instead of omitting the
 		  archive field or forging production policy, while still blocking that
 		  policy flag when forged direct archive verification is present, rejects
+		  non-boolean direct evidence-gate and readiness production-policy flags
+		  before summary loading and non-boolean direct XSD strict/trust-bundle
+		  policy flags before manifest or bundle loading, plus non-boolean direct
+		  canary, rail-gateway, and audit-notary policy flags before config,
+		  inbox, or export loading, and rejects bare strings or non-path/non-string
+		  entries for direct repeatable path/endpoint arguments before trust,
+		  receipt, evidence, readiness, or notary loading, caps trust bundle and
+		  receipt selector path lists at 64 entries before trust/receipt loading,
+		  caps recursive ISO JSON surrogate/secret-material scanners at 8192
+		  array entries, 8192 object members, and 128 nesting levels before
+		  walking unknown or unsupported JSON shapes, and wraps parser recursion
+		  failures with the same label-only nesting diagnostic before local paths
+		  or attacker-controlled leaves can be echoed,
+		  caps operator-canary runbook notary endpoint and verifier
+		  receipt-selector string lists at 8192 entries before entry parsing,
+		  caps trust-bundle SHA-256, certificate-policy OID, and DER material
+		  lists at 8192 entries before per-entry parsing,
+		  caps evidence canary, trust, receipt, and receipt-directory input path
+		  lists at 64 entries before evidence loading, and caps notary endpoint
+		  lists at 64 values before export loading, caps untrusted XSD,
+		  evidence, and readiness JSON arrays at 8192 items before semantic
+		  replay, caps receipt/notary audit record, status-history, and
+		  change-reason arrays at 8192 items before replay, while scalar direct
+		  path arguments normalize string/path-like values and reject invalid
+		  path objects before XSD, trust, canary, rail, notary, evidence, or
+		  readiness loading, plus non-string direct rail Torii URLs before URL
+		  validation or inbox loading, and non-string direct
+		  evidence/readiness provider, environment, and default-profile context
+		  values before summary loading, and now treats omitted direct
+		  `argparse.Namespace` attributes for required ISO config/inbox/export
+			  paths, policy booleans, evidence/readiness context strings,
+			  freshness budgets, canary output limits, rail payload limits, and
+			  notary response limits as controlled validation failures before file
+			  discovery, summary loading, network work, or child execution, cap live
+			  response-body retention at 4 MiB, and report XSD `xmllint`, canary
+			  child-stage, and direct receipt-verifier startup failures with stable
+			  labels instead of argv, local paths, or raw process-launch exception
+			  text or chained traceback causes, plus their stdout/stderr pipe read
+			  or close failures as label-only stage-output read errors, while
+			  omitted optional trust source freshness budgets and rail message
+		  selectors take the same defaults as their CLI forms,
 		  unused final-readiness `--allow-reviewed-xsd-gaps` and
 		  `--allow-canary-stage-receipts-only` overrides unless a reviewed XSD warning
-		  beyond an unreviewed profile-version gap or canary-stage-only receipt
-		  evidence is actually present, keeps unreviewed advertised profile-version
-		  gaps as blockers even when other reviewed XSD warnings exist, and
+		  beyond a truly unreviewed profile-version gap or canary-stage-only receipt
+		  evidence is actually present, keeps truly unreviewed advertised
+		  profile-version gaps as blockers even when other reviewed XSD warnings
+		  exist, and
 	  rechecks compact trust profile JSON emission and digest, rejects copied
 	  compact trust profile JSON digests, all-zero compact receipt digests, all-zero compact
 	  canary/trust summary references, and all-zero compact trust digests,
@@ -8704,7 +9340,25 @@ and completed history lives in [`status.md`](./status.md).
 	  while rejecting repeated or copied
 	  XSD/evidence and compact canary/trust summaries, rejecting nested
 	  canary/trust/receipt/profile replay across evidence summaries, requiring compact
-	  canary/trust `summary_sha256` references to be canonical nonzero digests, requiring compact
+	  XSD summary/manifest/schema/fixture/blocked-source/pending-source/profile-catalog digest
+	  roles to stay separate from evidence summary/receipt/canary/trust digest roles,
+	  requiring compact XSD schema/fixture/blocked-source/pending-source message-definition
+	  roles plus manifest/profile-catalog paths and digest roles to stay unique
+	  across repeated XSD-summary inputs,
+	  requiring compact XSD schema, fixture, blocked-source, and pending-source
+	  arrays to remain in canonical message-definition/path or source-provenance order,
+	  requiring compact
+	  canary/trust summary paths and `summary_sha256` references to stay
+	  role-separated, with digest references canonical nonzero digests
+	  that do not reuse each other or nested receipt-summary, receipt,
+	  receipt-material, profile-JSON, bundle, or DER proof digest roles inside one aggregate
+	  evidence summary or across multiple evidence-summary inputs, including
+	  canary-summary identities replayed as trust material and trust-summary
+	  identities replayed as receipt material, requiring compact summary JSON
+	  paths to stay disjoint from canary config and trust-bundle material paths
+	  inside one evidence summary or across multiple evidence-summary inputs,
+	  requiring compact trust bundle paths to stay unique inside and across
+	  archived trust summaries, requiring compact
 	  canary/trust source paths to be control-free, trim-free, not flag-shaped, and
 	  traversal-free `.json` summary files, requiring compact canary runbook config paths to remain
 	  traversal-free JSON pointers, requiring compact canary stage names to remain
@@ -8722,7 +9376,7 @@ and completed history lives in [`status.md`](./status.md).
 				  compact `stage_dry_run` booleans aligned with `stage_names`, and
 				  rejecting receipt kinds attached to dry-run-only rail/notary stages,
 		  requiring summary digests, rejecting duplicate receipt paths or receipt digests,
-	  rejecting rail/notary source path or source digest replay across canary summaries during evidence verification and across distinct evidence summaries during readiness replay,
+	  rejecting rail/notary source path or source digest replay across canary summaries during evidence verification, rail source XML path, payload digest, or rail message-id replay within canary/archive receipt summaries when relabelled entries reuse compact source material, keeping source path and payload digest checks active when rail message ids are null, and rail/notary source-material replay across distinct evidence summaries during readiness replay,
 	  rejecting non-canonical compact receipt paths and all-zero compact receipt
 	  digests, compact receipt paths
 	  under checked-in ISO fixture coordinates, rejecting duplicate compact
@@ -8730,12 +9384,16 @@ and completed history lives in [`status.md`](./status.md).
 	  across trust summaries, rejecting all-zero compact trust bundle/profile
 	  JSON/DER proof digests, rejecting control-bearing or whitespace-padded
   compact identity strings, rejecting non-canonical compact trust profile IDs,
+  reordered compact trust-profile arrays,
   and rejecting compact trust rail IDs outside `generic-iso20022`,
   `swift-cbpr-plus`, `fedwire-funds`, `sepa-sct-inst`, and `securities-csd`,
   rejecting unknown compact evidence fields,
-  rechecking XSD schema/fixture summary arrays for count, digest, and
-  cross-summary replay, schema-path/message-id, fixture-path segment canonicality, canonical fixture
-  schema-reference strings, and schema-reference consistency,
+  rechecking XSD manifest/profile-catalog paths and digests plus
+  schema/fixture/blocked-source message-definition roles and schema/fixture
+  summary arrays for count, message-definition id, digest, and cross-summary replay,
+  schema-path/message-id, fixture-path segment canonicality, canonical fixture
+  schema-reference strings, schema-reference consistency, and missing-schema
+  fixtures that must not relabel checked-in schema message definitions as gaps,
   rejecting DTD/entity declarations before schema or fixture XML parsing,
   rejecting ambiguous schema `Document` declarations or prefixed `Document`
   type spoofing, rejecting payload `ref` indirection, weakened payload
@@ -8748,7 +9406,8 @@ and completed history lives in [`status.md`](./status.md).
   the same checked bytes, capping manifest JSON and profile catalog source at
   4 MiB and schema/fixture XML inputs at 8 MiB before parsing,
 	  requiring XML schema-validation proof for every
-	  schema-backed fixture, rejecting unknown XSD summary fields, recomputing
+	  schema-backed fixture while redacting local schema/fixture paths from
+	  `xmllint` diagnostics, rejecting unknown XSD summary fields, recomputing
 	  schema-only flags/reasons and reviewed gap-list paths/reasons from the schema/fixture
 	  relationship while rejecting padded, control-bearing, non-ASCII,
 	  secret-looking, or overlong reviewed reason strings plus present
@@ -8759,7 +9418,7 @@ and completed history lives in [`status.md`](./status.md).
 			  archived XML identifiers, whitespace,
 			  leading-dash path segments, semicolon path parameters, URI/drive prefixes,
 			  or malformed/smuggled percent escapes in checked-in XSD source provenance,
-			  rejects omitted checked-in and blocked-source `source` keys separately
+			  rejects omitted checked-in, blocked-source, and pending-source `source` keys separately
 		  from explicit null source objects,
 		  manifest schema, fixture, fixture schema-reference, and archived
 	  profile-catalog paths during preflight and archived-summary readiness
@@ -8769,7 +9428,9 @@ and completed history lives in [`status.md`](./status.md).
 	  their referenced schemas, requiring
 	  profile-catalog source and embedded JSON
   digest provenance from exactly one active Rust `DEFAULT_PROFILES_JSON`
-	  raw-string declaration plus duplicate-free profile/message/direction/version shape
+	  raw-string declaration, rejecting archived manifest digests that reuse
+	  schema, fixture, blocked-source, pending-source, profile-catalog source, or profile-catalog
+	  JSON digest roles, plus duplicate-free profile/message/direction/version shape
 	  and canonical skipped family-version aliases
 	  with unknown source catalog keys rejected by the XSD preflight and
 	  runtime catalog-field shapes checked before summary emission, requiring
@@ -10411,8 +11072,8 @@ and completed history lives in [`status.md`](./status.md).
   discontinuities, and binds chain id, asset definition, roots, hop count, and
   aggregate folded-hop digests. The folded statement now carries a proved
   aggregation-mode column; checked transparent pre-fold v1 remains supported
-  while ABI-7 recursive compact mode `2` remains reserved behind the
-  fail-closed `kagemusha-recursive-compact-v1` proof/verifier surface. A Poseidon2
+  while ABI-7 recursive compact mode `2` stays gated by the fail-closed
+  `kagemusha-recursive-compact-v1` proof/verifier surface. A Poseidon2
   aggregation transcript digest is derived from the same canonical hop sequence
   as the recursive verifier's public accumulator. Checked fold construction verifies each private hop
   proof and binds its verified public-input statement plus verifier-key
@@ -10767,9 +11428,29 @@ and completed history lives in [`status.md`](./status.md).
   table directly instead of assigning a duplicate private selection-table copy,
   and shared-table native-scalar multiplication now composes that selector with
   scalar decomposition, shifted-base table derivation, window-base doubling, and
-  selected-point accumulation. Shared-table multi-term MSM composition now
-  chains those scalar-multiplication terms into one public MSM output while
-  keeping term outputs private, and shared-table final IPA MSM composition adds
+  selected-point accumulation, including the identity-base branch where a
+  selected scalar bit must still accept an identity table base without forcing
+	  a non-identity output. The direct one-bit shared-table adversarial tests now
+	  tamper assigned scalar-bit and selected-addend witnesses, not unassigned
+	  duplicate selection-table witness copies, and the direct-mode builders omit
+	  those duplicate table/selection witness vectors entirely. Fixed-window and
+	  shared-table assignment now also rejects malformed witness-vector shapes
+	  before assignment, including adversarial extra direct-mode duplicate vectors
+	  and truncated direct-mode window-base chains that would otherwise be skipped
+	  by `zip`; the older bitwise native-scalar scalar-mul/MSM path now has the
+		  same synthesis-time shape rejection for extra conditional steps and truncated
+		  term ladders. Shared-table multi-term MSM composition now chains those
+		  scalar-multiplication terms into one public MSM output while keeping term
+		  outputs private; ignored regression coverage also exercises a two-window MSM
+		  term whose selected base is the identity point. Shared-table IPA verifier
+		  base-link checks now use the assigned direct-mode base helper as well, so
+		  direct one-bit shared-table profiles can omit duplicate table/selection
+		  witnesses while preserving the `Q`, folded-generator, and final-MSM host
+		  links; release-facing public-instance column generation uses the same
+		  assigned-base helper for direct shared-table MSM terms, with a routed
+		  policy negative control guarding both helper paths against table-index
+		  drift. Shared-table
+	  final IPA MSM composition adds
   the native-field `a * b` product link for the `U` term. Shared-table
   round-accumulator and generator-fold composition now binds those MSM scalars
   back to the transcript challenge and inverse for per-round IPA verification,
@@ -11103,8 +11784,9 @@ and completed history lives in [`status.md`](./status.md).
   bridge-loader tests pin packaged artifacts to at least ABI 6, the Node NAPI
   host exports `connectNoritoBridgeAbiVersion`, and the Python PyO3 extension
   exports `kagemusha_recursive_spend_native_bridge_abi_version`. The SDK surfaces also
-  expose a common preferred offline spend-mode selector: `recursive_spend_v1`
-  when the ABI-6-or-later recursive spend surface is available and
+  expose a common preferred offline spend-mode selector: `recursive_compact_v1`
+  when ABI-7 compact prover/verifier support is available, `recursive_spend_v1`
+  when only the ABI-6-or-later recursive spend surface is available, and
   `checked_prefold_v1` as the compatibility fallback; Kotlin/JVM and Java
   Android probe the native bridge ABI version plus verify and both lineage
   witness JNI symbols, C# probes the matching P/Invoke symbols, and
@@ -15643,7 +16325,7 @@ or ABI behavior.
 							  before verifier-record lookup even when artifact digest/commitment
 							  metadata is recalculated.
 							  Release-audit trusted reviewer ids now also share the external
-							  audit-artifact placeholder scanner, so draft, fake, TODO,
+							  audit-artifact placeholder scanner, so draft, fake, to-do,
 							  pending-audit, sample, template, example, and not-production-ready
 							  reviewer labels fail before signoff construction, trusted-reviewer
 							  checks, package validation, or
@@ -15980,7 +16662,7 @@ or ABI behavior.
 									  trace private/public row policy and proof-key-bound release prover input
 									  package.
 									  Governed full-bootstrap artifact payloads now also reject blank text
-									  plus placeholder, pending/TODO, handoff,
+									  plus placeholder, pending/to-do, handoff,
 									  non-production, template, and example sentinels at the shared
 									  payload guard before role-specific Norito decoding, while avoiding a
 									  raw `sample` substring ban so sample-extraction role names remain

@@ -35,8 +35,6 @@ import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.crypto.Signer;
 import org.hyperledger.iroha.android.model.InstructionBox;
-import org.hyperledger.iroha.android.model.JsonValue;
-import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.norito.NoritoCodec;
@@ -100,10 +98,10 @@ public final class OfflineNoteTest {
     walletLoadDerivesCommitmentBeforeIssuerSubmission();
     walletLoadDoesNotBlockIssuerCompletionThread();
     walletLoadCompletesExceptionallyWhenIssuerThrowsSynchronously();
-    toriiIssuerClientBodySignsRefillAndIssuesWalletCommitment();
+    toriiIssuerClientBodySignsRefillAndRetiresNoteIssue();
     toriiIssuerClientRejectsMalformedCertificateUsageLimits();
     walletLifecycleBuildsAuditAcceptAndRedeemTransactions();
-    offlineNoteTransactionSubmitterIncludesFeeMetadata();
+    offlineNoteTransactionSubmitterIsRetiredAndKeepsFeeMetadataHelper();
     walletSyncReconcilesPendingSpendChangeAndRedeemStates();
     walletRejectsDuplicateTokenAndAlreadyPendingInputs();
     walletRejectsExactAmountReceiveRequestReplayAfterRestart();
@@ -960,8 +958,8 @@ public final class OfflineNoteTest {
   private static void kagemushaRecursiveSpendNativeProverValidatesInput() {
     assertTrue(
         KagemushaRecursiveSpendProver.preferredMode(true, true)
-            == KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
-        "recursive spend should remain the production default when compact ABI is present");
+            == KagemushaRecursiveSpendProver.Mode.RECURSIVE_COMPACT_V1,
+        "recursive compact should be preferred when compact ABI is present");
     assertTrue(
         KagemushaRecursiveSpendProver.preferredMode(true)
             == KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
@@ -3121,7 +3119,7 @@ public final class OfflineNoteTest {
         "loaded note state");
   }
 
-  private static void toriiIssuerClientBodySignsRefillAndIssuesWalletCommitment()
+  private static void toriiIssuerClientBodySignsRefillAndRetiresNoteIssue()
       throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> certificateJson =
@@ -3168,7 +3166,6 @@ public final class OfflineNoteTest {
             new SequenceIdGenerator(
                 "operation-refill-1",
                 "auth-refill-1",
-                "auth-issue-1",
                 "operation-refill-2",
                 "auth-refill-2"));
 
@@ -3182,8 +3179,9 @@ public final class OfflineNoteTest {
     for (int i = 0; i < commitment.length; i++) {
       commitment[i] = (byte) (i + 1);
     }
-    final OfflineNoteIssueResponse response =
-        client.issueNote(
+    final Throwable issueFailure =
+        assertFutureFailsWithin(
+            client.issueNote(
                 new OfflineNoteIssueRequest(
                     "chain-1",
                     accountId,
@@ -3191,16 +3189,18 @@ public final class OfflineNoteTest {
                     assetDefinitionId + "#" + accountId,
                     "5",
                     context,
-                    commitment))
-            .get();
-
-    assertEquals(hex(commitment), hex(response.noteCommitment()), "issued commitment");
-    assertEquals("settlement-entry-hash", response.settlementEntryHashHex(), "settlement hash");
-    assertEquals(2L, executor.requests.size(), "issuer request count");
+                    commitment)),
+            "classic Offline Note issue must be retired");
+    assertTrue(
+        issueFailure instanceof IllegalStateException,
+        "retired issue should fail with IllegalStateException");
+    assertEquals(
+        ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE,
+        issueFailure.getMessage(),
+        "retired issue message");
+    assertEquals(1L, executor.requests.size(), "issuer request count");
     assertEquals(
         "/v1/offline/v2/keys/refill", executor.requests.get(0).uri().getPath(), "refill path");
-    assertEquals(
-        "/v1/offline/v2/notes/issue", executor.requests.get(1).uri().getPath(), "issue path");
     for (final TransportRequest request : executor.requests) {
       assertTrue(
           request.headers().keySet().stream()
@@ -3215,7 +3215,7 @@ public final class OfflineNoteTest {
     assertEquals("", string(refillBody, "local_state_hash"), "refill local state hash");
     assertEquals("attestation-key-1", string(refillBody, "attestation_key_id"), "refill attestation key");
     assertEquals("auth-refill-1", string(refillBody, "nonce"), "refill nonce");
-    assertEquals(2L, signedMessages.size(), "issuer body auth signing count");
+    assertEquals(1L, signedMessages.size(), "issuer body auth signing count");
     final byte[] refillMessage =
         CanonicalRequestSigner.canonicalBodyAuthSignatureMessage(
             "POST",
@@ -3235,42 +3235,13 @@ public final class OfflineNoteTest {
     assertEquals(
         "setup", string(obj(refillBody, "device_proof"), "operation"), "refill device proof");
 
-    final Map<String, Object> issueBody = executor.requestBody(1);
-    assertEquals(hex(commitment), string(issueBody, "note_commitment"), "issue commitment");
-    assertEquals(0L, longValue(issueBody, "local_revision"), "pre-issue revision");
-    assertEquals("0", string(issueBody, "local_balance"), "pre-issue balance");
-    assertEquals(
-        " lineage-state-hash ",
-        string(issueBody, "local_state_hash"),
-        "issue local state hash exactness");
-    final byte[] issueMessage =
-        CanonicalRequestSigner.canonicalBodyAuthSignatureMessage(
-            "POST",
-            executor.requests.get(1).uri(),
-            issueBody,
-            1_700_000_000_000L,
-            "auth-issue-1");
-    assertTrue(Arrays.equals(issueMessage, signedMessages.get(1)), "issue body auth message");
-    assertEquals(
-        Base64.getEncoder().encodeToString(fakeIssuerSignature(issueMessage)),
-        string(issueBody, "signature_base64"),
-        "issue body signature");
-    assertEquals("auth-issue-1", string(issueBody, "nonce"), "issue nonce");
-    assertEquals(
-        "load", string(obj(issueBody, "device_proof"), "operation"), "issue device proof");
-    assertEquals("5", string(obj(issueBody, "device_proof"), "amount"), "issue proof amount");
-    obj(issueBody, "lineage_state");
-
     nowMs[0] = 1_700_000_060_001L;
     final OfflineNoteLoadContext refillContext =
         client.prepareLoad("chain-1", accountId, assetDefinitionId, "7").get();
     assertEquals("operation-refill-2", refillContext.operationId(), "second refill operation id");
-    assertEquals(3L, executor.requests.size(), "issuer request count after second refill");
-    final Map<String, Object> secondRefillBody = executor.requestBody(2);
-    assertEquals(
-        " lineage-state-hash ",
-        string(secondRefillBody, "local_state_hash"),
-        "second refill local state hash exactness");
+    assertEquals(2L, executor.requests.size(), "issuer request count after second refill");
+    final Map<String, Object> secondRefillBody = executor.requestBody(1);
+    assertEquals("", string(secondRefillBody, "local_state_hash"), "second refill local state hash");
   }
 
   private static byte[] fakeIssuerSignature(final byte[] message) {
@@ -3570,34 +3541,58 @@ public final class OfflineNoteTest {
         "defund audit trail token id");
   }
 
-  private static void offlineNoteTransactionSubmitterIncludesFeeMetadata() throws Exception {
+  private static void offlineNoteTransactionSubmitterIsRetiredAndKeepsFeeMetadataHelper()
+      throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> chain = obj(fixture, "chain_vectors");
     final Map<String, Object> derivation = obj(chain, "derivation");
     final Map<String, Object> payment = obj(fixture, "payment_token");
-    final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter();
     final CapturingIrohaClient client = new CapturingIrohaClient();
     final Map<String, String> metadata =
         IrohaOfflineNoteTransactionSubmitter.feeMetadata(
-            "xor#universal", string(payment, "recipient_account_id"));
+            "  xor#universal  ", "  " + string(payment, "recipient_account_id") + "  ");
+    assertEquals(
+        "xor#universal",
+        metadata.get(IrohaOfflineNoteTransactionSubmitter.GAS_ASSET_ID_METADATA_KEY),
+        "gas asset metadata");
+    assertEquals(
+        string(payment, "recipient_account_id"),
+        metadata.get(IrohaOfflineNoteTransactionSubmitter.FEE_SPONSOR_METADATA_KEY),
+        "fee sponsor metadata");
     final IrohaOfflineNoteTransactionSubmitter submitter =
         new IrohaOfflineNoteTransactionSubmitter(
             client,
             new FakeSigner(),
             string(derivation, "chain_id"),
             string(payment, "sender_account_id"),
-            codec,
+            new NoritoJavaCodecAdapter(),
             () -> 1_736_000_000_000L,
             metadata);
 
-    submitter.submitAudit(audit(fixture)).get(5, TimeUnit.SECONDS);
+    final OfflineNote.AuditBundle audit = audit(fixture);
+    final OfflineNote.Redeem redemption = redeem(fixture);
+    assertRetiredOfflineNoteSubmission(submitter.submitAudit(audit));
+    assertRetiredOfflineNoteSubmission(submitter.submitRedeem(redemption));
+    assertRetiredOfflineNoteSubmission(
+        submitter.submitDefund(redemption, Collections.singletonList(audit)));
+    assertTrue(client.submittedTransaction == null, "retired submitter must not submit a transaction");
+  }
 
-    assertTrue(client.submittedTransaction != null, "submitter should submit a transaction");
-    final TransactionPayload payload =
-        codec.decodeTransaction(client.submittedTransaction.encodedPayload());
-    final Map<String, JsonValue> expectedMetadata = new LinkedHashMap<>();
-    metadata.forEach((key, value) -> expectedMetadata.put(key, JsonValue.string(value)));
-    assertTrue(expectedMetadata.equals(payload.metadata()), "fee metadata should round-trip");
+  private static void assertRetiredOfflineNoteSubmission(
+      final CompletableFuture<ClientResponse> future) throws Exception {
+    try {
+      future.get(5, TimeUnit.SECONDS);
+      throw new AssertionError("classic Offline Note submitter should be retired");
+    } catch (final ExecutionException ex) {
+      final Throwable cause = ex.getCause();
+      assertTrue(
+          cause instanceof IllegalStateException,
+          "retired submitter should fail with IllegalStateException");
+      assertEquals(
+          IrohaOfflineNoteTransactionSubmitter.RETIRED_OFFLINE_NOTE_PAYMENT_MESSAGE,
+          cause.getMessage(),
+          "retired submitter failure message");
+    }
   }
 
   private static void walletSyncReconcilesPendingSpendChangeAndRedeemStates() throws Exception {

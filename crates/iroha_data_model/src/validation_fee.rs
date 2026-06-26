@@ -511,7 +511,7 @@ impl ValidationFeePolicyV1 {
         height >= self.effective_from_height
             && self
                 .expires_after_height
-                .is_none_or(|expires_after_height| height <= expires_after_height)
+                .is_none_or(|expires_after_height| height < expires_after_height)
     }
 
     /// Deterministic domain-separated policy hash.
@@ -577,7 +577,7 @@ impl ValidationFeePolicyV1 {
         }
         if self
             .expires_after_height
-            .is_some_and(|expires_after_height| expires_after_height < self.effective_from_height)
+            .is_some_and(|expires_after_height| expires_after_height <= self.effective_from_height)
         {
             return Some("validation-fee policy validity window is invalid");
         }
@@ -1037,8 +1037,19 @@ mod tests {
 
         assert!(!policy.is_active_at_height(9));
         assert!(policy.is_active_at_height(10));
-        assert!(policy.is_active_at_height(100));
+        assert!(!policy.is_active_at_height(100));
         assert!(!policy.is_active_at_height(101));
+    }
+
+    #[test]
+    fn policy_invariants_reject_zero_height_validity_window() {
+        let mut policy = policy();
+        policy.expires_after_height = Some(policy.effective_from_height);
+
+        assert_eq!(
+            policy.policy_invariant_error(),
+            Some("validation-fee policy validity window is invalid")
+        );
     }
 
     #[test]

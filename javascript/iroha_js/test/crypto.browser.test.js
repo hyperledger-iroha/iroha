@@ -255,8 +255,8 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
     );
     assert.equal(
       crypto.preferredKagemushaOfflineSpendModeForCapabilities(true, true),
-      crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
-      `${label} capability helper should prefer recursive spend mode`,
+      crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
+      `${label} capability helper should prefer recursive compact mode`,
     );
     assert.equal(
       crypto.isKagemushaRecursiveCompactPaymentTokenNativeAvailable(),

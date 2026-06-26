@@ -81,13 +81,16 @@ val transports = OfflineNoteTransferCapabilities.current(
 Do not render NFC controls when `supportedModalities()` omits NFC; non-NFC
 devices and app builds without HCE should use QR or Nearby only.
 
-JVM core includes an in-memory store, `IrohaOfflineNoteTransactionSubmitter`,
-and `ToriiOfflineNoteIssuerClient` for Torii key-refill plus note-issue
-loads. Apps provide canonical auth and a device-binding provider; Android
-secure storage remains in the platform wallet layer. The Android
-`AndroidOfflineNoteSecureStore` rotates a non-exportable Android Keystore key
-on every committed wallet-state revision and rejects app-data rollback or
-cloned preference snapshots when the old revision key is no longer present.
+JVM core includes an in-memory store and `ToriiOfflineNoteIssuerClient` for
+Torii key-refill. Legacy note issue and
+`IrohaOfflineNoteTransactionSubmitter` audit/redeem/defund submissions are
+retained for source compatibility but fail closed; production offline payments
+use Kagemusha flows. Apps provide canonical auth and a device-binding provider;
+Android secure storage remains in the platform wallet layer. The
+Android `AndroidOfflineNoteSecureStore` rotates a non-exportable Android
+Keystore key on every committed wallet-state revision and rejects app-data
+rollback or cloned preference snapshots when the old revision key is no longer
+present.
 `KagemushaCompactPaymentTokenProver` exposes the native record-backed compact
 token prover for shielded offline-offline payments. Pass a Norito-encoded
 `KagemushaVerifiedFoldRecordBundle`; the JNI bridge verifies each private hop
@@ -200,6 +203,12 @@ lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base
 verifier-witness batch, transition-profile, append-opening-preflight,
 append-boundary, scalar-projection, and previous/resulting accumulator digests);
 SDK code must not derive, supply, or patch accumulator state.
+generic proof-state (`proofState`, `ProofState`, `proof_state`),
+recursive/lineage proof-state, aggregation-transcript, fixed-window
+table-schedule/shared-manifest/table-base, verifier-witness batch,
+transition-profile binding, append-opening preflight, recursive verifier
+scalar-projection, and previous/resulting accumulator aliases are native-owned
+material, not Kotlin request fields.
 Verify request archives must pass the same public-binding preflight before the
 native bridge returns a `KagemushaRecursiveSpendVerifyResultV1`:
 Reserved-lineage bundles require a matching active `lineage_verifier_record`,

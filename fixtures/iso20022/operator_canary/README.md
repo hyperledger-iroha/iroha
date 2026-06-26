@@ -22,7 +22,24 @@ files, populate the rail inbox with XML plus `*.xml.json` sidecars, and point
 When running with `--require-explicit-policy`, keep list-valued runbook fields
 explicit as arrays, including `verify.receipt_dirs: []` and
 `verify.receipts: []` when receipt verification should use only generated stage
-receipts.
+receipts. Also set `rail.receipt_dir` and `notary.receipt_dir` explicitly and
+keep them separate from `rail.inbox_dir` and `notary.export_dir`; production
+policy rejects receipt directories that overlap those source roots.
+Receipt directories must also stay separate from configured rail/notary
+bearer-token file paths before execution, so runtime-only token files are never
+inside generated receipt roots or treated as receipt-root ancestors.
+Bearer-token files must also stay outside `rail.inbox_dir` and
+`notary.export_dir`; those source roots are for message/audit evidence only.
+Direct rail/notary adapter runs additionally reject receipt directories that
+overlap explicit rail XML/sidecar source files, rail/notary bearer-token files,
+directories containing those token files, or notary anchor/index source files,
+and reject bearer-token files under the source roots before source loading or
+network delivery.
+If `--summary-out` is supplied, the canary runner checks the summary target and
+existing ancestors without creating missing parent directories before runbook
+JSON parsing; after planning, the same output must still remain separate from
+the config input and all planned stage artifacts before any child command is
+executed.
 Production runbooks must use real operator endpoints. Reserved placeholder
 hosts such as `.example`, `example.com`, `example.net`, `example.org`, or
 `example.invalid` are rejected before planning or network delivery, and archived

@@ -450,7 +450,11 @@ def test_query_accounts_typed_preserves_bounded_page_metadata() -> None:
     )
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
-    page = client.query_accounts_typed(limit=1, count_mode="bounded")
+    page = client.query_accounts_typed(
+        limit=1,
+        count_mode="bounded",
+        select=[" id ", {"metadata": {"tier": True}}],
+    )
 
     assert page.total is None
     assert page.has_more is True
@@ -458,7 +462,10 @@ def test_query_accounts_typed_preserves_bounded_page_metadata() -> None:
     assert page.indexed_height == 7
     assert page.indexed_block_hash == "ab" * 32
     assert page.query_source == "live"
-    assert json.loads(session.calls[0]["data"])["count_mode"] == "bounded"
+    body = json.loads(session.calls[0]["data"])
+    assert body["count_mode"] == "bounded"
+    assert body["pagination"] == {"offset": 0, "limit": 1}
+    assert body["select"] == ["id", {"metadata": {"tier": True}}]
 
 
 def test_query_accounts_rejects_invalid_count_mode_without_request() -> None:
@@ -529,6 +536,76 @@ def test_query_rwas_typed_preserves_bounded_metadata_and_validates_count_mode() 
     rejecting = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
     with pytest.raises(ValueError, match="count_mode"):
         rejecting.list_rwas(count_mode="full")
+
+
+def test_query_account_transactions_posts_count_mode_and_select_projection() -> None:
+    account = account_address(0x31)
+    session = FakeSession([response(200, {"items": [], "total": 0})])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    payload = client.query_account_transactions(
+        account,
+        count_mode="bounded",
+        select=[" authority ", {"metadata": {"amount": True}}],
+        query_name=" VisibleTransactions ",
+        limit=25,
+        offset=5,
+    )
+
+    assert payload == {"items": [], "total": 0}
+    assert session.calls[0]["path"] == f"/v1/accounts/{quote(account, safe='')}/transactions/query"
+    body = json.loads(session.calls[0]["data"])
+    assert body["pagination"] == {"limit": 25, "offset": 5}
+    assert "limit" not in body
+    assert "offset" not in body
+    assert body["count_mode"] == "bounded"
+    assert body["query"] == "VisibleTransactions"
+    assert "query_name" not in body
+    assert body["select"] == ["authority", {"metadata": {"amount": True}}]
+
+
+def test_query_triggers_posts_query_wire_name_and_count_mode() -> None:
+    session = FakeSession([response(200, {"items": [], "total": 0, "count_mode": "bounded"})])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    payload = client.query_triggers(
+        fetch_size=3,
+        count_mode="bounded",
+        select=[" id ", {"authority": True}],
+        query_name=" recent-triggers ",
+        limit=10,
+        offset=2,
+    )
+
+    assert payload == {"items": [], "total": 0, "count_mode": "bounded"}
+    assert session.calls[0]["path"] == "/v1/triggers/query"
+    body = json.loads(session.calls[0]["data"])
+    assert body["pagination"] == {"limit": 10, "offset": 2}
+    assert "limit" not in body
+    assert "offset" not in body
+    assert body["fetch_size"] == 3
+    assert body["count_mode"] == "bounded"
+    assert body["query"] == "recent-triggers"
+    assert "query_name" not in body
+    assert body["select"] == ["id", {"authority": True}]
+
+
+def test_query_account_transactions_rejects_bad_select_before_request() -> None:
+    account = account_address(0x32)
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+
+    with pytest.raises(TypeError, match="select must be a sequence"):
+        client.query_account_transactions(account, select="authority")
+    with pytest.raises(ValueError, match=r"select\[1].*non-empty"):
+        client.query_account_transactions(account, select=["authority", " "])
+    with pytest.raises(TypeError, match=r"select\[1].*field-path string or mapping"):
+        client.query_account_transactions(account, select=["authority", 7])
+    with pytest.raises(ValueError, match="filter/select/sort"):
+        client.query_account_transactions(
+            account,
+            envelope={"select": ["authority"]},
+            select=["authority"],
+        )
 
 
 def test_repo_agreement_page_preserves_bounded_metadata_and_rejects_bad_flags() -> None:

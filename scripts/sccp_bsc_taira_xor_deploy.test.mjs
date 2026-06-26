@@ -49,6 +49,7 @@ import {
   buildDeploymentEvidence,
   buildMergedBscTairaXorRouteConfigToml,
   bscProductionRequirements,
+  compiledContractCodeHashesFromArtifacts,
   main,
   isKnownDiagnosticBscVerifierKeyHash,
   isCanonicalBscProductionArtifactPath,
@@ -1686,6 +1687,89 @@ test("BSC deployment evidence accepts only matching live readback", () => {
         }),
       }),
     /compiled bridge code hash does not match live readback/u,
+  );
+});
+
+test("BSC compiled code hashes bind source bridge constructor immutables", () => {
+  const zeroWord = "00".repeat(32);
+  const sourceBridgeRuntime = `0x60${zeroWord}${zeroWord}${zeroWord}5b`;
+  const artifacts = {
+    token: { deployedBytecodeKeccak256: HASH_33 },
+    bridge: { deployedBytecodeKeccak256: HASH_44 },
+    sourceBridge: {
+      deployedBytecode: sourceBridgeRuntime,
+      deployedBytecodeKeccak256: HASH_55,
+      immutableReferences: {
+        "18": [{ start: 1, length: 32 }],
+        "20": [{ start: 33, length: 32 }],
+        "22": [{ start: 65, length: 32 }],
+      },
+      immutableReferenceNames: {
+        "18": { name: "networkId", type: "bytes32" },
+        "20": { name: "sourceDomain", type: "uint32" },
+        "22": { name: "targetDomain", type: "uint32" },
+      },
+    },
+    verifier: { deployedBytecodeKeccak256: HASH_11 },
+  };
+
+  const hashes = compiledContractCodeHashesFromArtifacts(artifacts, {
+    profile: "testnet",
+  });
+  assert.equal(hashes.token, HASH_33);
+  assert.equal(hashes.bridge, HASH_44);
+  assert.equal(hashes.verifier, HASH_11);
+  assert.match(hashes.sourceBridge, /^0x[0-9a-f]{64}$/u);
+  assert.notEqual(hashes.sourceBridge, HASH_55);
+
+  const patchedReadback = readyReadback({
+    codeHashes: { sourceBridge: hashes.sourceBridge },
+  });
+  assert.equal(patchedReadback.codeHashes.sourceBridge, hashes.sourceBridge);
+  const evidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+    readback: patchedReadback,
+    compiledContractCodeHashes: hashes,
+  });
+  assert.equal(
+    evidence.compiledContractCodeHashes.sourceBridge,
+    hashes.sourceBridge,
+  );
+
+  assert.throws(
+    () =>
+      buildDeploymentEvidence({
+        tokenAddress: BSC_TOKEN_ADDRESS,
+        bridgeAddress: BSC_BRIDGE_ADDRESS,
+        sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+        verifierAddress: BSC_VERIFIER_ADDRESS,
+        verifierCodeHash: HASH_11,
+        verifierKeyHash: HASH_22,
+        readback: readyReadback(),
+        compiledContractCodeHashes: hashes,
+      }),
+    /compiled sourceBridge code hash does not match live readback/u,
+  );
+  assert.throws(
+    () =>
+      compiledContractCodeHashesFromArtifacts(
+        {
+          ...artifacts,
+          bridge: {
+            deployedBytecode: "0x6000",
+            deployedBytecodeKeccak256: HASH_44,
+            immutableReferences: { "1": [{ start: 1, length: 1 }] },
+            immutableReferenceNames: { "1": { name: "unexpected" } },
+          },
+        },
+        { profile: "testnet" },
+      ),
+    /BSC bridge has immutables but no deployment-aware code hash binding/u,
   );
 });
 
@@ -8598,6 +8682,7 @@ test("BSC deployment helper subcommand help does not touch operator inputs", asy
   );
   assert.match(groth16Material.help, /groth16-material sign-attestation/u);
   assert.match(groth16Material.help, /groth16-material attestation-status/u);
+  assert.match(groth16Material.help, /groth16-material attestation-inventory/u);
   assert.match(groth16Material.help, /groth16-material proof-self-test/u);
   assert.match(groth16Material.help, /groth16-material finalize-attestations/u);
   assert.doesNotMatch(
@@ -8934,6 +9019,10 @@ test("BSC production requirements command writes public artifact without deploye
     assert.match(
       written.commands.groth16AttestationStatus,
       /--trusted-attestation-signer <0x\.\.\.>/u,
+    );
+    assert.match(
+      written.commands.groth16AttestationInventory,
+      /groth16-material attestation-inventory --request <attestation-request\.json> --scan-dir <native-prover-artifact-root> --trusted-attestation-signer <0x\.\.\.>/u,
     );
     assert.match(
       written.commands.groth16ProofSelfTest,

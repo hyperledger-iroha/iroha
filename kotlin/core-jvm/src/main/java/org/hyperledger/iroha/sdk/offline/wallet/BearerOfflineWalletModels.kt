@@ -272,6 +272,9 @@ enum class OfflineNoteRecordSource {
 
 @Serializable
 enum class OfflineNoteRecordStatus {
+    @SerialName("receive_pending")
+    RECEIVE_PENDING,
+
     @SerialName("spendable")
     SPENDABLE,
 
@@ -283,6 +286,15 @@ enum class OfflineNoteRecordStatus {
 
     @SerialName("archived")
     ARCHIVED
+}
+
+@Serializable
+enum class OfflineNoteRecordOriginKind {
+    @SerialName("issuer_load")
+    ISSUER_LOAD,
+
+    @SerialName("p2p_output")
+    P2P_OUTPUT
 }
 
 @Serializable
@@ -298,7 +310,15 @@ data class OfflineNoteRecord(
     @SerialName("token_id") val tokenId: String? = null,
     @SerialName("lineage_id") val lineageId: String? = null,
     @SerialName("key_certificate") val keyCertificate: OfflineCompactKeyCertificate? = null,
-    @SerialName("input_claim") val inputClaim: OfflinePaymentTokenInputClaim? = null
+    @SerialName("input_claim") val inputClaim: OfflinePaymentTokenInputClaim? = null,
+    @SerialName("note_secret_base64") val noteSecretBase64: String? = null,
+    @SerialName("origin_kind") val originKind: OfflineNoteRecordOriginKind? = null,
+    @SerialName("origin_operation_id") val originOperationId: String? = null,
+    @SerialName("origin_lineage_id") val originLineageId: String? = null,
+    @SerialName("origin_local_revision") val originLocalRevision: Long? = null,
+    @SerialName("origin_payment_request_id") val originPaymentRequestId: String? = null,
+    @SerialName("origin_output_index") val originOutputIndex: Int? = null,
+    @SerialName("native_issuer_payment_token_norito_base64") val nativeIssuerPaymentTokenNoritoBase64: String? = null
 )
 
 @Serializable
