@@ -8287,7 +8287,7 @@ pub struct SccpRouteAllowlist {
 }
 
 /// Route-bound browser prover manifest reference advertised to wallet clients.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 pub struct SccpRouteBrowserProverManifestRef {
     /// Browser-safe prover module URL.
     pub module_url: String,
@@ -8306,7 +8306,7 @@ pub struct SccpRouteBrowserProverManifestRef {
 }
 
 /// Configured SCCP route manifest material advertised to wallet clients.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 pub struct SccpRouteManifest {
     /// Material format version.
     pub version: u8,

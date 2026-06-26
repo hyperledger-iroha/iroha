@@ -390,5 +390,10 @@ SafetyAnchors ==
   /\ JsonProjectionAnchors
   /\ TypedProjectionAnchors
 
+CommitQuorumStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ Safety
+  /\ SafetyAnchors
+
 =============================================================================
 ====

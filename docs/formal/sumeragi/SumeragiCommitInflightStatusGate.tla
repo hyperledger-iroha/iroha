@@ -493,5 +493,10 @@ SafetyAnchors ==
   /\ TimeoutRecordAnchors
   /\ ProjectionAnchors
 
+CommitInflightStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ Safety
+  /\ SafetyAnchors
+
 =============================================================================
 ====

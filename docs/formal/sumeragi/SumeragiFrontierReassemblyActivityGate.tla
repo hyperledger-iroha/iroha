@@ -323,6 +323,11 @@ FrontierReassemblyActivitySafetyAnchors ==
   /\ DeferredBlockSyncAnchors
   /\ NoSpuriousReassemblyAnchors
 
+FrontierReassemblyActivityCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ FrontierReassemblyActivitySafetyAnchors
+
 Safety == FrontierReassemblyActivitySafetyAnchors
 
 ====

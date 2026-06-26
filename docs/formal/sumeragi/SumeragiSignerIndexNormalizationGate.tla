@@ -361,6 +361,10 @@ SignerIndexNormalizationExactness ==
   /\ ViewSetNormalizationExact
   /\ RoundTripNormalizationExact
 
+SignerIndexNormalizationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SignerIndexNormalizationExactness
+
 BugCanonicalEmptyKept ==
   ActualResult("empty_to_canonical") = SpecResult("empty_to_canonical")
 

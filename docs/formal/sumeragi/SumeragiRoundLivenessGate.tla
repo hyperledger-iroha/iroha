@@ -493,4 +493,8 @@ NoBugInvariant == RoundLivenessCoreSafety
 
 SafetyFast == RoundLivenessCoreSafety
 
+RoundLivenessCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RoundLivenessCoreSafety
+
 ====

@@ -57,6 +57,7 @@ fn serialize_state_snapshot(
     let block_hashes: Vec<HashOf<BlockHeader>> = view.block_hashes.iter().copied().collect();
     let commit_topology = view.commit_topology.to_vec();
     let prev_commit_topology = view.prev_commit_topology.to_vec();
+    let sccp_route_manifests = view.zk.sccp_route_manifests.clone();
     let public_lane_validators: Vec<_> = view
         .world
         .public_lane_validators
@@ -148,6 +149,11 @@ fn serialize_state_snapshot(
     json::write_json_string("public_lane_reward_claims", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&public_lane_reward_claims, out);
+    out.push(',');
+
+    json::write_json_string("sccp_route_manifests", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(&sccp_route_manifests, out);
 
     if include_space_directory_manifests {
         out.push(',');
@@ -2099,6 +2105,57 @@ mod tests {
         state_factory_with_kura(Kura::blank_kura_for_testing())
     }
 
+    fn sccp_route_manifest_for_snapshot_test(
+        route_id: &str,
+    ) -> iroha_config::parameters::actual::SccpRouteManifest {
+        iroha_config::parameters::actual::SccpRouteManifest {
+            version: 1,
+            route_id: route_id.to_owned(),
+            asset_key: "xor".to_owned(),
+            tron_network: "nile".to_owned(),
+            chain: "tron-nile".to_owned(),
+            chain_id_hex: "0xcd8690dc".to_owned(),
+            counterparty_domain: iroha_sccp::SCCP_DOMAIN_TRON,
+            verifier_target: "TronContract".to_owned(),
+            production_ready: false,
+            disabled_reason: Some("testnet route".to_owned()),
+            network_id_hex: "0x00000000000000000000000000000000000000000000000000000000cd8690dc"
+                .to_owned(),
+            taira_xor_token_address: "TT1DaQcqzoJEzEaHDU8nsmiKtiyhXHaSKD".to_owned(),
+            taira_xor_bridge_address: "TWvqVD8cuSTqisoDrPKfwkkrpAsziL3XFh".to_owned(),
+            sccp_tron_source_bridge_address: "TJk5a8Y1bWkUxqLeBEKiyLEJD2ytoBrsa9".to_owned(),
+            tron_verifier_address: "TKJtY3UFssmhUSg1FPdXyxWcHKS9SWVtCJ".to_owned(),
+            verifier_code_hash: format!("0x{}", "11".repeat(32)),
+            verifier_key_hash: format!("0x{}", "22".repeat(32)),
+            proof_artifact_hash: None,
+            proving_key_hash: None,
+            native_evm_prover_bundle_hash: None,
+            destination_browser_prover: None,
+            source_browser_prover: None,
+            deployment_evidence_sha256: None,
+            destination_binding_key: "iroha:sccp:tron-destination-binding:v1:0:5:nile".to_owned(),
+            destination_binding_hash: format!("0x{}", "33".repeat(32)),
+            taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+                .to_owned(),
+            taira_burn_record_contract_artifact_b64: "Tm9yaXRvLXJvdXRlLWZpeHR1cmU=".to_owned(),
+            taira_burn_record_artifact_sha256: format!("0x{}", "44".repeat(32)),
+            taira_burn_record_code_hash: "55".repeat(32),
+            taira_burn_record_vk_backend: "halo2/ipa".to_owned(),
+            taira_burn_record_vk_name: "taira_xor_burn_record_v1".to_owned(),
+            taira_burn_record_gas_limit: 2_000_000,
+            settlement_contract_address: None,
+            settlement_contract_alias: Some("taira_xor_burn_record".to_owned()),
+            post_deploy_full_toml_ready: None,
+            post_deploy_source_bridge_config_hash: None,
+            post_deploy_source_event_transaction_id: None,
+            post_deploy_source_event_explorer_url: None,
+            post_deploy_route_canary_evidence_hash: None,
+            post_deploy_route_canary_transaction_id: None,
+            post_deploy_route_canary_explorer_url: None,
+            post_deploy_offline_full_toml_sha256: None,
+        }
+    }
+
     fn kura_config_for_snapshot_test(
         store_dir: &Path,
         blocks_in_memory: NonZeroUsize,
@@ -2582,6 +2639,53 @@ mod tests {
             canonical_state_snapshot_bytes_for_tests(&state),
             "snapshot roundtrip must preserve canonical WSV bytes"
         );
+    }
+
+    #[test]
+    async fn snapshot_roundtrip_preserves_sccp_route_manifests() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = state_factory_with_kura(Arc::clone(&kura));
+        let block =
+            signed_block_with_transaction(accepted_log_transaction("sccp-route-manifest-snapshot"));
+        store_block_and_mark_state_height(&mut state, &kura, block);
+        let route = sccp_route_manifest_for_snapshot_test("snapshot_route");
+        *state.sccp_route_manifests.write() = vec![route.clone()];
+        let key_pair = checked_random_snapshot_keypair();
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+
+        let snapshot_bytes =
+            std::fs::read(store_dir.join(SNAPSHOT_FILE_NAME)).expect("snapshot bytes");
+        let snapshot_value: json::Value =
+            json::from_slice(&snapshot_bytes).expect("snapshot JSON should parse");
+        let route_count = snapshot_value
+            .as_object()
+            .and_then(|root| root.get("sccp_route_manifests"))
+            .and_then(json::Value::as_array)
+            .map_or(0, |routes| routes.len());
+        assert_eq!(
+            route_count, 1,
+            "new snapshots must carry the SCCP route manifest registry"
+        );
+
+        let snapshot_state = try_read_snapshot(
+            &store_dir,
+            &kura,
+            LiveQueryStore::start_test,
+            BlockCount(state.view().height()),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::new(<_>::default(), true),
+        )
+        .expect("snapshot read");
+        let routes = snapshot_state.zk_snapshot().sccp_route_manifests;
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].route_id.as_str(), route.route_id.as_str());
+        assert_eq!(routes[0].chain_id_hex.as_str(), route.chain_id_hex.as_str());
     }
 
     #[test]

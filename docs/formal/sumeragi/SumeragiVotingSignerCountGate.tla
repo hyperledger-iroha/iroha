@@ -217,6 +217,10 @@ VotingSignerSupportCountExactness ==
   /\ OutOfRangeSupportFiltered
   /\ DuplicateSupportCollapsed
 
+VotingSignerSupportCountCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VotingSignerSupportCountExactness
+
 BugEmptySetReturnsOne ==
   ActualCount("empty_set_zero") = SpecCount("empty_set_zero")
 

@@ -305,4 +305,9 @@ SafetyFast ==
 
 Safety == MessageProjectionSafetyAnchors
 
+MessageProjectionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ MessageProjectionSafetyAnchors
+
 ====

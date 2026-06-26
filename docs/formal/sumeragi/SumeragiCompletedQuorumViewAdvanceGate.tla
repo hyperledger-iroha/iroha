@@ -459,6 +459,10 @@ CompletedQuorumViewAdvanceExactness ==
   /\ CompletedQuorumCauseExact
   /\ CompletedQuorumGenericPreservesSlotExact
 
+CompletedQuorumViewAdvanceCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CompletedQuorumViewAdvanceExactness
+
 Safety ==
   SafetyFast
 

@@ -598,6 +598,10 @@ QuorumRebroadcastDispatchExactness ==
   /\ QuorumRebroadcastBlockSyncDispatchExact
   /\ QuorumRebroadcastMarkingExact
 
+QuorumRebroadcastDispatchCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ QuorumRebroadcastDispatchExactness
+
 Safety ==
   QuorumRebroadcastCoreSafety
 

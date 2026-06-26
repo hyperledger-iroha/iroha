@@ -297,4 +297,9 @@ SafetyAnchors ==
   /\ CleanupAnchors
   /\ CursorProgressAnchors
 
+RbcOutboundFlushCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ SafetyAnchors
+
 ====

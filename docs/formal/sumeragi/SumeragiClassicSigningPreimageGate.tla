@@ -390,4 +390,9 @@ ClassicSigningPreimageExactness ==
 
 Safety == ClassicSigningPreimageExactness
 
+ClassicSigningPreimageCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ Safety
+  /\ ClassicPreimageSafetyAnchors
+
 ====

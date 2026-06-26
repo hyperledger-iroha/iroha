@@ -216,4 +216,9 @@ SafetyAnchors ==
   /\ SchedulePostAnchors
   /\ ForkReadyAnchors
 
+RbcChunkPostDebugCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ SafetyAnchors
+
 ====

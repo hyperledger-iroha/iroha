@@ -6772,15 +6772,33 @@ def test_all_lanes_evidence_rejects_malformed_governed_blocker_containers():
         for route in records["sccp_route_allowlists"]
         if route["domain"] == module.SCCP_DOMAIN_TON
     )
+    bsc_destination = next(
+        rollout
+        for rollout in records["sccp_destination_rollouts"]
+        if rollout["domain"] == module.SCCP_DOMAIN_BSC
+    )
+    tron_route = next(
+        route
+        for route in records["sccp_route_allowlists"]
+        if route["domain"] == module.SCCP_DOMAIN_TRON
+    )
 
     confusable_blocker = "operator public bl\u043ecker"
     eth_destination["blockers"] = "operator says destination rollout is ready"
     tron_destination["blockers"] = [123]
     sol_destination["blockers"] = ["operator\nsecret-token-governed-blocker"]
+    bsc_destination["blockers"] = [
+        "destination verifier deployment still pending",
+        "destination verifier deployment still pending",
+    ]
     eth_route["blockers"] = ["operator secret-token-governed-blocker"]
     bsc_route["blockers"] = [""]
     sol_route["blockers"] = [" route canary still pending"]
     ton_route["blockers"] = ["operator|governed-blocker", confusable_blocker]
+    tron_route["blockers"] = [
+        "governance canary has not passed",
+        "governance canary has not passed",
+    ]
 
     summary = module.validate_evidence_bundle(records)
 
@@ -6818,8 +6836,20 @@ def test_all_lanes_evidence_rejects_malformed_governed_blocker_containers():
         "domain 4 (ton): route allowlist blockers[1] contains non-ASCII "
         "character"
     ) in blockers
+    assert (
+        # Source-inventory marker: destination rollout blockers must not contain duplicate strings
+        "domain 2 (bsc): destination rollout blockers must not contain "
+        "duplicate strings"
+    ) in blockers
+    assert (
+        # Source-inventory marker: route allowlist blockers must not contain duplicate strings
+        "domain 5 (tron): route allowlist blockers must not contain duplicate "
+        "strings"
+    ) in blockers
     assert "domain 2 (bsc): route allowlist blockers must be empty" in blockers
     assert "domain 3 (sol): route allowlist blockers must be empty" in blockers
+    assert "destination verifier deployment still pending" not in blockers
+    assert "governance canary has not passed" not in blockers
     assert "secret-token-governed-blocker" not in blockers
     assert "operator|governed-blocker" not in blockers
     assert confusable_blocker not in blockers
@@ -7848,6 +7878,69 @@ def test_all_lanes_cli_suppresses_malformed_summary_blockers(capsys):
         "all-lanes summary blockers[0] contains sensitive name"
     ]
     assert "secret-token-blocker" not in captured.out
+
+
+def test_all_lanes_cli_rejects_duplicate_public_blockers_without_leaking(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    root_blocker = "safe duplicated root blocker"
+    lane_blocker = "safe duplicated lane blocker"
+    gate_blocker = "safe duplicated source gate blocker"
+    checklist_blocker = "safe duplicated checklist blocker"
+    eth_lane = summary["lanes"][0]
+    summary["production_ready"] = False
+    summary["blockers"] = [root_blocker, root_blocker]
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = [lane_blocker, lane_blocker]
+    eth_lane["source_adapter_gate"]["ready"] = False
+    eth_lane["source_adapter_gate"]["blockers"] = [gate_blocker, gate_blocker]
+    summary["release_checklist"]["items"][0]["ready"] = False
+    summary["release_checklist"]["items"][0]["blockers"] = [
+        checklist_blocker,
+        checklist_blocker,
+    ]
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: copy.deepcopy(summary)
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert (
+        "all-lanes summary blockers must not contain duplicate strings"
+    ) in blockers
+    assert (
+        "all-lanes summary lanes[0] blockers must not contain duplicate strings"
+    ) in blockers
+    assert (
+        # Source-inventory marker: all-lanes summary lanes[0].source_adapter_gate blockers must not contain duplicate strings
+        "all-lanes summary lanes[0].source_adapter_gate blockers must not "
+        "contain duplicate strings"
+    ) in blockers
+    assert (
+        # Source-inventory marker: all-lanes summary release_checklist items[0] blockers must not contain duplicate strings
+        "all-lanes summary release_checklist items[0] blockers must not contain "
+        "duplicate strings"
+    ) in blockers
+    assert "lanes" not in payload
+    assert "release_checklist" not in payload
+    for copied_blocker in (
+        root_blocker,
+        lane_blocker,
+        gate_blocker,
+        checklist_blocker,
+    ):
+        assert copied_blocker not in captured.out
+    assert "Traceback" not in captured.err
 
 
 def test_all_lanes_cli_rejects_unknown_summary_fields_without_leaking(capsys):
@@ -10773,14 +10866,20 @@ def test_all_lanes_cli_rejects_copied_not_ready_route_canary_missing_fields(
         for index, lane in enumerate(summary["lanes"])
     }
     eth_index, eth_lane = lanes[module.SCCP_DOMAIN_ETH]
+    bsc_index, bsc_lane = lanes[module.SCCP_DOMAIN_BSC]
     sol_index, sol_lane = lanes[module.SCCP_DOMAIN_SOL]
     ton_index, ton_lane = lanes[module.SCCP_DOMAIN_TON]
     tron_index, tron_lane = lanes[module.SCCP_DOMAIN_TRON]
-    for lane in (eth_lane, sol_lane, ton_lane, tron_lane):
+    for lane in (eth_lane, bsc_lane, sol_lane, ton_lane, tron_lane):
         lane["production_ready"] = False
         lane["blockers"] = ["operator pending lane certification"]
 
     eth_lane["route_allowlist"]["route_canary"].pop("transaction_hash", None)
+    eth_lane["route_allowlist"]["route_canary"].pop("message_proof_used", None)
+    bsc_lane["route_allowlist"]["route_canary"].pop(
+        "receipt_block_finalized",
+        None,
+    )
     sol_lane["route_allowlist"]["route_canary"].pop(
         "solana_programdata_address",
         None,
@@ -10790,6 +10889,15 @@ def test_all_lanes_cli_rejects_copied_not_ready_route_canary_missing_fields(
         None,
     )
     tron_lane["route_allowlist"]["route_canary"].pop("signature_sha256", None)
+    tron_lane["route_allowlist"]["route_canary"].pop("message_proof_used", None)
+    tron_lane["route_allowlist"]["route_canary"].pop(
+        "raw_data_owner_matches_transaction",
+        None,
+    )
+    tron_lane["route_allowlist"]["route_canary"].pop(
+        "signature_recovers_to_owner",
+        None,
+    )
 
     module.load_evidence_bundle = lambda paths: {}
     module.validate_evidence_bundle = lambda records: summary
@@ -10806,8 +10914,17 @@ def test_all_lanes_cli_rejects_copied_not_ready_route_canary_missing_fields(
     assert payload["production_ready"] is False
     assert "lanes" not in payload
     assert "operator pending external verifier deployment" in blockers
+    # Source-inventory marker: missing field: message_proof_used
+    # Source-inventory marker: missing field: receipt_block_finalized
+    # Source-inventory marker: missing field: raw_data_owner_matches_transaction
+    # Source-inventory marker: missing field: signature_recovers_to_owner
     expected_blockers = (
         (eth_index, "route_allowlist.route_canary missing field transaction_hash"),
+        (eth_index, "route_allowlist.route_canary missing field message_proof_used"),
+        (
+            bsc_index,
+            "route_allowlist.route_canary missing field receipt_block_finalized",
+        ),
         (
             sol_index,
             "route_allowlist.route_canary missing field solana_programdata_address",
@@ -10817,6 +10934,15 @@ def test_all_lanes_cli_rejects_copied_not_ready_route_canary_missing_fields(
             "route_allowlist.route_canary missing field ton_last_transaction_hash",
         ),
         (tron_index, "route_allowlist.route_canary missing field signature_sha256"),
+        (tron_index, "route_allowlist.route_canary missing field message_proof_used"),
+        (
+            tron_index,
+            "route_allowlist.route_canary missing field raw_data_owner_matches_transaction",
+        ),
+        (
+            tron_index,
+            "route_allowlist.route_canary missing field signature_recovers_to_owner",
+        ),
     )
     for lane_index, expected in expected_blockers:
         assert f"all-lanes summary lanes[{lane_index}].{expected}" in blockers
@@ -12094,10 +12220,17 @@ def test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars():
                 "evidence_hash": hex32(0x5C),
                 "evidence_source": "evm_message_proof_accepted_transaction",
                 "evidence_bound": True,
+                "message_proof_used": True,
+                "receipt_block_finalized": True,
             },
         },
         "blockers": [],
     }
+    route_canary_missing_scalar_cases = (
+        "missing.evidence_bound",
+        "missing.message_proof_used",
+        "missing.receipt_block_finalized",
+    )
     cases = (
         (
             "status",
@@ -12120,6 +12253,16 @@ def test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars():
             "domain 1 (eth): live route canary evidence source must be a non-empty canonical string",
         ),
         (
+            "evidence_source",
+            None,
+            "domain 1 (eth): live route canary evidence source is missing",
+        ),
+        (
+            "evidence_source",
+            "",
+            "domain 1 (eth): live route canary evidence source is missing",
+        ),
+        (
             "evidence_bound",
             "true",
             "domain 1 (eth): route canary evidence_bound must be boolean",
@@ -12131,7 +12274,17 @@ def test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars():
         ),
         (
             "evidence_bound",
+            None,
+            "domain 1 (eth): route canary evidence_bound must be boolean",
+        ),
+        (
+            "evidence_bound",
             False,
+            "domain 1 (eth): route canary evidence is not bound",
+        ),
+        (
+            "missing.evidence_bound",
+            None,
             "domain 1 (eth): route canary evidence is not bound",
         ),
         (
@@ -12146,7 +12299,17 @@ def test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars():
         ),
         (
             "message_proof_used",
+            None,
+            "domain 1 (eth): route canary message_proof_used must be boolean",
+        ),
+        (
+            "message_proof_used",
             False,
+            "domain 1 (eth): route canary message proof must be used",
+        ),
+        (
+            "missing.message_proof_used",
+            None,
             "domain 1 (eth): route canary message proof must be used",
         ),
         (
@@ -12161,14 +12324,29 @@ def test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars():
         ),
         (
             "receipt_block_finalized",
+            None,
+            "domain 1 (eth): route canary receipt_block_finalized must be boolean",
+        ),
+        (
+            "receipt_block_finalized",
             False,
+            "domain 1 (eth): route canary receipt block must be finalized",
+        ),
+        (
+            "missing.receipt_block_finalized",
+            None,
             "domain 1 (eth): route canary receipt block must be finalized",
         ),
     )
 
     for field, value, expected in cases:
         lane = copy.deepcopy(base_lane)
-        lane["route_allowlist"]["route_canary"][field] = value
+        canary = lane["route_allowlist"]["route_canary"]
+        if field in route_canary_missing_scalar_cases:
+            _, target_field = field.split(".", 1)
+            canary.pop(target_field)
+        else:
+            canary[field] = value
 
         checklist = module._release_checklist([lane], [])
         items = {item["id"]: item for item in checklist["items"]}
@@ -12234,7 +12412,32 @@ def test_all_lanes_release_checklist_rejects_malformed_tron_route_canary_boolean
         },
         "blockers": [],
     }
+    route_canary_missing_scalar_cases = (
+        "missing.message_proof_used",
+        "missing.raw_data_owner_matches_transaction",
+        "missing.signature_recovers_to_owner",
+    )
     cases = (
+        (
+            "message_proof_used",
+            "true",
+            "domain 5 (tron): route canary message_proof_used must be boolean",
+        ),
+        (
+            "message_proof_used",
+            None,
+            "domain 5 (tron): route canary message_proof_used must be boolean",
+        ),
+        (
+            "message_proof_used",
+            False,
+            "domain 5 (tron): route canary message proof must be used",
+        ),
+        (
+            "missing.message_proof_used",
+            None,
+            "domain 5 (tron): route canary message proof must be used",
+        ),
         (
             "raw_data_owner_matches_transaction",
             "true",
@@ -12247,7 +12450,17 @@ def test_all_lanes_release_checklist_rejects_malformed_tron_route_canary_boolean
         ),
         (
             "raw_data_owner_matches_transaction",
+            None,
+            "domain 5 (tron): route canary raw_data_owner_matches_transaction must be boolean",
+        ),
+        (
+            "raw_data_owner_matches_transaction",
             False,
+            "domain 5 (tron): route canary raw_data owner must match transaction",
+        ),
+        (
+            "missing.raw_data_owner_matches_transaction",
+            None,
             "domain 5 (tron): route canary raw_data owner must match transaction",
         ),
         (
@@ -12262,14 +12475,29 @@ def test_all_lanes_release_checklist_rejects_malformed_tron_route_canary_boolean
         ),
         (
             "signature_recovers_to_owner",
+            None,
+            "domain 5 (tron): route canary signature_recovers_to_owner must be boolean",
+        ),
+        (
+            "signature_recovers_to_owner",
             False,
+            "domain 5 (tron): route canary signature must recover to owner",
+        ),
+        (
+            "missing.signature_recovers_to_owner",
+            None,
             "domain 5 (tron): route canary signature must recover to owner",
         ),
     )
 
     for field, value, expected in cases:
         lane = copy.deepcopy(base_lane)
-        lane["route_allowlist"]["route_canary"][field] = value
+        canary = lane["route_allowlist"]["route_canary"]
+        if field in route_canary_missing_scalar_cases:
+            _, target_field = field.split(".", 1)
+            canary.pop(target_field)
+        else:
+            canary[field] = value
 
         checklist = module._release_checklist([lane], [])
         items = {item["id"]: item for item in checklist["items"]}

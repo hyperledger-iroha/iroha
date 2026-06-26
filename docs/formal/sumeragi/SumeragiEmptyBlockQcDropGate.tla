@@ -350,6 +350,10 @@ EmptyBlockQcDropExactness ==
   /\ EmptyBlockVoteCleanupExact
   /\ EmptyBlockRosterSignerCleanupExact
 
+EmptyBlockQcDropCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EmptyBlockQcDropExactness
+
 NewViewNeverDropped ==
   Matches("new_view_known_empty")
 

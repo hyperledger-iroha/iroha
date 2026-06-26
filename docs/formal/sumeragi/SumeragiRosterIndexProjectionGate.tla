@@ -242,6 +242,10 @@ RosterIndexProjectionExactness ==
   /\ RosterIndexManagerApplyExact
   /\ RosterIndexProjectionManagerExact
 
+RosterIndexProjectionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RosterIndexProjectionExactness
+
 NoBugInvariant == RosterIndexProjectionCoreSafety
 
 SafetyFast == RosterIndexProjectionCoreSafety

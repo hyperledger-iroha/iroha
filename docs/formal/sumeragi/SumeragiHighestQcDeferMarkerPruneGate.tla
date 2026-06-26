@@ -342,4 +342,8 @@ NoBugInvariant ==
 
 SafetyFast == NoBugInvariant
 
+HighestQcDeferMarkerPruneCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ NoBugInvariant
+
 ====

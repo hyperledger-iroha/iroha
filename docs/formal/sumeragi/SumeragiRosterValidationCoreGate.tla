@@ -449,6 +449,10 @@ RosterValidationCoreExactness ==
   /\ RosterValidationCoreCheckpointRootPreimageExact
   /\ RosterValidationCoreCheckpointBlsOutputExact
 
+RosterValidationCoreCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RosterValidationCoreExactness
+
 BugCommitAcceptsEmptyRoster ==
   ImplementationActions(CommitRejectEmptyRoster) =
     SpecActions(CommitRejectEmptyRoster)

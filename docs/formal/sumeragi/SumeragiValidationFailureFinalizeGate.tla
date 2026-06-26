@@ -326,4 +326,9 @@ SafetyAnchors ==
   /\ PreviousRosterRecoveryOnlyForPreviousRosterFailures
   /\ CleanupAnchorCases
 
+ValidationFailureFinalizeCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ SafetyAnchors
+
 ====

@@ -317,4 +317,9 @@ BlockMessageKindExactness ==
 
 Safety == BlockMessageKindExactness
 
+BlockMessageKindCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ Safety
+  /\ BlockMessageKindSafetyAnchors
+
 ====

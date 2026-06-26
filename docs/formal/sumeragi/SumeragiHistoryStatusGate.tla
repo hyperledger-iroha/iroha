@@ -438,5 +438,10 @@ SafetyAnchors ==
   /\ NposHistoryAnchors
   /\ ConsensusKeyHistoryAnchors
 
+HistoryStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ Safety
+  /\ SafetyAnchors
+
 =============================================================================
 ====

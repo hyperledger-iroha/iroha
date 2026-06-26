@@ -253,6 +253,10 @@ MembershipViewHashExactness ==
   /\ MembershipViewHashPeerOrderExact
   /\ MembershipViewHashPeerCardinalityExact
 
+MembershipViewHashCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MembershipViewHashExactness
+
 NoBugInvariant == MembershipViewHashCoreSafety
 
 SafetyFast == MembershipViewHashCoreSafety

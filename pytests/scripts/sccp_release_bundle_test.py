@@ -10,7 +10,7 @@ import shlex
 import subprocess
 import sys
 from importlib.util import module_from_spec, spec_from_file_location
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 
@@ -536,6 +536,14 @@ def test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift() 
             ["route canary governance review pending"],
             "route canary blockers must be empty",
         ),
+        (
+            "duplicate",
+            [
+                "route canary governance review pending",
+                "route canary governance review pending",
+            ],
+            "route canary blockers must not contain duplicate strings",
+        ),
     )
     for case_label, blocker_value, expected_blocker in route_canary_blocker_cases:
         canary = {**valid_canary, "blockers": blocker_value}
@@ -640,6 +648,65 @@ def test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift() 
             f"{label}: route canary {target_label} must not reuse {source_label}"
         ) in blockers
 
+    route_canary_evidence_source_exactness_cases = (
+        (
+            "wrong",
+            "operator_note",
+            "route canary evidence source must be "
+            "evm_message_proof_accepted_transaction",
+        ),
+        (
+            "uppercase",
+            verifier.ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE.upper(),
+            "route canary evidence source must be "
+            "evm_message_proof_accepted_transaction",
+        ),
+        (
+            "missing",
+            None,
+            "route canary evidence source must be a non-empty canonical string",
+        ),
+        (
+            "null",
+            None,
+            "route canary evidence source must be a non-empty canonical string",
+        ),
+        (
+            "empty",
+            "",
+            "route canary evidence source must be a non-empty canonical string",
+        ),
+        (
+            "padded",
+            f" {verifier.ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE} ",
+            "route canary evidence source must be a non-empty canonical string",
+        ),
+        (
+            "numeric",
+            123,
+            "route canary evidence source must be a non-empty canonical string",
+        ),
+    )
+    for case_id, value, expected_blocker in (
+        route_canary_evidence_source_exactness_cases
+    ):
+        canary = dict(valid_canary)
+        if case_id == "missing":
+            canary.pop("evidence_source")
+        else:
+            canary["evidence_source"] = value
+        blockers = verifier._active_launch_route_canary_metadata_blockers(
+            label,
+            canary,
+        )
+
+        assert f"{label}: {expected_blocker}" in blockers, case_id
+        assert not any(
+            "route canary receipt block number must be a positive integer" in blocker
+            for blocker in blockers
+        )
+        assert f"{label}: route canary receipt block must be finalized" not in blockers
+
     route_canary_hex32_exactness_cases = (
         ("evidence_hash", None, "evidence hash"),
         ("evidence_hash", fixed_hex32(0xA1).upper(), "evidence hash"),
@@ -686,18 +753,59 @@ def test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift() 
         ) in blockers
         assert f"{label}: route canary receipt block must be finalized" not in blockers
 
-    for value in ("true", 1, False, None):
-        canary = {**valid_canary, "receipt_block_finalized": value}
+    route_canary_message_proof_used_exactness_cases = (
+        ("string", "true", "route canary message_proof_used must be boolean"),
+        ("numeric", 1, "route canary message_proof_used must be boolean"),
+        ("null", None, "route canary message_proof_used must be boolean"),
+        ("false", False, "route canary message proof must be used"),
+        ("missing", None, "route canary message proof must be used"),
+    )
+    for case_id, value, expected_blocker in (
+        route_canary_message_proof_used_exactness_cases
+    ):
+        canary = dict(valid_canary)
+        if case_id == "missing":
+            canary.pop("message_proof_used")
+        else:
+            canary["message_proof_used"] = value
         blockers = verifier._active_launch_route_canary_metadata_blockers(
             label,
             canary,
         )
 
-        assert f"{label}: route canary receipt block must be finalized" in blockers
+        assert f"{label}: {expected_blocker}" in blockers, case_id
         assert not any(
             "route canary receipt block number must be a positive integer" in blocker
             for blocker in blockers
         )
+        assert f"{label}: route canary receipt block must be finalized" not in blockers
+
+    route_canary_receipt_finalized_exactness_cases = (
+        ("string", "true", "route canary receipt_block_finalized must be boolean"),
+        ("numeric", 1, "route canary receipt_block_finalized must be boolean"),
+        ("null", None, "route canary receipt_block_finalized must be boolean"),
+        ("false", False, "route canary receipt block must be finalized"),
+        ("missing", None, "route canary receipt block must be finalized"),
+    )
+    for case_id, value, expected_blocker in (
+        route_canary_receipt_finalized_exactness_cases
+    ):
+        canary = dict(valid_canary)
+        if case_id == "missing":
+            canary.pop("receipt_block_finalized")
+        else:
+            canary["receipt_block_finalized"] = value
+        blockers = verifier._active_launch_route_canary_metadata_blockers(
+            label,
+            canary,
+        )
+
+        assert f"{label}: {expected_blocker}" in blockers, case_id
+        assert not any(
+            "route canary receipt block number must be a positive integer" in blocker
+            for blocker in blockers
+        )
+        assert f"{label}: route canary message proof must be used" not in blockers
 
 
 def test_release_bundle_hex_predicates_redact_parser_exit_causes(
@@ -962,6 +1070,14 @@ def test_release_bundle_active_route_allowlist_metadata_rejects_exact_flag_and_r
             ["governance canary has not passed"],
             f"{label}: route allowlist blockers must be empty",
         ),
+        (
+            "duplicate",
+            [
+                "governance canary has not passed",
+                "governance canary has not passed",
+            ],
+            f"{label}: route allowlist blockers must not contain duplicate strings",
+        ),
     )
     for case_id, route_blockers, expected_blocker in route_allowlist_blocker_cases:
         lane = {
@@ -1148,6 +1264,14 @@ def test_release_bundle_active_governed_deployment_metadata_rejects_exact_flag_a
             ["destination verifier deployment still pending"],
             f"{label}: destination rollout blockers must be empty",
         ),
+        (
+            "duplicate",
+            [
+                "destination verifier deployment still pending",
+                "destination verifier deployment still pending",
+            ],
+            f"{label}: destination rollout blockers must not contain duplicate strings",
+        ),
     )
     for case_id, destination_blockers, expected_blocker in (
         destination_binding_blocker_cases
@@ -1197,6 +1321,11 @@ def test_release_bundle_active_governed_deployment_metadata_rejects_exact_flag_a
             "valid nonempty",
             ["source gate audit pending"],
             f"{label}: source adapter gate blockers must be empty",
+        ),
+        (
+            "duplicate",
+            ["source gate audit pending", "source gate audit pending"],
+            f"{label}: source adapter gate blockers must not contain duplicate strings",
         ),
     )
     for case_id, gate_blockers, expected_blocker in source_adapter_gate_blocker_cases:
@@ -4323,6 +4452,11 @@ def test_release_bundle_release_notes_reject_malformed_artifact_rows() -> None:
             "sha256": "operator secret-token-hash",
         },
         {
+            "path": "sccp-release-zero-byte-artifact.json",
+            "bytes": 0,
+            "sha256": "2" * 64,
+        },
+        {
             "path": "sccp-release-notes-attachment.md",
             "bytes": 7,
             "sha256": "1" * 64,
@@ -4344,6 +4478,8 @@ def test_release_bundle_release_notes_reject_malformed_artifact_rows() -> None:
         assert "secret-token" not in notes
         assert "operator|" not in notes
         assert "Traceback" not in notes
+    for notes in (builder_notes, verifier_notes):
+        assert "| `sccp-release-zero-byte-artifact.json` | `<invalid bytes>` |" in notes
 
     assert builder_notes == verifier_notes
     single_invalid_artifacts = [artifacts[1], artifacts[2]]
@@ -4848,17 +4984,17 @@ def test_release_bundle_rejects_malformed_copied_input_provenance_before_render(
             report = minimal_release_bundle_report()
             if self.calls == 2:
                 report["inputs"] = [
-                    "evidence/secret-token-complete.toml",
-                    "evidence/secret-token-complete.toml",
-                    "../secret-token-operator/complete.toml",
+                    "evidence/complete.toml",
+                    "evidence/complete.toml",
+                    "../operator/complete.toml",
                     "",
-                    "evidence/secret-token-renamed.toml",
+                    "evidence/renamed.toml",
                     " evidence/05-padded.toml ",
                     "evidence/%2e%2e/secret.toml",
                 ]
                 report["input_artifacts"] = [
-                    artifact("evidence/secret-token-complete.toml"),
-                    artifact("evidence/secret-token-complete.toml"),
+                    artifact("evidence/complete.toml"),
+                    artifact("evidence/complete.toml"),
                     artifact("evidence/02-other.toml"),
                     artifact(" evidence/03-padded.toml "),
                     artifact("evidence/%2e%2e/secret.toml"),
@@ -5043,7 +5179,12 @@ def test_release_bundle_rejects_malformed_copied_artifacts_before_render(
                         markdown_field: "markdown local claim",
                         confusable_field: "confusable local claim",
                         secret_field: "secret local claim",
-                    }
+                    },
+                    {
+                        "path": "evidence/01-complete.toml",
+                        "bytes": 1,
+                        "sha256": "0" * 64,
+                    },
                 ]
                 corridor = report["corridor"]
                 assert isinstance(corridor, dict)
@@ -5123,6 +5264,10 @@ def test_release_bundle_rejects_malformed_copied_artifacts_before_render(
     assert (
         "bundled report.input_artifacts[0] sha256 must be a canonical SHA-256 "
         "hex string"
+    ) in captured.err
+    assert (
+        "bundled report.input_artifacts[1] sha256 must be a non-zero canonical "
+        "SHA-256 hex string"
     ) in captured.err
     assert (
         "bundled report.corridor.evidence_artifacts['contract-smoke'] path "
@@ -6659,6 +6804,19 @@ def test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render(
                         "route_canary_evidence_hash": "0x" + "44" * 32,
                         "route_canary_evidence_source": " route-canary ",
                         "route_canary_evidence_bound": "true",
+                        "route_canary_message_proof_used": "true",
+                        "route_canary_raw_data_owner_matches_transaction": "true",
+                        "route_canary_signature_recovers_to_owner": "true",
+                        "route_canary_log_index": "0",
+                        "route_canary_target_domain": "1",
+                        "route_canary_proof_version": "1",
+                        "route_canary_proof_source_domain": "0",
+                        "route_canary_call_data_sha256": "0X" + "50" * 32,
+                        "route_canary_payload_hash": "0x" + "51" * 31,
+                        "route_canary_statement_hash": "0x" + "52" * 31,
+                        "route_canary_commitment_root": True,
+                        "route_canary_finality_height": "0x" + "zz" * 32,
+                        "route_canary_finality_block_hash": 7,
                         "route_canary_transaction_hash": "0X" + "55" * 32,
                         "route_canary_receipt_block_number": False,
                         "route_canary_receipt_block_hash": True,
@@ -6736,6 +6894,24 @@ def test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render(
     assert f"{label} route_canary_evidence_bound must be true or false" in (
         captured.err
     )
+    assert f"{label} route_canary_message_proof_used must be true, false, or null" in (
+        captured.err
+    )
+    assert (
+        f"{label} route_canary_raw_data_owner_matches_transaction must be "
+        "true, false, or null"
+    ) in captured.err
+    assert (
+        f"{label} route_canary_signature_recovers_to_owner must be true, false, or null"
+        in captured.err
+    )
+    for field in (
+        "route_canary_log_index",
+        "route_canary_target_domain",
+        "route_canary_proof_version",
+        "route_canary_proof_source_domain",
+    ):
+        assert f"{label} {field} must be null or a non-negative integer" in captured.err
     assert f"{label} source_adapter_gate_required must be true or false" in (
         captured.err
     )
@@ -6753,6 +6929,12 @@ def test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render(
         "route_canary_receipt_block_hash",
         "route_canary_block_receipts_root",
         "route_canary_message_id",
+        "route_canary_call_data_sha256",
+        "route_canary_payload_hash",
+        "route_canary_statement_hash",
+        "route_canary_commitment_root",
+        "route_canary_finality_height",
+        "route_canary_finality_block_hash",
     ):
         assert (
             f"{label} {field} must be empty, null, or a canonical bytes32 hex string"
@@ -6825,6 +7007,244 @@ def test_release_bundle_rejects_unbound_copied_crypto_evidence_before_render() -
         f"{label} route_canary_receipt_block_finalized must be true for finalized "
         "EVM route canary evidence"
     ) in errors
+    assert (
+        f"{label} route_canary_message_proof_used must be true for message-proof "
+        "route canary evidence"
+    ) in errors
+
+
+def test_release_bundle_rejects_copied_crypto_message_proof_drift_before_render() -> None:
+    """Copied message-proof canary rows must advertise proven message usage."""
+
+    bundle = load_bundle_module()
+    label = "bundled report.cryptographic_evidence[0]"
+    for domain, chain, value in (
+        (1, "eth", False),
+        (2, "bsc", None),
+        (5, "tron", False),
+    ):
+        row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+        row.update(
+            {
+                "domain": domain,
+                "chain": chain,
+                "route_canary_evidence_hash": fixed_hex32(0x44),
+                "route_canary_evidence_source": bundle._route_canary_source_by_domain()[
+                    domain
+                ],
+                "route_canary_evidence_bound": True,
+                "route_canary_message_proof_used": value,
+                "route_canary_raw_data_owner_matches_transaction": (
+                    True if domain == 5 else None
+                ),
+                "route_canary_signature_recovers_to_owner": (
+                    True if domain == 5 else None
+                ),
+                "route_canary_log_index": 0,
+                "route_canary_target_domain": domain,
+                "route_canary_proof_version": 1,
+                "route_canary_proof_source_domain": bundle._sccp_domain_sora(),
+                "route_canary_call_data_sha256": fixed_hex32(0x90 + domain),
+                "route_canary_payload_hash": fixed_hex32(0x95 + domain),
+                "route_canary_statement_hash": fixed_hex32(0x9A + domain),
+                "route_canary_commitment_root": fixed_hex32(0xA0 + domain),
+                "route_canary_finality_height": fixed_hex32(0xA5 + domain),
+                "route_canary_finality_block_hash": fixed_hex32(0xAA + domain),
+                "route_canary_receipt_block_finalized": (
+                    True if domain in (1, 2) else None
+                ),
+            }
+        )
+
+        errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+
+        assert (
+            f"{label} route_canary_message_proof_used must be true for "
+            "message-proof route canary evidence"
+        ) in errors
+
+
+def test_release_bundle_rejects_copied_crypto_scalar_drift_before_render() -> None:
+    """Copied message-proof canary rows must publish exact scalar proof context."""
+
+    bundle = load_bundle_module()
+    label = "bundled report.cryptographic_evidence[0]"
+    row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+    row.update(
+        {
+            "domain": 1,
+            "chain": "eth",
+            "route_canary_evidence_hash": fixed_hex32(0x45),
+            "route_canary_evidence_source": bundle._route_canary_source_by_domain()[1],
+            "route_canary_evidence_bound": True,
+            "route_canary_message_proof_used": True,
+            "route_canary_log_index": -1,
+            "route_canary_target_domain": 2,
+            "route_canary_proof_version": 2,
+            "route_canary_proof_source_domain": 1,
+            "route_canary_call_data_sha256": fixed_hex32(0xB1),
+            "route_canary_payload_hash": fixed_hex32(0xB2),
+            "route_canary_statement_hash": fixed_hex32(0xB3),
+            "route_canary_commitment_root": fixed_hex32(0xB4),
+            "route_canary_finality_height": fixed_hex32(0xB5),
+            "route_canary_finality_block_hash": fixed_hex32(0xB6),
+            "route_canary_receipt_block_finalized": True,
+        }
+    )
+    non_message_row = {
+        field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS
+    }
+    non_message_row.update(
+        {
+            "domain": 3,
+            "chain": "solana",
+            "route_canary_log_index": 0,
+        }
+    )
+
+    errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+    errors.extend(
+        bundle._cryptographic_evidence_row_bundle_errors(non_message_row, label)
+    )
+
+    assert (
+        f"{label} route_canary_log_index must be a non-negative u32 integer for "
+        "message-proof route canary evidence"
+    ) in errors
+    assert (
+        f"{label} route_canary_target_domain must be the lane domain for "
+        "message-proof route canary evidence"
+    ) in errors
+    assert (
+        f"{label} route_canary_proof_version must be 1 for message-proof route "
+        "canary evidence"
+    ) in errors
+    assert (
+        f"{label} route_canary_proof_source_domain must be SORA for message-proof "
+        "route canary evidence"
+    ) in errors
+    assert (
+        f"{label} route_canary_log_index must be null for lanes without "
+        "message-proof route canary evidence"
+    ) in errors
+
+
+def test_release_bundle_rejects_copied_crypto_transcript_hash_drift_before_render() -> None:
+    """Copied message-proof canary rows must publish non-zero transcript hashes."""
+
+    bundle = load_bundle_module()
+    label = "bundled report.cryptographic_evidence[0]"
+    row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+    row.update(
+        {
+            "domain": 1,
+            "chain": "eth",
+            "route_canary_evidence_hash": fixed_hex32(0x46),
+            "route_canary_evidence_source": bundle._route_canary_source_by_domain()[1],
+            "route_canary_evidence_bound": True,
+            "route_canary_message_proof_used": True,
+            "route_canary_log_index": 0,
+            "route_canary_target_domain": 1,
+            "route_canary_proof_version": 1,
+            "route_canary_proof_source_domain": bundle._sccp_domain_sora(),
+            "route_canary_call_data_sha256": None,
+            "route_canary_payload_hash": "0x" + "00" * 32,
+            "route_canary_statement_hash": "0x" + "11" * 31,
+            "route_canary_commitment_root": "0X" + "12" * 32,
+            "route_canary_finality_height": fixed_hex32(0x47),
+            "route_canary_finality_block_hash": fixed_hex32(0x48),
+            "route_canary_receipt_block_finalized": True,
+        }
+    )
+    non_message_row = {
+        field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS
+    }
+    non_message_row.update(
+        {
+            "domain": 4,
+            "chain": "ton",
+            "route_canary_call_data_sha256": fixed_hex32(0x49),
+        }
+    )
+
+    errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+    errors.extend(
+        bundle._cryptographic_evidence_row_bundle_errors(non_message_row, label)
+    )
+
+    for field in (
+        "route_canary_call_data_sha256",
+        "route_canary_payload_hash",
+        "route_canary_statement_hash",
+        "route_canary_commitment_root",
+    ):
+        assert (
+            f"{label} {field} must be a non-zero canonical bytes32 hex string "
+            "for message-proof route canary evidence"
+        ) in errors
+    assert (
+        f"{label} route_canary_call_data_sha256 must be null for lanes without "
+        "message-proof route canary evidence"
+    ) in errors
+
+
+def test_release_bundle_rejects_copied_tron_crypto_owner_signature_drift_before_render() -> None:
+    """Copied TRON canary crypto rows must publish owner/signature proof flags."""
+
+    bundle = load_bundle_module()
+    label = "bundled report.cryptographic_evidence[0]"
+    for field, value in (
+        ("route_canary_raw_data_owner_matches_transaction", False),
+        ("route_canary_signature_recovers_to_owner", None),
+    ):
+        row = {row_field: None for row_field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+        row.update(
+            {
+                "domain": 5,
+                "chain": "tron",
+                "route_canary_evidence_hash": fixed_hex32(0x54),
+                "route_canary_evidence_source": bundle._route_canary_source_by_domain()[
+                    5
+                ],
+                "route_canary_message_proof_used": True,
+                "route_canary_raw_data_owner_matches_transaction": True,
+                "route_canary_signature_recovers_to_owner": True,
+            "route_canary_log_index": 0,
+            "route_canary_target_domain": 5,
+            "route_canary_proof_version": 1,
+            "route_canary_proof_source_domain": bundle._sccp_domain_sora(),
+            "route_canary_call_data_sha256": fixed_hex32(0xB7),
+            "route_canary_payload_hash": fixed_hex32(0xB8),
+            "route_canary_statement_hash": fixed_hex32(0xB9),
+            "route_canary_commitment_root": fixed_hex32(0xBA),
+            "route_canary_finality_height": fixed_hex32(0xBB),
+            "route_canary_finality_block_hash": fixed_hex32(0xBC),
+            field: value,
+            }
+        )
+
+        errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+
+        assert (
+            f"{label} {field} must be true for TRON route canary evidence"
+            in errors
+        )
+
+    non_tron = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+    non_tron.update(
+        {
+            "domain": 1,
+            "chain": "eth",
+            "route_canary_raw_data_owner_matches_transaction": True,
+        }
+    )
+
+    errors = bundle._cryptographic_evidence_row_bundle_errors(non_tron, label)
+
+    assert (
+        f"{label} route_canary_raw_data_owner_matches_transaction must be null "
+        "for non-TRON route canary evidence"
+    ) in errors
 
 
 def test_release_bundle_rejects_oversized_copied_crypto_evidence_receipt_before_render() -> None:
@@ -6840,6 +7260,7 @@ def test_release_bundle_rejects_oversized_copied_crypto_evidence_receipt_before_
             "route_canary_evidence_hash": fixed_hex32(0x44),
             "route_canary_evidence_source": "evm_message_proof_accepted_transaction",
             "route_canary_evidence_bound": True,
+            "route_canary_message_proof_used": True,
             "route_canary_receipt_block_number": 0x1_0000_0000,
             "route_canary_receipt_block_finalized": True,
         }
@@ -7043,6 +7464,17 @@ def test_release_bundle_rejects_copied_crypto_route_canary_transcript_replay() -
             "route_canary_evidence_hash": route_message_id,
             "route_canary_evidence_source": bundle._route_canary_source_by_domain()[1],
             "route_canary_evidence_bound": True,
+            "route_canary_message_proof_used": True,
+            "route_canary_log_index": 0,
+            "route_canary_target_domain": 1,
+            "route_canary_proof_version": 1,
+            "route_canary_proof_source_domain": bundle._sccp_domain_sora(),
+            "route_canary_call_data_sha256": fixed_hex32(0xAB),
+            "route_canary_payload_hash": fixed_hex32(0xAC),
+            "route_canary_statement_hash": fixed_hex32(0xAD),
+            "route_canary_commitment_root": fixed_hex32(0xAE),
+            "route_canary_finality_height": fixed_hex32(0xAF),
+            "route_canary_finality_block_hash": fixed_hex32(0xB0),
             "route_canary_transaction_hash": fixed_hex32(0xA7),
             "route_canary_receipt_block_number": 123,
             "route_canary_receipt_block_hash": fixed_hex32(0xA8),
@@ -8097,6 +8529,19 @@ def test_release_bundle_rejects_copied_crypto_evidence_lane_binding_before_rende
         "route_canary_evidence_hash": fixed_hex32(0xE4),
         "route_canary_evidence_source": "operator_attestation",
         "route_canary_evidence_bound": True,
+        "route_canary_message_proof_used": False,
+        "route_canary_raw_data_owner_matches_transaction": None,
+        "route_canary_signature_recovers_to_owner": None,
+        "route_canary_log_index": 1,
+        "route_canary_target_domain": 2,
+        "route_canary_proof_version": 2,
+        "route_canary_proof_source_domain": readiness.ACTIVE_LAUNCH_DOMAIN,
+        "route_canary_call_data_sha256": fixed_hex32(0xE6),
+        "route_canary_payload_hash": fixed_hex32(0xE7),
+        "route_canary_statement_hash": fixed_hex32(0xE8),
+        "route_canary_commitment_root": fixed_hex32(0xE9),
+        "route_canary_finality_height": fixed_hex32(0xEA),
+        "route_canary_finality_block_hash": fixed_hex32(0xEB),
         "route_canary_transaction_hash": transaction_hash,
         "route_canary_receipt_block_number": 2,
         "route_canary_receipt_block_hash": receipt_block_hash,
@@ -8164,6 +8609,23 @@ def test_release_bundle_rejects_copied_crypto_evidence_lane_binding_before_rende
         ("source_adapter_gate_audit_hashes", "source_adapter_gate.audit_hashes"),
         ("route_canary_evidence_hash", "route_allowlist.route_canary.evidence_hash"),
         ("route_canary_evidence_source", "route_allowlist.route_canary.evidence_source"),
+        ("route_canary_message_proof_used", "route_allowlist.route_canary.message_proof_used"),
+        ("route_canary_log_index", "route_allowlist.route_canary.log_index"),
+        ("route_canary_target_domain", "route_allowlist.route_canary.target_domain"),
+        ("route_canary_proof_version", "route_allowlist.route_canary.proof_version"),
+        (
+            "route_canary_proof_source_domain",
+            "route_allowlist.route_canary.proof_source_domain",
+        ),
+        ("route_canary_call_data_sha256", "route_allowlist.route_canary.call_data_sha256"),
+        ("route_canary_payload_hash", "route_allowlist.route_canary.payload_hash"),
+        ("route_canary_statement_hash", "route_allowlist.route_canary.statement_hash"),
+        ("route_canary_commitment_root", "route_allowlist.route_canary.commitment_root"),
+        ("route_canary_finality_height", "route_allowlist.route_canary.finality_height"),
+        (
+            "route_canary_finality_block_hash",
+            "route_allowlist.route_canary.finality_block_hash",
+        ),
         ("route_canary_receipt_block_number", "route_allowlist.route_canary.receipt_block_number"),
         ("route_canary_receipt_block_finalized", "route_allowlist.route_canary.receipt_block_finalized"),
         ("route_canary_message_id", "route_allowlist.route_canary.message_id"),
@@ -9407,6 +9869,14 @@ def test_release_bundle_rejects_malformed_copied_evidence_before_render(
         "duplicate integers"
     ) in captured.err
     assert (
+        "bundled report.evidence supported_launch_domains must be the supported "
+        "launch remote domains"
+    ) in captured.err
+    assert (
+        "bundled report.evidence unsupported_launch_domains must be the "
+        "diagnostic unsupported remote domains"
+    ) in captured.err
+    assert (
         "bundled report.evidence blockers must be a list of non-empty strings "
         "with no surrounding whitespace"
     ) in captured.err
@@ -9450,6 +9920,78 @@ def test_release_bundle_rejects_malformed_copied_evidence_before_render(
     ) in captured.err
     assert (
         "bundled report.evidence.lanes[0].source_adapter_gate must be an object"
+    ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_evidence_launch_scope_drift_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied launch-domain summaries must stay exact before public rendering."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                evidence_summary = report["evidence"]
+                evidence_summary["supported_launch_domains"] = [1, 2, 3, 4, 5, 6]
+                evidence_summary["unsupported_launch_domains"] = [1]
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("launch-scope domain drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("launch-scope domain drift reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    label = "bundled report.evidence"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{label} supported_launch_domains must be the supported launch remote domains"
+        in captured.err
+    )
+    assert (
+        f"{label} unsupported_launch_domains must be the diagnostic unsupported "
+        "remote domains"
+    ) in captured.err
+    assert (
+        f"{label} supported_launch_domains and unsupported_launch_domains must be "
+        "disjoint"
+    ) in captured.err
+    assert (
+        f"{label} supported_launch_domains plus unsupported_launch_domains must "
+        "match required_domains"
     ) in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
@@ -11449,6 +11991,108 @@ def test_release_bundle_rejects_active_copied_evm_route_canary_missing_fields_wh
     assert "operator pending active route canary field certification" not in (
         captured.err
     )
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_route_canary_required_truth_fields_when_lane_not_ready(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied all-lanes summaries must keep route-canary required truth flags."""
+
+    bundle = load_bundle_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    eth_index, eth_lane = lanes[evidence_module.SCCP_DOMAIN_ETH]
+    bsc_index, bsc_lane = lanes[evidence_module.SCCP_DOMAIN_BSC]
+    tron_index, tron_lane = lanes[evidence_module.SCCP_DOMAIN_TRON]
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending route canary truth flag audit"]
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending route canary truth flag audit"]
+
+    eth_lane["route_allowlist"]["route_canary"].pop("message_proof_used", None)
+    bsc_lane["route_allowlist"]["route_canary"].pop(
+        "receipt_block_finalized",
+        None,
+    )
+    tron_canary = tron_lane["route_allowlist"]["route_canary"]
+    tron_canary.pop("message_proof_used", None)
+    tron_canary.pop("raw_data_owner_matches_transaction", None)
+    tron_canary.pop("signature_recovers_to_owner", None)
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError(
+                "route-canary required truth-field drift reached Markdown rendering"
+            )
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "route-canary required truth-field drift reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    expected_missing_fields = (
+        (eth_index, "message_proof_used"),
+        (bsc_index, "receipt_block_finalized"),
+        (tron_index, "message_proof_used"),
+        (tron_index, "raw_data_owner_matches_transaction"),
+        (tron_index, "signature_recovers_to_owner"),
+    )
+    for lane_index, field in expected_missing_fields:
+        canary_label = (
+            f"bundled report.evidence.lanes[{lane_index}]."
+            "route_allowlist.route_canary"
+        )
+        assert f"{canary_label} missing field: {field}" in captured.err
+    assert "operator pending route canary truth flag audit" not in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -14129,8 +14773,8 @@ def test_release_bundle_suppresses_duplicate_phase_evidence_paths_before_copy(
     """Duplicate phase-evidence diagnostics must not echo local paths."""
 
     evidence, _ = write_complete_evidence(tmp_path)
-    first_log = tmp_path / "phase-evidence-secret-token-first.log"
-    second_log = tmp_path / "phase-evidence-secret-token-second.log"
+    first_log = tmp_path / "phase-evidence-first.log"
+    second_log = tmp_path / "phase-evidence-second.log"
     first_log.write_text(complete_corridor_log(), encoding="utf-8")
     second_log.write_text(complete_corridor_log(), encoding="utf-8")
     output_dir = tmp_path / "bundle"
@@ -14162,7 +14806,8 @@ def test_release_bundle_suppresses_duplicate_phase_evidence_paths_before_copy(
     ) in completed.stderr
     assert "already set by --phase-evidence all=<path>" in completed.stderr
     assert "cannot set from --phase-evidence rust-sccp=<path>" in completed.stderr
-    assert "secret-token" not in completed.stderr
+    assert "phase-evidence-first.log" not in completed.stderr
+    assert "phase-evidence-second.log" not in completed.stderr
     assert not output_dir.exists()
 
 
@@ -14534,6 +15179,71 @@ def test_release_bundle_rejects_empty_phase_evidence_path_before_copy(
     assert not output_dir.exists()
 
 
+def test_release_bundle_rejects_malformed_phase_evidence_paths_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject unsafe phase-evidence paths before copy."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    cases = (
+        (
+            "rust-sccp= secret-token-phase.log",
+            "phase evidence path must not contain surrounding whitespace",
+            "secret-token-phase.log",
+        ),
+        (
+            "rust-sccp=phase\x07evidence.log",
+            "phase evidence path contains control character",
+            "phase\x07evidence.log",
+        ),
+        (
+            "rust-sccp=phase-évidence.log",
+            "phase evidence path contains non-ASCII character",
+            "phase-évidence.log",
+        ),
+        (
+            "rust-sccp=phase|evidence.log",
+            "phase evidence path contains Markdown-unsafe character",
+            "phase|evidence.log",
+        ),
+        (
+            "rust-sccp=secret-token-phase.log",
+            "phase evidence path contains sensitive name",
+            "secret-token-phase.log",
+        ),
+        (
+            "rust-sccp=phase/%2e%2e/evidence.log",
+            "phase evidence path contains percent-encoded traversal segment",
+            "phase/%2e%2e/evidence.log",
+        ),
+    )
+    for index, (assignment, expected_error, leaked_path) in enumerate(cases):
+        output_dir = tmp_path / f"bundle-{index}"
+        completed = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "--allow-not-ready",
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "rust-sccp=passed",
+                "--phase-evidence",
+                assignment,
+                str(evidence),
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert completed.returncode == 2, assignment
+        assert expected_error in completed.stderr
+        assert leaked_path not in completed.stderr
+        assert not output_dir.exists()
+
+
 def test_release_bundle_rejects_markdown_phase_evidence_name_before_copy(
     tmp_path: Path,
 ) -> None:
@@ -14612,7 +15322,7 @@ def test_release_bundle_suppresses_missing_phase_evidence_dir_path_before_copy(
     """Missing phase evidence dir diagnostics must not echo local paths."""
 
     evidence, _ = write_complete_evidence(tmp_path)
-    phase_artifacts = tmp_path / "secret-token-phase-artifacts"
+    phase_artifacts = tmp_path / "missing-phase-artifacts"
     phase_artifacts.mkdir()
     output_dir = tmp_path / "bundle"
 
@@ -14638,8 +15348,73 @@ def test_release_bundle_suppresses_missing_phase_evidence_dir_path_before_copy(
     assert completed.returncode != 0
     assert "missing SCCP corridor evidence log for phase" in completed.stderr
     assert "checked standard phase log layouts" in completed.stderr
-    assert "secret-token" not in completed.stderr
+    assert "missing-phase-artifacts" not in completed.stderr
     assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_malformed_phase_evidence_dir_paths_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject unsafe phase-evidence dirs before lookup."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    cases = (
+        (
+            " secret-token-phase-artifacts",
+            "phase evidence directory path must not contain surrounding whitespace",
+            "secret-token-phase-artifacts",
+        ),
+        (
+            "phase\x07artifacts",
+            "phase evidence directory path contains control character",
+            "phase\x07artifacts",
+        ),
+        (
+            "phase-évidence-artifacts",
+            "phase evidence directory path contains non-ASCII character",
+            "phase-évidence-artifacts",
+        ),
+        (
+            "phase|evidence-artifacts",
+            "phase evidence directory path contains Markdown-unsafe character",
+            "phase|evidence-artifacts",
+        ),
+        (
+            "secret-token-phase-artifacts",
+            "phase evidence directory path contains sensitive name",
+            "secret-token-phase-artifacts",
+        ),
+        (
+            "phase/%2e%2e/artifacts",
+            "phase evidence directory path contains percent-encoded traversal segment",
+            "phase/%2e%2e/artifacts",
+        ),
+    )
+    for index, (raw_dir, expected_error, leaked_path) in enumerate(cases):
+        output_dir = tmp_path / f"bundle-{index}"
+        completed = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "--allow-not-ready",
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "rust-sccp=passed",
+                "--phase-evidence-dir",
+                raw_dir,
+                str(evidence),
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert completed.returncode == 2, raw_dir
+        assert expected_error in completed.stderr
+        assert leaked_path not in completed.stderr
+        assert not output_dir.exists()
 
 
 def test_release_bundle_suppresses_unknown_phase_evidence_name_before_copy(
@@ -15049,6 +15824,53 @@ def test_release_bundle_rejects_encoded_traversal_evidence_filename_before_copy(
     assert not output_dir.exists()
 
 
+def test_release_bundle_rejects_non_ascii_or_sensitive_evidence_filename_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject evidence filenames unsafe for public paths."""
+
+    _, evidence_payload = write_complete_evidence(tmp_path)
+    cases = (
+        (
+            "compléte.toml",
+            "release bundle source filename contains non-ASCII character",
+            "compléte.toml",
+        ),
+        (
+            "secret-token-complete.toml",
+            "release bundle source filename contains sensitive name",
+            "secret-token-complete.toml",
+        ),
+    )
+    for index, (filename, expected_error, leaked_name) in enumerate(cases):
+        evidence_path = tmp_path / filename
+        evidence_path.write_text(evidence_payload, encoding="utf-8")
+        output_dir = tmp_path / f"bundle-{index}"
+
+        completed = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "--allow-not-ready",
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=missing",
+                str(evidence_path),
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert completed.returncode == 2, filename
+        assert expected_error in completed.stderr
+        assert leaked_name not in completed.stderr
+        assert "Wrote SCCP release bundle" not in completed.stdout
+        assert not output_dir.exists()
+
+
 def test_release_bundle_rejects_symlinked_phase_evidence_before_copy(
     tmp_path: Path,
 ) -> None:
@@ -15057,7 +15879,7 @@ def test_release_bundle_rejects_symlinked_phase_evidence_before_copy(
     evidence, _ = write_complete_evidence(tmp_path)
     corridor_log = tmp_path / "rust-sccp.log"
     corridor_log.write_text(complete_corridor_log(), encoding="utf-8")
-    corridor_link = tmp_path / "secret-token-rust-sccp-link.log"
+    corridor_link = tmp_path / "rust-sccp-link.log"
     corridor_link.symlink_to(corridor_log)
     output_dir = tmp_path / "bundle"
 
@@ -15084,7 +15906,7 @@ def test_release_bundle_rejects_symlinked_phase_evidence_before_copy(
 
     assert completed.returncode == 2
     assert "release bundle source path must not be a symlink" in completed.stderr
-    assert "secret-token" not in completed.stderr
+    assert "rust-sccp-link.log" not in completed.stderr
     assert not output_dir.exists()
 
 
@@ -15098,7 +15920,7 @@ def test_release_bundle_rejects_symlinked_phase_evidence_ancestor_before_copy(
     real_dir.mkdir()
     corridor_log = real_dir / "rust-sccp.log"
     corridor_log.write_text(complete_corridor_log(), encoding="utf-8")
-    phase_alias = tmp_path / "secret-token-phase-log-alias"
+    phase_alias = tmp_path / "phase-log-alias"
     phase_alias.symlink_to(real_dir, target_is_directory=True)
     output_dir = tmp_path / "bundle"
 
@@ -15127,7 +15949,7 @@ def test_release_bundle_rejects_symlinked_phase_evidence_ancestor_before_copy(
     assert (
         "release bundle source path ancestor must not be a symlink"
     ) in completed.stderr
-    assert "secret-token" not in completed.stderr
+    assert "phase-log-alias" not in completed.stderr
     assert not output_dir.exists()
 
 
@@ -15137,7 +15959,7 @@ def test_release_bundle_rejects_control_character_phase_evidence_before_copy(
     """Bundle generation must reject unsafe phase evidence source paths."""
 
     evidence, _ = write_complete_evidence(tmp_path)
-    corridor_log = tmp_path / "secret-token-rust-sccp\noperator.log"
+    corridor_log = tmp_path / "rust-sccp\noperator.log"
     corridor_log.write_text(complete_corridor_log(), encoding="utf-8")
     output_dir = tmp_path / "bundle"
 
@@ -15163,10 +15985,8 @@ def test_release_bundle_rejects_control_character_phase_evidence_before_copy(
     )
 
     assert completed.returncode == 2
-    assert "release bundle source path contains control character '\\n'" in (
-        completed.stderr
-    )
-    assert "secret-token" not in completed.stderr
+    assert "phase evidence path contains control character" in completed.stderr
+    assert "rust-sccp\noperator.log" not in completed.stderr
     assert not output_dir.exists()
 
 
@@ -15176,7 +15996,7 @@ def test_release_bundle_rejects_markdown_unsafe_phase_evidence_before_copy(
     """Bundle generation must reject table-breaking phase evidence filenames."""
 
     evidence, _ = write_complete_evidence(tmp_path)
-    corridor_log = tmp_path / "secret-token-rust-sccp|operator.log"
+    corridor_log = tmp_path / "rust-sccp|operator.log"
     corridor_log.write_text(complete_corridor_log(), encoding="utf-8")
     output_dir = tmp_path / "bundle"
 
@@ -15203,10 +16023,9 @@ def test_release_bundle_rejects_markdown_unsafe_phase_evidence_before_copy(
 
     assert completed.returncode == 2
     assert (
-        "release bundle source filename contains Markdown-unsafe character "
-        "'|'"
+        "phase evidence path contains Markdown-unsafe character"
     ) in completed.stderr
-    assert "secret-token" not in completed.stderr
+    assert "rust-sccp|operator.log" not in completed.stderr
     assert not output_dir.exists()
 
 
@@ -15255,7 +16074,7 @@ def test_release_bundle_rejects_encoded_traversal_phase_evidence_filename_before
     """Bundle generation must reject encoded traversal in phase evidence names."""
 
     evidence, _ = write_complete_evidence(tmp_path)
-    corridor_log = tmp_path / "rust-sccp%2f..%2fsecret-token.log"
+    corridor_log = tmp_path / "rust-sccp%2f..%2fevidence.log"
     corridor_log.write_text(complete_corridor_log(), encoding="utf-8")
     output_dir = tmp_path / "bundle"
 
@@ -15282,10 +16101,10 @@ def test_release_bundle_rejects_encoded_traversal_phase_evidence_filename_before
 
     assert completed.returncode == 2
     assert (
-        "release bundle source filename contains percent-encoded traversal segment"
+        "phase evidence path contains percent-encoded traversal segment"
         in completed.stderr
     )
-    assert "secret-token" not in completed.stderr
+    assert "rust-sccp%2f..%2fevidence.log" not in completed.stderr
     assert not output_dir.exists()
 
 
@@ -16282,35 +17101,82 @@ def test_release_bundle_cli_redacts_top_level_exception_details(
 
     bundle = load_bundle_module()
 
+    sensitive_messages = (
+        ("secret-token /tmp/operator/private-path", ("secret-token", "private-path")),
+        ("operator bearer value", ("bearer value",)),
+        ("operator session value", ("session value",)),
+        ("operator token value", ("token value",)),
+        ("operator clé value", ("clé value",)),
+        ("operator" + "\n" + "value", ("operator", "value")),
+        ("operator" + "\t" + "value", ("operator", "value")),
+    )
+
     for exception_type in (OSError, RuntimeError, TypeError, ValueError):
+        for sensitive_message, leaked_markers in sensitive_messages:
 
-        class FakeReportModule:
-            def _corridor_phases(self) -> list[str]:
-                return []
+            class FakeReportModule:
+                def _corridor_phases(self) -> list[str]:
+                    return []
 
-            def _build_report(self, *_args, **_kwargs):
-                raise exception_type("secret-token /tmp/operator/private-path")
+                def _build_report(self, *_args, **_kwargs):
+                    raise exception_type(sensitive_message)
 
-        with monkeypatch.context() as patch:
-            patch.setattr(bundle, "_report_module", lambda: FakeReportModule())
-            try:
-                bundle.main(
-                    [
-                        "--output-dir",
-                        str(tmp_path / "bundle"),
-                        str(tmp_path / "evidence.toml"),
-                    ]
-                )
-            except SystemExit as exc:
-                assert exc.code == 2
-            else:
-                raise AssertionError("bundle CLI accepted top-level build failure")
+            with monkeypatch.context() as patch:
+                patch.setattr(bundle, "_report_module", lambda: FakeReportModule())
+                try:
+                    bundle.main(
+                        [
+                            "--output-dir",
+                            str(tmp_path / "bundle"),
+                            str(tmp_path / "evidence.toml"),
+                        ]
+                    )
+                except SystemExit as exc:
+                    assert exc.code == 2
+                else:
+                    raise AssertionError("bundle CLI accepted top-level build failure")
 
-            captured = capsys.readouterr()
-            assert "SCCP release bundle generation failed" in captured.err
-            assert "secret-token" not in captured.err
-            assert "private-path" not in captured.err
-            assert exception_type.__name__ not in captured.err
+                captured = capsys.readouterr()
+                assert "SCCP release bundle generation failed" in captured.err
+                for leaked_marker in leaked_markers:
+                    assert leaked_marker not in captured.err
+                assert exception_type.__name__ not in captured.err
+
+
+def test_release_bundle_cli_preserves_safe_top_level_exception_details(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Top-level bundle CLI exceptions may keep non-sensitive categories."""
+
+    bundle = load_bundle_module()
+
+    class FakeReportModule:
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *_args, **_kwargs):
+            raise ValueError("phase evidence manifest is malformed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(bundle, "_report_module", lambda: FakeReportModule())
+        try:
+            bundle.main(
+                [
+                    "--output-dir",
+                    str(tmp_path / "bundle"),
+                    str(tmp_path / "evidence.toml"),
+                ]
+            )
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:
+            raise AssertionError("bundle CLI accepted top-level build failure")
+
+        captured = capsys.readouterr()
+        assert "__main__.py: error:" in captured.err
+        assert "phase evidence manifest is malformed" in captured.err
 
 
 def test_release_bundle_rejects_duplicate_native_evm_prover_payload_paths_before_copy(
@@ -16321,11 +17187,9 @@ def test_release_bundle_rejects_duplicate_native_evm_prover_payload_paths_before
     evidence, _ = write_complete_evidence(tmp_path)
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
     payload = json.loads(native_bundle.read_text(encoding="utf-8"))
-    secret_role_path = (
-        tmp_path / "native-prover-artifacts" / "secret-token-role-reuse.bin"
-    )
-    secret_role_path.write_bytes((tmp_path / payload["proving_key"]).read_bytes())
-    secret_role = secret_role_path.relative_to(tmp_path).as_posix()
+    reused_role_path = tmp_path / "native-prover-artifacts" / "role-reuse.bin"
+    reused_role_path.write_bytes((tmp_path / payload["proving_key"]).read_bytes())
+    secret_role = reused_role_path.relative_to(tmp_path).as_posix()
     payload["proof_artifact"] = secret_role
     payload["proving_key"] = secret_role
     native_bundle.write_text(
@@ -16574,6 +17438,56 @@ def test_release_bundle_rejects_encoded_traversal_native_evm_manifest_filename_b
     assert not output_dir.exists()
 
 
+def test_release_bundle_rejects_non_ascii_or_sensitive_native_evm_manifest_filename_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject unsafe native prover manifest filenames."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    cases = (
+        (
+            "native-évm-prover.json",
+            "release bundle source filename contains non-ASCII character",
+            "native-évm-prover.json",
+        ),
+        (
+            "secret-token-native-prover.json",
+            "release bundle source filename contains sensitive name",
+            "secret-token-native-prover.json",
+        ),
+    )
+    for index, (filename, expected_error, leaked_name) in enumerate(cases):
+        native_copy = tmp_path / filename
+        native_copy.write_text(native_bundle.read_text(encoding="utf-8"), encoding="utf-8")
+        output_dir = tmp_path / f"bundle-{index}"
+
+        completed = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "--allow-not-ready",
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=missing",
+                "--native-evm-prover-bundle",
+                str(native_copy),
+                str(evidence),
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert completed.returncode == 2, filename
+        assert expected_error in completed.stderr
+        assert leaked_name not in completed.stderr
+        assert "Wrote SCCP release bundle" not in completed.stdout
+        assert not output_dir.exists()
+
+
 def test_release_bundle_rejects_symlinked_native_evm_prover_payload_before_copy(
     tmp_path: Path,
 ) -> None:
@@ -16582,7 +17496,7 @@ def test_release_bundle_rejects_symlinked_native_evm_prover_payload_before_copy(
     evidence, _ = write_complete_evidence(tmp_path)
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
     proof_path = (
-        tmp_path / "native-prover-artifacts" / "secret-token-proof-artifact.bin"
+        tmp_path / "native-prover-artifacts" / "operator-proof-artifact.bin"
     )
     proof_target = tmp_path / "native-prover-artifacts" / "proof-artifact-real.bin"
     (tmp_path / "native-prover-artifacts" / "proof-artifact.bin").rename(
@@ -16591,7 +17505,7 @@ def test_release_bundle_rejects_symlinked_native_evm_prover_payload_before_copy(
     proof_path.symlink_to(proof_target)
     payload = json.loads(native_bundle.read_text(encoding="utf-8"))
     payload["proof_artifact"] = (
-        "native-prover-artifacts/secret-token-proof-artifact.bin"
+        "native-prover-artifacts/operator-proof-artifact.bin"
     )
     native_bundle.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
@@ -16635,13 +17549,13 @@ def test_release_bundle_rejects_symlinked_native_evm_payload_ancestor_before_cop
     evidence, _ = write_complete_evidence(tmp_path)
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
     payload = json.loads(native_bundle.read_text(encoding="utf-8"))
-    payload_alias = tmp_path / "secret-token-native-prover-artifacts-alias"
+    payload_alias = tmp_path / "native-prover-artifacts-alias"
     payload_alias.symlink_to(
         tmp_path / "native-prover-artifacts",
         target_is_directory=True,
     )
     payload["proof_artifact"] = (
-        "secret-token-native-prover-artifacts-alias/proof-artifact.bin"
+        "native-prover-artifacts-alias/proof-artifact.bin"
     )
     native_bundle.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
@@ -16891,6 +17805,69 @@ def test_release_bundle_rejects_encoded_traversal_native_evm_payload_filename_be
     assert not output_dir.exists()
 
 
+def test_release_bundle_rejects_non_ascii_or_sensitive_native_evm_payload_filename_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject unsafe native prover payload filenames."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    cases = (
+        (
+            "proof-artifact-évidence.bin",
+            "native-prover-artifacts/proof-artifact-évidence.bin",
+            "native EVM Groth16 prover bundle proof_artifact path contains "
+            "non-ASCII character",
+            "proof-artifact-évidence.bin",
+        ),
+        (
+            "secret-token-proof-artifact.bin",
+            "native-prover-artifacts/secret-token-proof-artifact.bin",
+            "native EVM Groth16 prover bundle proof_artifact path contains "
+            "sensitive name",
+            "secret-token-proof-artifact.bin",
+        ),
+    )
+    for index, (filename, manifest_path, expected_error, leaked_name) in enumerate(cases):
+        case_dir = tmp_path / f"payload-filename-{index}"
+        case_dir.mkdir()
+        native_bundle = write_native_evm_prover_bundle(case_dir, evidence)
+        proof_path = case_dir / "native-prover-artifacts" / "proof-artifact.bin"
+        proof_unsafe = case_dir / "native-prover-artifacts" / filename
+        proof_path.rename(proof_unsafe)
+        payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+        payload["proof_artifact"] = manifest_path
+        native_bundle.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        output_dir = tmp_path / f"bundle-payload-{index}"
+
+        completed = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "--allow-not-ready",
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=missing",
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert completed.returncode == 2, filename
+        assert expected_error in completed.stderr
+        assert leaked_name not in completed.stderr
+        assert "Wrote SCCP release bundle" not in completed.stdout
+        assert not output_dir.exists()
+
+
 def test_release_bundle_rejects_missing_native_evm_payload_without_path_leak(
     tmp_path: Path,
 ) -> None:
@@ -16899,7 +17876,7 @@ def test_release_bundle_rejects_missing_native_evm_payload_without_path_leak(
     evidence, _ = write_complete_evidence(tmp_path)
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
     payload = json.loads(native_bundle.read_text(encoding="utf-8"))
-    payload["proof_artifact"] = "native-prover-artifacts/secret-token-missing.bin"
+    payload["proof_artifact"] = "native-prover-artifacts/operator-missing.bin"
     native_bundle.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -16933,7 +17910,7 @@ def test_release_bundle_rejects_missing_native_evm_payload_without_path_leak(
         "native EVM Groth16 prover bundle proof_artifact file is missing "
         "or is not a regular file"
     ) in completed.stderr
-    assert "secret-token" not in completed.stderr
+    assert "operator-missing" not in completed.stderr
     assert not output_dir.exists()
 
 
@@ -16942,7 +17919,7 @@ def test_release_bundle_force_rejects_output_containing_inputs(
 ) -> None:
     """Forced output replacement must not delete evidence inputs or phase logs."""
 
-    output_root = tmp_path / "secret-token-output-root"
+    output_root = tmp_path / "protected-output-root"
     output_root.mkdir()
     evidence, evidence_payload = write_complete_evidence(output_root)
     write_phase_artifacts(output_root)
@@ -16970,7 +17947,7 @@ def test_release_bundle_force_rejects_output_containing_inputs(
     assert "refusing --force output directory that contains input evidence" in (
         completed.stderr
     )
-    assert "secret-token" not in completed.stderr
+    assert "protected-output-root" not in completed.stderr
     assert evidence.read_text(encoding="utf-8") == evidence_payload
     assert (
         output_root
@@ -16988,7 +17965,7 @@ def test_release_bundle_rejects_existing_output_without_force_before_create(
     evidence, _ = write_complete_evidence(tmp_path)
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
     write_phase_artifacts(tmp_path)
-    output_dir = tmp_path / "secret-token-existing-bundle"
+    output_dir = tmp_path / "existing-bundle"
     output_dir.mkdir()
 
     completed = subprocess.run(
@@ -17013,7 +17990,7 @@ def test_release_bundle_rejects_existing_output_without_force_before_create(
 
     assert completed.returncode == 2
     assert "output directory already exists" in completed.stderr
-    assert "secret-token" not in completed.stderr
+    assert "existing-bundle" not in completed.stderr
     assert output_dir.is_dir()
 
 
@@ -17186,6 +18163,104 @@ def test_release_bundle_rejects_control_character_output_directory_before_create
     ) in completed.stderr
     assert "secret-token" not in completed.stderr
     assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_malformed_output_directory_paths_before_create(
+    tmp_path: Path,
+) -> None:
+    """Bundle output creation must reject unsafe new output path text."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    cases = (
+        (
+            " secret-token-output",
+            "release bundle output directory path must not contain surrounding whitespace",
+            "secret-token-output",
+        ),
+        (
+            "release-évidence-output",
+            "release bundle output directory path contains non-ASCII character",
+            "release-évidence-output",
+        ),
+        (
+            "release|evidence-output",
+            "release bundle output directory path contains Markdown-unsafe character",
+            "release|evidence-output",
+        ),
+        (
+            "secret-token-output",
+            "release bundle output directory path contains sensitive name",
+            "secret-token-output",
+        ),
+        (
+            "release/%2e%2e/output",
+            "release bundle output directory path contains percent-encoded traversal segment",
+            "release/%2e%2e/output",
+        ),
+    )
+
+    for raw_output, expected_error, leaked_path in cases:
+        completed = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "--allow-not-ready",
+                "--output-dir",
+                raw_output,
+                "--phase-result",
+                "all=missing",
+                str(evidence),
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert completed.returncode == 2, raw_output
+        assert expected_error in completed.stderr
+        assert leaked_path not in completed.stderr
+        assert "Wrote SCCP release bundle" not in completed.stdout
+        assert not Path(raw_output).exists()
+
+
+def test_release_bundle_force_rejects_sensitive_existing_output_directory(
+    tmp_path: Path,
+) -> None:
+    """Forced output replacement must not delete then print sensitive path text."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    output_dir = tmp_path / "secret-token-force-output"
+    output_dir.mkdir()
+    sentinel = output_dir / "keep.txt"
+    sentinel.write_text("do not delete\n", encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--force",
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=missing",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "release bundle output directory path contains sensitive name"
+        in completed.stderr
+    )
+    assert "secret-token" not in completed.stderr
+    assert "Wrote SCCP release bundle" not in completed.stdout
+    assert sentinel.read_text(encoding="utf-8") == "do not delete\n"
 
 
 def test_release_bundle_writes_hash_bound_public_artifacts(tmp_path: Path) -> None:
@@ -18214,20 +19289,20 @@ def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_payload_pat
     output_dir = build_ready_bundle(tmp_path)
     native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
     payload = json.loads(native_path.read_text(encoding="utf-8"))
-    secret_role_path = (
+    reused_role_path = (
         output_dir
         / "native-prover"
         / "native-prover-artifacts"
-        / "secret-token-role-reuse.bin"
+        / "role-reuse.bin"
     )
-    secret_role_path.write_bytes(
+    reused_role_path.write_bytes(
         (output_dir / "native-prover" / payload["proving_key"]).read_bytes()
     )
     append_manifest_artifact(
         output_dir,
-        "native-prover/native-prover-artifacts/secret-token-role-reuse.bin",
+        "native-prover/native-prover-artifacts/role-reuse.bin",
     )
-    secret_role = "native-prover-artifacts/secret-token-role-reuse.bin"
+    secret_role = "native-prover-artifacts/role-reuse.bin"
     payload["proof_artifact"] = secret_role
     payload["proving_key"] = secret_role
     native_path.write_text(
@@ -18273,12 +19348,12 @@ def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_report_path
     report_path = output_dir / "sccp-release-readiness.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
     native_bundle = report["native_evm_prover_bundle"]
-    secret_artifact = dict(native_bundle["proof_artifact"])
-    secret_artifact["path"] = (
-        "native-prover/native-prover-artifacts/secret-token-report-reuse.bin"
+    reused_artifact = dict(native_bundle["proof_artifact"])
+    reused_artifact["path"] = (
+        "native-prover/native-prover-artifacts/report-reuse.bin"
     )
-    native_bundle["proof_artifact"] = secret_artifact
-    native_bundle["proving_key"] = dict(secret_artifact)
+    native_bundle["proof_artifact"] = reused_artifact
+    native_bundle["proving_key"] = dict(reused_artifact)
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -18302,8 +19377,8 @@ def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_report_path
         "readiness report native_evm_prover_bundle proving_key path must not "
         "reuse proof_artifact"
     ) in verified.stdout
-    assert "secret-token" not in verified.stdout
-    assert "secret-token" not in verified.stderr
+    assert "report-reuse.bin" not in verified.stdout
+    assert "report-reuse.bin" not in verified.stderr
 
 
 def test_release_bundle_verifier_rejects_native_evm_prover_report_malformed_field_names(
@@ -18903,6 +19978,67 @@ def test_release_bundle_verifier_rejects_markdown_unsafe_native_evm_prover_paylo
     assert "secret-token" not in verified.stderr
 
 
+def test_release_bundle_verifier_rejects_non_ascii_or_sensitive_native_evm_prover_payload_paths(
+    tmp_path: Path,
+) -> None:
+    """Published native prover manifests must reject unsafe public path text."""
+
+    cases = (
+        (
+            "native-prover-artifacts/proof-artifact-évidence.bin",
+            "native EVM Groth16 prover bundle proof_artifact path contains "
+            "non-ASCII character",
+            "proof-artifact-évidence.bin",
+        ),
+        (
+            "native-prover-artifacts/secret-token-proof-artifact.bin",
+            "native EVM Groth16 prover bundle proof_artifact path contains "
+            "sensitive name",
+            "secret-token-proof-artifact.bin",
+        ),
+    )
+    for index, (manifest_path, expected_error, leaked_name) in enumerate(cases):
+        case_dir = tmp_path / f"native-path-{index}"
+        case_dir.mkdir()
+        output_dir = build_ready_bundle(case_dir)
+        native_path = (
+            output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+        )
+        payload = json.loads(native_path.read_text(encoding="utf-8"))
+        payload["proof_artifact"] = manifest_path
+        native_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        rewrite_manifest_artifact(
+            output_dir,
+            "native-prover/00-native-evm-prover-bundle.json",
+        )
+
+        verified = subprocess.run(
+            [
+                "python3",
+                str(VERIFY_SCRIPT),
+                str(output_dir),
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, manifest_path
+        assert (
+            "bundled native EVM prover manifest blocker: " + expected_error
+        ) in verified.stdout
+        assert leaked_name not in verified.stdout
+        assert leaked_name not in verified.stderr
+        assert (
+            "readiness report native_evm_prover_bundle does not match bundled "
+            "native prover manifest"
+        ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_missing_native_evm_prover_payload_paths(
     tmp_path: Path,
 ) -> None:
@@ -18911,12 +20047,12 @@ def test_release_bundle_verifier_rejects_missing_native_evm_prover_payload_paths
     output_dir = build_ready_bundle(tmp_path)
     native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
     payload = json.loads(native_path.read_text(encoding="utf-8"))
-    payload["proof_artifact"] = "native-prover-artifacts/secret-token-proof.bin"
+    payload["proof_artifact"] = "native-prover-artifacts/operator-proof.bin"
     payload["cross_sdk_fixture_parity_artifact"] = (
-        "native-prover-artifacts/secret-token-parity.json"
+        "native-prover-artifacts/operator-parity.json"
     )
     payload["native_prover_self_test_artifact"] = (
-        "native-prover-artifacts/secret-token-self-test.json"
+        "native-prover-artifacts/operator-self-test.json"
     )
     native_path.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
@@ -18954,8 +20090,12 @@ def test_release_bundle_verifier_rejects_missing_native_evm_prover_payload_paths
         "bundle native_prover_self_test_artifact file is missing or is not a "
         "regular file"
     ) in verified.stdout
-    assert "secret-token" not in verified.stdout
-    assert "secret-token" not in verified.stderr
+    assert "operator-proof" not in verified.stdout
+    assert "operator-parity" not in verified.stdout
+    assert "operator-self-test" not in verified.stdout
+    assert "operator-proof" not in verified.stderr
+    assert "operator-parity" not in verified.stderr
+    assert "operator-self-test" not in verified.stderr
 
 
 def test_release_bundle_verifier_blocks_malformed_native_evm_artifact_metadata(
@@ -20951,7 +22091,7 @@ def test_release_bundle_verifier_rejects_manifest_path_escape(tmp_path: Path) ->
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     for artifact in manifest["artifacts"]:
         if artifact["path"] == "sccp-release-readiness.md":
-            artifact["path"] = "../secret-token-outside.md"
+            artifact["path"] = "../outside.md"
             artifact["bytes"] = outside.stat().st_size
             artifact["sha256"] = hashlib.sha256(outside.read_bytes()).hexdigest()
             break
@@ -20972,8 +22112,8 @@ def test_release_bundle_verifier_rejects_manifest_path_escape(tmp_path: Path) ->
 
     assert verified.returncode == 1
     assert "manifest artifact path escapes bundle" in verified.stdout
-    assert "secret-token" not in verified.stdout
-    assert "secret-token" not in verified.stderr
+    assert "outside.md" not in verified.stdout
+    assert "outside.md" not in verified.stderr
 
 
 def test_release_bundle_verifier_rejects_manifest_root_self_listing(
@@ -21008,7 +22148,7 @@ def test_release_bundle_verifier_rejects_duplicate_manifest_artifact_paths(
     manifest_path = output_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     duplicate = dict(manifest["artifacts"][0])
-    duplicate["path"] = "secret-token-duplicate-artifact.txt"
+    duplicate["path"] = "duplicate-artifact.txt"
     (output_dir / duplicate["path"]).write_text("duplicate\n", encoding="utf-8")
     payload = (output_dir / duplicate["path"]).read_bytes()
     duplicate["bytes"] = len(payload)
@@ -21030,8 +22170,8 @@ def test_release_bundle_verifier_rejects_duplicate_manifest_artifact_paths(
 
     assert verified.returncode == 1
     assert "duplicate manifest artifact path" in verified.stdout
-    assert "secret-token" not in verified.stdout
-    assert "secret-token" not in verified.stderr
+    assert "duplicate-artifact.txt" not in verified.stdout
+    assert "duplicate-artifact.txt" not in verified.stderr
 
 
 def test_release_bundle_verifier_rejects_symlinked_manifest(
@@ -21134,7 +22274,7 @@ def test_release_bundle_verifier_rejects_unmanifested_artifact(
     """A verified release bundle must not carry files outside the manifest."""
 
     output_dir = build_ready_bundle(tmp_path)
-    unexpected = output_dir / "evidence" / "secret-token-operator-side-note.txt"
+    unexpected = output_dir / "evidence" / "operator-side-note.txt"
     unexpected.write_text("not hash-bound\n", encoding="utf-8")
 
     verified = subprocess.run(
@@ -21147,8 +22287,8 @@ def test_release_bundle_verifier_rejects_unmanifested_artifact(
 
     assert verified.returncode == 1
     assert "bundle contains unmanifested artifact" in verified.stdout
-    assert "secret-token" not in verified.stdout
-    assert "secret-token" not in verified.stderr
+    assert "operator-side-note.txt" not in verified.stdout
+    assert "operator-side-note.txt" not in verified.stderr
 
 
 def test_release_bundle_verifier_rejects_unmanifested_directory(
@@ -21157,7 +22297,7 @@ def test_release_bundle_verifier_rejects_unmanifested_directory(
     """A verified release bundle must not carry empty operator-side folders."""
 
     output_dir = build_ready_bundle(tmp_path)
-    (output_dir / "secret-token-operator-notes").mkdir()
+    (output_dir / "operator-notes").mkdir()
 
     verified = subprocess.run(
         ["python3", str(VERIFY_SCRIPT), str(output_dir)],
@@ -21169,8 +22309,8 @@ def test_release_bundle_verifier_rejects_unmanifested_directory(
 
     assert verified.returncode == 1
     assert "bundle contains unmanifested directory" in verified.stdout
-    assert "secret-token" not in verified.stdout
-    assert "secret-token" not in verified.stderr
+    assert "operator-notes" not in verified.stdout
+    assert "operator-notes" not in verified.stderr
 
 
 def test_release_bundle_verifier_rejects_unsupported_entry_without_path_leak(
@@ -21182,7 +22322,7 @@ def test_release_bundle_verifier_rejects_unsupported_entry_without_path_leak(
         return
 
     output_dir = build_ready_bundle(tmp_path)
-    fifo_path = output_dir / "evidence" / "secret-token-operator-side-channel"
+    fifo_path = output_dir / "evidence" / "operator-side-channel"
     os.mkfifo(fifo_path)
 
     verified = subprocess.run(
@@ -21195,8 +22335,48 @@ def test_release_bundle_verifier_rejects_unsupported_entry_without_path_leak(
 
     assert verified.returncode == 1
     assert "bundle contains unsupported filesystem entry" in verified.stdout
-    assert "secret-token" not in verified.stdout
-    assert "secret-token" not in verified.stderr
+    assert "operator-side-channel" not in verified.stdout
+    assert "operator-side-channel" not in verified.stderr
+
+
+def test_release_bundle_verifier_rejects_non_ascii_or_sensitive_filesystem_entries(
+    tmp_path: Path,
+) -> None:
+    """Extracted bundle entry names must not expose unsafe path text."""
+
+    cases = (
+        (
+            "operator-nótes.txt",
+            "bundle contains entry path with non-ASCII character",
+            "operator-nótes.txt",
+        ),
+        (
+            "secret-token-operator-notes.txt",
+            "bundle contains entry path with sensitive name",
+            "secret-token-operator-notes.txt",
+        ),
+    )
+    for index, (filename, expected_error, leaked_name) in enumerate(cases):
+        case_dir = tmp_path / f"filesystem-entry-{index}"
+        case_dir.mkdir()
+        output_dir = build_ready_bundle(case_dir)
+        (output_dir / "evidence" / filename).write_text(
+            "unreviewed operator note\n",
+            encoding="utf-8",
+        )
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, filename
+        assert expected_error in verified.stdout
+        assert leaked_name not in verified.stdout
+        assert leaked_name not in verified.stderr
 
 
 def test_release_bundle_rejects_control_character_artifact_paths(
@@ -21218,7 +22398,7 @@ def test_release_bundle_rejects_control_character_artifact_paths(
         raise AssertionError("control-character artifact path was accepted")
 
     assert "release artifact path contains control character '\\n'" in message
-    assert "secret-token" not in message
+    assert "symlinked-complete.toml" not in message
 
 
 def test_release_bundle_rejects_markdown_unsafe_artifact_paths(
@@ -21272,7 +22452,7 @@ def test_release_bundle_rejects_symlinked_artifact_path_without_path_leak(
 
     module = load_bundle_module()
     output_dir = tmp_path / "bundle"
-    artifact = output_dir / "evidence" / "secret-token-complete.toml"
+    artifact = output_dir / "evidence" / "symlinked-complete.toml"
     real_artifact = tmp_path / "real-complete.toml"
     artifact.parent.mkdir(parents=True)
     real_artifact.write_text("release evidence\n", encoding="utf-8")
@@ -21318,6 +22498,41 @@ def test_release_bundle_rejects_percent_encoded_artifact_traversal_paths(
             "release artifact path contains percent-encoded traversal segment"
         ) in message
         assert "secret-token" not in message
+
+
+def test_release_bundle_rejects_non_ascii_or_sensitive_artifact_paths(
+    tmp_path: Path,
+) -> None:
+    """Generated public artifact paths must not expose unsafe path text."""
+
+    module = load_bundle_module()
+    cases = (
+        (
+            "evidence/compléte.toml",
+            "release artifact path contains non-ASCII character",
+            "compléte.toml",
+        ),
+        (
+            "evidence/secret-token-complete.toml",
+            "release artifact path contains sensitive name",
+            "secret-token-complete.toml",
+        ),
+    )
+    for index, (relative_path, expected_error, leaked_path) in enumerate(cases):
+        output_dir = tmp_path / f"bundle-artifact-path-{index}"
+        artifact = output_dir.joinpath(*PurePosixPath(relative_path).parts)
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text("release evidence\n", encoding="utf-8")
+
+        try:
+            module._artifact(artifact, output_dir)
+        except ValueError as exc:
+            message = str(exc)
+        else:
+            raise AssertionError(f"unsafe artifact path was accepted: {relative_path}")
+
+        assert expected_error in message
+        assert leaked_path not in message
 
 
 def test_release_bundle_verifier_rejects_control_character_manifest_paths(
@@ -21380,6 +22595,49 @@ def test_release_bundle_verifier_rejects_markdown_unsafe_manifest_paths(
     assert "secret-token" not in verified.stderr
 
 
+def test_release_bundle_verifier_rejects_non_ascii_or_sensitive_manifest_paths(
+    tmp_path: Path,
+) -> None:
+    """Manifest artifact paths must reject unsafe public path text."""
+
+    cases = (
+        (
+            "release-réadiness.md",
+            "manifest artifact path contains non-ASCII character",
+            "release-réadiness.md",
+        ),
+        (
+            "secret-token-release-readiness.md",
+            "manifest artifact path contains sensitive name",
+            "secret-token-release-readiness.md",
+        ),
+    )
+    for index, (artifact_path, expected_error, leaked_path) in enumerate(cases):
+        case_dir = tmp_path / f"manifest-public-path-{index}"
+        case_dir.mkdir()
+        output_dir = build_ready_bundle(case_dir)
+        manifest_path = output_dir / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["artifacts"][0]["path"] = artifact_path
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, artifact_path
+        assert expected_error in verified.stdout
+        assert leaked_path not in verified.stdout
+        assert leaked_path not in verified.stderr
+
+
 def test_release_bundle_verifier_rejects_padded_manifest_paths(
     tmp_path: Path,
 ) -> None:
@@ -21423,9 +22681,7 @@ def test_release_bundle_verifier_rejects_percent_encoded_manifest_path_escape(
         output_dir = build_ready_bundle(case_dir)
         manifest_path = output_dir / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        manifest["artifacts"][0]["path"] = (
-            f"evidence/{marker}/secret-token-outside.md"
-        )
+        manifest["artifacts"][0]["path"] = f"evidence/{marker}/outside.md"
         manifest_path.write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -21443,8 +22699,8 @@ def test_release_bundle_verifier_rejects_percent_encoded_manifest_path_escape(
         assert (
             "manifest artifact path contains percent-encoded traversal segment"
         ) in verified.stdout
-        assert "secret-token" not in verified.stdout
-        assert "secret-token" not in verified.stderr
+        assert "outside.md" not in verified.stdout
+        assert "outside.md" not in verified.stderr
 
 
 def test_release_bundle_verifier_rejects_control_character_report_paths(
@@ -21745,11 +23001,11 @@ def test_release_bundle_verifier_rejects_symlinked_artifact(
     """Manifested artifacts must be ordinary bundle files, not symlinks."""
 
     output_dir = build_ready_bundle(tmp_path)
-    artifact = output_dir / "evidence" / "secret-token-complete.toml"
+    artifact = output_dir / "evidence" / "symlinked-complete.toml"
     outside = tmp_path / "outside-complete.toml"
     outside.write_bytes((output_dir / "evidence" / "00-complete.toml").read_bytes())
     artifact.symlink_to(outside)
-    append_manifest_artifact(output_dir, "evidence/secret-token-complete.toml")
+    append_manifest_artifact(output_dir, "evidence/symlinked-complete.toml")
 
     verified = subprocess.run(
         ["python3", str(VERIFY_SCRIPT), str(output_dir)],
@@ -21762,8 +23018,8 @@ def test_release_bundle_verifier_rejects_symlinked_artifact(
     assert verified.returncode == 1
     assert "bundle artifact path uses symlink" in verified.stdout
     assert "bundle contains symlink" in verified.stdout
-    assert "secret-token" not in verified.stdout
-    assert "secret-token" not in verified.stderr
+    assert "symlinked-complete.toml" not in verified.stdout
+    assert "symlinked-complete.toml" not in verified.stderr
 
 
 def test_release_bundle_verifier_requires_manifest_handoff_note(
@@ -21948,9 +23204,18 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
         "with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` "
         "reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a "
         "numeric unit duration, and with a positive TRX byte count plus a "
-        "TRX marker that full-matches the C# test project "
-        "`TestResults/sccp-dotnet-sdk.trx` path before release readiness can "
-        "pass.\n",
+        "TRX marker that full-matches the direct C# test project "
+        "`TestResults/sccp-dotnet-sdk.trx` path. Canonical `.NET` SCCP "
+        "marker lines must use a single literal space after the colon; "
+        "VSTest summary label/value and number/unit separators must be "
+        "present, padding must use ordinary spaces only, and "
+        "tab/control-whitespace separators remain forged evidence. Traced "
+        "restore/test `PATH` prefixes must start with the printed "
+        "`connect_norito_bridge.dll` directory and must not contain empty "
+        "path-list segments. Named or "
+        "traversal subdirectories before or after `TestResults` remain "
+        "forged evidence and cannot satisfy release readiness. Windows backslash or "
+        "drive-qualified TRX marker paths remain forged evidence too.\n",
         "",
     )
     errors = verifier._readiness_markdown_invariant_errors(report, weakened)
@@ -22060,7 +23325,42 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
     assert (
         "readiness report Markdown Required Release Evidence section missing "
         "release evidence marker: "
-        "full-matches the C# test project `TestResults/sccp-dotnet-sdk.trx` path"
+        "full-matches the direct C# test project "
+        "`TestResults/sccp-dotnet-sdk.trx` path"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: Canonical `.NET` SCCP marker lines must use "
+        "a single literal space after the colon"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "VSTest summary label/value and number/unit separators must be present"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: padding must use ordinary spaces only"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "tab/control-whitespace separators remain forged evidence"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: must not contain empty path-list segments"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "Named or traversal subdirectories before or after `TestResults` "
+        "remain forged evidence"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: Windows backslash or drive-qualified TRX "
+        "marker paths remain forged evidence too"
     ) in errors
     assert (
         "readiness report Markdown Required Release Evidence section missing "
@@ -22339,13 +23639,26 @@ def test_release_bundle_required_evidence_markers_are_unique_and_generated(
     )
     required_evidence = markdown.split("## Required Release Evidence\n", 1)[1]
     required_evidence = required_evidence.split("\n## ", 1)[0]
+    required_evidence_items = [
+        line[2:] for line in required_evidence.splitlines() if line.startswith("- ")
+    ]
     markers = verifier.READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS
 
+    assert len(required_evidence_items) == len(set(required_evidence_items))
     assert len(markers) == len(set(markers))
     missing_markers = [
         marker for marker in markers if marker not in required_evidence
     ]
     assert missing_markers == []
+    assert "canonical top-level title/status block" in required_evidence
+    assert "Markdown short-indented heading recognition" in required_evidence
+    assert "Setext heading rejection" in required_evidence
+    assert "exact public section-heading spelling" in required_evidence
+    assert "no unexpected public section headings" in required_evidence
+    assert "repeated public section headings" in required_evidence
+    assert "noncanonical required-section order" in required_evidence
+    assert "canonical Required Release Evidence bullet spelling" in required_evidence
+    assert "must not contain empty path-list segments" in required_evidence
 
 
 def test_release_bundle_verifier_release_notes_renderer_is_independent(
@@ -22465,6 +23778,30 @@ def test_release_bundle_verifier_release_notes_invariants_require_single_top_lev
     )
     assert "release notes attachment has unexpected top-level heading" in errors
 
+    indented_heading = notes.replace(
+        "Status: READY\n\n",
+        "Status: READY\n   # Operator Advisory\n\n",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        indented_heading,
+    )
+    assert "release notes attachment has unexpected top-level heading" in errors
+
+    setext_heading = notes.replace(
+        "Status: READY\n\n",
+        "Status: READY\nOperator Advisory\n===\n\n",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        setext_heading,
+    )
+    assert "release notes attachment has unexpected top-level heading" in errors
+
 
 def test_release_bundle_verifier_release_notes_invariants_reject_unexpected_section_headings(
     tmp_path: Path,
@@ -22481,15 +23818,20 @@ def test_release_bundle_verifier_release_notes_invariants_reject_unexpected_sect
         report,
         manifest["artifacts"],
     )
-    extra_sections = notes + "\n## Operator Notes\n\n### Hidden Review Notes\n"
+    for heading in (
+        "## Operator Notes\n",
+        "   ## Operator Notes\n",
+        "Operator Notes\n---\n",
+    ):
+        extra_sections = notes + f"\n{heading}\n### Hidden Review Notes\n"
 
-    errors = verifier._release_notes_attachment_invariant_errors(
-        report,
-        manifest["artifacts"],
-        extra_sections,
-    )
+        errors = verifier._release_notes_attachment_invariant_errors(
+            report,
+            manifest["artifacts"],
+            extra_sections,
+        )
 
-    assert "release notes attachment has unexpected section heading" in errors
+        assert "release notes attachment has unexpected section heading" in errors
 
 
 def test_release_bundle_verifier_release_notes_invariants_reject_trailing_content(
@@ -23616,7 +24958,7 @@ def test_release_bundle_verifier_rejects_missing_report_summary_json_without_pat
 ) -> None:
     """Missing public JSON artifacts must not echo local bundle paths."""
 
-    secret_root = tmp_path / "secret-token-public-json"
+    secret_root = tmp_path / "public-json-root"
     secret_root.mkdir()
     output_dir = build_ready_bundle(secret_root)
     (output_dir / "sccp-release-readiness.json").unlink()
@@ -23629,7 +24971,7 @@ def test_release_bundle_verifier_rejects_missing_report_summary_json_without_pat
     assert summary["verified"] is False
     assert "cannot load readiness report JSON" in errors
     assert "cannot load all-lanes summary JSON" in errors
-    assert "secret-token" not in errors
+    assert "public-json-root" not in errors
     assert "Traceback" not in errors
 
 
@@ -23665,7 +25007,7 @@ def test_release_bundle_verifier_redacts_public_markdown_load_errors(
 ) -> None:
     """Public Markdown load errors must not echo local bundle paths."""
 
-    secret_root = tmp_path / "secret-token-public-markdown"
+    secret_root = tmp_path / "public-markdown-root"
     secret_root.mkdir()
     output_dir = build_ready_bundle(secret_root)
     (output_dir / "sccp-release-readiness.md").unlink()
@@ -23678,7 +25020,7 @@ def test_release_bundle_verifier_redacts_public_markdown_load_errors(
     assert summary["verified"] is False
     assert "cannot load readiness report Markdown" in errors
     assert "cannot load release-notes attachment" in errors
-    assert "secret-token" not in errors
+    assert "public-markdown-root" not in errors
     assert "Traceback" not in errors
 
 
@@ -26957,9 +28299,16 @@ def test_release_bundle_verifier_recomputes_active_route_canary_evidence_bound_e
     summary_payload = (output_dir / "sccp-all-lanes-summary.json").read_text(
         encoding="utf-8"
     )
-    route_canary_evidence_bound_exactness_cases = ("true", 1, False, None)
+    # Source-inventory marker: route canary recomputed evidence_bound null-vs-missing cases
+    route_canary_evidence_bound_exactness_cases = (
+        ("string", "true"),
+        ("numeric", 1),
+        ("false", False),
+        ("null", None),
+        ("missing", None),
+    )
 
-    for value in route_canary_evidence_bound_exactness_cases:
+    for case_id, value in route_canary_evidence_bound_exactness_cases:
         summary = json.loads(summary_payload)
         active_lane = next(
             lane
@@ -26967,7 +28316,7 @@ def test_release_bundle_verifier_recomputes_active_route_canary_evidence_bound_e
             if lane["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
         )
         canary = active_lane["route_allowlist"]["route_canary"]
-        if value is None:
+        if case_id == "missing":
             canary.pop("evidence_bound", None)
         else:
             canary["evidence_bound"] = value
@@ -26979,21 +28328,21 @@ def test_release_bundle_verifier_recomputes_active_route_canary_evidence_bound_e
         item_by_id = {item["id"]: item for item in checklist["items"]}
         route_canary_item = item_by_id["live_route_canary_evidence"]
 
-        assert checklist["ready"] is False, repr(value)
-        assert route_canary_item["ready"] is False, repr(value)
+        assert checklist["ready"] is False, case_id
+        assert route_canary_item["ready"] is False, case_id
         assert any(
             "route canary evidence is not bound" in blocker
             for blocker in route_canary_item["blockers"]
-        ), repr(value)
-        if value is not None and type(value) is not bool:
+        ), case_id
+        if case_id != "missing" and type(value) is not bool:
             assert any(
                 "route canary evidence_bound must be boolean" in blocker
                 for blocker in route_canary_item["blockers"]
-            ), repr(value)
+            ), case_id
         assert not any(
             "route canary receipt block must be finalized" in blocker
             for blocker in route_canary_item["blockers"]
-        ), repr(value)
+        ), case_id
 
 
 def test_release_bundle_verifier_recomputes_active_route_canary_receipt_finalized_exactly(
@@ -27009,9 +28358,16 @@ def test_release_bundle_verifier_recomputes_active_route_canary_receipt_finalize
     summary_payload = (output_dir / "sccp-all-lanes-summary.json").read_text(
         encoding="utf-8"
     )
-    route_canary_receipt_finalized_exactness_cases = ("true", 1, False, None)
+    # Source-inventory marker: route canary recomputed receipt_block_finalized null-vs-missing cases
+    route_canary_receipt_finalized_exactness_cases = (
+        ("string", "true"),
+        ("numeric", 1),
+        ("false", False),
+        ("null", None),
+        ("missing", None),
+    )
 
-    for value in route_canary_receipt_finalized_exactness_cases:
+    for case_id, value in route_canary_receipt_finalized_exactness_cases:
         summary = json.loads(summary_payload)
         active_lane = next(
             lane
@@ -27019,7 +28375,7 @@ def test_release_bundle_verifier_recomputes_active_route_canary_receipt_finalize
             if lane["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
         )
         canary = active_lane["route_allowlist"]["route_canary"]
-        if value is None:
+        if case_id == "missing":
             canary.pop("receipt_block_finalized", None)
         else:
             canary["receipt_block_finalized"] = value
@@ -27031,21 +28387,21 @@ def test_release_bundle_verifier_recomputes_active_route_canary_receipt_finalize
         item_by_id = {item["id"]: item for item in checklist["items"]}
         route_canary_item = item_by_id["live_route_canary_evidence"]
 
-        assert checklist["ready"] is False, repr(value)
-        assert route_canary_item["ready"] is False, repr(value)
+        assert checklist["ready"] is False, case_id
+        assert route_canary_item["ready"] is False, case_id
         assert any(
             "route canary receipt block must be finalized" in blocker
             for blocker in route_canary_item["blockers"]
-        ), repr(value)
-        if value is not None and type(value) is not bool:
+        ), case_id
+        if case_id != "missing" and type(value) is not bool:
             assert any(
                 "route canary receipt_block_finalized must be boolean" in blocker
                 for blocker in route_canary_item["blockers"]
-            ), repr(value)
+            ), case_id
         assert not any(
             "route canary evidence is not bound" in blocker
             for blocker in route_canary_item["blockers"]
-        ), repr(value)
+        ), case_id
 
 
 def test_release_bundle_verifier_recomputes_active_route_canary_message_proof_used_exactly(
@@ -27061,9 +28417,16 @@ def test_release_bundle_verifier_recomputes_active_route_canary_message_proof_us
     summary_payload = (output_dir / "sccp-all-lanes-summary.json").read_text(
         encoding="utf-8"
     )
-    route_canary_message_proof_used_exactness_cases = ("true", 1, False, None)
+    # Source-inventory marker: route canary recomputed message_proof_used null-vs-missing cases
+    route_canary_message_proof_used_exactness_cases = (
+        ("string", "true"),
+        ("numeric", 1),
+        ("false", False),
+        ("null", None),
+        ("missing", None),
+    )
 
-    for value in route_canary_message_proof_used_exactness_cases:
+    for case_id, value in route_canary_message_proof_used_exactness_cases:
         summary = json.loads(summary_payload)
         active_lane = next(
             lane
@@ -27071,7 +28434,7 @@ def test_release_bundle_verifier_recomputes_active_route_canary_message_proof_us
             if lane["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
         )
         canary = active_lane["route_allowlist"]["route_canary"]
-        if value is None:
+        if case_id == "missing":
             canary.pop("message_proof_used", None)
         else:
             canary["message_proof_used"] = value
@@ -27083,21 +28446,21 @@ def test_release_bundle_verifier_recomputes_active_route_canary_message_proof_us
         item_by_id = {item["id"]: item for item in checklist["items"]}
         route_canary_item = item_by_id["live_route_canary_evidence"]
 
-        assert checklist["ready"] is False, repr(value)
-        assert route_canary_item["ready"] is False, repr(value)
+        assert checklist["ready"] is False, case_id
+        assert route_canary_item["ready"] is False, case_id
         assert any(
             "route canary message proof must be used" in blocker
             for blocker in route_canary_item["blockers"]
-        ), repr(value)
-        if value is not None and type(value) is not bool:
+        ), case_id
+        if case_id != "missing" and type(value) is not bool:
             assert any(
                 "route canary message_proof_used must be boolean" in blocker
                 for blocker in route_canary_item["blockers"]
-            ), repr(value)
+            ), case_id
         assert not any(
             "route canary evidence is not bound" in blocker
             for blocker in route_canary_item["blockers"]
-        ), repr(value)
+        ), case_id
 
 
 def test_release_bundle_verifier_classifies_malformed_active_required_record_fields(
@@ -27180,6 +28543,7 @@ def test_release_bundle_verifier_classifies_malformed_active_lane_blockers(
         "route_allowlist_binding",
         "live_route_canary_evidence",
     )
+    duplicate_lane_blocker = "route canary safe duplicated active lane blocker"
     cases = (
         (
             "operator launch hold",
@@ -27200,6 +28564,11 @@ def test_release_bundle_verifier_classifies_malformed_active_lane_blockers(
             ["route canary operator launch hold"],
             ("live_route_canary_evidence",),
             "domain 1 (eth): route canary operator launch hold",
+        ),
+        (
+            [duplicate_lane_blocker, duplicate_lane_blocker],
+            (*category_item_ids, "no_unresolved_blockers"),
+            "domain 1 (eth): active launch lane blockers must not contain duplicate strings",
         ),
     )
 
@@ -27228,6 +28597,13 @@ def test_release_bundle_verifier_classifies_malformed_active_lane_blockers(
             )
         if not isinstance(lane_blockers, list):
             assert "o" not in item_by_id["live_route_canary_evidence"]["blockers"]
+        if lane_blockers == [duplicate_lane_blocker, duplicate_lane_blocker]:
+            all_blockers = "\n".join(
+                blocker
+                for item in item_by_id.values()
+                for blocker in item["blockers"]
+            )
+            assert duplicate_lane_blocker not in all_blockers
 
 
 def test_release_bundle_verifier_blocks_malformed_native_prover_blockers(
@@ -27284,6 +28660,15 @@ def test_release_bundle_verifier_blocks_malformed_native_prover_blockers(
             ["operator secret-token-native-blocker"],
             "native EVM prover validation_blockers[0] contains sensitive name",
             "operator secret-token-native-blocker",
+            True,
+        ),
+        (
+            [
+                "safe duplicated native validation blocker",
+                "safe duplicated native validation blocker",
+            ],
+            "native EVM prover validation_blockers must not contain duplicate strings",
+            "safe duplicated native validation blocker",
             True,
         ),
         (
@@ -27606,6 +28991,56 @@ def test_release_bundle_verifier_rejects_artifact_digest_text_drift(
     )
     assert (
         "readiness report input artifact sha256 must be a canonical SHA-256 hex string"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_zero_artifact_hashes(
+    tmp_path: Path,
+) -> None:
+    """Manifest and report artifact SHA-256 fields must not be all-zero."""
+
+    # Source-inventory markers:
+    # readiness report input artifact sha256 must be a non-zero canonical SHA-256 hex string
+    # sha256 must be a non-zero canonical SHA-256 hex string
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["input_artifacts"][0]["sha256"] = "0" * 64
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+
+    manifest_path = output_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for artifact in manifest["artifacts"]:
+        if artifact["path"] == "sccp-all-lanes-summary.json":
+            artifact["sha256"] = "0" * 64
+            break
+    else:
+        raise AssertionError("summary artifact not found")
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "manifest artifact sha256 must be a non-zero canonical SHA-256 hex string"
+        in verified.stdout
+    )
+    assert (
+        "readiness report input artifact sha256 must be a non-zero canonical SHA-256 hex string"
     ) in verified.stdout
 
 
@@ -28396,7 +29831,7 @@ def test_release_bundle_verifier_rejects_input_provenance_schema_drift(
     """Copied input provenance must use unique canonical bundle paths."""
 
     output_dir = build_ready_bundle(tmp_path)
-    secret_relative = "evidence/secret-token-complete.toml"
+    secret_relative = "evidence/copied-complete.toml"
     secret_artifact_path = output_dir / secret_relative
     secret_artifact_path.write_bytes(
         (output_dir / "evidence" / "00-complete.toml").read_bytes()
@@ -28413,7 +29848,7 @@ def test_release_bundle_verifier_rejects_input_provenance_schema_drift(
     report["inputs"] = [
         secret_relative,
         secret_relative,
-        "../secret-token-operator/complete.toml",
+        "../operator/complete.toml",
         "",
     ]
     report["input_artifacts"][0] = dict(secret_artifact)
@@ -28443,8 +29878,8 @@ def test_release_bundle_verifier_rejects_input_provenance_schema_drift(
     assert "readiness report input_artifacts contains duplicate path" in (
         verified.stdout
     )
-    assert "secret-token" not in verified.stdout
-    assert "secret-token" not in verified.stderr
+    assert "copied-complete.toml" not in verified.stdout
+    assert "copied-complete.toml" not in verified.stderr
 
 
 def test_release_bundle_verifier_rejects_report_artifact_path_drift(
@@ -28455,9 +29890,9 @@ def test_release_bundle_verifier_rejects_report_artifact_path_drift(
     output_dir = build_ready_bundle(tmp_path)
     report_path = output_dir / "sccp-release-readiness.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    report["input_artifacts"][0]["path"] = "../secret-token-evidence/00-complete.toml"
+    report["input_artifacts"][0]["path"] = "../operator-evidence/00-complete.toml"
     report["corridor"]["evidence_artifacts"]["swift-sdk"]["path"] = (
-        "corridor\\secret-token-swift-sdk.log"
+        "corridor\\swift-sdk.log"
     )
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
@@ -28480,8 +29915,8 @@ def test_release_bundle_verifier_rejects_report_artifact_path_drift(
         "readiness report phase swift-sdk artifact path is not canonical"
         in verified.stdout
     )
-    assert "secret-token" not in verified.stdout
-    assert "secret-token" not in verified.stderr
+    assert "operator-evidence" not in verified.stdout
+    assert "operator-evidence" not in verified.stderr
 
 
 def test_release_bundle_verifier_rejects_percent_encoded_report_paths(
@@ -28537,13 +29972,13 @@ def test_release_bundle_verifier_rejects_copied_input_layout_drift(
 
     output_dir = build_ready_bundle(tmp_path)
     original = output_dir / "evidence" / "00-complete.toml"
-    renamed = output_dir / "evidence" / "secret-token-renamed.toml"
+    renamed = output_dir / "evidence" / "renamed.toml"
     original.rename(renamed)
 
     report_path = output_dir / "sccp-release-readiness.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    report["inputs"] = ["evidence/secret-token-renamed.toml"]
-    report["input_artifacts"][0]["path"] = "evidence/secret-token-renamed.toml"
+    report["inputs"] = ["evidence/renamed.toml"]
+    report["input_artifacts"][0]["path"] = "evidence/renamed.toml"
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -28553,7 +29988,7 @@ def test_release_bundle_verifier_rejects_copied_input_layout_drift(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     for artifact in manifest["artifacts"]:
         if artifact["path"] == "evidence/00-complete.toml":
-            artifact["path"] = "evidence/secret-token-renamed.toml"
+            artifact["path"] = "evidence/renamed.toml"
             break
     else:
         raise AssertionError("copied evidence artifact not found")
@@ -28582,8 +30017,8 @@ def test_release_bundle_verifier_rejects_copied_input_layout_drift(
         "readiness report input_artifacts path must use copied evidence layout "
         "evidence/00-*.toml"
     ) in verified.stdout
-    assert "secret-token" not in verified.stdout
-    assert "secret-token" not in verified.stderr
+    assert "renamed.toml" not in verified.stdout
+    assert "renamed.toml" not in verified.stderr
 
 
 def test_release_bundle_verifier_requires_non_empty_report_and_summary_json(
@@ -29419,6 +30854,26 @@ def test_release_bundle_verifier_active_launch_blockers_reject_malformed_contain
         "domain 1 (eth): active launch lane blocker must be a non-empty canonical string",
     ], case_id
     assert " padded " not in blockers
+
+    case_id = "top_level.duplicate_root"
+    summary = json.loads(summary_payload)
+    active_lane = next(
+        lane
+        for lane in summary["lanes"]
+        if lane["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["blockers"] = []
+    summary["blockers"] = [
+        "safe duplicated active evidence blocker",
+        "safe duplicated active evidence blocker",
+    ]
+
+    blockers = verifier._active_launch_blockers(summary)
+
+    assert blockers == [
+        "SCCP evidence blockers must not contain duplicate strings",
+    ], case_id
+    assert "safe duplicated active evidence blocker" not in "\n".join(blockers)
 
 
 def test_release_bundle_verifier_rejects_malformed_active_launch_blockers(
@@ -32559,6 +34014,318 @@ def test_release_bundle_verifier_markdown_invariants_require_public_sections(
     )
 
 
+def test_release_bundle_verifier_rejects_noncanonical_readiness_title_status_block(
+    tmp_path: Path,
+) -> None:
+    """Readiness Markdown title and status must stay in the canonical block."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    status_line = (
+        "Status: READY"
+        if report.get("production_ready") is True
+        else "Status: NOT READY"
+    )
+    conflicting_status_line = (
+        "Status: NOT READY" if status_line == "Status: READY" else "Status: READY"
+    )
+
+    duplicate_title = markdown.replace(
+        "# SCCP Release Readiness Report\n",
+        "# SCCP Release Readiness Report\n# SCCP Release Readiness Report\n",
+        1,
+    )
+    duplicate_title_errors = verifier._readiness_markdown_invariant_errors(
+        report,
+        duplicate_title,
+    )
+    assert (
+        "readiness report Markdown has multiple canonical titles"
+        in duplicate_title_errors
+    )
+    assert (
+        "readiness report Markdown has unexpected top-level heading"
+        in duplicate_title_errors
+    )
+    assert (
+        "readiness report Markdown title/status block is not canonical"
+        in duplicate_title_errors
+    )
+
+    for forged_heading_line in (
+        "# Forged Reviewer Status",
+        "   # Forged Reviewer Status",
+    ):
+        forged_heading = markdown.replace(
+            f"{status_line}\n",
+            f"{status_line}\n{forged_heading_line}\n",
+            1,
+        )
+        forged_heading_errors = verifier._readiness_markdown_invariant_errors(
+            report,
+            forged_heading,
+        )
+        assert (
+            "readiness report Markdown has unexpected top-level heading"
+            in forged_heading_errors
+        )
+        assert "Forged Reviewer Status" not in "\n".join(forged_heading_errors)
+
+    setext_heading = markdown.replace(
+        f"{status_line}\n",
+        f"{status_line}\nForged Reviewer Status\n===\n",
+        1,
+    )
+    setext_heading_errors = verifier._readiness_markdown_invariant_errors(
+        report,
+        setext_heading,
+    )
+    assert (
+        "readiness report Markdown has unexpected top-level heading"
+        in setext_heading_errors
+    )
+    assert "Forged Reviewer Status" not in "\n".join(setext_heading_errors)
+
+    conflicting_status = markdown.replace(
+        f"{status_line}\n",
+        f"{status_line}\n{conflicting_status_line}\n",
+        1,
+    )
+    conflicting_status_errors = verifier._readiness_markdown_invariant_errors(
+        report,
+        conflicting_status,
+    )
+    assert (
+        "readiness report Markdown has multiple status lines"
+        in conflicting_status_errors
+    )
+    assert (
+        "readiness report Markdown title/status block is not canonical"
+        in conflicting_status_errors
+    )
+
+
+def test_release_bundle_verifier_rejects_duplicate_required_evidence_items(
+    tmp_path: Path,
+) -> None:
+    """Required Release Evidence must not hide drift behind duplicate bullets."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    required_evidence = markdown.split("## Required Release Evidence\n", 1)[1]
+    first_item = next(
+        line for line in required_evidence.splitlines() if line.startswith("- ")
+    )
+    tampered = markdown.replace(first_item, f"{first_item}\n{first_item}", 1)
+
+    errors = verifier._readiness_markdown_invariant_errors(report, tampered)
+
+    assert (
+        "readiness report Markdown Required Release Evidence section contains "
+        "duplicate release evidence item"
+    ) in errors
+
+
+def test_release_bundle_verifier_rejects_whitespace_variant_required_evidence_duplicates(
+    tmp_path: Path,
+) -> None:
+    """Required evidence duplicates must be normalized before comparison."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    required_evidence = markdown.split("## Required Release Evidence\n", 1)[1]
+    first_item = next(
+        line for line in required_evidence.splitlines() if line.startswith("- ")
+    )
+    tampered = markdown.replace(first_item, f"{first_item}\n{first_item}  ", 1)
+
+    errors = verifier._readiness_markdown_invariant_errors(report, tampered)
+
+    assert (
+        "readiness report Markdown Required Release Evidence section contains "
+        "duplicate release evidence item"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section has "
+        "noncanonical release evidence bullet"
+    ) in errors
+
+
+def test_release_bundle_verifier_rejects_noncanonical_required_evidence_bullets(
+    tmp_path: Path,
+) -> None:
+    """Required Release Evidence must use canonical public bullet spelling."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    required_evidence = markdown.split("## Required Release Evidence\n", 1)[1]
+    first_item = next(
+        line for line in required_evidence.splitlines() if line.startswith("- ")
+    )
+
+    for noncanonical_item in (
+        f" {first_item}",
+        first_item.replace("- ", "-  ", 1),
+        first_item.replace("- ", "* ", 1),
+    ):
+        tampered = markdown.replace(first_item, noncanonical_item, 1)
+
+        errors = verifier._readiness_markdown_invariant_errors(report, tampered)
+
+        assert (
+            "readiness report Markdown Required Release Evidence section has "
+            "noncanonical release evidence bullet"
+        ) in errors
+
+
+def test_release_bundle_verifier_rejects_duplicate_readiness_markdown_section(
+    tmp_path: Path,
+) -> None:
+    """Readiness Markdown must not repeat public section headings."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    tampered = markdown.replace(
+        "## Required Release Evidence\n",
+        "## Required Release Evidence\n## Required Release Evidence\n",
+        1,
+    )
+
+    errors = verifier._readiness_markdown_invariant_errors(report, tampered)
+
+    assert (
+        "readiness report Markdown repeats section: ## Required Release Evidence"
+        in errors
+    )
+
+
+def test_release_bundle_verifier_rejects_noncanonical_readiness_markdown_heading(
+    tmp_path: Path,
+) -> None:
+    """Readiness Markdown section headings must match exactly."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+
+    for tampered_heading in (
+        " ## Required Release Evidence",
+        "## Required Release Evidence ",
+    ):
+        tampered = markdown.replace(
+            "## Required Release Evidence",
+            tampered_heading,
+            1,
+        )
+
+        errors = verifier._readiness_markdown_invariant_errors(report, tampered)
+
+        assert (
+            "readiness report Markdown section heading is not canonical: "
+            "## Required Release Evidence"
+        ) in errors
+
+
+def test_release_bundle_verifier_rejects_unexpected_readiness_markdown_section(
+    tmp_path: Path,
+) -> None:
+    """Readiness Markdown must reject unknown public section headings."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    for forged_heading in (
+        "## Forged Evidence\n",
+        "   ## Forged Evidence\n",
+        "Forged Evidence\n---\n",
+    ):
+        tampered = markdown.replace(
+            "## Required Release Evidence\n",
+            f"{forged_heading}\nOperator controlled payload\n\n"
+            "## Required Release Evidence\n",
+            1,
+        )
+
+        errors = verifier._readiness_markdown_invariant_errors(report, tampered)
+
+        assert "readiness report Markdown has unexpected section heading" in errors
+        assert "Forged Evidence" not in "\n".join(errors)
+        assert "Operator controlled payload" not in "\n".join(errors)
+
+
+def test_release_bundle_verifier_rejects_out_of_order_readiness_markdown_section(
+    tmp_path: Path,
+) -> None:
+    """Readiness Markdown section order must stay canonical."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    tampered = markdown.replace("## Blocking Items", "__BLOCKING_ITEMS__", 1)
+    tampered = tampered.replace(
+        "## Required Release Evidence",
+        "## Blocking Items",
+        1,
+    )
+    tampered = tampered.replace(
+        "__BLOCKING_ITEMS__",
+        "## Required Release Evidence",
+        1,
+    )
+
+    errors = verifier._readiness_markdown_invariant_errors(report, tampered)
+
+    assert (
+        "readiness report Markdown section order is not canonical: "
+        "## Required Release Evidence"
+    ) in errors
+
+
 def test_release_bundle_verifier_markdown_invariants_require_evidence_input_row(
     tmp_path: Path,
 ) -> None:
@@ -32963,6 +34730,19 @@ def test_release_bundle_verifier_markdown_invariants_require_crypto_route_canary
         f"{hash_cell(row['route_allowlist_hash'])} | "
         f"{hash_cell(row['route_canary_evidence_hash'])} | "
         f"`{canary_source}` | "
+        f"{boolean_cell(row['route_canary_message_proof_used'])} | "
+        f"{boolean_cell(row['route_canary_raw_data_owner_matches_transaction'])} | "
+        f"{boolean_cell(row['route_canary_signature_recovers_to_owner'])} | "
+        f"{integer_cell(row['route_canary_log_index'])} | "
+        f"{integer_cell(row['route_canary_target_domain'])} | "
+        f"{integer_cell(row['route_canary_proof_version'])} | "
+        f"{integer_cell(row['route_canary_proof_source_domain'])} | "
+        f"{hash_cell(row['route_canary_call_data_sha256'])} | "
+        f"{hash_cell(row['route_canary_payload_hash'])} | "
+        f"{hash_cell(row['route_canary_statement_hash'])} | "
+        f"{hash_cell(row['route_canary_commitment_root'])} | "
+        f"{hash_cell(row['route_canary_finality_height'])} | "
+        f"{hash_cell(row['route_canary_finality_block_hash'])} | "
         f"{hash_cell(row['route_canary_transaction_hash'])} | "
         f"{integer_cell(row['route_canary_receipt_block_number'])} | "
         f"{hash_cell(row['route_canary_receipt_block_hash'])} | "
@@ -33073,7 +34853,7 @@ def test_release_bundle_verifier_readiness_markdown_rejects_malformed_crypto_row
 
     assert (
         "| - | - | `-` | `-` | `-` | `-` | - | - | - | - | - | - | - | "
-        "`- (unbound)` | - | - | - | - | - | - | - | - |"
+        "`- (unbound)` | - | - | - | - | - | - | - | - | - | - | - |"
     ) in markdown
     assert "`<invalid source_adapter_gate_audit_hashes>`" in markdown
     assert "secret-token" not in markdown
@@ -34115,6 +35895,12 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_binding_drift(
         "destination_binding_hash",
         "route_allowlist_hash",
         "route_canary_evidence_hash",
+        "route_canary_call_data_sha256",
+        "route_canary_payload_hash",
+        "route_canary_statement_hash",
+        "route_canary_commitment_root",
+        "route_canary_finality_height",
+        "route_canary_finality_block_hash",
         "route_canary_transaction_hash",
         "route_canary_receipt_block_hash",
         "route_canary_block_receipts_root",
@@ -34123,8 +35909,15 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_binding_drift(
         row[field] = replacement_hash(row[field])
     row["route_canary_evidence_source"] = "forged-route-canary"
     row["route_canary_evidence_bound"] = False
+    row["route_canary_message_proof_used"] = False
+    row["route_canary_log_index"] += 1
+    row["route_canary_target_domain"] = 2
+    row["route_canary_proof_version"] = 2
+    row["route_canary_proof_source_domain"] = 1
     row["route_canary_receipt_block_number"] += 1
     row["route_canary_receipt_block_finalized"] = False
+    tron_row["route_canary_raw_data_owner_matches_transaction"] = False
+    tron_row["route_canary_signature_recovers_to_owner"] = False
     tron_row["route_canary_block_number"] += 1
     tron_row["route_canary_block_timestamp"] += 1
     source_gate_row["source_adapter_gate_required"] = False
@@ -34177,6 +35970,50 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_binding_drift(
             "route_allowlist.route_canary.evidence_bound",
         ),
         (
+            "route_canary_message_proof_used",
+            "route_allowlist.route_canary.message_proof_used",
+        ),
+        (
+            "route_canary_log_index",
+            "route_allowlist.route_canary.log_index",
+        ),
+        (
+            "route_canary_target_domain",
+            "route_allowlist.route_canary.target_domain",
+        ),
+        (
+            "route_canary_proof_version",
+            "route_allowlist.route_canary.proof_version",
+        ),
+        (
+            "route_canary_proof_source_domain",
+            "route_allowlist.route_canary.proof_source_domain",
+        ),
+        (
+            "route_canary_call_data_sha256",
+            "route_allowlist.route_canary.call_data_sha256",
+        ),
+        (
+            "route_canary_payload_hash",
+            "route_allowlist.route_canary.payload_hash",
+        ),
+        (
+            "route_canary_statement_hash",
+            "route_allowlist.route_canary.statement_hash",
+        ),
+        (
+            "route_canary_commitment_root",
+            "route_allowlist.route_canary.commitment_root",
+        ),
+        (
+            "route_canary_finality_height",
+            "route_allowlist.route_canary.finality_height",
+        ),
+        (
+            "route_canary_finality_block_hash",
+            "route_allowlist.route_canary.finality_block_hash",
+        ),
+        (
             "route_canary_transaction_hash",
             "route_allowlist.route_canary.transaction_hash",
         ),
@@ -34207,6 +36044,14 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_binding_drift(
         "route_allowlist.route_canary.receipt_block_number"
     ) in verified.stdout
     for field, lane_field in (
+        (
+            "route_canary_raw_data_owner_matches_transaction",
+            "route_allowlist.route_canary.raw_data_owner_matches_transaction",
+        ),
+        (
+            "route_canary_signature_recovers_to_owner",
+            "route_allowlist.route_canary.signature_recovers_to_owner",
+        ),
         ("route_canary_block_number", "route_allowlist.route_canary.block_number"),
         (
             "route_canary_block_timestamp",
@@ -34531,6 +36376,19 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift(
     row["route_canary_evidence_hash"] = "0x" + "gg" * 32
     row["route_canary_evidence_source"] = False
     row["route_canary_evidence_bound"] = "true"
+    row["route_canary_message_proof_used"] = "true"
+    row["route_canary_raw_data_owner_matches_transaction"] = "true"
+    row["route_canary_signature_recovers_to_owner"] = "true"
+    row["route_canary_log_index"] = "0"
+    row["route_canary_target_domain"] = "1"
+    row["route_canary_proof_version"] = "1"
+    row["route_canary_proof_source_domain"] = "0"
+    row["route_canary_call_data_sha256"] = "0X" + "10" * 32
+    row["route_canary_payload_hash"] = "0x" + "11" * 31
+    row["route_canary_statement_hash"] = "0x" + "12" * 31
+    row["route_canary_commitment_root"] = True
+    row["route_canary_finality_height"] = "0x" + "gg" * 32
+    row["route_canary_finality_block_hash"] = 7
     row["route_canary_transaction_hash"] = "0X" + "11" * 32
     row["route_canary_receipt_block_number"] = 0
     row["route_canary_receipt_block_hash"] = True
@@ -34624,9 +36482,37 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift(
     ) in verified.stdout
     assert (
         "readiness report cryptographic evidence row "
+        "route_canary_message_proof_used must be a boolean or null"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row "
+        "route_canary_raw_data_owner_matches_transaction must be a boolean or null"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row "
+        "route_canary_signature_recovers_to_owner must be a boolean or null"
+    ) in verified.stdout
+    for field in (
+        "route_canary_log_index",
+        "route_canary_target_domain",
+        "route_canary_proof_version",
+        "route_canary_proof_source_domain",
+    ):
+        assert (
+            "readiness report cryptographic evidence row "
+            f"{field} must be a u32 integer"
+        ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row "
         "route_canary_receipt_block_finalized must be a boolean or null"
     ) in verified.stdout
     for field in (
+        "route_canary_call_data_sha256",
+        "route_canary_payload_hash",
+        "route_canary_statement_hash",
+        "route_canary_commitment_root",
+        "route_canary_finality_height",
+        "route_canary_finality_block_hash",
         "route_canary_transaction_hash",
         "route_canary_receipt_block_hash",
         "route_canary_message_id",
@@ -34813,6 +36699,19 @@ def test_release_bundle_verifier_accepts_bsc_testnet_crypto_profile() -> None:
         "route_canary_evidence_hash": hex32("55"),
         "route_canary_evidence_source": "evm_message_proof_accepted_transaction",
         "route_canary_evidence_bound": True,
+        "route_canary_message_proof_used": True,
+        "route_canary_raw_data_owner_matches_transaction": None,
+        "route_canary_signature_recovers_to_owner": None,
+        "route_canary_log_index": 0,
+        "route_canary_target_domain": verifier.SCCP_DOMAIN_BSC,
+        "route_canary_proof_version": 1,
+        "route_canary_proof_source_domain": verifier.SCCP_DOMAIN_SORA,
+        "route_canary_call_data_sha256": hex32("5a"),
+        "route_canary_payload_hash": hex32("5b"),
+        "route_canary_statement_hash": hex32("5c"),
+        "route_canary_commitment_root": hex32("5d"),
+        "route_canary_finality_height": hex32("5e"),
+        "route_canary_finality_block_hash": hex32("5f"),
         "route_canary_transaction_hash": hex32("66"),
         "route_canary_receipt_block_number": 4660,
         "route_canary_receipt_block_hash": hex32("77"),
@@ -34892,6 +36791,41 @@ def test_release_bundle_verifier_accepts_bsc_testnet_crypto_profile() -> None:
             "route_canary_evidence_bound",
             False,
             "route_canary_evidence_bound must be true for finalized EVM route canary evidence",
+        ),
+        (
+            "route_canary_message_proof_used",
+            False,
+            "route_canary_message_proof_used must be true for message-proof route canary evidence",
+        ),
+        (
+            "route_canary_log_index",
+            -1,
+            "route_canary_log_index must be a u32 integer",
+        ),
+        (
+            "route_canary_target_domain",
+            verifier.SCCP_DOMAIN_ETH,
+            "route_canary_target_domain must be the lane domain",
+        ),
+        (
+            "route_canary_proof_version",
+            2,
+            "route_canary_proof_version must be 1",
+        ),
+        (
+            "route_canary_proof_source_domain",
+            verifier.SCCP_DOMAIN_BSC,
+            "route_canary_proof_source_domain must be SORA",
+        ),
+        (
+            "route_canary_call_data_sha256",
+            None,
+            "route_canary_call_data_sha256 must be a canonical bytes32 hex string",
+        ),
+        (
+            "route_canary_payload_hash",
+            "0x" + "00" * 32,
+            "route_canary_payload_hash must be a non-zero canonical bytes32 hex string",
         ),
         (
             "route_canary_receipt_block_finalized",
@@ -34998,6 +36932,73 @@ def test_release_bundle_verifier_rejects_tron_crypto_profile_block_metadata_drif
         "route_canary_block_timestamp must be null for non-TRON lanes" in error
         for error in errors
     )
+
+
+def test_release_bundle_verifier_rejects_tron_crypto_owner_signature_drift() -> None:
+    """TRON crypto rows must prove raw-data owner and recovered signature flags."""
+
+    verifier = load_verify_helpers()
+    row = {field: None for field in verifier.CRYPTOGRAPHIC_EVIDENCE_KEYS}
+    row.update(
+        {
+            "domain": verifier.SCCP_DOMAIN_TRON,
+            "chain": "tron",
+            "evm_source_rpc_chain_id": "",
+            "evm_source_block_tag": "",
+            "evm_destination_rpc_chain_id": "",
+            "evm_destination_block_tag": "",
+            "route_canary_evidence_hash": fixed_hex32(0x51),
+            "route_canary_evidence_source": "tron_message_proof_accepted_transaction",
+            "route_canary_message_proof_used": True,
+            "route_canary_raw_data_owner_matches_transaction": False,
+            "route_canary_signature_recovers_to_owner": None,
+            "route_canary_log_index": 0,
+            "route_canary_target_domain": verifier.SCCP_DOMAIN_TRON,
+            "route_canary_proof_version": 1,
+            "route_canary_proof_source_domain": verifier.SCCP_DOMAIN_SORA,
+            "route_canary_call_data_sha256": fixed_hex32(0x61),
+            "route_canary_payload_hash": fixed_hex32(0x62),
+            "route_canary_statement_hash": fixed_hex32(0x63),
+            "route_canary_commitment_root": fixed_hex32(0x64),
+            "route_canary_finality_height": fixed_hex32(0x65),
+            "route_canary_finality_block_hash": fixed_hex32(0x66),
+            "route_canary_block_number": 1,
+            "route_canary_block_timestamp": 0,
+            "source_adapter_gate_required": True,
+            "source_adapter_gate_hash": "0x" + "11" * 32,
+            "source_adapter_gate_audit_hashes": {
+                "tron_dpos_source_gate_hash": "0x" + "11" * 32,
+            },
+        }
+    )
+
+    errors = verifier._cryptographic_evidence_row_schema_errors(row)
+
+    assert (
+        "readiness report cryptographic evidence row "
+        "route_canary_raw_data_owner_matches_transaction must be true for "
+        "TRON route canary evidence"
+    ) in errors
+    assert (
+        "readiness report cryptographic evidence row "
+        "route_canary_signature_recovers_to_owner must be true for TRON "
+        "route canary evidence"
+    ) in errors
+
+    non_tron = {
+        **row,
+        "domain": verifier.SCCP_DOMAIN_ETH,
+        "chain": "eth",
+        "route_canary_evidence_hash": None,
+        "route_canary_raw_data_owner_matches_transaction": True,
+    }
+    errors = verifier._cryptographic_evidence_row_schema_errors(non_tron)
+
+    assert (
+        "readiness report cryptographic evidence row "
+        "route_canary_raw_data_owner_matches_transaction must be null for "
+        "non-TRON route canary evidence"
+    ) in errors
 
 
 def test_release_bundle_verifier_rejects_crypto_source_adapter_gate_policy_drift() -> None:
@@ -39378,6 +41379,118 @@ def test_release_bundle_verifier_rejects_dotnet_noncanonical_zero_skipped_summar
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_dotnet_summary_non_space_whitespace(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must reject tab-spliced VSTest success summaries."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    cases = (
+        (
+            "tabbed-status-separator",
+            "Passed!\t- Failed: 0, Passed: 42, Skipped: 0, Total: 42, "
+            "Duration: 1 s - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)",
+        ),
+        (
+            "tabbed-duration-unit",
+            "Passed! - Failed: 0, Passed: 42, Skipped: 0, Total: 42, "
+            "Duration: 1\t s - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)",
+        ),
+    )
+    for label, forged_summary in cases:
+        success_fragments = tuple(
+            forged_summary if fragment.startswith("Passed!") else fragment
+            for fragment in phase_success_lines(report, "dotnet-sdk")
+        )
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: dotnet-sdk",
+                    *phase_command_lines(
+                        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                    ),
+                    *success_fragments,
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, label
+        assert (
+            "readiness report phase dotnet-sdk evidence artifact is missing "
+            "expected phase-block success marker: Passed!"
+        ) in verified.stdout, label
+
+
+def test_release_bundle_verifier_rejects_dotnet_summary_collapsed_spacing(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must reject collapsed VSTest summary spacing."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    cases = (
+        (
+            "collapsed-count-labels",
+            "Passed! - Failed:0, Passed:42, Skipped:0, Total:42, "
+            "Duration:1 s - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)",
+        ),
+        (
+            "compact-duration-unit",
+            "Passed! - Failed: 0, Passed: 42, Skipped: 0, Total: 42, "
+            "Duration: 1s - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)",
+        ),
+    )
+    for label, forged_summary in cases:
+        success_fragments = tuple(
+            forged_summary if fragment.startswith("Passed!") else fragment
+            for fragment in phase_success_lines(report, "dotnet-sdk")
+        )
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: dotnet-sdk",
+                    *phase_command_lines(
+                        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                    ),
+                    *success_fragments,
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, label
+        assert (
+            "readiness report phase dotnet-sdk evidence artifact is missing "
+            "expected phase-block success marker: Passed!"
+        ) in verified.stdout, label
+
+
 def test_release_bundle_verifier_rejects_dotnet_malformed_duration_summary(
     tmp_path: Path,
 ) -> None:
@@ -40196,6 +42309,180 @@ def test_release_bundle_verifier_rejects_dotnet_trx_traversal_component(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_dotnet_trx_named_subdirectory(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must use the direct project TestResults TRX path."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    forged_paths = (
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/forged/TestResults/"
+        "sccp-dotnet-sdk.trx",
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TestResults/forged/"
+        "sccp-dotnet-sdk.trx",
+    )
+    for index, forged_path in enumerate(forged_paths):
+        phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+        success_fragments = tuple(
+            f"SCCP .NET SDK TRX: {forged_path}"
+            if fragment.startswith("SCCP .NET SDK TRX:")
+            else fragment
+            for fragment in phase_success_lines(report, "dotnet-sdk")
+        )
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: dotnet-sdk",
+                    *phase_command_lines(
+                        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                    ),
+                    *success_fragments,
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, forged_path
+        assert (
+            "readiness report phase dotnet-sdk evidence artifact is missing "
+            "expected phase-block success marker: SCCP .NET SDK TRX:"
+        ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_trx_backslash_or_drive_path(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must reject Windows-style noncanonical TRX paths."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    forged_paths = (
+        r"csharp\tests\Hyperledger.Iroha.Sdk.Tests\TestResults\sccp-dotnet-sdk.trx",
+        r"C:\work\iroha\csharp\tests\Hyperledger.Iroha.Sdk.Tests\TestResults\sccp-dotnet-sdk.trx",
+    )
+    for index, forged_path in enumerate(forged_paths):
+        phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+        success_fragments = tuple(
+            f"SCCP .NET SDK TRX: {forged_path}"
+            if fragment.startswith("SCCP .NET SDK TRX:")
+            else fragment
+            for fragment in phase_success_lines(report, "dotnet-sdk")
+        )
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: dotnet-sdk",
+                    *phase_command_lines(
+                        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                    ),
+                    *success_fragments,
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, forged_path
+        assert (
+            "readiness report phase dotnet-sdk evidence artifact is missing "
+            "expected phase-block success marker: SCCP .NET SDK TRX:"
+        ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_padded_or_tabbed_marker_separators(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence markers must use canonical single-space separators."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    marker_cases = (
+        ("SCCP .NET SDK version:", "SCCP .NET SDK version: 8."),
+        ("SCCP .NET SDK OS:", "SCCP .NET SDK OS: Windows"),
+        ("SCCP .NET SDK RID:", "SCCP .NET SDK RID: win-"),
+        ("SCCP .NET SDK Architecture:", "SCCP .NET SDK Architecture:"),
+        (
+            "connect_norito_bridge native bridge:",
+            "connect_norito_bridge native bridge:",
+        ),
+        (
+            "connect_norito_bridge native bridge sha256:",
+            "connect_norito_bridge native bridge sha256:",
+        ),
+        ("SCCP .NET SDK TRX:", "SCCP .NET SDK TRX:"),
+        ("SCCP .NET SDK TRX bytes:", "SCCP .NET SDK TRX bytes:"),
+    )
+    separators = (("double-space", "  "), ("tab", "\t"))
+    base_lines = phase_successful_lines(report, "dotnet-sdk")
+    for marker_prefix, expected_fragment in marker_cases:
+        for separator_label, separator in separators:
+            mutated = False
+            forged_lines: list[str] = []
+            for line in base_lines:
+                if line.startswith(marker_prefix):
+                    forged_lines.append(
+                        f"{marker_prefix}{separator}{line[len(marker_prefix):].lstrip(' ')}"
+                    )
+                    mutated = True
+                else:
+                    forged_lines.append(line)
+            assert mutated, marker_prefix
+            phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+            phase_log.write_text(
+                "\n".join(
+                    (
+                        "==> SCCP production corridor: dotnet-sdk",
+                        *forged_lines,
+                        "SCCP production corridor completed.",
+                        "",
+                    )
+                ),
+                encoding="utf-8",
+            )
+            rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+            verified = subprocess.run(
+                ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+            assert verified.returncode == 1, (
+                marker_prefix,
+                separator_label,
+                verified.stdout,
+                verified.stderr,
+            )
+            assert (
+                "readiness report phase dotnet-sdk evidence artifact is missing "
+                f"expected phase-block success marker: {expected_fragment}"
+            ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_inert_swift_phase_command_fragment(
     tmp_path: Path,
 ) -> None:
@@ -40937,6 +43224,103 @@ def test_release_bundle_verifier_rejects_mismatched_dotnet_path_prefix(
     ) in verified.stdout
     assert "secret-token" not in verified.stdout
     assert "secret-token" not in verified.stderr
+
+
+def test_release_bundle_verifier_rejects_dotnet_empty_path_segments(
+    tmp_path: Path,
+) -> None:
+    """Published .NET PATH prefixes must not include empty path segments."""
+
+    for case_id, replacement, original_prefix in (
+        (
+            "restore",
+            "+ env DOTNET_ROOT=/tmp/dotnet "
+            "DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_UI_LANGUAGE=en "
+            "PATH=target/sccp-production-corridor/debug::/tmp/secret-token-bridge "
+            "/tmp/dotnet/dotnet restore Hyperledger.Iroha.Sdk.sln",
+            "+ dotnet restore Hyperledger.Iroha.Sdk.sln",
+        ),
+        (
+            "test",
+            None,
+            "+ dotnet test ",
+        ),
+        (
+            "restore-interior",
+            "+ env DOTNET_ROOT=/tmp/dotnet "
+            "DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_UI_LANGUAGE=en "
+            "PATH=target/sccp-production-corridor/debug:/tmp/secret-token-bridge::/usr/bin "
+            "/tmp/dotnet/dotnet restore Hyperledger.Iroha.Sdk.sln",
+            "+ dotnet restore Hyperledger.Iroha.Sdk.sln",
+        ),
+        (
+            "test-interior",
+            None,
+            "+ dotnet test ",
+        ),
+    ):
+        case_tmp_path = tmp_path / case_id
+        case_tmp_path.mkdir()
+        output_dir = build_ready_bundle(case_tmp_path)
+        report = load_report_module()
+        filter_fragment = next(
+            fragment
+            for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+            if fragment.startswith("FullyQualifiedName")
+        )
+        replacement_line = replacement
+        if replacement_line is None:
+            path_value = (
+                "target/sccp-production-corridor/debug;"
+                if case_id == "test"
+                else "target/sccp-production-corridor/debug;/tmp/"
+                "secret-token-bridge;;C:/Windows"
+            )
+            replacement_line = (
+                "+ env DOTNET_ROOT=/tmp/dotnet "
+                "DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_UI_LANGUAGE=en "
+                f"PATH={path_value} "
+                "/tmp/dotnet/dotnet test "
+                "tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+                f"--filter {filter_fragment} --nologo --logger "
+                "trx;LogFileName=sccp-dotnet-sdk.trx"
+            )
+        lines = phase_successful_lines(report, "dotnet-sdk")
+        command_index = next(
+            index for index, line in enumerate(lines) if line.startswith(original_prefix)
+        )
+        forged_lines = (
+            lines[:command_index] + [replacement_line] + lines[command_index + 1 :]
+        )
+        phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: dotnet-sdk",
+                    *forged_lines,
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, case_id
+        assert (
+            "readiness report phase dotnet-sdk evidence artifact .NET phase "
+            "used a non-canonical environment prefix"
+        ) in verified.stdout
+        assert "secret-token" not in verified.stdout
+        assert "secret-token" not in verified.stderr
 
 
 def test_release_bundle_verifier_rejects_inert_contract_smoke_test_fragment(
@@ -43080,6 +45464,46 @@ def test_release_bundle_verifier_guards_release_corridor_phase_transcript_invent
         "def _dotnet_phase_block_bridge_path_matches_target_dir(",
         'bridge_path == f"{target_dir}/debug/connect_norito_bridge.dll"',
         "test_release_bundle_verifier_rejects_dotnet_bridge_target_dir_drift",
+        "test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades",
+        "test_sccp_production_corridor_dotnet_phase_rejects_multiline_version",
+        "test_sccp_production_corridor_dotnet_phase_rejects_contradictory_os_markers",
+        "test_sccp_production_corridor_dotnet_phase_rejects_ambiguous_os_metadata",
+        "test_sccp_production_corridor_dotnet_phase_rejects_duplicate_rid",
+        "test_sccp_production_corridor_dotnet_phase_rejects_ambiguous_rid_or_architecture_metadata",
+        "test_sccp_production_corridor_dotnet_phase_rejects_noncanonical_rid_values",
+        "test_sccp_production_corridor_dotnet_phase_rejects_missing_os_architecture",
+        "test_sccp_production_corridor_dotnet_phase_rejects_noncanonical_architecture_values",
+        "test_sccp_production_corridor_dotnet_phase_rejects_colon_injected_info_values",
+        "test_sccp_production_corridor_dotnet_phase_rejects_uppercase_architecture",
+        "test_sccp_production_corridor_dotnet_phase_rejects_nested_trx_path",
+        "missing-os-name",
+        "duplicate-os-name",
+        "missing-os-platform",
+        "duplicate-os-platform",
+        "missing-rid",
+        "duplicate-os-architecture",
+        "uppercase-win-rid",
+        "foreign-linux-rid",
+        "alias-amd64-rid",
+        "alias-amd64-architecture",
+        "alias-x86_64-architecture",
+        "alias-aarch64-architecture",
+        "colon-injected-os-name",
+        "colon-injected-os-platform",
+        "colon-injected-rid",
+        "colon-injected-architecture",
+        "exactly one canonical SDK version line",
+        "exactly one OS Name and one OS Platform",
+        "dotnet_info_field_value",
+        "substr(line, length(label) + 2)",
+        "exactly one canonical Windows RID from dotnet --info",
+        "exactly one OS Architecture from dotnet --info",
+        "found: X64",
+        "direct .NET TRX TestResults path must remain the only accepted path",
+        "nested .NET TRX TestResults paths must remain rejected",
+        r"^SCCP \.NET SDK version: 8\.0\.[1-9][0-9]*$",
+        "test_release_readiness_report_rejects_dotnet_padded_or_tabbed_marker_separators",
+        "test_release_bundle_verifier_rejects_dotnet_padded_or_tabbed_marker_separators",
     ):
         assert required_marker in inventory_markers
 

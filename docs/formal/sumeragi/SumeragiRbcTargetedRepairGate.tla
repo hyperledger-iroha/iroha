@@ -548,4 +548,9 @@ SafetyAnchors ==
   /\ RescueAuthoritativeReadyAnchors
   /\ RescueMissingQcAnchors
 
+RbcTargetedRepairCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ SafetyAnchors
+
 ====

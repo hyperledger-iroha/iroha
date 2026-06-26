@@ -401,6 +401,10 @@ CollectorSelectionExactness ==
   /\ PrfCollectorSelectionExact
   /\ DeterministicCollectorRoutingExact
 
+CollectorSelectionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CollectorSelectionExactness
+
 BugQuorumUnderestimatesLen4 ==
   ActualCommitQuorum("len4_k1") = SpecCommitQuorum(4)
 
