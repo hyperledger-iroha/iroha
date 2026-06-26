@@ -255,7 +255,7 @@ export const TAIRA_BURN_RECORD_ARTIFACT_MAX_BYTES = 8 * 1024 * 1024;
 export const TAIRA_BURN_RECORD_PRODUCTION_ARTIFACT_MIN_BYTES = 256;
 export const SCCP_BSC_JSON_INPUT_MAX_BYTES = 12 * 1024 * 1024;
 export const SCCP_BSC_TEXT_INPUT_MAX_BYTES = 8 * 1024 * 1024;
-export const SCCP_BSC_BINARY_ARTIFACT_INPUT_MAX_BYTES = 512 * 1024 * 1024;
+export const SCCP_BSC_BINARY_ARTIFACT_INPUT_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const SCCP_BSC_BROWSER_PROVER_MANIFEST_MAX_BYTES = 256 * 1024;
 const EVM_EMPTY_CODE_KECCAK256 =
   "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470";
@@ -745,7 +745,7 @@ function usage() {
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-inventory --request <attestation-request.json> --scan-dir <dir> --trusted-attestation-signer <0x...>
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material finalize-attestations --request <attestation-request.json> --semantic-attestation <json> --circuit-security-attestation <json> --trusted-setup-attestation <json> --reproducible-build-attestation <json> --trusted-attestation-signer <0x...> [--out-dir ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT}/testnet]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs native-prover-bundle --route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT} --artifact-root ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT} --proof-artifact <relative-file> --proving-key <relative-file> --verifier-key <relative-file> --groth16-material-manifest <relative-json> --groth16-proof-self-test <relative-json> --snarkjs-bin <snarkjs> --trusted-attestation-signer <0x...> --cross-sdk-parity <relative-json> --native-prover-self-test <relative-json> --javascript-implementation <relative-file> --swift-implementation <relative-file> --kotlin-implementation <relative-file> --java-android-implementation <relative-file> --dotnet-implementation <relative-file> --audit-circuit-security <hex-or-relative-file> --audit-native-implementation <hex-or-relative-file> --audit-reproducible-build <hex-or-relative-file> --audit-no-wasm-no-remote-scan <hex-or-relative-file> [--audit-cross-sdk-parity <matching-hex-or-relative-file>] [--audit-native-prover-self-test <matching-hex-or-relative-file>] [--out ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--attach-route-manifest-out ${DEFAULT_ROUTE_MANIFEST_OUT}]
-  node scripts/sccp_bsc_taira_xor_deploy.mjs publish-route-manifest [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--out ${DEFAULT_ROUTE_MANIFEST_ISI_OUT}] [--submit true --torii-url ${DEFAULT_TAIRA_TORII_URL} --chain-id ${DEFAULT_TAIRA_CHAIN_ID} --authority <account> --private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV}] [--wait-for-commit true|false]
+  node scripts/sccp_bsc_taira_xor_deploy.mjs publish-route-manifest [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--out ${DEFAULT_ROUTE_MANIFEST_ISI_OUT}] [--submit true --torii-url ${DEFAULT_TAIRA_TORII_URL} --chain-id ${DEFAULT_TAIRA_CHAIN_ID} --authority <account> --private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV} --gas-asset-id <asset-definition-id>] [--wait-for-commit true|false] [--commit-timeout-ms 120000]
   node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--allow-unready true|false] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}] [--write-offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs requirements [--bsc-network testnet|mainnet] [--out ${DEFAULT_PRODUCTION_REQUIREMENTS_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs self-test
@@ -856,7 +856,7 @@ stanza. Production-ready manifests must not use --allow-unready; draft
 manifests must opt in to --allow-unready true and cannot be written as
 canonical production material.`,
   "publish-route-manifest": `Usage:
-  node scripts/sccp_bsc_taira_xor_deploy.mjs publish-route-manifest [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--out ${DEFAULT_ROUTE_MANIFEST_ISI_OUT}] [--submit true --torii-url ${DEFAULT_TAIRA_TORII_URL} --chain-id ${DEFAULT_TAIRA_CHAIN_ID} --authority <account> --private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV}] [--wait-for-commit true|false]
+  node scripts/sccp_bsc_taira_xor_deploy.mjs publish-route-manifest [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--out ${DEFAULT_ROUTE_MANIFEST_ISI_OUT}] [--submit true --torii-url ${DEFAULT_TAIRA_TORII_URL} --chain-id ${DEFAULT_TAIRA_CHAIN_ID} --authority <account> --private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV} --gas-asset-id <asset-definition-id>] [--wait-for-commit true|false] [--commit-timeout-ms 120000]
 
 Builds the UpsertSccpRouteManifest ISI payload from a production BSC route
 manifest. By default the command writes the public ISI artifact without
@@ -3436,32 +3436,7 @@ function nativeProverBundleProductionProblems(record, label) {
 
 export function canonicalBscNativeEvmProverBundleHash(bundle) {
   return bytesToHex(
-    sha256(
-      textEncoder.encode(
-        JSON.stringify({
-          schema: bundle.schema,
-          bundleId: bundle.bundleId,
-          domain: bundle.domain,
-          chain: bundle.chain,
-          proofBackend: bundle.proofBackend,
-          proofArtifact: bundle.proofArtifact,
-          proofArtifactHash: bundle.proofArtifactHash,
-          provingKey: bundle.provingKey,
-          provingKeyHash: bundle.provingKeyHash,
-          verifierKey: bundle.verifierKey,
-          verifierKeyHash: bundle.verifierKeyHash,
-          verifierKeyArtifactHash: bundle.verifierKeyArtifactHash,
-          destinationBindingHash: bundle.destinationBindingHash,
-          noWasm: bundle.noWasm,
-          remoteProverRequired: bundle.remoteProverRequired,
-          browserImplementation: bundle.browserImplementation,
-          nativeSdkArtifacts: bundle.nativeSdkArtifacts,
-          crossSdkParityArtifact: bundle.crossSdkParityArtifact,
-          nativeProverSelfTestArtifact: bundle.nativeProverSelfTestArtifact,
-          auditHashes: bundle.auditHashes,
-        }),
-      ),
-    ),
+    sha256(textEncoder.encode(JSON.stringify(bundle))),
   );
 }
 
@@ -3647,6 +3622,36 @@ function normalizeCanonicalAssetDefinitionId(value, label) {
     throw new Error(`${label} must be a canonical Base58 asset definition ID.`);
   }
   return normalized;
+}
+
+function normalizeTransactionHash(value, label) {
+  const text = normalizeNonEmptyText(value, label);
+  const hex = text.startsWith("0x") ? text.slice(2) : text;
+  if (!/^[0-9a-f]{64}$/iu.test(hex) || /^0{64}$/u.test(hex.toLowerCase())) {
+    throw new Error(`${label} must be a non-zero 32-byte transaction hash.`);
+  }
+  return `0x${hex.toLowerCase()}`;
+}
+
+function transactionStatusKind(status) {
+  if (typeof status === "string") {
+    return status;
+  }
+  if (!isRecord(status)) {
+    return null;
+  }
+  for (const value of [
+    ownValue(ownValue(status, "status"), "kind"),
+    ownValue(status, "summary"),
+    ownValue(status, "status"),
+    ownValue(status, "kind"),
+    ownValue(ownValue(status, "value"), "kind"),
+  ]) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
 }
 
 function normalizeStrictBase64(value, label) {
@@ -5989,6 +5994,10 @@ function bscGroth16MaterialManifestShapeProblems(manifest) {
         "public_signal_names",
         "verifierKeyHash",
         "verifier_key_hash",
+        "proofArtifactHash",
+        "proof_artifact_hash",
+        "provingKeyHash",
+        "proving_key_hash",
         "productionReady",
         "production_ready",
         "productionBlockers",
@@ -6023,6 +6032,8 @@ function bscGroth16MaterialManifestShapeProblems(manifest) {
         ["publicInputCount", ["publicInputCount", "public_input_count"]],
         ["publicSignalNames", ["publicSignalNames", "public_signal_names"]],
         ["verifierKeyHash", ["verifierKeyHash", "verifier_key_hash"]],
+        ["proofArtifactHash", ["proofArtifactHash", "proof_artifact_hash"]],
+        ["provingKeyHash", ["provingKeyHash", "proving_key_hash"]],
         ["productionReady", ["productionReady", "production_ready"]],
         ["productionBlockers", ["productionBlockers", "production_blockers"]],
         ["trustedSetup", ["trustedSetup", "trusted_setup"]],
@@ -7738,14 +7749,15 @@ function groth16TrustedSetupTranscriptProblems(record, label) {
     groth16ManifestArrayOrCountAtLeastProblem(
       record,
       ["contributors", "participants", "contributions"],
-      [
-        "minimumContributors",
-        "minimum_contributors",
-        "minimumContributorsObserved",
-        "minimum_contributors_observed",
-      ],
+      ["minimumContributors", "minimum_contributors"],
       2,
       `${label} contributors`,
+    ),
+    groth16ManifestOptionalIntegerProblem(
+      record,
+      ["minimumContributorsObserved", "minimum_contributors_observed"],
+      2,
+      `${label} minimumContributorsObserved`,
     ),
     groth16ManifestBooleanProblem(
       record,
@@ -7799,20 +7811,27 @@ function groth16ReproducibleBuildTranscriptProblems(record, label, manifest) {
     groth16ManifestArrayOrCountAtLeastProblem(
       record,
       ["independentRebuilders", "independent_rebuilders", "rebuilders"],
-      [
-        "independentRebuilderCount",
-        "independent_rebuilder_count",
-        "independentRebuildersObserved",
-        "independent_rebuilders_observed",
-      ],
+      ["independentRebuilderCount", "independent_rebuilder_count"],
       2,
       `${label} independentRebuilders`,
     ),
+    groth16ManifestOptionalIntegerProblem(
+      record,
+      ["independentRebuildersObserved", "independent_rebuilders_observed"],
+      2,
+      `${label} independentRebuildersObserved`,
+    ),
     groth16ManifestBooleanProblem(
       record,
-      ["reproducible", "reproducibleBuildComplete", "reproducible_build_complete"],
+      ["reproducible"],
       true,
       `${label} reproducible`,
+    ),
+    groth16ManifestOptionalBooleanProblem(
+      record,
+      ["reproducibleBuildComplete", "reproducible_build_complete"],
+      true,
+      `${label} reproducibleBuildComplete`,
     ),
   ];
   if (snarkjs) {
@@ -7958,7 +7977,7 @@ function groth16ReproducibleBuildTranscriptToolchainEvidence(
   if (
     snarkjsBinary &&
     manifestSnarkjsBinary &&
-    snarkjsBinary !== manifestSnarkjsBinary
+    resolve(snarkjsBinary) !== resolve(manifestSnarkjsBinary)
   ) {
     problems.push(
       "Groth16 material manifest selfChecks.snarkjs.snarkjsBinary must match reproducible build transcript toolchain.snarkjs.binary",
@@ -11347,6 +11366,74 @@ function mergeBscOfflineFullTomlEvidenceOptions(options, offlineEvidence) {
   return next;
 }
 
+function formatBscRouteMissingReadinessItems(items) {
+  if (items.length === 0) {
+    return "production readiness acknowledgement";
+  }
+  if (items.length === 1) {
+    return items[0];
+  }
+  return `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+}
+
+function buildBscRouteDraftDisabledReason({
+  diagnosticVerifierReasons,
+  routeEvidence,
+  proofArtifactHash,
+  provingKeyHash,
+  nativeEvmProverBundleHash,
+  destinationBrowserProver,
+  sourceBrowserProver,
+  postDeployLiveEvidence,
+}) {
+  if (diagnosticVerifierReasons.length > 0) {
+    return "BSC verifier material is diagnostic and must be replaced before production readiness.";
+  }
+  const missing = [];
+  if (!routeEvidence.contractReadback) {
+    missing.push("BSC contract readback");
+  }
+  if (!proofArtifactHash || !provingKeyHash) {
+    missing.push("proof artifact and proving key hashes");
+  }
+  if (!nativeEvmProverBundleHash) {
+    missing.push("native EVM prover bundle");
+  }
+  if (!destinationBrowserProver) {
+    missing.push("TAIRA-to-BSC browser prover manifest");
+  }
+  if (!sourceBrowserProver) {
+    missing.push("BSC-to-TAIRA browser prover manifest");
+  }
+  if (!postDeployLiveEvidence) {
+    missing.push("post-deploy live evidence");
+  } else {
+    if (postDeployLiveEvidence.fullTomlReady !== true) {
+      missing.push("offline full-TOML readiness evidence");
+    }
+    if (!postDeployLiveEvidence.offlineFullTomlSha256) {
+      missing.push("offline full-TOML hash");
+    }
+    if (
+      !postDeployLiveEvidence.sourceBridgeConfigHash ||
+      !postDeployLiveEvidence.sourceEventTransactionId ||
+      !postDeployLiveEvidence.sourceEventExplorerUrl
+    ) {
+      missing.push("BSC source-event evidence");
+    }
+    if (
+      !postDeployLiveEvidence.routeCanaryEvidenceHash ||
+      !postDeployLiveEvidence.routeCanaryTransactionId ||
+      !postDeployLiveEvidence.routeCanaryExplorerUrl
+    ) {
+      missing.push("BSC route-canary evidence");
+    }
+  }
+  return `Route manifest draft is not production-ready; missing ${formatBscRouteMissingReadinessItems(
+    missing,
+  )}.`;
+}
+
 export async function buildBscTairaXorRouteManifestDraft(input = {}) {
   const options = ownValue(input, "options") ?? {};
   const evidence = ownValue(input, "evidence");
@@ -11531,10 +11618,16 @@ export async function buildBscTairaXorRouteManifestDraft(input = {}) {
     ...(productionReady
       ? { postDeployReadbackChecked: true }
       : {
-          disabledReason:
-            diagnosticVerifierReasons.length > 0
-              ? "BSC verifier material is diagnostic and must be replaced before production readiness."
-              : "Route manifest draft is not production-ready until BSC contract readback, native prover, TAIRA route publication, and live canary evidence are complete.",
+          disabledReason: buildBscRouteDraftDisabledReason({
+            diagnosticVerifierReasons,
+            routeEvidence,
+            proofArtifactHash,
+            provingKeyHash,
+            nativeEvmProverBundleHash,
+            destinationBrowserProver,
+            sourceBrowserProver,
+            postDeployLiveEvidence,
+          }),
         }),
     bscTokenAddress: addresses.token,
     bscBridgeAddress: addresses.bridge,
@@ -13903,6 +13996,18 @@ export function buildUpsertSccpRouteManifestInstruction(manifest) {
   if (!Number.isInteger(route.version) || route.version < 0 || route.version > 255) {
     throw new Error("route manifest version must fit u8 for ISI publication.");
   }
+  const counterpartyAccountCodec =
+    readFirstValue(
+      manifest,
+      "counterpartyAccountCodec",
+      "counterparty_account_codec",
+    ) ?? (route.counterpartyDomain === 2 ? 2 : null);
+  const counterpartyAccountCodecKey =
+    readFirstValue(
+      manifest,
+      "counterpartyAccountCodecKey",
+      "counterparty_account_codec_key",
+    ) ?? (route.counterpartyDomain === 2 ? "evm_hex" : null);
   const payload = {
     version: route.version,
     route_id: route.routeId,
@@ -13910,7 +14015,11 @@ export function buildUpsertSccpRouteManifestInstruction(manifest) {
     tron_network: route.legacyTronNetwork,
     chain: route.chain,
     chain_id_hex: route.chainIdHex,
+    explorer_url: route.explorerUrl,
+    explorer_host: route.explorerHost,
     counterparty_domain: route.counterpartyDomain,
+    counterparty_account_codec: counterpartyAccountCodec,
+    counterparty_account_codec_key: counterpartyAccountCodecKey,
     verifier_target: route.verifierTarget,
     production_ready: route.productionReady,
     disabled_reason: route.disabledReason ?? null,
@@ -13924,6 +14033,7 @@ export function buildUpsertSccpRouteManifestInstruction(manifest) {
     proof_artifact_hash: route.proofArtifactHash ?? null,
     proving_key_hash: route.provingKeyHash ?? null,
     native_evm_prover_bundle_hash: route.nativeEvmProverBundleHash ?? null,
+    native_evm_prover_bundle: route.nativeEvmProverBundle ?? null,
     destination_browser_prover: sccpRouteBrowserProverRefIsi(
       route.destinationBrowserProver,
     ),
@@ -14033,6 +14143,28 @@ async function commandPublishRouteManifest(options) {
   const chainId = normalizeTairaChainId(options["chain-id"]);
   const toriiUrl = normalizeTairaToriiUrl(options["torii-url"]);
   const waitForCommit = optionEnabled(options, "wait-for-commit", true);
+  const commitTimeoutMs = normalizePositiveSafeInteger(
+    options["commit-timeout-ms"],
+    "--commit-timeout-ms",
+    120_000,
+  );
+  const manifestSettlementAssetId = normalizeCanonicalAssetDefinitionId(
+    manifest?.tairaXorBurnRecord?.settlementAssetDefinitionId,
+    "manifest tairaXorBurnRecord.settlementAssetDefinitionId",
+  );
+  const gasAssetId =
+    options["gas-asset-id"] === undefined || options["gas-asset-id"] === null
+      ? manifestSettlementAssetId
+      : normalizeCanonicalAssetDefinitionId(
+          options["gas-asset-id"],
+          "--gas-asset-id",
+        );
+  const metadata = {
+    routeId: publication.routeKey.routeId,
+    assetKey: publication.routeKey.assetKey,
+    action: "publish_sccp_route_manifest",
+    gas_asset_id: gasAssetId,
+  };
   const { buildTransaction, submitSignedTransaction } = await import(
     "../javascript/iroha_js/src/transaction.js"
   );
@@ -14041,19 +14173,46 @@ async function commandPublishRouteManifest(options) {
     chainId,
     authority,
     instructions: [publication.instruction],
-    metadata: {
-      routeId: publication.routeKey.routeId,
-      assetKey: publication.routeKey.assetKey,
-      action: "publish_sccp_route_manifest",
-    },
+    metadata,
     privateKey,
   });
   const client = new ToriiClient(toriiUrl);
   const submission = await submitSignedTransaction(
     client,
     transaction.signedTransaction,
-    { waitForCommit },
+    { waitForCommit, timeoutMs: commitTimeoutMs },
   );
+  const hash = normalizeTransactionHash(
+    transaction.hash.toString("hex"),
+    "local transaction hash",
+  );
+  const submittedHash = normalizeTransactionHash(
+    submission.hash,
+    "submitted transaction hash",
+  );
+  const statusKind = transactionStatusKind(submission.status);
+  const submissionEvidence = {
+    submitted: true,
+    toriiUrl,
+    chainId,
+    authority,
+    hash,
+    submittedHash,
+    statusKind,
+    status: submission.status ?? null,
+    gasAssetId,
+    waitForCommit,
+    commitTimeoutMs,
+  };
+  await writeJsonNoSecrets(out, {
+    ...artifact,
+    submission: submissionEvidence,
+  });
+  if (waitForCommit && statusKind !== "Applied") {
+    throw new Error(
+      `TAIRA route manifest publication was not applied: ${statusKind ?? "unknown"}.`,
+    );
+  }
   return {
     ok: true,
     wrote: out,
@@ -14061,9 +14220,13 @@ async function commandPublishRouteManifest(options) {
     toriiUrl,
     chainId,
     authority,
-    hash: transaction.hash.toString("hex"),
-    submittedHash: submission.hash,
+    hash,
+    submittedHash,
+    statusKind,
     status: submission.status ?? null,
+    gasAssetId,
+    waitForCommit,
+    commitTimeoutMs,
     routeId: publication.routeKey.routeId,
     assetKey: publication.routeKey.assetKey,
   };

@@ -48,6 +48,7 @@ import {
   buildBscTairaXorRouteConfigToml,
   buildDeploymentEvidence,
   buildMergedBscTairaXorRouteConfigToml,
+  buildUpsertSccpRouteManifestInstruction,
   bscProductionRequirements,
   compiledContractCodeHashesFromArtifacts,
   main,
@@ -910,6 +911,47 @@ const nativeProverSelfTestFixture = ({
   };
 };
 
+const bscNativeProverFixtureBytes = (label, size) => {
+  const seed = Buffer.from(`${label}: route-bound native bsc material\n`);
+  const bytes = Buffer.alloc(size);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] =
+      (seed[index % seed.length] + index * 31 + (index >> 7)) & 0xff;
+  }
+  return bytes;
+};
+
+const bscNativeProverSnarkjsBytes = (
+  magic,
+  sectionIds,
+  bytes = bscNativeProverFixtureBytes(`${magic}-artifact`, 96 * 1024),
+) => {
+  const out = Buffer.from(bytes);
+  const headerBytes = 12;
+  const sectionHeaderBytes = sectionIds.length * 12;
+  const payloadBytes = out.length - headerBytes - sectionHeaderBytes;
+  if (payloadBytes < sectionIds.length) {
+    throw new Error("snarkjs test fixture is too small");
+  }
+  out.set(Buffer.from(magic, "ascii"), 0);
+  out.writeUInt32LE(1, 4);
+  out.writeUInt32LE(sectionIds.length, 8);
+  let offset = headerBytes;
+  for (let index = 0; index < sectionIds.length; index += 1) {
+    const sectionSize =
+      Math.floor(payloadBytes / sectionIds.length) +
+      (index < payloadBytes % sectionIds.length ? 1 : 0);
+    out.writeUInt32LE(sectionIds[index], offset);
+    out.writeUInt32LE(sectionSize, offset + 4);
+    out.writeUInt32LE(0, offset + 8);
+    offset += 12 + sectionSize;
+  }
+  if (offset !== out.length) {
+    throw new Error("snarkjs test fixture sections do not fill the file");
+  }
+  return out;
+};
+
 async function writeNativeProverFixtureFiles({
   routeOverrides = {},
   artifactByteOverrides = {},
@@ -922,48 +964,21 @@ async function writeNativeProverFixtureFiles({
     await writeFile(pathName, bytes);
     return pathName;
   };
-  const bytesFor = (label, size) => {
-    const seed = Buffer.from(`${label}: route-bound native bsc material\n`);
-    const bytes = Buffer.alloc(size);
-    for (let index = 0; index < bytes.length; index += 1) {
-      bytes[index] =
-        (seed[index % seed.length] + index * 31 + (index >> 7)) & 0xff;
-    }
-    return bytes;
-  };
-  const snarkjsBytes = (magic, sectionCount, bytes) => {
-    const out = Buffer.from(bytes);
-    const headerBytes = 12;
-    const sectionHeaderBytes = sectionCount * 12;
-    const payloadBytes = out.length - headerBytes - sectionHeaderBytes;
-    if (payloadBytes < sectionCount) {
-      throw new Error("snarkjs test fixture is too small");
-    }
-    out.set(Buffer.from(magic, "ascii"), 0);
-    out.writeUInt32LE(1, 4);
-    out.writeUInt32LE(sectionCount, 8);
-    let offset = headerBytes;
-    for (let index = 0; index < sectionCount; index += 1) {
-      const sectionSize =
-        Math.floor(payloadBytes / sectionCount) +
-        (index < payloadBytes % sectionCount ? 1 : 0);
-      out.writeUInt32LE(index + 1, offset);
-      out.writeUInt32LE(sectionSize, offset + 4);
-      out.writeUInt32LE(0, offset + 8);
-      offset += 12 + sectionSize;
-    }
-    if (offset !== out.length) {
-      throw new Error("snarkjs test fixture sections do not fill the file");
-    }
-    return out;
-  };
   const proofBytes =
     artifactByteOverrides.proofArtifact ??
     artifactByteOverrides.proof ??
-    snarkjsBytes("r1cs", 3, bytesFor("proof-artifact", 96 * 1024));
+    bscNativeProverSnarkjsBytes(
+      "r1cs",
+      [1, 2, 3],
+      bscNativeProverFixtureBytes("proof-artifact", 96 * 1024),
+    );
   const provingKeyBytes =
     artifactByteOverrides.provingKey ??
-    snarkjsBytes("zkey", 10, bytesFor("proving-key", 96 * 1024));
+    bscNativeProverSnarkjsBytes(
+      "zkey",
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+      bscNativeProverFixtureBytes("proving-key", 96 * 1024),
+    );
   const verifierKeyMaterial = verifierMaterial(
     artifactByteOverrides.verifierMaterial ?? {},
   );
@@ -1035,7 +1050,7 @@ async function writeNativeProverFixtureFiles({
     const implementationBytes =
       artifactByteOverrides[`${sdk}Implementation`] ??
       artifactByteOverrides[sdk] ??
-      bytesFor(`${sdk}-implementation`, 2048);
+      bscNativeProverFixtureBytes(`${sdk}-implementation`, 2048);
     await writeArtifact(relativePath, implementationBytes);
     sdkImplementationArtifacts[sdk] = {
       sdk,
@@ -1052,7 +1067,7 @@ async function writeNativeProverFixtureFiles({
     "circuit-security-audit.bin",
     "reproducible-build-attestation.bin",
   ]) {
-    await writeArtifact(name, bytesFor(name, 2048));
+    await writeArtifact(name, bscNativeProverFixtureBytes(name, 2048));
   }
   const noWasmNoRemoteScan = {
     schema: "iroha-sccp-bsc-native-evm-no-wasm-no-remote-scan/v1",
@@ -2123,6 +2138,17 @@ test("BSC route-manifest command builds production-ready manifests only with bou
   assert.equal(
     manifest.postDeployLiveEvidence.offlineFullTomlSha256,
     hex32("88"),
+  );
+  const publicationInstruction =
+    buildUpsertSccpRouteManifestInstruction(manifest).instruction
+      .UpsertSccpRouteManifest.manifest;
+  assert.equal(publicationInstruction.explorer_url, "https://testnet.bscscan.com");
+  assert.equal(publicationInstruction.explorer_host, "testnet.bscscan.com");
+  assert.equal(publicationInstruction.counterparty_account_codec, 2);
+  assert.equal(publicationInstruction.counterparty_account_codec_key, "evm_hex");
+  assert.deepEqual(
+    publicationInstruction.native_evm_prover_bundle,
+    manifest.nativeEvmProverBundle,
   );
 
   const noReadbackEvidencePath = join(dir, "deployment.no-readback.json");
@@ -7138,6 +7164,63 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
     () =>
       buildBscNativeEvmProverBundleFromArtifacts(verifierAliasFixture.options),
     /BSC route manifest verifierKeyHash must not use multiple aliases in BSC route manifest/u,
+  );
+  const markerOffset = 12 + 10 * 12 + 64;
+  const proofRemoteMarkerBytes = bscNativeProverSnarkjsBytes(
+    "r1cs",
+    [1, 2, 3],
+    bscNativeProverFixtureBytes("proof-artifact-with-remote-marker", 96 * 1024),
+  );
+  proofRemoteMarkerBytes.set(Buffer.from("remote_prover", "ascii"), 12 + 3 * 12 + 64);
+  const proofRemoteMarker = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: { proofArtifact: proofRemoteMarkerBytes },
+  });
+  await assert.rejects(
+    () => buildBscNativeEvmProverBundleFromArtifacts(proofRemoteMarker.options),
+    /proofArtifactBytes contains forbidden prover dependency marker: remote_prover/u,
+  );
+  const provingWasmMarkerBytes = bscNativeProverSnarkjsBytes(
+    "zkey",
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    bscNativeProverFixtureBytes("proving-key-with-wasm-marker", 96 * 1024),
+  );
+  provingWasmMarkerBytes.set(Buffer.from("wasm", "ascii"), markerOffset);
+  const provingWasmMarker = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: { provingKey: provingWasmMarkerBytes },
+  });
+  await assert.rejects(
+    () => buildBscNativeEvmProverBundleFromArtifacts(provingWasmMarker.options),
+    /provingKeyBytes contains forbidden prover dependency marker: wasm/u,
+  );
+  const nonCanonicalProofSections = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: {
+      proofArtifact: bscNativeProverSnarkjsBytes(
+        "r1cs",
+        [1, 3, 2],
+        bscNativeProverFixtureBytes("proof-artifact-noncanonical", 96 * 1024),
+      ),
+    },
+  });
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts(nonCanonicalProofSections.options),
+    /proofArtifactBytes \.r1cs section ids must be in canonical order: 1, 2, 3/u,
+  );
+  const nonCanonicalProvingKeySections = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: {
+      provingKey: bscNativeProverSnarkjsBytes(
+        "zkey",
+        [1, 2, 3, 4, 5, 7, 6, 8, 9, 10],
+        bscNativeProverFixtureBytes("proving-key-noncanonical", 96 * 1024),
+      ),
+    },
+  });
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts(
+        nonCanonicalProvingKeySections.options,
+      ),
+    /provingKeyBytes \.zkey section ids must be in canonical order: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10/u,
   );
   await assert.rejects(() => {
     const { "dotnet-implementation": _drop, ...options } = fixture.options;

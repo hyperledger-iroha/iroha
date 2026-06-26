@@ -6993,6 +6993,22 @@ pub struct SccpRouteManifestDto {
     pub chain: String,
     /// CAIP-compatible TRON chain id hex.
     pub chain_id_hex: String,
+    /// Canonical counterparty explorer base URL.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub explorer_url: Option<String>,
+    /// Canonical counterparty explorer host.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub explorer_host: Option<String>,
+    /// SCCP counterparty account codec id.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub counterparty_account_codec: Option<u8>,
+    /// Stable logical key for the counterparty account codec.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub counterparty_account_codec_key: Option<String>,
     /// SCCP counterparty domain identifier.
     pub counterparty_domain: u32,
     /// Destination verifier target name.
@@ -7073,6 +7089,10 @@ pub struct SccpRouteManifestDto {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub native_evm_prover_bundle_hash: Option<String>,
+    /// Optional canonical native EVM prover bundle JSON.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub native_evm_prover_bundle: Option<IrohaJson>,
     /// Optional route-bound TAIRA-to-counterparty browser prover manifest reference.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -7273,6 +7293,10 @@ fn sccp_route_manifest_dto(
         tron_network: manifest.tron_network.clone(),
         chain: manifest.chain.clone(),
         chain_id_hex: manifest.chain_id_hex.clone(),
+        explorer_url: manifest.explorer_url.clone(),
+        explorer_host: manifest.explorer_host.clone(),
+        counterparty_account_codec: manifest.counterparty_account_codec,
+        counterparty_account_codec_key: manifest.counterparty_account_codec_key.clone(),
         counterparty_domain: manifest.counterparty_domain,
         verifier_target: manifest.verifier_target.clone(),
         production_ready: manifest.production_ready,
@@ -7341,6 +7365,7 @@ fn sccp_route_manifest_dto(
         },
         post_deploy_live_evidence: sccp_route_manifest_post_deploy_evidence(manifest),
         native_evm_prover_bundle_hash: manifest.native_evm_prover_bundle_hash.clone(),
+        native_evm_prover_bundle: manifest.native_evm_prover_bundle.clone(),
         destination_browser_prover: manifest
             .destination_browser_prover
             .as_ref()
@@ -12615,6 +12640,7 @@ mod sccp_message_backend_tests {
         let chain = iroha_sccp::sccp_chain_key_for_domain(domain)
             .unwrap_or("unknown")
             .to_owned();
+        let is_bsc = domain == iroha_sccp::SCCP_DOMAIN_BSC;
         iroha_config::parameters::actual::SccpRouteManifest {
             version: 1,
             route_id: "taira_bsc_xor".to_owned(),
@@ -12622,6 +12648,10 @@ mod sccp_message_backend_tests {
             tron_network: chain.clone(),
             chain,
             chain_id_hex: "0x61".to_owned(),
+            explorer_url: is_bsc.then(|| "https://testnet.bscscan.com".to_owned()),
+            explorer_host: is_bsc.then(|| "testnet.bscscan.com".to_owned()),
+            counterparty_account_codec: is_bsc.then_some(iroha_sccp::SCCP_CODEC_EVM_HEX),
+            counterparty_account_codec_key: is_bsc.then(|| "evm_hex".to_owned()),
             counterparty_domain: domain,
             verifier_target: "EvmContract".to_owned(),
             production_ready: false,
@@ -12637,6 +12667,7 @@ mod sccp_message_backend_tests {
             proof_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
             proving_key_hash: Some(format!("0x{}", "4d".repeat(32))),
             native_evm_prover_bundle_hash: None,
+            native_evm_prover_bundle: None,
             destination_browser_prover: None,
             source_browser_prover: None,
             deployment_evidence_sha256: Some(format!("0x{}", "4f".repeat(32))),

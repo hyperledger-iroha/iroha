@@ -9426,6 +9426,10 @@ pub mod isi {
             tron_network: manifest.tron_network,
             chain: manifest.chain,
             chain_id_hex: manifest.chain_id_hex,
+            explorer_url: manifest.explorer_url,
+            explorer_host: manifest.explorer_host,
+            counterparty_account_codec: manifest.counterparty_account_codec,
+            counterparty_account_codec_key: manifest.counterparty_account_codec_key,
             counterparty_domain: manifest.counterparty_domain,
             verifier_target: manifest.verifier_target,
             production_ready: manifest.production_ready,
@@ -9450,6 +9454,7 @@ pub mod isi {
             circuit_artifact_hash: None,
             proving_key_hash: manifest.proving_key_hash,
             native_evm_prover_bundle_hash: manifest.native_evm_prover_bundle_hash,
+            native_evm_prover_bundle: manifest.native_evm_prover_bundle,
             destination_browser_prover: manifest
                 .destination_browser_prover
                 .map(sccp_route_browser_prover_ref_to_user),
