@@ -1774,4 +1774,51 @@ PromotedSecondSlotEventuallyClears ==
       => <> ~pending
      )
 
+FrontierRecoveryStateSafetyEnvelope ==
+  /\ TypeInvariant
+  /\ CommitImpliesVoteQuorum
+  /\ CommitImpliesPayloadAvailability
+  /\ CommittedFrontierHasNoStagedFuture
+  /\ VoteBackedNotDroppedAsZeroEvidenceZombie
+  /\ ZeroEvidenceDropHasNoConsensusEvidence
+  /\ ZeroEvidenceDropHasNoStagedFuture
+  /\ PostGstVoteBackedFrontierHasProgress
+  /\ FuturePromotionReadyHasProgress
+  /\ StaleRecoveryOwnerHasClearProgress
+  /\ VoteQueueBacklogHasDrainProgress
+  /\ MissingPayloadHasRecoveryProgress
+  /\ PayloadRecoveredHasLocalOwner
+  /\ QuorumWindowHasRetransmitProgress
+  /\ QuorumRetransmitClearsRescheduleWindow
+  /\ RetransmitHasFollowthroughProgress
+  /\ FutureEvidenceHasReanchorProgress
+  /\ FutureEvidencePreservedUntilPromotion
+  /\ FuturePromotionResetsActiveProgress
+  /\ FuturePromotionInstallsFreshSecondSlot
+  /\ FuturePromotionReadyClearsCurrentWrapper
+  /\ FuturePromotionReadyClearsActiveMarkers
+  /\ TerminalFrontierOutcomesAreExclusive
+  /\ RotatedFrontierHasRetransmitEvidence
+  /\ RotatedFrontierHasNoStagedFuture
+  /\ ViewBoundDropHasRetransmitEvidence
+  /\ ViewBoundDropHasNoStagedFuture
+  /\ PendingProgressEventsTouchAge
+  /\ StaleRecoveryUnlockIsViewScoped
+  /\ StaleRecoveryUnlockClearsStaleOwner
+
+FrontierRecoveryAlwaysMatchesStateSafetyEnvelope ==
+  [] FrontierRecoveryStateSafetyEnvelope
+
+FrontierRecoveryLivenessEnvelope ==
+  /\ PostGstVoteBackedFrontierEventuallyResolves
+  /\ RecoveredPayloadEventuallyAdvances
+  /\ QuorumRetransmitEventuallyLeavesPending
+  /\ FutureFrontierEvidenceEventuallyReanchors
+  /\ FuturePromotionReadyEventuallyPromotes
+  /\ PromotedSecondSlotEventuallyClears
+
+FrontierRecoveryCorrectnessEnvelope ==
+  /\ FrontierRecoveryAlwaysMatchesStateSafetyEnvelope
+  /\ FrontierRecoveryLivenessEnvelope
+
 ====

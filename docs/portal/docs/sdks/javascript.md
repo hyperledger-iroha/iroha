@@ -177,9 +177,8 @@ console.log(balances.items, txs.items, holders.items);
 ## Offline readiness
 
 JavaScript integrations should use `GET /v1/offline/readiness` for offline feature discovery.
-Offline note issuance, redemption, and audit payloads are submitted as transaction instructions;
-the legacy offline reserve, revocation, and transfer-history HTTP routes are no longer published by
-Torii.
+Classic Offline Note issuance, redemption, and audit transaction paths are retired;
+Kagemusha readiness fields advertise the active offline payment implementation.
 
 ## Torii queries & streaming (WebSockets)
 

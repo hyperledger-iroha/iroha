@@ -3530,6 +3530,10 @@ def _check_stage_adapter_stdout(
             raise EvidenceError(
                 f"{summary_label}.receipts must match submitted_messages"
             )
+        if _command_has_flag(command, "--message") and submitted_messages != 1:
+            raise EvidenceError(
+                f"{summary_label}.submitted_messages must be one when command uses --message"
+            )
         return receipts
     published_anchors = _required_positive_int_field(
         summary,
@@ -3548,6 +3552,10 @@ def _check_stage_adapter_stdout(
     if len(receipts) != published_anchors * endpoint_count:
         raise EvidenceError(
             f"{summary_label}.receipts must match published_anchors and endpoint_count"
+        )
+    if not _command_has_flag(command, "--all") and published_anchors != 1:
+        raise EvidenceError(
+            f"{summary_label}.published_anchors must be one unless command uses --all"
         )
     return receipts
 

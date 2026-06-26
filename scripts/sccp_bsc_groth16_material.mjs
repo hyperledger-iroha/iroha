@@ -420,6 +420,54 @@ function optionalPath(options, names) {
   return null;
 }
 
+function evidenceArtifactInputPathBlockers(pathName, label) {
+  const normalized = trim(pathName);
+  if (!normalized) {
+    return [`${label} path is required`];
+  }
+  const usesUriScheme =
+    /^[a-z][a-z0-9+.-]*:/iu.test(normalized) && !win32.isAbsolute(normalized);
+  if (
+    normalized.includes("\0") ||
+    /[\u0000-\u001f\u007f]/u.test(normalized) ||
+    usesUriScheme ||
+    normalized.includes("?") ||
+    normalized.includes("#") ||
+    normalized.includes("\\") ||
+    /%[0-9a-f]{2}/iu.test(normalized) ||
+    pathHasDecodedParentSegment(normalized)
+  ) {
+    return [`${label} path must be a safe local artifact path.`];
+  }
+  const slashPath = normalized.replace(/\\/gu, "/");
+  const segments = slashPath.startsWith("/")
+    ? slashPath.slice(1).split("/")
+    : slashPath.split("/");
+  if (!segments.every((segment) => segment && segment !== "." && segment !== "..")) {
+    return [`${label} path must be a safe local artifact path.`];
+  }
+  return [];
+}
+
+function optionalEvidenceArtifactPath(options, names, label) {
+  const keys = Array.isArray(names) ? names : [names];
+  for (const key of keys) {
+    const value = ownValue(options, key);
+    if (value !== undefined && trim(value) !== "") {
+      const rawPath = String(value);
+      const blockers = evidenceArtifactInputPathBlockers(
+        rawPath,
+        `${label} evidence artifact`,
+      );
+      return {
+        pathName: blockers.length > 0 ? null : resolve(rawPath),
+        pathBlockers: blockers,
+      };
+    }
+  }
+  return { pathName: null, pathBlockers: [] };
+}
+
 function sha256Hex(bytes) {
   return `0x${createHash("sha256").update(bytes).digest("hex")}`;
 }
@@ -2315,6 +2363,32 @@ function materialManifestReferenceBlockers(manifest, label = "material manifest"
   ];
 }
 
+function materialManifestArtifactPathBlockers(pathName, label) {
+  const normalized = trim(pathName);
+  if (!normalized) {
+    return [`${label} is required`];
+  }
+  if (
+    normalized.includes("\0") ||
+    /[\u0000-\u001f\u007f]/u.test(normalized) ||
+    /^[a-z][a-z0-9+.-]*:/iu.test(normalized) ||
+    normalized.includes("?") ||
+    normalized.includes("#") ||
+    normalized.includes("\\") ||
+    /%[0-9a-f]{2}/iu.test(normalized) ||
+    pathHasDecodedParentSegment(normalized)
+  ) {
+    return [`${label} must be a safe artifact path.`];
+  }
+  if (!isAbsolute(normalized) && !win32.isAbsolute(normalized)) {
+    const segments = normalized.split("/");
+    if (!segments.every((segment) => segment && segment !== "." && segment !== "..")) {
+      return [`${label} must be a safe artifact path.`];
+    }
+  }
+  return [];
+}
+
 function materialManifestShapeBlockers(manifest, label = "material manifest") {
   if (!isRecord(manifest)) {
     return [];
@@ -2354,6 +2428,10 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
         "public_signal_names",
         "verifierKeyHash",
         "verifier_key_hash",
+        "proofArtifactHash",
+        "proof_artifact_hash",
+        "provingKeyHash",
+        "proving_key_hash",
         "productionReady",
         "production_ready",
         "productionBlockers",
@@ -2388,6 +2466,8 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
         ["publicInputCount", "public_input_count"],
         ["publicSignalNames", "public_signal_names"],
         ["verifierKeyHash", "verifier_key_hash"],
+        ["proofArtifactHash", "proof_artifact_hash"],
+        ["provingKeyHash", "proving_key_hash"],
         ["productionReady", "production_ready"],
         ["productionBlockers", "production_blockers"],
         ["trustedSetup", "trusted_setup"],
@@ -2471,6 +2551,14 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
           `${label} artifacts.${artifactLabel}`,
         ),
       );
+      if (isRecord(artifact)) {
+        blockers.push(
+          ...materialManifestArtifactPathBlockers(
+            ownValue(artifact, "path"),
+            `${label} artifacts.${artifactLabel}.path`,
+          ),
+        );
+      }
     }
   }
 
@@ -2711,6 +2799,50 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
   }
 
   return blockers.filter(Boolean);
+}
+
+function materialManifestRequiredArtifactHash(manifest, keys, label) {
+  const artifacts = ownValue(manifest, "artifacts");
+  if (!isRecord(artifacts)) {
+    throw new Error("material manifest artifacts are required.");
+  }
+  const artifact = keys
+    .map((key) => ownValue(artifacts, key))
+    .find((value) => value !== undefined);
+  if (!isRecord(artifact)) {
+    throw new Error(`material manifest artifacts.${label} is required.`);
+  }
+  return normalizeManifestHash(
+    ownValue(artifact, "sha256") ??
+      ownValue(artifact, "hash") ??
+      ownValue(artifact, "artifactHash") ??
+      ownValue(artifact, "artifact_hash"),
+    `material manifest artifacts.${label}.sha256`,
+  );
+}
+
+function requireMaterialManifestTopLevelArtifactHash({
+  manifest,
+  manifestKeys,
+  artifactKeys,
+  artifactLabel,
+  fieldLabel,
+}) {
+  const declared = normalizeManifestHash(
+    attestationValue(manifest, manifestKeys),
+    `material manifest ${fieldLabel}`,
+  );
+  const artifactHash = materialManifestRequiredArtifactHash(
+    manifest,
+    artifactKeys,
+    artifactLabel,
+  );
+  if (declared !== artifactHash) {
+    throw new Error(
+      `material manifest ${fieldLabel} must match artifacts.${artifactLabel}.sha256.`,
+    );
+  }
+  return declared;
 }
 
 const BSC_GROTH16_EVIDENCE_COMMON_FIELDS = Object.freeze([
@@ -4207,19 +4339,23 @@ function evidenceReportReference(record, key, label) {
 }
 
 function pathHasDecodedParentSegment(pathName) {
-  const normalized = trim(pathName).replace(/\\/gu, "/");
-  const variants = new Set([normalized]);
-  try {
-    variants.add(decodeURIComponent(normalized));
-  } catch (_error) {
-    // Invalid percent-encoding is handled by normal path checks below.
-  }
-  for (const variant of variants) {
-    if (variant.split("/").some((segment) => segment === "..")) {
+  let normalized = trim(pathName).replace(/\\/gu, "/");
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (normalized.split("/").some((segment) => segment === "..")) {
       return true;
     }
+    let decoded;
+    try {
+      decoded = decodeURIComponent(normalized).replace(/\\/gu, "/");
+    } catch (_error) {
+      return true;
+    }
+    if (decoded === normalized) {
+      return false;
+    }
+    normalized = decoded;
   }
-  return false;
+  return true;
 }
 
 function evidenceReportPathBlockers(pathName, label) {
@@ -4233,9 +4369,18 @@ function evidenceReportPathBlockers(pathName, label) {
     /^[a-z][a-z0-9+.-]*:/iu.test(normalized) ||
     normalized.includes("?") ||
     normalized.includes("#") ||
+    normalized.includes("\\") ||
+    /%[0-9a-f]{2}/iu.test(normalized) ||
     isAbsolute(normalized) ||
     win32.isAbsolute(normalized) ||
     pathHasDecodedParentSegment(normalized)
+  ) {
+    return [`${label} path must be a safe relative path.`];
+  }
+  if (
+    !normalized
+      .split("/")
+      .every((segment) => segment && segment !== "." && segment !== "..")
   ) {
     return [`${label} path must be a safe relative path.`];
   }
@@ -4406,6 +4551,7 @@ function evidenceMaterialBindingBlockers({
 
 async function bscGroth16EvidenceReference({
   pathName,
+  pathBlockers = [],
   label,
   expectedSchema,
   reportKey,
@@ -4413,6 +4559,13 @@ async function bscGroth16EvidenceReference({
   bodyFields,
   specificBlockers,
 }) {
+  if (pathBlockers.length > 0) {
+    return {
+      reference: null,
+      bodyFields: {},
+      blockers: pathBlockers,
+    };
+  }
   if (!pathName) {
     return {
       reference: null,
@@ -4562,9 +4715,19 @@ function circuitSecurityAuditEvidenceBlockers(record, label) {
 }
 
 async function buildBscGroth16RequestEvidence(options, context) {
+  const semanticReviewPath = optionalEvidenceArtifactPath(
+    options,
+    BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_OPTION_NAMES,
+    "semantic SCCP circuit review",
+  );
+  const circuitSecurityAuditPath = optionalEvidenceArtifactPath(
+    options,
+    BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_OPTION_NAMES,
+    "circuit security audit",
+  );
   return {
     semanticReview: await bscGroth16EvidenceReference({
-      pathName: optionalPath(options, BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_OPTION_NAMES),
+      ...semanticReviewPath,
       label: "semantic SCCP circuit review",
       expectedSchema: BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA,
       reportKey: "reviewReport",
@@ -4577,7 +4740,7 @@ async function buildBscGroth16RequestEvidence(options, context) {
       specificBlockers: semanticReviewEvidenceBlockers,
     }),
     circuitSecurityAudit: await bscGroth16EvidenceReference({
-      pathName: optionalPath(options, BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_OPTION_NAMES),
+      ...circuitSecurityAuditPath,
       label: "circuit security audit",
       expectedSchema: BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA,
       reportKey: "auditReport",
@@ -4876,6 +5039,8 @@ async function generateMaterialFromVerificationKey({
     publicInputCount: 9,
     publicSignalNames: [...BSC_GROTH16_PUBLIC_SIGNAL_NAMES],
     verifierKeyHash: verifierMaterial.verifierKeyHash,
+    proofArtifactHash: artifacts.r1cs.sha256,
+    provingKeyHash: artifacts.provingKey.sha256,
     productionReady: productionBlockers.length === 0,
     productionBlockers,
     artifacts,
@@ -4909,6 +5074,8 @@ async function generateMaterialFromVerificationKey({
     manifest: manifestPath,
     verifierKey: bscVerifierKeyPath,
     verifierKeyHash: verifierMaterial.verifierKeyHash,
+    proofArtifactHash: artifacts.r1cs.sha256,
+    provingKeyHash: artifacts.provingKey.sha256,
     proofArtifact: r1csPath,
     provingKey: zkeyPath,
   };
@@ -5165,6 +5332,13 @@ function materialManifestArtifact(manifest, key, label = key) {
   if (!artifactPath) {
     throw new Error(`material manifest ${label} artifact path is required.`);
   }
+  const pathBlockers = materialManifestArtifactPathBlockers(
+    artifactPath,
+    `material manifest ${label} artifact path`,
+  );
+  if (pathBlockers.length > 0) {
+    throw new Error(pathBlockers[0]);
+  }
   return {
     path: artifactPath,
     sha256: normalizeManifestHash(
@@ -5337,6 +5511,20 @@ function validateMaterialManifestForAttestationRequest(manifest, profile) {
     ownValue(manifest, "verifierKeyHash"),
     "material manifest verifierKeyHash",
   );
+  requireMaterialManifestTopLevelArtifactHash({
+    manifest,
+    manifestKeys: ["proofArtifactHash", "proof_artifact_hash"],
+    artifactKeys: ["r1cs"],
+    artifactLabel: "r1cs",
+    fieldLabel: "proofArtifactHash",
+  });
+  requireMaterialManifestTopLevelArtifactHash({
+    manifest,
+    manifestKeys: ["provingKeyHash", "proving_key_hash"],
+    artifactKeys: ["provingKey", "proving_key"],
+    artifactLabel: "provingKey",
+    fieldLabel: "provingKeyHash",
+  });
   const selfChecks = ownValue(manifest, "selfChecks");
   const snarkjsSelfCheck = isRecord(selfChecks)
     ? ownValue(selfChecks, "snarkjs")
@@ -10828,6 +11016,23 @@ export async function preflightBscGroth16Material(options = {}) {
             status.problems[0] ?? "request package is invalid"
           }`,
         );
+      } else {
+        const blockedRoles = Object.entries(status.requestReadyForSignature)
+          .filter(([, ready]) => ready !== true)
+          .map(([role]) => role);
+        if (blockedRoles.length > 0) {
+          const blockerPreview = status.problems
+            .filter((problem) =>
+              blockedRoles.some((role) => problem.startsWith(`${role}:`)),
+            )
+            .slice(0, 4)
+            .join("; ");
+          problems.push(
+            `attestation request roles are not ready for signature: ${blockedRoles.join(
+              ", ",
+            )}${blockerPreview ? ` (${blockerPreview})` : ""}`,
+          );
+        }
       }
     } catch (error) {
       problems.push(

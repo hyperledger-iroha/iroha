@@ -370,6 +370,10 @@ IdleViewProposalBudgetExactness ==
   /\ IdleViewProposalBudgetEffectsExact
   /\ IdleViewProposalBudgetRetryExact
 
+IdleViewProposalBudgetCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ IdleViewProposalBudgetExactness
+
 Safety ==
   IdleViewProposalBudgetExactness
 

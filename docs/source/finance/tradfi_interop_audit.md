@@ -739,10 +739,13 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   archives. Evidence replay also requires executed rail/notary child stdout to
   parse as the live adapter summary shape with zero failures, receipt paths
   under the recorded stage receipt directory, and counts matching submitted
-  messages or published anchors/endpoints. Notary stdout `endpoint_count` must
-  also match the executed command's repeated `--endpoint` flags, so arbitrary
-  printable child logs, dry-run summaries, or inflated endpoint counts cannot be
-  archived as production canary evidence. The
+  messages or published anchors/endpoints. Rail stdout must report a single
+  submitted message when the command used explicit `--message`; notary stdout
+  `endpoint_count` must match the executed command's repeated `--endpoint`
+  flags, and `published_anchors` must stay at one unless the command used
+  `--all`. Arbitrary printable child logs, dry-run summaries, inflated endpoint
+  counts, forged multi-message claims, or forged multi-anchor publication claims
+  cannot be archived as production canary evidence. The
   verify-stage receipt-verifier JSON embedded in canary stdout must also keep
   every receipt path covered by the verify command's `--receipt-dir`/`--receipt`
   selectors, and every explicit `--receipt` selector must appear in the

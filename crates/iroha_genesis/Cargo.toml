@@ -14,7 +14,7 @@ workspace = true
 norito = {workspace = true}
 iroha_crypto = { workspace = true }
 iroha_schema = { workspace = true }
-iroha_data_model = { workspace = true, features = ["std", "json", "bls"] }
+iroha_data_model = { workspace = true, features = ["std", "json", "bls", "transparent_api"] }
 iroha_executor_data_model = { workspace = true }
 iroha_version = { workspace = true }
 iroha_primitives = { workspace = true }

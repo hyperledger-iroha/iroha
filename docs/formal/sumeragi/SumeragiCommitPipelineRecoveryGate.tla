@@ -285,4 +285,8 @@ CommitPipelineRecoveryExactness ==
   /\ MissingCommitQcRecoveryGateExact
   /\ QuorumRetransmitGateExact
 
+CommitPipelineRecoveryCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CommitPipelineRecoveryExactness
+
 ====

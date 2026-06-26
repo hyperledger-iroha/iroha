@@ -376,6 +376,10 @@ RosterValidationCachedExactness ==
   /\ RosterValidationCachedForwardingExact
   /\ RosterValidationCachedPrefilterOrderExact
 
+RosterValidationCachedCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RosterValidationCachedExactness
+
 BugCommitIgnoresHash ==
   ImplementationActions(CommitHashPrefilter) = SpecActions(CommitHashPrefilter)
 

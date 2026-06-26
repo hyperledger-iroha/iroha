@@ -14,13 +14,10 @@ if ! command -v "${DOTNET_BIN}" >/dev/null 2>&1; then
 fi
 DOTNET_VERSION="$("${DOTNET_BIN}" --version)"
 printf '%s\n' "${DOTNET_VERSION}"
-case "${DOTNET_VERSION}" in
-  8.0.*) ;;
-  *)
-    echo "error: Kagemusha recursive spend C# SDK tests require .NET SDK 8.0.x; got ${DOTNET_VERSION}" >&2
-    exit 1
-    ;;
-esac
+if [[ ! "${DOTNET_VERSION}" =~ ^8\.0\.[1-9][0-9]*$ ]]; then
+  echo "error: Kagemusha recursive spend C# SDK tests require a stable canonical .NET SDK 8.0.x with a non-zero patch; got ${DOTNET_VERSION}" >&2
+  exit 1
+fi
 printf 'dotnet --info:\n'
 "${DOTNET_BIN}" --info
 
@@ -50,8 +47,8 @@ else
   echo "error: sha256sum or shasum is required to record the native bridge digest" >&2
   exit 1
 fi
-if [[ ! "${BRIDGE_LIBRARY_SHA256}" =~ ^[0-9a-fA-F]{64}$ ]]; then
-  echo "error: failed to compute a valid SHA-256 for ${BRIDGE_LIBRARY_PATH}" >&2
+if [[ ! "${BRIDGE_LIBRARY_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "error: failed to compute a lowercase canonical SHA-256 for ${BRIDGE_LIBRARY_PATH}" >&2
   exit 1
 fi
 printf 'connect_norito_bridge native bridge: %s\n' "${BRIDGE_LIBRARY_PATH}"

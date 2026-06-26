@@ -381,6 +381,10 @@ RosterArtifactSelectionExactness ==
   /\ RosterArtifactSelectionEpochExact
   /\ RosterArtifactSelectionGenesisStubExact
 
+RosterArtifactSelectionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RosterArtifactSelectionExactness
+
 BugViewCommitUsesCheckpoint ==
   ImplementationActions(ViewCommitPriority) = SpecActions(ViewCommitPriority)
 

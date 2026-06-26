@@ -3462,6 +3462,7 @@ public final class HttpClientTransportTests {
                     .setMemo("QR invoice 42")
                     .setValidationFeePolicyVersion(7L)
                     .setValidationFeePolicyHash("AB".repeat(32))
+                    .setValidationFeeInstructionIndex(1L)
                     .build())
             .join();
 
@@ -3490,6 +3491,8 @@ public final class HttpClientTransportTests {
         : "validation_fee_policy_version mismatch";
     assert "ab".repeat(32).equals(payload.get("validation_fee_policy_hash"))
         : "validation_fee_policy_hash mismatch";
+    assert "1".equals(payload.get("validation_fee_instruction_index"))
+        : "validation_fee_instruction_index mismatch";
     assert Long.valueOf(123L).equals(((Number) payload.get("creation_time_ms")).longValue())
         : "creation_time_ms mismatch";
     @SuppressWarnings("unchecked")
@@ -3604,6 +3607,28 @@ public final class HttpClientTransportTests {
                     .setValidationFeePolicyHash("not-hex")
                     .build()),
         "malformed validation fee policy hash must be rejected");
+    expectIllegalArgument(
+        () ->
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest.builder()
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId("alice")
+                    .addInstructionBytes(instruction)
+                    .setValidationFeeInstructionIndex(1L)
+                    .build()),
+        "validation fee instruction index without policy metadata must be rejected");
+    expectIllegalArgument(
+        () ->
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest.builder()
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId("alice")
+                    .addInstructionBytes(instruction)
+                    .setValidationFeePolicyVersion(1L)
+                    .setValidationFeePolicyHash("ab".repeat(32))
+                    .setValidationFeeInstructionIndex(-1L)
+                    .build()),
+        "negative validation fee instruction index must be rejected");
   }
 
   private static void multisigResponseParserRejectsMalformedFields() {

@@ -350,6 +350,10 @@ TopologyFanoutHelperExactness ==
   /\ RedundantSendFloorExact
   /\ TailFanoutSelectionExact
 
+TopologyFanoutCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ TopologyFanoutHelperExactness
+
 BugRedundantZeroLenReturnsZero ==
   ActualRedundantSendR("redundant_len_zero") =
     SpecRedundantSendR("redundant_len_zero")

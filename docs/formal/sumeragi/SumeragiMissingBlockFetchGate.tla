@@ -405,6 +405,10 @@ MissingBlockFetchExactness ==
   /\ MissingBlockSendDeferralExact
   /\ MissingBlockRequestFieldsExact
 
+MissingBlockFetchCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MissingBlockFetchExactness
+
 Safety ==
   MissingBlockFetchExactness
 

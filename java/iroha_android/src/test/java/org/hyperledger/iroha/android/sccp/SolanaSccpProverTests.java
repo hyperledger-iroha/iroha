@@ -4351,28 +4351,47 @@ public final class SolanaSccpProverTests {
                 canonicalProofResult.publicInputs(),
                 upper(canonicalProofResult.publicInputs().statementHash()),
                 upper(canonicalProofResult.publicInputs().destinationBindingHash())));
-    final SolanaSccpProver.Submission normalizedMetadataSubmission =
-        SolanaSccpProver.buildSubmission(
-            new SolanaSccpProver.SubmissionInput(
-                new SolanaSccpProver.SubmissionPublicInputs(
-                    upper(canonicalPublicInputs.messageId()),
-                    upper(canonicalPublicInputs.payloadHash()),
-                    canonicalPublicInputs.targetDomain(),
-                    upper(canonicalPublicInputs.commitmentRoot()),
-                    canonicalPublicInputs.finalityHeight(),
-                    upper(canonicalPublicInputs.finalityBlockHash())),
-                uppercaseProofResult.proofBytes(),
-                new byte[] {5, 6, 7},
-                upper(canonicalProofResult.proofContext().statementHash()),
-                upper(solanaDestinationBindingHash),
-                upper(canonicalProofResult.proofContextHash()),
-                uppercaseProofResult));
-    assertEquals(
-        canonicalProofResult.proofContextHash(), normalizedMetadataSubmission.proofContextHash());
-    assertEquals(
-        canonicalProofResult.proofContext().statementHash(),
-        normalizedMetadataSubmission.statementHash());
-    assertEquals(solanaDestinationBindingHash, normalizedMetadataSubmission.destinationBindingHash());
+    final IllegalArgumentException uppercaseMetadata =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                SolanaSccpProver.buildSubmission(
+                    new SolanaSccpProver.SubmissionInput(
+                        new SolanaSccpProver.SubmissionPublicInputs(
+                            upper(canonicalPublicInputs.messageId()),
+                            upper(canonicalPublicInputs.payloadHash()),
+                            canonicalPublicInputs.targetDomain(),
+                            upper(canonicalPublicInputs.commitmentRoot()),
+                            canonicalPublicInputs.finalityHeight(),
+                            upper(canonicalPublicInputs.finalityBlockHash())),
+                        canonicalProofResult.proofBytes(),
+                        new byte[] {5, 6, 7},
+                        canonicalProofResult.proofContext().statementHash(),
+                        solanaDestinationBindingHash,
+                        canonicalProofResult.proofContextHash(),
+                        canonicalProofResult)));
+    assertTrue(uppercaseMetadata.getMessage().contains("publicInputs.messageId must be canonical hex"));
+    final IllegalArgumentException uppercaseProofResultError =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                SolanaSccpProver.buildSubmission(
+                    new SolanaSccpProver.SubmissionInput(
+                        canonicalPublicInputs,
+                        uppercaseProofResult.proofBytes(),
+                        new byte[] {5, 6, 7},
+                        canonicalProofResult.proofContext().statementHash(),
+                        solanaDestinationBindingHash,
+                        canonicalProofResult.proofContextHash(),
+                        uppercaseProofResult)));
+    assertTrue(
+        "actual error: " + uppercaseProofResultError.getMessage(),
+        uppercaseProofResultError
+                .getMessage()
+                .contains("proofResult.proofContext.statementHash must be canonical hex")
+            || uppercaseProofResultError
+                .getMessage()
+                .contains("statementHash must be canonical hex"));
 
     final IllegalArgumentException missingEnvelope =
         assertThrows(

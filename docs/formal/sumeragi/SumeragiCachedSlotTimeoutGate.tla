@@ -354,6 +354,10 @@ CachedSlotTimeoutExactness ==
   /\ CachedSlotTimeoutHysteresisWaitExact
   /\ CachedSlotTimeoutStreakExact
 
+CachedSlotTimeoutCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CachedSlotTimeoutExactness
+
 Safety ==
   CachedSlotTimeoutExactness
 

@@ -227,4 +227,9 @@ SafetyAnchors ==
   /\ MissingOrMismatchedQcRejectionAnchors
   /\ AcceptedCasesRequireObserverMismatchAndQc
 
+ObserverSignatureRecoveryCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ SafetyAnchors
+
 ====

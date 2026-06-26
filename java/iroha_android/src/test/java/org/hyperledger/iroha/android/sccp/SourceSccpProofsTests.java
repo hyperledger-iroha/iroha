@@ -444,6 +444,27 @@ public final class SourceSccpProofsTests {
     assert mismatchedTronConfigHashThrew
         : "TRON source material helper must reject mismatched source bridge config hash";
 
+    boolean reusedTronOwnerAsEmitterThrew = false;
+    try {
+      SourceSccpProofs.canonicalSourceVerifierMaterialBytes(
+          SourceSccpProofs.DOMAIN_TRON,
+          "0x" + repeat("44", 32),
+          "0x" + repeat("55", 32),
+          "0x" + repeat("66", 32),
+          "0x" + repeat("88", 32),
+          null,
+          "0x" + repeat("11", 20),
+          "0x" + repeat("77", 32),
+          "0x" + repeat("33", 32),
+          "0x" + repeat("11", 20),
+          "0x3af0eb31468e605a2781906d8475d2778cccfd4b5d1dd47c31f44d7933396adc");
+    } catch (final IllegalArgumentException exception) {
+      reusedTronOwnerAsEmitterThrew =
+          exception.getMessage().contains("sourceBridgeOwnerAddress");
+    }
+    assert reusedTronOwnerAsEmitterThrew
+        : "TRON source material helper must reject owner/emitter address reuse";
+
     boolean reusedSourceMaterialRoleThrew = false;
     try {
       SourceSccpProofs.canonicalSourceVerifierMaterialBytes(

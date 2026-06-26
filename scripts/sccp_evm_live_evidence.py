@@ -121,7 +121,7 @@ def _summary_hex_bytes(
         raise ValueError(f"{label} must be an exact hex string")
     try:
         raw = _parse_hex_bytes(value, label=label, byte_length=byte_length)
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError(f"{label} metadata is invalid") from None
     if value != _hex(raw):
         raise ValueError(f"{label} must be canonical lowercase 0x hex")
@@ -148,7 +148,7 @@ def _summary_runtime_bytes(record: dict[str, Any], field: str, *, label: str) ->
     }
     try:
         raw = evidence.parse_runtime_bytecode_hex(value, label=label)
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError(
             invalid_metadata_errors.get(label, f"EVM {label} metadata is invalid")
         ) from None
@@ -218,7 +218,7 @@ def parse_block_tag(value: str) -> str:
 def _default_rpc_chain_id_for_domain(domain: int) -> int:
     try:
         return EXPECTED_RPC_CHAIN_IDS[domain]
-    except (KeyError, TypeError, ValueError, argparse.ArgumentTypeError):
+    except (KeyError, SystemExit, RuntimeError, TypeError, ValueError, argparse.ArgumentTypeError):
         raise argparse.ArgumentTypeError(
             "domain must have a canonical RPC chain id"
         ) from None
@@ -233,7 +233,7 @@ def default_block_tag_for_domain(domain: int) -> str:
 def _default_network_id_for_domain(domain: int) -> bytes:
     try:
         return evidence.evm_mainnet_network_id_for_domain(domain)
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(
             "domain must have a canonical EVM mainnet network id"
         ) from None
@@ -320,7 +320,7 @@ def _rpc_hex_data(result: Any, *, method: str) -> bytes:
         raise RuntimeError(f"{method} returned non-canonical lowercase 0x hex data")
     try:
         return bytes.fromhex(text)
-    except (TypeError, ValueError):
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         raise RuntimeError(
             f"{method} returned non-canonical lowercase 0x hex data"
         ) from None
@@ -357,7 +357,7 @@ def _parse_exact_hex_blob(value: Any, *, label: str, nonzero: bool = True) -> by
         raise RuntimeError(f"{label} must be canonical lowercase 0x hex")
     try:
         parsed = bytes.fromhex(text)
-    except (TypeError, ValueError):
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         raise RuntimeError(f"{label} must be canonical lowercase 0x hex") from None
     if nonzero and not any(parsed):
         raise RuntimeError(f"{label} must not be zero")

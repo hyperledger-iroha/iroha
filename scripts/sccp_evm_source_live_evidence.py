@@ -112,7 +112,7 @@ def _parse_hex_bytes(value: str, *, label: str, byte_length: int) -> bytes:
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except (TypeError, ValueError):
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
@@ -135,7 +135,7 @@ def _summary_hex_bytes(
         raise ValueError(f"{label} must be an exact hex string")
     try:
         raw = _parse_hex_bytes(value, label=label, byte_length=byte_length)
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError(f"{label} metadata is invalid") from None
     if value != _hex(raw):
         raise ValueError(f"{label} must be canonical lowercase 0x hex")
@@ -169,7 +169,7 @@ def _summary_runtime_bytes(
     }
     try:
         raw = evidence.parse_runtime_bytecode_hex(value, label=label)
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError(
             invalid_metadata_errors.get(label, f"EVM {label} metadata is invalid")
         ) from None
@@ -381,7 +381,7 @@ def _rpc_hex_data(result: Any, *, method: str) -> bytes:
         raise RuntimeError(f"{method} returned non-canonical lowercase 0x hex data")
     try:
         return bytes.fromhex(text)
-    except (TypeError, ValueError):
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         raise RuntimeError(
             f"{method} returned non-canonical lowercase 0x hex data"
         ) from None
@@ -400,6 +400,23 @@ def _rpc_fixed_hex_data(
     if nonzero and not any(raw):
         raise RuntimeError(f"{method} returned zero data")
     return raw
+
+
+def _guarded_rpc_fixed_hex_data(
+    result: Any,
+    *,
+    method: str,
+    byte_length: int,
+    blocker: str,
+) -> bytes:
+    try:
+        return _rpc_fixed_hex_data(
+            result,
+            method=method,
+            byte_length=byte_length,
+        )
+    except (SystemExit, RuntimeError, TypeError, ValueError):
+        raise RuntimeError(blocker) from None
 
 
 def _runtime_code_hash(
@@ -444,16 +461,12 @@ def _receipt_summary(
     if not isinstance(result, dict):
         raise RuntimeError("eth_getTransactionReceipt returned a non-object receipt")
     receipt_transaction_hash = result.get("transactionHash")
-    try:
-        parsed_receipt_transaction_hash = _rpc_fixed_hex_data(
-            receipt_transaction_hash,
-            method="eth_getTransactionReceipt transactionHash",
-            byte_length=32,
-        )
-    except (RuntimeError, TypeError, ValueError):
-        raise RuntimeError(
-            "deployment receipt transactionHash must be a non-zero bytes32"
-        ) from None
+    parsed_receipt_transaction_hash = _guarded_rpc_fixed_hex_data(
+        receipt_transaction_hash,
+        method="eth_getTransactionReceipt transactionHash",
+        byte_length=32,
+        blocker="deployment receipt transactionHash must be a non-zero bytes32",
+    )
     if parsed_receipt_transaction_hash != deployment_transaction_hash:
         raise RuntimeError(
             "deployment receipt transactionHash does not match requested "
@@ -463,31 +476,23 @@ def _receipt_summary(
     if status != "0x1":
         raise RuntimeError("deployment transaction receipt status must be 0x1")
     contract_address = result.get("contractAddress")
-    try:
-        parsed_contract_address = _rpc_fixed_hex_data(
-            contract_address,
-            byte_length=20,
-            method="eth_getTransactionReceipt contractAddress",
-        )
-    except (RuntimeError, TypeError, ValueError):
-        raise RuntimeError(
-            "deployment receipt contractAddress must be a non-zero 20-byte EVM address"
-        ) from None
+    parsed_contract_address = _guarded_rpc_fixed_hex_data(
+        contract_address,
+        byte_length=20,
+        method="eth_getTransactionReceipt contractAddress",
+        blocker="deployment receipt contractAddress must be a non-zero 20-byte EVM address",
+    )
     if _hex(parsed_contract_address).lower() != bridge_address.lower():
         raise RuntimeError(
             "deployment receipt contractAddress does not match source bridge"
         )
     block_hash = result.get("blockHash")
-    try:
-        parsed_block_hash = _rpc_fixed_hex_data(
-            block_hash,
-            method="eth_getTransactionReceipt blockHash",
-            byte_length=32,
-        )
-    except (RuntimeError, TypeError, ValueError):
-        raise RuntimeError(
-            "deployment receipt blockHash must be a non-zero bytes32"
-        ) from None
+    parsed_block_hash = _guarded_rpc_fixed_hex_data(
+        block_hash,
+        method="eth_getTransactionReceipt blockHash",
+        byte_length=32,
+        blocker="deployment receipt blockHash must be a non-zero bytes32",
+    )
     block_number = result.get("blockNumber")
     block_number_value = _rpc_quantity(
         block_number,
@@ -504,19 +509,21 @@ def _receipt_summary(
     )
     if not isinstance(transaction, dict):
         raise RuntimeError("eth_getTransactionByHash returned a non-object transaction")
-    parsed_transaction_hash = _rpc_fixed_hex_data(
+    parsed_transaction_hash = _guarded_rpc_fixed_hex_data(
         transaction.get("hash"),
         method="eth_getTransactionByHash hash",
         byte_length=32,
+        blocker="deployment transaction hash must be a non-zero bytes32",
     )
     if parsed_transaction_hash != deployment_transaction_hash:
         raise RuntimeError(
             "deployment transaction hash does not match requested deployment transaction"
         )
-    transaction_block_hash = _rpc_fixed_hex_data(
+    transaction_block_hash = _guarded_rpc_fixed_hex_data(
         transaction.get("blockHash"),
         method="eth_getTransactionByHash blockHash",
         byte_length=32,
+        blocker="deployment transaction blockHash must be a non-zero bytes32",
     )
     if transaction_block_hash != parsed_block_hash:
         raise RuntimeError(
@@ -543,9 +550,9 @@ def _receipt_summary(
         "deployment_transaction_block_hash": _hex(transaction_block_hash),
         "deployment_transaction_block_number": transaction_block_number,
         "deployment_transaction_contract_creation": True,
-        "deployment_transaction_input_sha256": hashlib.sha256(
-            transaction_input
-        ).hexdigest(),
+        "deployment_transaction_input_sha256": _hex(
+            hashlib.sha256(transaction_input).digest()
+        ),
         "deployment_transaction_block_matches": True,
         "deployment_receipt_status": status,
         "deployment_receipt_contract_address": _hex(parsed_contract_address),
@@ -579,19 +586,21 @@ def _verify_receipt_block_header(
         raise RuntimeError(
             "deployment receipt block number does not match eth_getBlockByNumber"
         )
-    header_hash = _rpc_fixed_hex_data(
+    header_hash = _guarded_rpc_fixed_hex_data(
         result.get("hash"),
         method="eth_getBlockByNumber hash",
         byte_length=32,
+        blocker="deployment receipt block hash must be a non-zero bytes32",
     )
     if header_hash != expected_block_hash:
         raise RuntimeError(
             "deployment receipt blockHash does not match eth_getBlockByNumber"
         )
-    receipts_root = _rpc_fixed_hex_data(
+    receipts_root = _guarded_rpc_fixed_hex_data(
         result.get("receiptsRoot"),
         method="eth_getBlockByNumber receiptsRoot",
         byte_length=32,
+        blocker="deployment receipt block receiptsRoot must be a non-zero bytes32",
     )
     return receipts_root
 
@@ -618,20 +627,24 @@ def _deployment_receipt_finalized_block_summary(
     )
     if finalized_block_number == 0:
         raise RuntimeError("deployment receipt finalized block number must be non-zero")
-    finalized_block_hash = _rpc_fixed_hex_data(
+    finalized_block_hash = _guarded_rpc_fixed_hex_data(
         finalized.get("hash"),
         method="deployment receipt finalized block hash",
         byte_length=32,
+        blocker="deployment receipt finalized block hash must be a non-zero bytes32",
     )
     receipt_block_number = int(receipt_summary["deployment_receipt_block_number"])
     if receipt_block_number > finalized_block_number:
         raise RuntimeError(
             "deployment receipt block is newer than the finalized execution block"
         )
-    receipt_block_hash = _parse_hex32(
-        str(receipt_summary["deployment_receipt_block_hash"]),
-        label="deployment receipt block hash",
-    )
+    try:
+        receipt_block_hash = _parse_hex32(
+            str(receipt_summary["deployment_receipt_block_hash"]),
+            label="deployment receipt block hash",
+        )
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
+        raise RuntimeError("deployment receipt block hash metadata is invalid") from None
     if (
         receipt_block_number == finalized_block_number
         and receipt_block_hash != finalized_block_hash
@@ -695,10 +708,19 @@ def collect_source_bridge_evidence(
     )
     if receipt_summary:
         receipt_block_tag = hex(receipt_summary["deployment_receipt_block_number"])
-        receipt_block_hash = _parse_hex32(
-            receipt_summary["deployment_receipt_block_hash"],
-            label="deployment receipt block hash",
-        )
+        try:
+            receipt_block_hash = _parse_hex32(
+                receipt_summary["deployment_receipt_block_hash"],
+                label="deployment receipt block hash",
+            )
+        except (
+            argparse.ArgumentTypeError,
+            SystemExit,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ):
+            raise RuntimeError("deployment receipt block hash metadata is invalid") from None
         receipt_block_receipts_root = _verify_receipt_block_header(
             rpc_url,
             block_number=receipt_summary["deployment_receipt_block_number"],
@@ -829,7 +851,7 @@ def _source_args(
         ),
         deployment_transaction_input_sha256=(
             _parse_hex32(
-                "0x" + str(source_bridge["deployment_transaction_input_sha256"]),
+                source_bridge["deployment_transaction_input_sha256"],
                 label="deployment transaction input SHA-256",
             )
             if source_bridge.get("deployment_transaction_input_sha256") is not None
@@ -1021,10 +1043,10 @@ def _source_bridge_deployment_receipt_is_verified(source_bridge: dict[str, Any])
             label="deployment transaction block number",
         )
         _parse_hex32(
-            "0x" + str(source_bridge.get("deployment_transaction_input_sha256")),
+            source_bridge.get("deployment_transaction_input_sha256"),
             label="deployment transaction input SHA-256",
         )
-        _parse_hex32(
+        receipt_block_hash = _parse_hex32(
             source_bridge.get("deployment_receipt_block_hash"),
             label="deployment receipt block hash",
         )
@@ -1059,15 +1081,18 @@ def _source_bridge_deployment_receipt_is_verified(source_bridge: dict[str, Any])
                 label="deployment receipt contract address",
             )
         )
-    except (argparse.ArgumentTypeError, AttributeError, TypeError, ValueError):
+    except (
+        argparse.ArgumentTypeError,
+        AttributeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
         return False
     return (
         receipt_address == bridge_address
-        and transaction_block_hash
-        == _parse_hex32(
-            source_bridge.get("deployment_receipt_block_hash"),
-            label="deployment receipt block hash",
-        )
+        and transaction_block_hash == receipt_block_hash
         and transaction_block_number == receipt_block_number
     )
 
@@ -1434,7 +1459,7 @@ def render_offline_toml(summary: dict[str, Any]) -> str:
         label="deployment transaction block number",
     )
     args.deployment_transaction_input_sha256 = _parse_hex32(
-        "0x" + str(source_bridge["deployment_transaction_input_sha256"]),
+        source_bridge["deployment_transaction_input_sha256"],
         label="deployment transaction input SHA-256",
     )
     rendered = evidence.render_toml(args)

@@ -10,13 +10,10 @@ export DOTNET_CLI_HOME="${DOTNET_CLI_HOME:-${TMPDIR:-/tmp}/iroha-dotnet-home}"
 cd "${ROOT_DIR}"
 DOTNET_VERSION="$("${DOTNET_BIN}" --version)"
 printf '%s\n' "${DOTNET_VERSION}"
-case "${DOTNET_VERSION}" in
-  8.0.*) ;;
-  *)
-    echo "error: privacy C# SDK tests require .NET SDK 8.0.x; got ${DOTNET_VERSION}" >&2
-    exit 1
-    ;;
-esac
+if [[ ! "${DOTNET_VERSION}" =~ ^8\.0\.[1-9][0-9]*$ ]]; then
+  echo "error: privacy C# SDK tests require a stable canonical .NET SDK 8.0.x with a non-zero patch; got ${DOTNET_VERSION}" >&2
+  exit 1
+fi
 
 for filter in \
   "FullyQualifiedName~PrivacyNativeTests" \

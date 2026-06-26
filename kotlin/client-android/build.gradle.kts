@@ -7,7 +7,13 @@ plugins {
 }
 
 group = "org.hyperledger.iroha.sdk"
-version = "0.1-SNAPSHOT"
+version = providers.gradleProperty("irohaSdkVersion")
+    .orElse(providers.environmentVariable("IROHA_SDK_VERSION"))
+    .orElse("0.1-SNAPSHOT")
+    .get()
+
+val mobileSdkRepoDir = providers.gradleProperty("irohaSdkRepoDir")
+    .orElse(rootProject.layout.buildDirectory.dir("mobile-sdk-maven").map { it.asFile.absolutePath })
 
 android {
     namespace = "org.hyperledger.iroha.sdk.android"
@@ -21,6 +27,7 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
+        isCoreLibraryDesugaringEnabled = true
     }
 
     kotlin {
@@ -44,8 +51,18 @@ repositories {
     mavenCentral()
 }
 
+publishing {
+    repositories {
+        maven {
+            name = "mobileSdk"
+            url = uri(mobileSdkRepoDir.get())
+        }
+    }
+}
+
 dependencies {
     api(project(":core-jvm"))
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
 }
 
 val jniLibsDir = layout.projectDirectory.dir("src/main/jniLibs")

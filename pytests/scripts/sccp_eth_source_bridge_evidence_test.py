@@ -113,6 +113,7 @@ def test_eth_address_parser_rejects_zero_and_wrong_width(tmp_path):
     ) == bytes.fromhex("6080604052")
 
     for value, expected in (
+        ("11" * 20, "canonical lowercase 0x hex"),
         ("0X" + "11" * 20, "lowercase 0x prefix"),
         ("0x" + "AA" * 20, "lowercase hex"),
     ):
@@ -135,6 +136,7 @@ def test_eth_address_parser_rejects_zero_and_wrong_width(tmp_path):
             raise AssertionError("padded ETH runtime bytecode was accepted")
 
     for value, expected in (
+        ("6080604052", "canonical lowercase 0x hex"),
         ("0X6080604052", "lowercase 0x prefix"),
         ("0x60806040AB", "lowercase hex"),
     ):
@@ -230,41 +232,51 @@ def test_eth_source_bridge_direct_parsers_redact_parser_causes(tmp_path):
         raise AssertionError("missing secret ETH source bridge runtime file was accepted")
 
 
-def test_eth_source_bridge_direct_parsers_redact_typeerror_parser_causes(monkeypatch):
+def test_eth_source_bridge_direct_parsers_redact_helper_exit_parser_causes(monkeypatch):
     module = load_evidence_module()
 
-    class SecretBytes:
-        @staticmethod
-        def fromhex(_text):
-            raise TypeError("secret-token ETH source hex TypeError detail")
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+        detail = (
+            "secret-token ETH source hex TypeError detail"
+            if exception_type is TypeError
+            else f"secret-token ETH source hex {exception_type.__name__} detail"
+        )
 
-    monkeypatch.setattr(module, "bytes", SecretBytes, raising=False)
+        class SecretBytes:
+            @staticmethod
+            def fromhex(_text, detail=detail, exception_type=exception_type):
+                raise exception_type(detail)
 
-    for parser, value, label, kwargs in (
-        (
-            module.parse_hex_bytes,
-            "0x" + "11" * 32,
-            "source trust anchor hash",
-            {"byte_length": 32},
-        ),
-        (
-            module.parse_runtime_bytecode_hex,
-            "0x6001600055",
-            "source bridge runtime bytecode",
-            {},
-        ),
-    ):
-        try:
-            parser(value, label=label, **kwargs)
-        except module.argparse.ArgumentTypeError as exc:
-            rendered = str(exc)
-            assert rendered == f"{label} must be hex"
-            assert "secret-token" not in rendered
-            assert "TypeError" not in rendered
-            assert exc.__cause__ is None
-            assert exc.__suppress_context__ is True
-        else:
-            raise AssertionError(f"{label} parser TypeError was accepted")
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "bytes", SecretBytes, raising=False)
+
+            for parser, value, label, kwargs in (
+                (
+                    module.parse_hex_bytes,
+                    "0x" + "11" * 32,
+                    "source trust anchor hash",
+                    {"byte_length": 32},
+                ),
+                (
+                    module.parse_runtime_bytecode_hex,
+                    "0x6001600055",
+                    "source bridge runtime bytecode",
+                    {},
+                ),
+            ):
+                try:
+                    parser(value, label=label, **kwargs)
+                except module.argparse.ArgumentTypeError as exc:
+                    rendered = str(exc)
+                    assert rendered == f"{label} must be hex"
+                    assert "secret-token" not in rendered
+                    assert exception_type.__name__ not in rendered
+                    assert exc.__cause__ is None
+                    assert exc.__suppress_context__ is True
+                else:
+                    raise AssertionError(
+                        f"{label} parser {exception_type.__name__} was accepted"
+                    )
 
 
 def test_eth_hash_parser_rejects_zero_and_wrong_width():
@@ -275,6 +287,17 @@ def test_eth_hash_parser_rejects_zero_and_wrong_width():
         label="source trust anchor hash",
         byte_length=32,
     ) == bytes.fromhex("44" * 32)
+
+    try:
+        module.parse_hex_bytes(
+            "44" * 32,
+            label="source trust anchor hash",
+            byte_length=32,
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        assert "canonical lowercase 0x hex" in str(exc)
+    else:
+        raise AssertionError("bare ETH component hash was accepted")
 
     try:
         module.parse_hex_bytes(
@@ -487,7 +510,7 @@ def test_eth_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding():
         in rendered
     )
     assert (
-        '# sccp_evm_source_deployment_transaction_input_sha256 = "'
+        '# sccp_evm_source_deployment_transaction_input_sha256 = "0x'
         + "cd" * 32
         + '"'
         in rendered
@@ -1051,7 +1074,7 @@ def test_eth_cli_json_summary_and_toml_output(capsys):
     )
     assert output["deployment_transaction_block_hash"] == "0x" + "bb" * 32
     assert output["deployment_transaction_block_number"] == 4660
-    assert output["deployment_transaction_input_sha256"] == "cd" * 32
+    assert output["deployment_transaction_input_sha256"] == "0x" + "cd" * 32
     assert (
         output["adapter_verifier_vk_hash"]
         == "0x" + ETH_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR

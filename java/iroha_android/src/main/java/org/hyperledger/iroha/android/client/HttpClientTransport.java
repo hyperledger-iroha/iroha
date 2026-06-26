@@ -2091,7 +2091,8 @@ public final class HttpClientTransport implements IrohaClient {
     putValidationFeePolicyMetadata(
         payload,
         request.validationFeePolicyVersion(),
-        request.validationFeePolicyHash());
+        request.validationFeePolicyHash(),
+        request.validationFeeInstructionIndex());
     final List<String> instructions = new ArrayList<>();
     int index = 0;
     for (final byte[] instruction : request.instructions()) {
@@ -2108,12 +2109,18 @@ public final class HttpClientTransport implements IrohaClient {
   static void putValidationFeePolicyMetadata(
       final Map<String, Object> payload,
       final Long validationFeePolicyVersion,
-      final String validationFeePolicyHash) {
+      final String validationFeePolicyHash,
+      final Long validationFeeInstructionIndex) {
     final boolean hasPolicyVersion = validationFeePolicyVersion != null;
     final boolean hasPolicyHash = validationFeePolicyHash != null;
+    final boolean hasInstructionIndex = validationFeeInstructionIndex != null;
     if (hasPolicyVersion != hasPolicyHash) {
       throw new IllegalArgumentException(
           "validationFeePolicyVersion and validationFeePolicyHash must be provided together");
+    }
+    if (!hasPolicyVersion && hasInstructionIndex) {
+      throw new IllegalArgumentException(
+          "validationFeeInstructionIndex requires validation fee policy metadata");
     }
     if (!hasPolicyVersion) {
       return;
@@ -2121,10 +2128,16 @@ public final class HttpClientTransport implements IrohaClient {
     if (validationFeePolicyVersion.longValue() < 0L) {
       throw new IllegalArgumentException("validationFeePolicyVersion must be non-negative");
     }
+    if (hasInstructionIndex && validationFeeInstructionIndex.longValue() < 0L) {
+      throw new IllegalArgumentException("validationFeeInstructionIndex must be non-negative");
+    }
     payload.put("validation_fee_policy_version", validationFeePolicyVersion.toString());
     payload.put(
         "validation_fee_policy_hash",
         normalizeHex32(validationFeePolicyHash, "validationFeePolicyHash"));
+    if (hasInstructionIndex) {
+      payload.put("validation_fee_instruction_index", validationFeeInstructionIndex.toString());
+    }
   }
 
   static Map<String, Object> buildVerifyingKeyRegisterPayload(

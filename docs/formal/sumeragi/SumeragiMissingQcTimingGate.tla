@@ -483,6 +483,10 @@ MissingQcTimingExactness ==
   /\ MissingQcRotationExact
   /\ MissingQcArithmeticExact
 
+MissingQcTimingCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MissingQcTimingExactness
+
 SafetyFast ==
   MissingQcTimingExactness
 

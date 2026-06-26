@@ -342,6 +342,11 @@ ContiguousFrontierPayloadHintSafetyAnchors ==
   /\ MarkerEligibilityAnchors
   /\ EmptyFallbackAnchors
 
+ContiguousFrontierPayloadHintCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ ContiguousFrontierPayloadHintSafetyAnchors
+
 Safety == ContiguousFrontierPayloadHintSafetyAnchors
 
 ====

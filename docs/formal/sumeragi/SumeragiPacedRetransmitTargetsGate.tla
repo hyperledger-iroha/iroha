@@ -280,6 +280,10 @@ PacedRetransmitTargetSelectionExactness ==
   /\ PacedRetransmitRotationOffsetExact
   /\ PacedRetransmitLimitTruncationExact
 
+PacedRetransmitTargetSelectionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PacedRetransmitTargetSelectionExactness
+
 BugZeroLimitSelects ==
   Bug # "zero_limit_selects" \/ OutSelectPeerOne = Empty
 

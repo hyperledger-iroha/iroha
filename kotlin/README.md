@@ -81,13 +81,16 @@ val transports = OfflineNoteTransferCapabilities.current(
 Do not render NFC controls when `supportedModalities()` omits NFC; non-NFC
 devices and app builds without HCE should use QR or Nearby only.
 
-JVM core includes an in-memory store, `IrohaOfflineNoteTransactionSubmitter`,
-and `ToriiOfflineNoteIssuerClient` for Torii key-refill plus note-issue
-loads. Apps provide canonical auth and a device-binding provider; Android
-secure storage remains in the platform wallet layer. The Android
-`AndroidOfflineNoteSecureStore` rotates a non-exportable Android Keystore key
-on every committed wallet-state revision and rejects app-data rollback or
-cloned preference snapshots when the old revision key is no longer present.
+JVM core includes an in-memory store and `ToriiOfflineNoteIssuerClient` for
+Torii key-refill. Legacy note issue and
+`IrohaOfflineNoteTransactionSubmitter` audit/redeem/defund submissions are
+retained for source compatibility but fail closed; production offline payments
+use Kagemusha flows. Apps provide canonical auth and a device-binding provider;
+Android secure storage remains in the platform wallet layer. The
+Android `AndroidOfflineNoteSecureStore` rotates a non-exportable Android
+Keystore key on every committed wallet-state revision and rejects app-data
+rollback or cloned preference snapshots when the old revision key is no longer
+present.
 `KagemushaCompactPaymentTokenProver` exposes the native record-backed compact
 token prover for shielded offline-offline payments. Pass a Norito-encoded
 `KagemushaVerifiedFoldRecordBundle`; the JNI bridge verifies each private hop

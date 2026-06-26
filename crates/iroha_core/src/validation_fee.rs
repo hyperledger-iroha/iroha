@@ -537,13 +537,12 @@ fn enforce_context_policy(
             if &transfer.source_account_id == treasury && treasury_payout_exemption_enabled {
                 continue;
             }
-            if &transfer.source_account_id != execution_account_id {
-                continue;
-            }
             if fee_coordinate.matches(transfer) {
                 continue;
             }
-            if &transfer.destination_account_id == treasury {
+            if &transfer.source_account_id == execution_account_id
+                && &transfer.destination_account_id == treasury
+            {
                 implicit_fee_transfers.push(transfer);
             } else {
                 qualifying_transfer_count += 1;
@@ -577,10 +576,9 @@ fn enforce_context_policy(
         if &transfer.source_account_id == treasury && treasury_payout_exemption_enabled {
             continue;
         }
-        if &transfer.source_account_id != execution_account_id {
-            continue;
-        }
-        if &transfer.destination_account_id == treasury {
+        if &transfer.source_account_id == execution_account_id
+            && &transfer.destination_account_id == treasury
+        {
             implicit_fee_transfers.push(transfer);
         } else {
             qualifying_transfer_count += 1;
@@ -1242,6 +1240,49 @@ mod tests {
                 required_minor_units: 10
             })
         );
+    }
+
+    #[test]
+    fn non_authority_source_transfer_requires_context_authority_fee() {
+        let authority = account(1);
+        let recipient = account(2);
+        let treasury = account(3);
+        let delegated_source = account(4);
+        let policy = policy(&treasury);
+        let fee_asset = policy.fee_asset_definition_id.clone();
+
+        let missing_fee_tx = tx(
+            1,
+            vec![transfer(
+                &delegated_source,
+                &fee_asset,
+                Numeric::new(1u64, 0),
+                &recipient,
+            )],
+            metadata_for(&policy),
+        );
+        assert_eq!(
+            enforce_policy(&missing_fee_tx, &policy),
+            Err(ValidationFeeAdmissionError::MissingFee {
+                required_minor_units: 10
+            })
+        );
+
+        let exact_fee_tx = tx(
+            1,
+            vec![
+                transfer(
+                    &delegated_source,
+                    &fee_asset,
+                    Numeric::new(1u64, 0),
+                    &recipient,
+                ),
+                transfer(&authority, &fee_asset, minor_units(10), &treasury),
+            ],
+            metadata_for_fee_instruction(&policy, 1),
+        );
+        enforce_policy(&exact_fee_tx, &policy)
+            .expect("context authority-paid aggregate fee should validate");
     }
 
     #[test]

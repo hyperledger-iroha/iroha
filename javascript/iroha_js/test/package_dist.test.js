@@ -139,6 +139,8 @@ import {
   bscValidatorSetTransitionMessageHash,
   canonicalSccpMessageProofBundleBytes,
   canonicalSccpPayloadEnvelopeBytes,
+  buildUpsertSccpRouteManifestInstruction,
+  buildRemoveSccpRouteManifestInstruction,
   buildEvmSccpProofRequest,
   buildEvmSccpSubmission,
   EthereumMainnetBeaconRestConsensusProvider,
@@ -379,6 +381,7 @@ import {
   tonSccpRouteCanaryEvidenceHash,
   tronSccpRouteCanaryEvidenceHash,
   sccpSourceAdapterEngineDeploymentHash,
+  sccpSourceAdapterDeploymentBindingFromDeployment,
   sccpSourceAdapterVerifierVkHash,
   sccpSolanaFullLightClientGateHash,
   sccpTonFullLightClientGateHash,
@@ -9980,8 +9983,15 @@ test("package declarations expose recursive compact key-package signatures", () 
   assert.equal(packageJson.types, "./index.d.ts");
   assert.equal(packageJson.exports["."].types, "./index.d.ts");
   assert.equal(packageJson.exports["./crypto"].types, "./index.d.ts");
+  assert.equal(packageJson.exports["./nexus-app"].browser, "./dist/nexusApp.js");
+  assert.equal(packageJson.exports["./nexus-app"].import, "./dist/nexusApp.js");
+  assert.equal(packageJson.exports["./nexus-app"].types, "./nexus-app.d.ts");
   assert.deepEqual(packageJson.typesVersions["*"].crypto, ["./index.d.ts"]);
   assert.equal(packageJson.files.includes("index.d.ts"), true);
+  const nexusAppDeclarations = PACKAGE_DECLARATION_TEXTS.get("nexus-app.d.ts");
+  assert.match(nexusAppDeclarations, /export interface NexusTransactionCodec/);
+  assert.match(nexusAppDeclarations, /finalizeSignedTransaction\(/);
+  assert.match(nexusAppDeclarations, /export class NexusAppClient/);
   assert.match(
     DECLARATIONS_TEXT,
     /export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes\(\s*recordBundleArchive: BinaryLike,\s*pallasOpenEnvelopesArchive: BinaryLike,\s*recursiveCompactKeyArtifactsArchive: BinaryLike,\s*\): Buffer;/u,
@@ -10768,6 +10778,10 @@ test("package declarations separate TON proof-request and submission inputs", ()
   assert.match(proofRequestInput, /sourceStateVerifierHash\?: string;/);
   assert.match(
     proofRequestInput,
+    /sourceAdapterDeployment\?: SccpSourceAdapterEngineDeploymentInput;/,
+  );
+  assert.match(
+    proofRequestInput,
     /sourceAdapterDeploymentBinding\?: SccpSourceAdapterDeploymentBindingInput;/,
   );
   assert.doesNotMatch(proofRequestInput, /proofResult\?:/);
@@ -10789,6 +10803,10 @@ test("package declarations separate TON proof-request and submission inputs", ()
   assert.match(
     DECLARATIONS_TEXT,
     /export function buildTonSccpProofRequest\([\s\S]*input: TonSccpProofRequestInput,[\s\S]*\): TonSccpProofRequest;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function sccpSourceAdapterDeploymentBindingFromDeployment\([\s\S]*input: SccpSourceAdapterEngineDeploymentInput,[\s\S]*\): SccpSourceAdapterDeploymentBinding;/,
   );
 });
 
@@ -10882,6 +10900,43 @@ test("package dist entrypoint exports SCCP portal constants", () => {
   assert.match(
     DECLARATIONS_TEXT,
     /export const SCCP_TON_MAINNET_MASTERCHAIN_CONFIG_VERIFIER_ID_V1: string;/,
+  );
+});
+
+test("package dist entrypoint exports SCCP route-manifest ISI helpers", () => {
+  const manifest = {
+    route_id: "taira_bsc_xor",
+    asset_key: "xor",
+    chain_id_hex: "0x61",
+    counterparty_domain: SCCP_DOMAIN_BSC,
+  };
+
+  assert.deepEqual(buildUpsertSccpRouteManifestInstruction({ manifest }), {
+    UpsertSccpRouteManifest: { manifest },
+  });
+  assert.deepEqual(
+    buildRemoveSccpRouteManifestInstruction({
+      route_id: "taira_bsc_xor",
+      asset_key: "xor",
+      counterparty_domain: "2",
+      chain_id_hex: "0x61",
+    }),
+    {
+      RemoveSccpRouteManifest: {
+        route_id: "taira_bsc_xor",
+        asset_key: "xor",
+        counterparty_domain: SCCP_DOMAIN_BSC,
+        chain_id_hex: "0x61",
+      },
+    },
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function buildUpsertSccpRouteManifestTransaction/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function buildRemoveSccpRouteManifestInstruction/u,
   );
 });
 
@@ -12773,6 +12828,33 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     cross_sdk_parity: sha256Hex(bscMainnetParityFixtureBytes),
     native_prover_self_test: sha256Hex(bscMainnetSelfTestFixtureBytes),
   };
+  const tinyBscMainnetParityFixtureBytesForFloor = Buffer.from("{}", "utf8");
+  assert.throws(
+    () =>
+      verifyBscMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: {
+            ...bscMainnetNativeProverBundle,
+            audit_hashes: {
+              ...bscMainnetNativeProverBundle.audit_hashes,
+              cross_sdk_parity: sha256Hex(
+                tinyBscMainnetParityFixtureBytesForFloor,
+              ),
+            },
+          },
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes: bscMainnetVerifierKeyBytes,
+          crossSdkParityBytes: tinyBscMainnetParityFixtureBytesForFloor,
+          nativeProverSelfTestBytes: bscMainnetSelfTestFixtureBytes,
+          groth16ProofSelfTestBytes: bscMainnetGroth16ProofSelfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes,
+        },
+        { destinationBinding: bscMainnetBinding },
+      ),
+    /crossSdkParityBytes must be at least 128 bytes/u,
+  );
   const bscMainnetNativeArtifacts = verifyBscMainnetNativeEvmProverArtifacts(
     {
       nativeProverBundle: bscMainnetNativeProverBundle,
@@ -13380,6 +13462,23 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
   assert.throws(
     () =>
       normalizeSccpSourceVerifierMaterial({
+        sourceDomain: SCCP_DOMAIN_TRON,
+        sourceTrustAnchorHash: `0x${"44".repeat(32)}`,
+        consensusVerifierHash: `0x${"55".repeat(32)}`,
+        messageInclusionVerifierHash: `0x${"66".repeat(32)}`,
+        finalityPolicyHash: `0x${"88".repeat(32)}`,
+        bridgeAddress: `0x${"11".repeat(20)}`,
+        sourceBridgeEmitterCodeHash: `0x${"77".repeat(32)}`,
+        networkId: `0x${"33".repeat(32)}`,
+        ownerAddress: `0x${"11".repeat(20)}`,
+        configHash:
+          "0x3af0eb31468e605a2781906d8475d2778cccfd4b5d1dd47c31f44d7933396adc",
+      }),
+    /sourceBridgeOwnerAddress must not match sourceBridgeEmitterAddress/u,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
         ...material,
         sourceTrustAnchorHash: SCCP_ETH_MAINNET_NETWORK_ID,
       }),
@@ -13472,6 +13571,30 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
         solanaBankForkChoiceVerifierHash: `0x${"dd".repeat(32)}`,
       }),
     /role-separated/,
+  );
+  const auditedTonDeployment = {
+    sourceDomain: SCCP_DOMAIN_TON,
+    sourceTrustAnchorHash: `0x${"44".repeat(32)}`,
+    consensusVerifierHash: `0x${"55".repeat(32)}`,
+    messageInclusionVerifierHash: `0x${"66".repeat(32)}`,
+    finalityPolicyHash: `0x${"88".repeat(32)}`,
+    sourceStateVerifierHash: `0x${"77".repeat(32)}`,
+    deploymentReceiptHash: `0x${"aa".repeat(32)}`,
+    tonMasterchainConfigVerifierHash: `0x${"bb".repeat(32)}`,
+    tonValidatorSetTransitionVerifierHash: `0x${"cc".repeat(32)}`,
+    tonShardAccountsDictionaryVerifierHash: `0x${"dd".repeat(32)}`,
+  };
+  assert.deepEqual(
+    sccpSourceAdapterDeploymentBindingFromDeployment(auditedTonDeployment),
+    {
+      version: 1,
+      sourceDomain: SCCP_DOMAIN_TON,
+      targetDomain: SCCP_DOMAIN_SORA,
+      sourceAdapterDeploymentHash:
+        "0x61e5d710ccbc902be00a38a5a80d05c19de97105605a3f93d4f8067862d81f07",
+      sourceAdapterDeploymentReceiptHash:
+        auditedTonDeployment.deploymentReceiptHash,
+    },
   );
   assert.equal(
     sccpTonFullLightClientGateHash({

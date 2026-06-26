@@ -657,6 +657,10 @@ BlockCreatedAdmissionExactness ==
   /\ BlockCreatedAdmissionEvidenceExactness
   /\ BlockCreatedAdmissionCommitExactness
 
+BlockCreatedAdmissionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockCreatedAdmissionExactness
+
 Safety == BlockCreatedAdmissionExactness
 
 ====

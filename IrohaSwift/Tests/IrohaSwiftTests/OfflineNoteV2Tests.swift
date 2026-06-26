@@ -3,6 +3,18 @@ import CryptoKit
 @testable import IrohaSwift
 
 final class OfflineNoteV2Tests: XCTestCase {
+    private func assertRetiredOfflineNotePayment(
+        _ expression: @autoclosure () throws -> SignedTransactionEnvelope,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertThrowsError(try expression(), file: file, line: line) { error in
+            guard case SwiftTransactionEncoderError.retiredOfflineNotePayment = error else {
+                return XCTFail("expected retiredOfflineNotePayment, got \(error)", file: file, line: line)
+            }
+        }
+    }
+
     func testCertificateSigningBytesMatchRustVector() throws {
         let fixture = try Self.loadFixture()
         let sender = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
@@ -107,45 +119,67 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertFalse(OfflineNoteV2TypeNames.redeemInstruction.hasSuffix("V2"))
         XCTAssertFalse(OfflineNoteV2TypeNames.auditInstruction.hasSuffix("V2"))
 
-        let issueWirePayload = Self.instructionWirePayload(
-            typeName: OfflineNoteV2TypeNames.issueInstruction,
-            modelPayload: try OfflineNoteV2Encoding.encodeIssue(issue)
-        )
-        let issueEnvelope = Self.rawInstructionPair(
+        let issueInstruction = ParsedOfflineNoteV2Instruction(
             wireName: OfflineNoteV2TypeNames.issueInstruction,
-            wirePayload: issueWirePayload
+            archive: Self.instructionWirePayload(
+                typeName: OfflineNoteV2TypeNames.issueInstruction,
+                modelPayload: try OfflineNoteV2Encoding.encodeIssue(issue)
+            )
+        )
+        XCTAssertFalse(issueInstruction.wireName.hasSuffix("V2"))
+        let issueEnvelope = Self.rawInstructionPair(
+            wireName: issueInstruction.wireName,
+            wirePayload: issueInstruction.archive
         )
         XCTAssertEqual(
             try OfflineNoteV2Decoding.decodeIssueInstruction(issueEnvelope).noritoEncoded().base64EncodedString(),
             try issue.noritoEncoded().base64EncodedString()
         )
         XCTAssertEqual(
-            try OfflineNoteV2Decoding.decodeIssueInstruction(issueWirePayload).noritoEncoded().base64EncodedString(),
+            try OfflineNoteV2Decoding.decodeIssueInstruction(issueInstruction.archive).noritoEncoded().base64EncodedString(),
             try issue.noritoEncoded().base64EncodedString()
         )
 
-        let auditEnvelope = Self.rawInstructionPair(
+        let auditInstruction = ParsedOfflineNoteV2Instruction(
             wireName: OfflineNoteV2TypeNames.auditInstruction,
-            wirePayload: Self.instructionWirePayload(
+            archive: Self.instructionWirePayload(
                 typeName: OfflineNoteV2TypeNames.auditInstruction,
                 modelPayload: try OfflineNoteV2Encoding.encodeAudit(audit)
-            ),
+            )
+        )
+        XCTAssertFalse(auditInstruction.wireName.hasSuffix("V2"))
+        let auditEnvelope = Self.rawInstructionPair(
+            wireName: auditInstruction.wireName,
+            wirePayload: auditInstruction.archive,
             compact: false
         )
         XCTAssertEqual(
             try OfflineNoteV2Decoding.decodeAuditInstruction(auditEnvelope).noritoEncoded().base64EncodedString(),
             try audit.noritoEncoded().base64EncodedString()
         )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeAuditInstruction(auditInstruction.archive).noritoEncoded().base64EncodedString(),
+            try audit.noritoEncoded().base64EncodedString()
+        )
 
-        let redeemEnvelope = Self.rawInstructionPair(
+        let redeemInstruction = ParsedOfflineNoteV2Instruction(
             wireName: OfflineNoteV2TypeNames.redeemInstruction,
-            wirePayload: Self.instructionWirePayload(
+            archive: Self.instructionWirePayload(
                 typeName: OfflineNoteV2TypeNames.redeemInstruction,
                 modelPayload: try OfflineNoteV2Encoding.encodeRedeem(redeem)
             )
         )
+        XCTAssertFalse(redeemInstruction.wireName.hasSuffix("V2"))
+        let redeemEnvelope = Self.rawInstructionPair(
+            wireName: redeemInstruction.wireName,
+            wirePayload: redeemInstruction.archive
+        )
         XCTAssertEqual(
             try OfflineNoteV2Decoding.decodeRedeemInstruction(redeemEnvelope).noritoEncoded().base64EncodedString(),
+            try redeem.noritoEncoded().base64EncodedString()
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeRedeemInstruction(redeemInstruction.archive).noritoEncoded().base64EncodedString(),
             try redeem.noritoEncoded().base64EncodedString()
         )
     }
@@ -344,7 +378,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertEqual(draft.evidenceHash, IrohaHash.hash(expectedEvidence))
     }
 
-    func testOfflineNoteV2TransactionBuildersProduceSignedEnvelopes() throws {
+    func testOfflineNoteV2PaymentTransactionBuildersAreRetiredAndRegistrationStillSigns() throws {
         let fixture = try Self.loadFixture()
         let keypair = try Keypair(privateKeyBytes: Data(0..<32))
         let authority = AccountId.make(publicKey: keypair.publicKey)
@@ -355,7 +389,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         let redeemModel = try Self.redeem(fixture)
         let registrationModel = try Self.attestationRegistration(fixture)
 
-        let issue = try SwiftTransactionEncoder.encodeIssueOfflineNoteV2(
+        assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeIssueOfflineNoteV2(
             request: IssueOfflineNoteV2Request(
                 chainId: chainId,
                 authority: authority,
@@ -364,8 +398,8 @@ final class OfflineNoteV2Tests: XCTestCase {
             ),
             keypair: keypair,
             creationTimeMs: creationTimeMs
-        )
-        let audit = try SwiftTransactionEncoder.encodeAuditOfflineNoteV2(
+        ))
+        assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeAuditOfflineNoteV2(
             request: AuditOfflineNoteV2Request(
                 chainId: chainId,
                 authority: authority,
@@ -374,8 +408,8 @@ final class OfflineNoteV2Tests: XCTestCase {
             ),
             keypair: keypair,
             creationTimeMs: creationTimeMs
-        )
-        let redeem = try SwiftTransactionEncoder.encodeRedeemOfflineNoteV2(
+        ))
+        assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeRedeemOfflineNoteV2(
             request: RedeemOfflineNoteV2Request(
                 chainId: chainId,
                 authority: authority,
@@ -384,7 +418,7 @@ final class OfflineNoteV2Tests: XCTestCase {
             ),
             keypair: keypair,
             creationTimeMs: creationTimeMs
-        )
+        ))
         let registerAttestation = try SwiftTransactionEncoder.encodeRegisterOfflineDeviceAttestation(
             request: RegisterOfflineDeviceAttestationRequest(
                 chainId: chainId,
@@ -396,30 +430,13 @@ final class OfflineNoteV2Tests: XCTestCase {
             creationTimeMs: creationTimeMs
         )
 
-        for envelope in [issue, audit, redeem, registerAttestation] {
-            XCTAssertEqual(envelope.norito.first, 1)
-            XCTAssertEqual(Data(envelope.norito.dropFirst()), envelope.signedTransaction)
-            XCTAssertEqual(envelope.transactionHash.count, 32)
-            XCTAssertNil(envelope.payload)
-        }
-        XCTAssertNotEqual(issue.transactionHash, audit.transactionHash)
-        XCTAssertNotEqual(audit.transactionHash, redeem.transactionHash)
-        XCTAssertNotEqual(redeem.transactionHash, registerAttestation.transactionHash)
+        XCTAssertEqual(registerAttestation.norito.first, 1)
+        XCTAssertEqual(Data(registerAttestation.norito.dropFirst()), registerAttestation.signedTransaction)
+        XCTAssertEqual(registerAttestation.transactionHash.count, 32)
+        XCTAssertNil(registerAttestation.payload)
 
-        let issueInstruction = try Self.parseSingleOfflineNoteV2Instruction(issue)
-        let auditInstruction = try Self.parseSingleOfflineNoteV2Instruction(audit)
-        let redeemInstruction = try Self.parseSingleOfflineNoteV2Instruction(redeem)
         let registerInstruction = try Self.parseSingleOfflineNoteV2Instruction(registerAttestation)
-        XCTAssertEqual(issueInstruction.wireName, OfflineNoteV2TypeNames.issueInstruction)
-        XCTAssertEqual(auditInstruction.wireName, OfflineNoteV2TypeNames.auditInstruction)
-        XCTAssertEqual(redeemInstruction.wireName, OfflineNoteV2TypeNames.redeemInstruction)
         XCTAssertEqual(registerInstruction.wireName, OfflineNoteV2TypeNames.registerDeviceAttestationInstruction)
-        XCTAssertFalse(issueInstruction.wireName.hasSuffix("V2"))
-        XCTAssertFalse(auditInstruction.wireName.hasSuffix("V2"))
-        XCTAssertFalse(redeemInstruction.wireName.hasSuffix("V2"))
-        XCTAssertEqual(try OfflineNoteV2Decoding.decodeIssueInstruction(issueInstruction.archive), issueModel)
-        XCTAssertEqual(try OfflineNoteV2Decoding.decodeAuditInstruction(auditInstruction.archive), auditModel)
-        XCTAssertEqual(try OfflineNoteV2Decoding.decodeRedeemInstruction(redeemInstruction.archive), redeemModel)
         XCTAssertEqual(
             registerInstruction.archive.base64EncodedString(),
             fixture.chainVectors.attestationRegistration.instructionNoritoBase64
@@ -1049,12 +1066,12 @@ final class OfflineNoteV2Tests: XCTestCase {
         let chainId = "00000000-0000-0000-0000-000000000000"
         let issue = try Self.issue(fixture)
 
-        let defaultEnvelope = try SwiftTransactionEncoder.encodeIssueOfflineNoteV2(
+        assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeIssueOfflineNoteV2(
             request: IssueOfflineNoteV2Request(chainId: chainId, authority: authority, issue: issue),
             keypair: keypair,
             creationTimeMs: 1_706_000_000_000
-        )
-        let nonceEnvelope = try SwiftTransactionEncoder.encodeIssueOfflineNoteV2(
+        ))
+        assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeIssueOfflineNoteV2(
             request: IssueOfflineNoteV2Request(
                 chainId: chainId,
                 authority: authority,
@@ -1064,10 +1081,7 @@ final class OfflineNoteV2Tests: XCTestCase {
             ),
             keypair: keypair,
             creationTimeMs: 1_706_000_000_000
-        )
-
-        XCTAssertNotEqual(defaultEnvelope.signedTransaction, nonceEnvelope.signedTransaction)
-        XCTAssertNotEqual(defaultEnvelope.transactionHash, nonceEnvelope.transactionHash)
+        ))
 
         XCTAssertThrowsError(try SwiftTransactionEncoder.encodeIssueOfflineNoteV2(
             request: IssueOfflineNoteV2Request(chainId: "  \(chainId)  ", authority: authority, issue: issue),

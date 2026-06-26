@@ -229,6 +229,10 @@ BuildSignersBitmapExactness ==
   /\ OutOfRangeAndPaddingFiltered
   /\ DuplicateSignerCollapsedExact
 
+BuildSignersBitmapCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BuildSignersBitmapExactness
+
 BugZeroRosterAllocatesByte ==
   ActualBitmap("zero_roster_empty") = SpecBitmap("zero_roster_empty")
 

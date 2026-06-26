@@ -1,9 +1,8 @@
 import Foundation
 
 extension SwiftTransactionEncoder {
-    private static func encodeTransactionMetadataJSON(_ metadata: [String: ToriiJSONValue]) throws -> Data? {
-        guard !metadata.isEmpty else { return nil }
-        return try JSONEncoder().encode(metadata)
+    private static func retiredOfflineNotePaymentTransaction() throws -> SignedTransactionEnvelope {
+        throw SwiftTransactionEncoderError.retiredOfflineNotePayment
     }
 
     static func encodeIssueOfflineNote(request: IssueOfflineNoteRequest,
@@ -20,25 +19,12 @@ extension SwiftTransactionEncoder {
     static func encodeIssueOfflineNote(request: IssueOfflineNoteRequest,
                                          signingKey: SigningKey,
                                          creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(
+        _ = try TransactionInputValidator.validate(
             chainId: request.chainId,
             authorityId: request.authority
         )
-        let privateKey = try privateKeyBytes(from: signingKey)
-        let issueModel = try request.issue.noritoEncoded()
-        let native = try bridgeOrThrow {
-            try NoritoNativeBridge.shared.encodeIssueOfflineNote(
-                chainId: ids.chainId,
-                authority: ids.authorityId,
-                creationTimeMs: creationTimeMs,
-                ttlMs: request.ttlMs,
-                nonce: request.nonce,
-                issueModel: issueModel,
-                privateKey: privateKey,
-                metadataJSON: try encodeTransactionMetadataJSON(request.metadata)
-            )
-        }
-        return try wrap(native: native)
+        _ = (signingKey, creationTimeMs)
+        return try retiredOfflineNotePaymentTransaction()
     }
 
     static func encodeRedeemOfflineNote(request: RedeemOfflineNoteRequest,
@@ -55,26 +41,13 @@ extension SwiftTransactionEncoder {
     static func encodeRedeemOfflineNote(request: RedeemOfflineNoteRequest,
                                           signingKey: SigningKey,
                                           creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(
+        _ = try TransactionInputValidator.validate(
             chainId: request.chainId,
             authorityId: request.authority
         )
         try request.redemption.validateProofBinding()
-        let privateKey = try privateKeyBytes(from: signingKey)
-        let redemptionModel = try request.redemption.noritoEncoded()
-        let native = try bridgeOrThrow {
-            try NoritoNativeBridge.shared.encodeRedeemOfflineNote(
-                chainId: ids.chainId,
-                authority: ids.authorityId,
-                creationTimeMs: creationTimeMs,
-                ttlMs: request.ttlMs,
-                nonce: request.nonce,
-                redemptionModel: redemptionModel,
-                privateKey: privateKey,
-                metadataJSON: try encodeTransactionMetadataJSON(request.metadata)
-            )
-        }
-        return try wrap(native: native)
+        _ = (signingKey, creationTimeMs)
+        return try retiredOfflineNotePaymentTransaction()
     }
 
     static func encodeDefundOfflineNote(request: DefundOfflineNoteRequest,
@@ -91,7 +64,7 @@ extension SwiftTransactionEncoder {
     static func encodeDefundOfflineNote(request: DefundOfflineNoteRequest,
                                           signingKey: SigningKey,
                                           creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(
+        _ = try TransactionInputValidator.validate(
             chainId: request.chainId,
             authorityId: request.authority
         )
@@ -99,23 +72,8 @@ extension SwiftTransactionEncoder {
             try audit.validateProofBinding()
         }
         try request.redemption.validateProofBinding()
-        let privateKey = try privateKeyBytes(from: signingKey)
-        let bearerAuditTrail = try request.bearerAuditTrail.map { try $0.noritoEncoded() }
-        let redemptionModel = try request.redemption.noritoEncoded()
-        let native = try bridgeOrThrow {
-            try NoritoNativeBridge.shared.encodeDefundOfflineNote(
-                chainId: ids.chainId,
-                authority: ids.authorityId,
-                creationTimeMs: creationTimeMs,
-                ttlMs: request.ttlMs,
-                nonce: request.nonce,
-                bearerAuditTrail: bearerAuditTrail,
-                redemptionModel: redemptionModel,
-                privateKey: privateKey,
-                metadataJSON: try encodeTransactionMetadataJSON(request.metadata)
-            )
-        }
-        return try wrap(native: native)
+        _ = (signingKey, creationTimeMs)
+        return try retiredOfflineNotePaymentTransaction()
     }
 
     static func encodeAuditOfflineNote(request: AuditOfflineNoteRequest,
@@ -132,26 +90,13 @@ extension SwiftTransactionEncoder {
     static func encodeAuditOfflineNote(request: AuditOfflineNoteRequest,
                                          signingKey: SigningKey,
                                          creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(
+        _ = try TransactionInputValidator.validate(
             chainId: request.chainId,
             authorityId: request.authority
         )
         try request.audit.validateProofBinding()
-        let privateKey = try privateKeyBytes(from: signingKey)
-        let auditModel = try request.audit.noritoEncoded()
-        let native = try bridgeOrThrow {
-            try NoritoNativeBridge.shared.encodeAuditOfflineNote(
-                chainId: ids.chainId,
-                authority: ids.authorityId,
-                creationTimeMs: creationTimeMs,
-                ttlMs: request.ttlMs,
-                nonce: request.nonce,
-                auditModel: auditModel,
-                privateKey: privateKey,
-                metadataJSON: try encodeTransactionMetadataJSON(request.metadata)
-            )
-        }
-        return try wrap(native: native)
+        _ = (signingKey, creationTimeMs)
+        return try retiredOfflineNotePaymentTransaction()
     }
 }
 

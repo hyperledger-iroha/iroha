@@ -40,7 +40,6 @@ import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
-import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.crypto.Signer
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
@@ -2827,7 +2826,7 @@ class OfflineNoteTest {
     }
 
     @Test
-    fun toriiIssuerClientBodySignsRefillAndIssuesWalletCommitment() {
+    fun toriiIssuerClientBodySignsRefillAndRetiresNoteIssue() {
         val fixture = loadFixture()
         val certificateJson = obj(obj(fixture, "payment_token"), "sender_key_certificate")
         val accountId = string(certificateJson, "account_id")
@@ -2861,7 +2860,6 @@ class OfflineNoteTest {
             nonceGenerator = SequenceIdGenerator(
                 "operation-refill-1",
                 "auth-refill-1",
-                "auth-issue-1",
                 "operation-refill-2",
                 "auth-refill-2",
             ),
@@ -2873,23 +2871,23 @@ class OfflineNoteTest {
         assertEquals(1L, context.localRevision)
 
         val commitment = ByteArray(32) { (it + 1).toByte() }
-        val response = client.issueNote(
-            OfflineNoteIssueRequest(
-                chainId = "chain-1",
-                accountId = accountId,
-                assetDefinitionId = assetDefinitionId,
-                assetId = "$assetDefinitionId#$accountId",
-                amount = "5",
-                loadContext = context,
-                noteCommitment = commitment,
-            )
-        ).join()
-
-        assertEquals(hex(commitment), hex(response.noteCommitment()))
-        assertEquals("settlement-entry-hash", response.settlementEntryHashHex)
-        assertEquals(2, executor.requests.size)
+        val issueFailure = assertFailsWith<ExecutionException> {
+            client.issueNote(
+                OfflineNoteIssueRequest(
+                    chainId = "chain-1",
+                    accountId = accountId,
+                    assetDefinitionId = assetDefinitionId,
+                    assetId = "$assetDefinitionId#$accountId",
+                    amount = "5",
+                    loadContext = context,
+                    noteCommitment = commitment,
+                )
+            ).get(5, TimeUnit.SECONDS)
+        }
+        assertTrue(issueFailure.cause is IllegalStateException)
+        assertEquals(ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, issueFailure.cause?.message)
+        assertEquals(1, executor.requests.size)
         assertEquals("/v1/offline/v2/keys/refill", executor.requests[0].uri.path)
-        assertEquals("/v1/offline/v2/notes/issue", executor.requests[1].uri.path)
         for (request in executor.requests) {
             assertFalse(request.headers.keys.any { it.startsWith("X-Iroha-", ignoreCase = true) })
         }
@@ -2907,19 +2905,12 @@ class OfflineNoteTest {
             string(obj(refillBody, "device_binding"), "signature_base64"),
         )
 
-        val issueBody = executor.requestBody(1)
-        assertEquals(hex(commitment), string(issueBody, "note_commitment"))
-        assertEquals(0L, long(issueBody, "local_revision"))
-        assertEquals("0", string(issueBody, "local_balance"))
-        assertEquals("auth-issue-1", string(issueBody, "nonce"))
-        assertNotNull(obj(issueBody, "lineage_state"))
-
         nowMs = 1_700_000_060_001L
         val refillContext = client.prepareLoad("chain-1", accountId, assetDefinitionId, "7").join()
         assertEquals("operation-refill-2", refillContext.operationId)
-        assertEquals(3, executor.requests.size)
-        val secondRefillBody = executor.requestBody(2)
-        assertEquals(" lineage-state-hash ", string(secondRefillBody, "local_state_hash"))
+        assertEquals(2, executor.requests.size)
+        val secondRefillBody = executor.requestBody(1)
+        assertEquals("", string(secondRefillBody, "local_state_hash"))
     }
 
     @Test
@@ -3100,32 +3091,46 @@ class OfflineNoteTest {
         string(obj(obj(fixture, "chain_vectors"), "redeem"), "amount")
 
     @Test
-    fun offlineNoteTransactionSubmitterIncludesFeeMetadata() {
+    fun offlineNoteTransactionSubmitterIsRetiredAndKeepsFeeMetadataHelper() {
         val fixture = loadFixture()
         val chain = obj(fixture, "chain_vectors")
         val derivation = obj(chain, "derivation")
         val payment = obj(fixture, "payment_token")
-        val codec = NoritoJavaCodecAdapter()
         val client = CapturingIrohaClient()
         val metadata = IrohaOfflineNoteTransactionSubmitter.feeMetadata(
-            gasAssetId = "xor#universal",
-            feeSponsor = string(payment, "recipient_account_id"),
+            gasAssetId = "  xor#universal  ",
+            feeSponsor = "  ${string(payment, "recipient_account_id")}  ",
+        )
+        assertEquals("xor#universal", metadata[IrohaOfflineNoteTransactionSubmitter.GAS_ASSET_ID_METADATA_KEY])
+        assertEquals(
+            string(payment, "recipient_account_id"),
+            metadata[IrohaOfflineNoteTransactionSubmitter.FEE_SPONSOR_METADATA_KEY],
         )
         val submitter = IrohaOfflineNoteTransactionSubmitter(
             client = client,
             signer = FakeSigner(),
             chainId = string(derivation, "chain_id"),
             authority = string(payment, "sender_account_id"),
-            codecAdapter = codec,
+            codecAdapter = NoritoJavaCodecAdapter(),
             clock = LongSupplier { 1_736_000_000_000L },
             transactionMetadata = metadata,
         )
 
-        submitter.submitAudit(audit(fixture)).get(5, TimeUnit.SECONDS)
+        fun assertRetiredSubmission(future: CompletableFuture<ClientResponse>) {
+            val error = assertFailsWith<ExecutionException> {
+                future.get(5, TimeUnit.SECONDS)
+            }
+            val cause = error.cause
+            assertTrue(cause is IllegalStateException)
+            assertEquals(IrohaOfflineNoteTransactionSubmitter.RETIRED_OFFLINE_NOTE_PAYMENT_MESSAGE, cause.message)
+        }
 
-        val signed = assertNotNull(client.submittedTransaction)
-        val payload = codec.decodeTransaction(signed.encodedPayload())
-        assertEquals(metadata.mapValues { JsonValue.string(it.value) }, payload.metadata)
+        val audit = audit(fixture)
+        val redemption = redeem(fixture)
+        assertRetiredSubmission(submitter.submitAudit(audit))
+        assertRetiredSubmission(submitter.submitRedeem(redemption))
+        assertRetiredSubmission(submitter.submitDefund(redemption, listOf(audit)))
+        assertNull(client.submittedTransaction)
     }
 
     @Test

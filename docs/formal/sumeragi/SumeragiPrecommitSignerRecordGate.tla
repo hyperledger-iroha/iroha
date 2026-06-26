@@ -249,9 +249,6 @@ SpecOutputAnchors ==
 PrecommitSignerRecordMatchesSpec ==
   \A c \in Cases: ActualOutput(c) = SpecOutput(c)
 
-SafetyFast ==
-  PrecommitSignerRecordMatchesSpec
-
 PrecommitSignerPermissionedExact ==
   \A c \in PermissionedCases:
     ActualOutput(c) = SpecOutput(c)
@@ -278,6 +275,14 @@ PrecommitSignerRecordExactness ==
   /\ PrecommitSignerNposStakeExact
   /\ PrecommitSignerSnapshotPolicyExact
   /\ PrecommitSignerOutputMetadataExact
+
+PrecommitSignerRecordCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PrecommitSignerRecordExactness
+
+SafetyFast ==
+  /\ PrecommitSignerRecordMatchesSpec
+  /\ PrecommitSignerRecordCorrectnessEnvelope
 
 BugDropPermissionedValid ==
   ActualOutput("permissioned_valid_snapshot_input") =

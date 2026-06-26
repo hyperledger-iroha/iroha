@@ -497,8 +497,13 @@ CommitPipelineSchedulingFastSafety ==
   /\ Safety
   /\ CommitPipelineSchedulingExactness
 
+CommitPipelineSchedulingCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CommitPipelineSchedulingExactness
+
 SafetyFast ==
-  CommitPipelineSchedulingFastSafety
+  /\ CommitPipelineSchedulingFastSafety
+  /\ CommitPipelineSchedulingCorrectnessEnvelope
 
 =============================================================================
 ====

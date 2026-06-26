@@ -1301,18 +1301,23 @@ private func tronBytesFromHex32(_ value: String, field: String) throws -> Data {
     guard value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
         throw TronSccpProverError.invalidHex32(field)
     }
-    var hex = value
-    if hex.lowercased().hasPrefix("0x") {
-        hex.removeFirst(2)
-    }
+    let hex = value.hasPrefix("0x") ? String(value.dropFirst(2)) : value
     guard hex.unicodeScalars.allSatisfy({ !CharacterSet.whitespacesAndNewlines.contains($0) }) else {
         throw TronSccpProverError.invalidHex32(field)
     }
-    hex = hex.lowercased()
-    guard hex.count == 64, let bytes = Data(hexString: hex), bytes.count == 32 else {
+    guard hex.count == 64,
+          tronIsLowercaseHexBody(hex),
+          let bytes = Data(hexString: hex),
+          bytes.count == 32 else {
         throw TronSccpProverError.invalidHex32(field)
     }
     return bytes
+}
+
+private func tronIsLowercaseHexBody(_ value: String) -> Bool {
+    value.utf8.allSatisfy { byte in
+        (byte >= 0x30 && byte <= 0x39) || (byte >= 0x61 && byte <= 0x66)
+    }
 }
 
 private func tronNormalizeHex32(_ value: String, field: String) throws -> String {
@@ -1376,10 +1381,10 @@ private func tronRouteCanaryAddressPayload(_ value: String, field: String) throw
         throw TronSccpProverError.invalidPublicInputs(field)
     }
     var hex = trimmed
-    if hex.lowercased().hasPrefix("0x") {
+    if hex.hasPrefix("0x") {
         hex.removeFirst(2)
     }
-    if hex.count == 42, let bytes = Data(hexString: hex.lowercased()), bytes.count == 21 {
+    if hex.count == 42, tronIsLowercaseHexBody(hex), let bytes = Data(hexString: hex), bytes.count == 21 {
         guard bytes.first == 0x41,
               bytes.dropFirst().contains(where: { $0 != 0 }) else {
             throw TronSccpProverError.invalidPublicInputs(field)

@@ -209,5 +209,10 @@ SafetyAnchors ==
   /\ ZeroSlotAnchors
   /\ SnapshotAnchors
 
+RbcAbortStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ Safety
+  /\ SafetyAnchors
+
 =============================================================================
 ====

@@ -191,6 +191,10 @@ QcSignerRawCountExactness ==
   /\ FullByteAndPaddingCountExact
   /\ MultiByteCountExact
 
+QcSignerRawCountCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ QcSignerRawCountExactness
+
 BugEmptyCountsOne ==
   ActualCount("empty") = SpecCount("empty")
 

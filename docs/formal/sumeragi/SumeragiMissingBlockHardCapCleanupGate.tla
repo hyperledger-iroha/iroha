@@ -320,6 +320,10 @@ MissingBlockHardCapCleanupExactness ==
   /\ HardCapCleanupQuorumRepairExact
   /\ HardCapCleanupEvidenceOwnerExact
 
+MissingBlockHardCapCleanupCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MissingBlockHardCapCleanupExactness
+
 Safety ==
   MissingBlockHardCapCleanupExactness
 

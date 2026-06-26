@@ -2153,6 +2153,7 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "crates/iroha_torii/src/offline_v2_issuer.rs",
     "crates/iroha_torii/src/openapi.rs",
     "crates/iroha_torii/src/zk_prover.rs",
+    "crates/iroha_torii/tests/offline_kagemusha_only_smoke.rs",
     "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs",
     "ci/check_kagemusha_production_readiness.sh",
     "ci/check_kagemusha_recursive_spend_jvm_sdk.sh",
@@ -2230,10 +2231,13 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
 )
 ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+    "IrohaSwift/Sources/IrohaSwift/ToriiOfflineNoteIssuerClient.swift",
+    "IrohaSwift/Sources/IrohaSwift/TransactionEncoder.swift",
     "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineCashLifecycleTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift",
     "crates/iroha_cli/src/main_shared.rs",
+    "crates/iroha_core/src/executor.rs",
     "crates/iroha_core/src/gas.rs",
     "crates/iroha_core/src/queue/router.rs",
     "crates/iroha_core/src/smartcontracts/isi/mod.rs",
@@ -2242,11 +2246,14 @@ ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     "crates/iroha_data_model/src/isi/mod.rs",
     "crates/iroha_data_model/src/isi/registry.rs",
     "crates/iroha_data_model/src/proof.rs",
+    "crates/iroha_torii/src/offline_issuer.rs",
     "crates/iroha_torii/src/lib.rs",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyBackendTag.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/IrohaOfflineNoteTransactionSubmitter.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJsonParser.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineReadiness.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/ToriiOfflineNoteIssuerClient.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineV2Readiness.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/GradleHarnessTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/OfflineToriiClientTests.java",
@@ -2262,6 +2269,7 @@ ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     "javascript/iroha_js/src/transaction.js",
     "javascript/iroha_js/test/crypto.browser.test.js",
     "javascript/iroha_js/test/instructionBuilders.test.js",
+    "javascript/iroha_js/test/integrationTorii.test.js",
     "javascript/iroha_js/test/offlineCashLifecycle.test.js",
     "javascript/iroha_js/test/privacyCatalogParity.test.js",
     "javascript/iroha_js/test/privacyFfiContractParity.test.js",
@@ -2271,6 +2279,7 @@ ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineJsonParser.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineReadiness.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/ToriiOfflineNoteIssuerClient.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineV2Readiness.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientReadinessTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientV2ReadinessTest.kt",
@@ -2475,6 +2484,23 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         "offline_v2_notes_redeem_rejects_auxiliary_kagemusha_fields_with_redeem_archive",
     ),
 }
+READINESS_SECTION_CONSISTENCY_COVERAGE = {
+    "scripts/kagemusha_production_readiness.py": (
+        "READINESS_SECTION_LABELS: dict[str, str]",
+        "def _section_readiness_blockers(",
+        '"kagemusha_readiness_section_blockers_shape"',
+        '"kagemusha_readiness_section_inconsistent"',
+        "all_blockers.extend(_section_readiness_blockers(section_key, section))",
+    ),
+    "scripts/tests/kagemusha_production_readiness_test.py": (
+        "test_build_summary_blocks_inconsistent_section_without_reported_blockers",
+        "test_build_summary_blocks_malformed_section_blockers",
+        '"kagemusha_readiness_section_inconsistent"',
+        '"kagemusha_readiness_section_blockers_shape"',
+        '"check_abi6_reserved_lineage"',
+        '"check_abi7_fail_closed"',
+    ),
+}
 WORKFLOW_REQUIRED_PATHS = (
     WORKFLOW_PATH,
     SHARED_FIXTURE_PATH,
@@ -2491,6 +2517,7 @@ WORKFLOW_REQUIRED_PATHS = (
     *RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE.keys(),
     *VERIFY_RESULT_FAIL_CLOSED_COVERAGE.keys(),
     *TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE.keys(),
+    *READINESS_SECTION_CONSISTENCY_COVERAGE.keys(),
 )
 WORKFLOW_MAIN_GUARD_COMMANDS = (
     (
@@ -2678,6 +2705,10 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "active non-C# TODO content scan inventory negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-content-scan-inventory",
+    ),
+    (
+        "production-readiness section-consistency negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-readiness-section-consistency",
     ),
     (
         "core append cap direct-prover negative control",
@@ -4608,6 +4639,13 @@ def check_torii_offline_v2_kagemusha_redeem_coverage():
     )
 
 
+def check_readiness_section_consistency_coverage():
+    require_needles(
+        READINESS_SECTION_CONSISTENCY_COVERAGE,
+        "is missing production-readiness section consistency coverage",
+    )
+
+
 def shared_fixture_manifest():
     try:
         return json.loads(read(SHARED_FIXTURE_PATH))
@@ -5163,6 +5201,7 @@ def run_checks():
     check_verify_result_fail_closed_coverage()
     check_payload_benchmark_source_coverage()
     check_torii_offline_v2_kagemusha_redeem_coverage()
+    check_readiness_section_consistency_coverage()
     check_active_noncsharp_kagemusha_todos_closed()
 
 
@@ -6680,6 +6719,13 @@ if mode == "--negative-control-active-noncsharp-todo":
             "production-readiness script active marker",
         ),
         (
+            "crates/iroha_torii/tests/offline_kagemusha_only_smoke.rs",
+            "//! Source-level guards for the Kagemusha-only offline payment surface.",
+            "// TODO: bypass Kagemusha-only offline smoke\n"
+            "//! Source-level guards for the Kagemusha-only offline payment surface.",
+            "Torii Kagemusha-only smoke active marker",
+        ),
+        (
             "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs",
             "//! Source-level smoke checks for the offline v2 Kagemusha redeem bridge.",
             "// TODO: bypass offline-v2 Kagemusha redeem smoke\n"
@@ -6799,6 +6845,55 @@ if mode == "--negative-control-active-noncsharp-todo-content-scan-inventory":
     raise SystemExit(
         "negative control failed: active non-C# Kagemusha TODO content scan inventory drift was not detected"
     )
+
+if mode == "--negative-control-readiness-section-consistency":
+    cases = (
+        (
+            "scripts/kagemusha_production_readiness.py",
+            "all_blockers.extend(_section_readiness_blockers(section_key, section))",
+            "all_blockers.extend(section_blockers)",
+            "scripts/kagemusha_production_readiness.py is missing production-readiness section consistency coverage: all_blockers.extend(_section_readiness_blockers(section_key, section))",
+        ),
+        (
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_build_summary_blocks_malformed_section_blockers",
+            "test_build_summary_accepts_malformed_section_blockers",
+            "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_build_summary_blocks_malformed_section_blockers",
+        ),
+    )
+    first_message = None
+    for target, before, after, expected in cases:
+        source = read(target)
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
+            raise SystemExit(
+                "negative control failed: unable to mutate production-readiness section consistency coverage"
+            )
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: production-readiness section consistency drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: production-readiness section consistency drift was not detected"
+        )
+    if first_message is None:
+        raise SystemExit(
+            "negative control failed: production-readiness section consistency drift was not detected"
+        )
+    print("negative control rejected production-readiness section consistency drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
 
 if mode == "--negative-control-core-append-cap-boundary":
     target = "crates/iroha_core/src/zk.rs"

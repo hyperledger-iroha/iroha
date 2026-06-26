@@ -10824,6 +10824,26 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "stages[0].stdout_preview.receipts must match submitted_messages",
                 )
             )
+            rail_explicit_message_mismatch = valid_canary_summary()
+            rail_explicit_message_mismatch["stages"][0]["command"].extend(
+                ["--message", "/ops/iso/inbox/explicit.xml"]
+            )
+            rail_explicit_message_mismatch["stages"][0]["stdout_preview"] = rail_stdout(
+                submitted_messages=2,
+                receipts=[
+                    "/ops/iso/rail-receipts/iso-rail-gateway.1.receipt.json",
+                    "/ops/iso/rail-receipts/forged-message.receipt.json",
+                ],
+            )
+            rail_explicit_message_mismatch.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(rail_explicit_message_mismatch),
+                    "stages[0].stdout_preview.submitted_messages must be one "
+                    "when command uses --message",
+                    "forged-message.receipt.json",
+                )
+            )
             notary_missing_fields = valid_canary_summary()
             notary_missing_fields["stages"][1]["stdout_preview"] = "{}\n"
             notary_missing_fields.pop("summary_sha256")
@@ -10861,6 +10881,23 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "stages[1].stdout_preview.endpoint_count does not match command "
                     "--endpoint count",
                     "forged-endpoint.receipt.json",
+                )
+            )
+            notary_latest_anchor_mismatch = valid_canary_summary()
+            notary_latest_anchor_mismatch["stages"][1]["stdout_preview"] = notary_stdout(
+                published_anchors=2,
+                receipts=[
+                    "/ops/iso/notary-receipts/iso-audit-notary.0.receipt.json",
+                    "/ops/iso/notary-receipts/forged-anchor.receipt.json",
+                ],
+            )
+            notary_latest_anchor_mismatch.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(notary_latest_anchor_mismatch),
+                    "stages[1].stdout_preview.published_anchors must be one "
+                    "unless command uses --all",
+                    "forged-anchor.receipt.json",
                 )
             )
             notary_dry_run_shape = valid_canary_summary()

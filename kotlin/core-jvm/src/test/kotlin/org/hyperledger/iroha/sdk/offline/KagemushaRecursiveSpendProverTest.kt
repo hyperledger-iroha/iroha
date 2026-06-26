@@ -1724,6 +1724,10 @@ class KagemushaRecursiveSpendProverTest {
         assertContains(archives, "\"semantics\": \"verifier_record_activation_height\"")
         assertContains(
             archives,
+            "\"sha256_hex\": \"c5402b3ea6aeb35ce12607344304b858273f8589e2b3887708a86cb19665ce68\"",
+        )
+        assertContains(
+            archives,
             "\"sha256_hex\": \"4fbfbe8b05b86c430a3743b0da68b819afca8c666357ef7b2e171b837f97f415\"",
         )
         assertContains(

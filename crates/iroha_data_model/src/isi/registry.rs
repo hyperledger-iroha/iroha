@@ -46,9 +46,6 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<RemoveAssetKeyValue>,
     InstructionRegistry::register_slice::<GrantBox>,
     InstructionRegistry::register_slice::<RevokeBox>,
-    InstructionRegistry::register_slice::<offline::IssueOfflineNote>,
-    InstructionRegistry::register_slice::<offline::RedeemOfflineNote>,
-    InstructionRegistry::register_slice::<offline::AuditOfflineNote>,
     InstructionRegistry::register_slice::<offline::KagemushaTransfer>,
     InstructionRegistry::register_slice::<offline::RedeemKagemushaRecursive>,
     InstructionRegistry::register_slice::<offline::RegisterOfflineDeviceAttestation>,
@@ -74,6 +71,16 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<nexus::SetLaneRelayEmergencyValidators>,
     InstructionRegistry::register_slice::<nexus::RegisterVerifiedLaneRelay>,
     InstructionRegistry::register_slice::<nexus::RegisterVerifiedNexusFeeBudget>,
+    |registry| {
+        registry.register_with_id_slice::<bridge::UpsertSccpRouteManifest>(
+            "iroha_data_model::isi::bridge::UpsertSccpRouteManifest",
+        )
+    },
+    |registry| {
+        registry.register_with_id_slice::<bridge::RemoveSccpRouteManifest>(
+            "iroha_data_model::isi::bridge::RemoveSccpRouteManifest",
+        )
+    },
     InstructionRegistry::register_slice::<oracle::RegisterOracleFeed>,
     InstructionRegistry::register_slice::<oracle::SubmitOracleObservation>,
     InstructionRegistry::register_slice::<oracle::AggregateOracleFeed>,
@@ -1435,6 +1442,22 @@ mod tests {
         assert!(registry.contains(rwa::RwaInstructionBox::WIRE_ID));
         assert!(registry.contains(repo::RepoInstructionBox::WIRE_ID));
         assert!(registry.contains(settlement::SettlementInstructionBox::WIRE_ID));
+        assert!(
+            registry.contains(std::any::type_name::<bridge::UpsertSccpRouteManifest>()),
+            "SCCP route manifest upsert Rust type path missing from default registry"
+        );
+        assert!(
+            registry.contains("iroha_data_model::isi::bridge::UpsertSccpRouteManifest"),
+            "SCCP route manifest upsert stable wire id missing from default registry"
+        );
+        assert!(
+            registry.contains(std::any::type_name::<bridge::RemoveSccpRouteManifest>()),
+            "SCCP route manifest removal Rust type path missing from default registry"
+        );
+        assert!(
+            registry.contains("iroha_data_model::isi::bridge::RemoveSccpRouteManifest"),
+            "SCCP route manifest removal stable wire id missing from default registry"
+        );
     }
 
     #[test]

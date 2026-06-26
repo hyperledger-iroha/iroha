@@ -14432,10 +14432,6 @@ mod tests {
     }
 
     const SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REVIEWER_ID: &str = "sora-zk-audit-wg-2026";
-    const SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY: &[u8] =
-        b"Independent SORA BFV full bootstrap release review confirms governed arithmetic artifacts, verifier keys, and runtime binding are approved for deployment.";
-    const SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BODY: &[u8] =
-        b"Archive evidence for the SORA BFV full bootstrap release review binds artifact digests, native circuit payloads, and reviewer approval records.";
 
     fn attach_full_bootstrap_release_audit_policy_fields(
         policy: &mut FheExecutionPolicyV1,
@@ -14449,29 +14445,56 @@ mod tests {
             .as_ref()
             .and_then(|bootstrap_key| bootstrap_key.full_bootstrap_material.as_ref())
             .expect("fixture evaluation keys carry full-bootstrap material");
-        let audit_report_bytes =
-            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_report_bytes_v1(
-                SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY,
+        let (generated_report_bytes, generated_archive_bytes) =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_report_and_archive_bytes_for_artifacts_v1(
+                &params,
+                material,
+                artifacts,
             )
-            .expect("fixture release audit report bytes are canonical");
-        let audit_archive_bytes =
-            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_archive_bytes_v1(
-                SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BODY,
+            .expect("fixture release audit generated report/archive bytes");
+        let generated_report_body = generated_report_bytes
+            .strip_prefix(iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1)
+            .expect("generated report bytes carry canonical header");
+        let generated_archive_body = generated_archive_bytes
+            .strip_prefix(iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1)
+            .expect("generated archive bytes carry canonical header");
+        let report_suffix = generated_report_body
+            .strip_prefix(b"machine-generated BFV full-bootstrap release audit report inventory v1")
+            .expect("generated report body carries deterministic inventory prefix");
+        let archive_suffix = generated_archive_body
+            .strip_prefix(
+                b"machine-generated BFV full-bootstrap release evidence archive inventory v1",
             )
-            .expect("fixture release audit archive bytes are canonical");
-        let package = iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_package_v1(
+            .expect("generated archive body carries deterministic inventory prefix");
+        let report_body = [
+            b"external-review-approved: independent BFV full-bootstrap release audit report v1"
+                .as_slice(),
+            report_suffix,
+        ]
+        .concat();
+        let archive_body = [
+            b"external-review-evidence-archive: independent BFV full-bootstrap prover verifier evidence v1"
+                .as_slice(),
+            archive_suffix,
+        ]
+        .concat();
+        let report_bytes =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_report_bytes_v1(&report_body)
+                .expect("fixture external-review report bytes");
+        let archive_bytes =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_archive_bytes_v1(&archive_body)
+                .expect("fixture external-review archive bytes");
+        let (package, package_digest) =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_external_review_package_and_digest_v1(
             &params,
             material,
             artifacts,
-            &audit_report_bytes,
-            &audit_archive_bytes,
+            &report_bytes,
+            &archive_bytes,
             SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REVIEWER_ID,
             reviewer_keypair.private_key(),
         )
-        .expect("fixture release audit package validates");
-        let package_digest =
-            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_package_digest_v1(&package)
-                .expect("fixture release audit package digest");
+            .expect("fixture external-review release audit package and digest");
         policy.full_bootstrap_release_audit_package = Some(package);
         policy.full_bootstrap_release_audit_package_digest = Some(package_digest);
         policy.full_bootstrap_release_audit_trusted_reviewer_id =
@@ -14758,15 +14781,31 @@ mod tests {
         }
     }
 
+    fn open_verify_envelope_with_native_envelope_bytes(
+        proof: &ProofAttachment,
+        native_envelope_bytes: &[u8],
+    ) -> OpenVerifyEnvelope {
+        let mut envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&proof.proof.bytes)
+            .expect("decode sample OpenVerifyEnvelope");
+        let mut open_proof =
+            norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+                .expect("decode sample STARK public-input wrapper");
+        open_proof.envelope_bytes = native_envelope_bytes.to_vec();
+        envelope.proof_bytes =
+            norito::to_bytes(&open_proof).expect("encode mutated STARK public-input wrapper");
+        envelope
+    }
+
+    fn replace_open_verify_envelope(proof: &mut ProofAttachment, envelope: &OpenVerifyEnvelope) {
+        proof.proof.bytes = norito::to_bytes(envelope).expect("encode mutated OpenVerifyEnvelope");
+        proof.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(&proof.proof.bytes)));
+    }
+
     fn replace_fhe_full_bootstrap_execution_open_verify_envelope(
         proof: &mut SoracloudFheFullBootstrapExecutionProofV1,
         envelope: &OpenVerifyEnvelope,
     ) {
-        proof.proof.proof.bytes = norito::to_bytes(envelope)
-            .expect("encode FHE full-bootstrap execution OpenVerifyEnvelope");
-        proof.proof.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(
-            &proof.proof.proof.bytes,
-        )));
+        replace_open_verify_envelope(&mut proof.proof, envelope);
     }
 
     fn sample_full_bootstrap_circuit_artifacts() -> BfvFullBootstrapCircuitArtifactBundleV1 {
@@ -15051,6 +15090,11 @@ mod tests {
             key_switch_decomposition_chain_digest:
                 iroha_crypto::fhe_bfv::registered_bfv_key_switch_decomposition_chain_digest(&params)
                     .expect("registered BFV decomposition digest"),
+            centered_scale_round_source_chain_digest:
+                iroha_crypto::fhe_bfv::registered_bfv_centered_scale_round_source_chain_digest(
+                    &params,
+                )
+                .expect("registered BFV centered-scale source-chain digest"),
             coefficient_to_slot_key_digest: Hash::new(&artifacts.coefficient_to_slot_key),
             slot_to_coefficient_key_digest: Hash::new(&artifacts.slot_to_coefficient_key),
             blind_rotation_key_digest: Hash::new(&artifacts.blind_rotation_key),
@@ -15072,14 +15116,24 @@ mod tests {
     fn fixture_full_bootstrap_evaluation_key_bundle(
         artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
     ) -> BfvEvaluationKeyBundle {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (_secret_key, public_key, _relinearization_key) =
+            iroha_crypto::fhe_bfv::keygen_from_seed(
+                &params,
+                b"torii-soracloud-fhe-preflight-keygen",
+            )
+            .expect("fixture BFV keygen");
         let material = sample_full_bootstrap_material_for_artifacts(artifacts);
         let mut evaluation_keys = fixture_bfv_evaluation_key_bundle();
-        let bootstrap_key = evaluation_keys
-            .bootstrap_key
-            .as_mut()
-            .expect("fixture carries bootstrap key");
-        bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
-        bootstrap_key.full_bootstrap_material = Some(material);
+        evaluation_keys.bootstrap_key = Some(
+            iroha_crypto::fhe_bfv::full_bootstrap_key_from_material_v1(
+                &params,
+                &public_key,
+                "torii-soracloud-fhe-preflight-full-bootstrap",
+                material,
+            )
+            .expect("fixture full-bootstrap key"),
+        );
         evaluation_keys
     }
 
@@ -18886,6 +18940,119 @@ mod tests {
         );
     }
 
+    fn assert_fhe_job_run_payload_rejects_placeholder_native_envelope(
+        payload: FheJobRunPayload,
+        expected_field: &str,
+    ) {
+        let key_pair = checked_test_keypair(0x90);
+        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
+        verify_fhe_job_run_signature(&request)
+            .expect("signed placeholder-native-envelope payload still has a valid signature");
+
+        let err = validate_fhe_job_run_proof_attachments(&payload)
+            .expect_err("placeholder native proof envelope must fail Torii preflight");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            err.message.contains(expected_field)
+                && err.message.contains("placeholder or non-production text"),
+            "unexpected error for {expected_field}: {err:?}"
+        );
+    }
+
+    #[test]
+    fn fhe_job_run_proof_preflight_rejects_placeholder_native_envelope_bytes() {
+        let placeholder_native_envelope =
+            b"\x00\xff\x80pending native stark proof before production\x81\xfe\x00";
+
+        let mut public_key_payload = fixture_release_audited_full_bootstrap_payload(Hash::new(
+            b"governance-with-placeholder-public-key-native-envelope",
+        ));
+        let public_key_proof = public_key_payload
+            .public_key_proof
+            .as_mut()
+            .expect("fixture carries public-key proof");
+        let public_key_envelope = open_verify_envelope_with_native_envelope_bytes(
+            &public_key_proof.proof,
+            placeholder_native_envelope,
+        );
+        replace_open_verify_envelope(&mut public_key_proof.proof, &public_key_envelope);
+        assert_fhe_job_run_payload_rejects_placeholder_native_envelope(
+            public_key_payload,
+            "invalid public_key_proof",
+        );
+
+        let bootstrap_policy = fixture_fhe_execution_policy();
+        let bootstrap_statement = bootstrap_policy
+            .bootstrap_key_zero_refresh_proof_statement_digest
+            .expect("fixture policy binds bootstrap-key proof statement");
+        let mut bootstrap_key_proof =
+            sample_fhe_bootstrap_key_proof_with_statement(bootstrap_statement);
+        let bootstrap_key_envelope = open_verify_envelope_with_native_envelope_bytes(
+            &bootstrap_key_proof.proof,
+            placeholder_native_envelope,
+        );
+        replace_open_verify_envelope(&mut bootstrap_key_proof.proof, &bootstrap_key_envelope);
+        let mut bootstrap_payload = FheJobRunPayload {
+            service_name: "health_portal".to_owned(),
+            binding_name: "private_state".to_owned(),
+            job: fixture_full_bootstrap_job_spec(),
+            policy: bootstrap_policy,
+            param_set: fixture_fhe_param_set(),
+            evaluation_keys: fixture_bfv_evaluation_key_bundle(),
+            evaluation_key_refresh_transcript: fixture_bfv_evaluation_key_refresh_transcript(),
+            public_key_proof: None,
+            bootstrap_key_zero_refresh_proof: Some(bootstrap_key_proof),
+            full_bootstrap_material_proof: None,
+            full_bootstrap_circuit_artifacts: None,
+            full_bootstrap_execution_proofs: Vec::new(),
+            governance_tx_hash: Hash::new(
+                b"governance-with-placeholder-bootstrap-key-native-envelope",
+            ),
+        };
+        attach_public_key_proof_for_policy(&mut bootstrap_payload);
+        assert_fhe_job_run_payload_rejects_placeholder_native_envelope(
+            bootstrap_payload,
+            "invalid bootstrap_key_zero_refresh_proof",
+        );
+
+        let mut material_payload = fixture_release_audited_full_bootstrap_payload(Hash::new(
+            b"governance-with-placeholder-material-native-envelope",
+        ));
+        let material_proof = material_payload
+            .full_bootstrap_material_proof
+            .as_mut()
+            .expect("fixture carries full-bootstrap material proof");
+        let material_envelope = open_verify_envelope_with_native_envelope_bytes(
+            &material_proof.proof,
+            placeholder_native_envelope,
+        );
+        replace_open_verify_envelope(&mut material_proof.proof, &material_envelope);
+        assert_fhe_job_run_payload_rejects_placeholder_native_envelope(
+            material_payload,
+            "invalid full_bootstrap_material_proof",
+        );
+
+        let mut execution_payload = fixture_release_audited_full_bootstrap_payload(Hash::new(
+            b"governance-with-placeholder-execution-native-envelope",
+        ));
+        let execution_proof = execution_payload
+            .full_bootstrap_execution_proofs
+            .first_mut()
+            .expect("fixture carries full-bootstrap execution proof");
+        let execution_envelope = open_verify_envelope_with_native_envelope_bytes(
+            &execution_proof.proof,
+            placeholder_native_envelope,
+        );
+        replace_fhe_full_bootstrap_execution_open_verify_envelope(
+            execution_proof,
+            &execution_envelope,
+        );
+        assert_fhe_job_run_payload_rejects_placeholder_native_envelope(
+            execution_payload,
+            "invalid full_bootstrap_execution_proofs[0]",
+        );
+    }
+
     #[test]
     fn fhe_job_run_proof_preflight_rejects_param_set_drift_without_attachments() {
         let mut param_set = fixture_fhe_param_set();
@@ -19873,6 +20040,64 @@ mod tests {
                 err.message.contains("invalid FHE execution policy")
                     && err.message.contains("placeholder full-bootstrap digest"),
                 "unexpected error for {label} placeholder digest: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fhe_job_run_proof_preflight_rejects_missing_release_audit_policy_fields() {
+        let cases: [(&str, fn(&mut FheExecutionPolicyV1), &str); 4] = [
+            (
+                "package",
+                |policy: &mut FheExecutionPolicyV1| {
+                    policy.full_bootstrap_release_audit_package = None;
+                },
+                "requires release audit package",
+            ),
+            (
+                "package digest",
+                |policy: &mut FheExecutionPolicyV1| {
+                    policy.full_bootstrap_release_audit_package_digest = None;
+                },
+                "requires release audit package digest",
+            ),
+            (
+                "trusted reviewer id",
+                |policy: &mut FheExecutionPolicyV1| {
+                    policy.full_bootstrap_release_audit_trusted_reviewer_id = None;
+                },
+                "requires trusted release audit reviewer id",
+            ),
+            (
+                "trusted reviewer public key",
+                |policy: &mut FheExecutionPolicyV1| {
+                    policy.full_bootstrap_release_audit_trusted_reviewer_public_key = None;
+                },
+                "requires trusted release audit reviewer public key",
+            ),
+        ];
+        for (label, mutate_policy, expected_message) in cases {
+            let mut payload = fixture_release_audited_full_bootstrap_payload(Hash::new(
+                format!("governance-with-missing-release-audit-{label}").as_bytes(),
+            ));
+            mutate_policy(&mut payload.policy);
+            let key_pair = checked_test_keypair(0x90);
+            let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
+            verify_fhe_job_run_signature(&request)
+                .expect("signed missing release-audit policy payload still has a valid signature");
+
+            let err = validate_fhe_job_run_proof_attachments(&payload)
+                .expect_err("missing release-audit policy field must fail Torii preflight");
+            assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+            assert!(
+                err.message.contains("invalid FHE execution policy")
+                    && err.message.contains(expected_message),
+                "unexpected error for missing {label}: {err:?}"
+            );
+            assert!(
+                !err.message
+                    .contains("release audit package failed validation"),
+                "missing {label} should fail before package validation: {err:?}"
             );
         }
     }

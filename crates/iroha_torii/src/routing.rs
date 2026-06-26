@@ -6847,6 +6847,10 @@ pub struct SccpRouteManifestDestinationRolloutDto {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub proving_key_hash: Option<String>,
+    /// Optional hex-encoded native EVM prover bundle digest.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub native_evm_prover_bundle_hash: Option<String>,
     /// Canonical destination binding hash.
     pub destination_binding_hash: String,
     /// Canonical destination binding key.
@@ -6947,6 +6951,34 @@ pub struct SccpRouteManifestPostDeployEvidenceDto {
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
+/// Route-bound browser prover manifest reference advertised in route manifests.
+pub struct SccpRouteBrowserProverManifestRefDto {
+    /// Browser-safe prover module URL.
+    pub module_url: String,
+    /// Optional package/module specifier for reproducible builds.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub module_specifier: Option<String>,
+    /// Hex-encoded SHA-256 digest of the browser module bytes.
+    pub module_hash: String,
+    /// Hex-encoded SHA-256 digest of the public browser prover manifest.
+    pub manifest_hash: String,
+    /// Expected exported symbols in the browser module.
+    pub expected_exports: Vec<String>,
+    /// Hex-encoded route/deployment hash this prover manifest is bound to.
+    pub bound_route_hash: String,
+    /// Hex-encoded proof/material hash this prover manifest is bound to.
+    pub bound_proof_hash: String,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)]
 /// Concrete SCCP route manifest advertised to wallet clients.
 pub struct SccpRouteManifestDto {
     /// Material format version.
@@ -6961,6 +6993,22 @@ pub struct SccpRouteManifestDto {
     pub chain: String,
     /// CAIP-compatible TRON chain id hex.
     pub chain_id_hex: String,
+    /// Canonical counterparty explorer base URL.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub explorer_url: Option<String>,
+    /// Canonical counterparty explorer host.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub explorer_host: Option<String>,
+    /// SCCP counterparty account codec id.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub counterparty_account_codec: Option<u8>,
+    /// Stable logical key for the counterparty account codec.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub counterparty_account_codec_key: Option<String>,
     /// SCCP counterparty domain identifier.
     pub counterparty_domain: u32,
     /// Destination verifier target name.
@@ -7037,6 +7085,22 @@ pub struct SccpRouteManifestDto {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub post_deploy_live_evidence: Option<SccpRouteManifestPostDeployEvidenceDto>,
+    /// Optional hex-encoded native EVM prover bundle digest.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub native_evm_prover_bundle_hash: Option<String>,
+    /// Optional canonical native EVM prover bundle JSON.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub native_evm_prover_bundle: Option<IrohaJson>,
+    /// Optional route-bound TAIRA-to-counterparty browser prover manifest reference.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub destination_browser_prover: Option<SccpRouteBrowserProverManifestRefDto>,
+    /// Optional route-bound counterparty-to-TAIRA browser prover manifest reference.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub source_browser_prover: Option<SccpRouteBrowserProverManifestRefDto>,
 }
 
 #[derive(
@@ -7201,6 +7265,20 @@ fn sccp_route_manifest_verifier_backend(
     )
 }
 
+fn sccp_route_browser_prover_manifest_ref_dto(
+    reference: &iroha_config::parameters::actual::SccpRouteBrowserProverManifestRef,
+) -> SccpRouteBrowserProverManifestRefDto {
+    SccpRouteBrowserProverManifestRefDto {
+        module_url: reference.module_url.clone(),
+        module_specifier: reference.module_specifier.clone(),
+        module_hash: reference.module_hash.clone(),
+        manifest_hash: reference.manifest_hash.clone(),
+        expected_exports: reference.expected_exports.clone(),
+        bound_route_hash: reference.bound_route_hash.clone(),
+        bound_proof_hash: reference.bound_proof_hash.clone(),
+    }
+}
+
 fn sccp_route_manifest_dto(
     manifest: &iroha_config::parameters::actual::SccpRouteManifest,
 ) -> SccpRouteManifestDto {
@@ -7215,6 +7293,10 @@ fn sccp_route_manifest_dto(
         tron_network: manifest.tron_network.clone(),
         chain: manifest.chain.clone(),
         chain_id_hex: manifest.chain_id_hex.clone(),
+        explorer_url: manifest.explorer_url.clone(),
+        explorer_host: manifest.explorer_host.clone(),
+        counterparty_account_codec: manifest.counterparty_account_codec,
+        counterparty_account_codec_key: manifest.counterparty_account_codec_key.clone(),
         counterparty_domain: manifest.counterparty_domain,
         verifier_target: manifest.verifier_target.clone(),
         production_ready: manifest.production_ready,
@@ -7245,9 +7327,10 @@ fn sccp_route_manifest_dto(
             verifier_code_hash: manifest.verifier_code_hash.clone(),
             verifier_key_hash: manifest.verifier_key_hash.clone(),
             proof_artifact_hash: manifest.proof_artifact_hash.clone(),
-            prover_artifact_hash: manifest.proof_artifact_hash.clone(),
-            circuit_artifact_hash: manifest.proof_artifact_hash.clone(),
+            prover_artifact_hash: None,
+            circuit_artifact_hash: None,
             proving_key_hash: manifest.proving_key_hash.clone(),
+            native_evm_prover_bundle_hash: manifest.native_evm_prover_bundle_hash.clone(),
             destination_binding_hash: manifest.destination_binding_hash.clone(),
             destination_binding_key: manifest.destination_binding_key.clone(),
         },
@@ -7281,6 +7364,16 @@ fn sccp_route_manifest_dto(
             contract_alias: manifest.settlement_contract_alias.clone(),
         },
         post_deploy_live_evidence: sccp_route_manifest_post_deploy_evidence(manifest),
+        native_evm_prover_bundle_hash: manifest.native_evm_prover_bundle_hash.clone(),
+        native_evm_prover_bundle: manifest.native_evm_prover_bundle.clone(),
+        destination_browser_prover: manifest
+            .destination_browser_prover
+            .as_ref()
+            .map(sccp_route_browser_prover_manifest_ref_dto),
+        source_browser_prover: manifest
+            .source_browser_prover
+            .as_ref()
+            .map(sccp_route_browser_prover_manifest_ref_dto),
     }
 }
 
@@ -12547,6 +12640,7 @@ mod sccp_message_backend_tests {
         let chain = iroha_sccp::sccp_chain_key_for_domain(domain)
             .unwrap_or("unknown")
             .to_owned();
+        let is_bsc = domain == iroha_sccp::SCCP_DOMAIN_BSC;
         iroha_config::parameters::actual::SccpRouteManifest {
             version: 1,
             route_id: "taira_bsc_xor".to_owned(),
@@ -12554,6 +12648,10 @@ mod sccp_message_backend_tests {
             tron_network: chain.clone(),
             chain,
             chain_id_hex: "0x61".to_owned(),
+            explorer_url: is_bsc.then(|| "https://testnet.bscscan.com".to_owned()),
+            explorer_host: is_bsc.then(|| "testnet.bscscan.com".to_owned()),
+            counterparty_account_codec: is_bsc.then_some(iroha_sccp::SCCP_CODEC_EVM_HEX),
+            counterparty_account_codec_key: is_bsc.then(|| "evm_hex".to_owned()),
             counterparty_domain: domain,
             verifier_target: "EvmContract".to_owned(),
             production_ready: false,
@@ -12568,6 +12666,10 @@ mod sccp_message_backend_tests {
             verifier_key_hash: format!("0x{}", "46".repeat(32)),
             proof_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
             proving_key_hash: Some(format!("0x{}", "4d".repeat(32))),
+            native_evm_prover_bundle_hash: None,
+            native_evm_prover_bundle: None,
+            destination_browser_prover: None,
+            source_browser_prover: None,
             deployment_evidence_sha256: Some(format!("0x{}", "4f".repeat(32))),
             destination_binding_key: "evm:0:2:test-binding".to_owned(),
             destination_binding_hash: format!("0x{}", "47".repeat(32)),
@@ -12650,11 +12752,11 @@ mod sccp_message_backend_tests {
         );
         assert_eq!(
             dto.destination_rollout.prover_artifact_hash.as_deref(),
-            Some(proof_artifact_hash.as_str())
+            None
         );
         assert_eq!(
             dto.destination_rollout.circuit_artifact_hash.as_deref(),
-            Some(proof_artifact_hash.as_str())
+            None
         );
         assert_eq!(
             dto.destination_rollout.proving_key_hash.as_deref(),
@@ -15801,6 +15903,7 @@ mod zk_roots_selector_tests {
         let validation_fee_policy_metadata = normalize_validation_fee_policy_metadata(
             Some("7".to_owned()),
             Some(policy_hash.to_owned()),
+            Some("1".to_owned()),
         )
         .expect("valid policy metadata");
 
@@ -15810,7 +15913,9 @@ mod zk_roots_selector_tests {
             Some("memo"),
             validation_fee_policy_metadata
                 .as_ref()
-                .map(|(version, hash)| (*version, hash.as_str())),
+                .map(|(version, hash, instruction_index)| {
+                    (*version, hash.as_str(), *instruction_index)
+                }),
         );
         let gas_asset_id = metadata
             .get("gas_asset_id")
@@ -15824,9 +15929,14 @@ mod zk_roots_selector_tests {
             .get(iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_HASH_METADATA_KEY)
             .cloned()
             .and_then(|value| value.try_into_any_norito::<String>().ok());
+        let instruction_index = metadata
+            .get(iroha_data_model::validation_fee::VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY)
+            .cloned()
+            .and_then(|value| value.try_into_any_norito::<u64>().ok());
 
         assert_eq!(gas_asset_id, Some(definition_id.to_string()));
         assert_eq!(policy_version, Some(7));
+        assert_eq!(instruction_index, Some(1));
         assert_eq!(
             policy_hash.as_deref(),
             Some("abcdefabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000")
@@ -15836,7 +15946,7 @@ mod zk_roots_selector_tests {
     #[test]
     fn normalize_validation_fee_policy_metadata_requires_complete_well_formed_pair() {
         assert!(
-            normalize_validation_fee_policy_metadata(None, None)
+            normalize_validation_fee_policy_metadata(None, None, None)
                 .expect("absent policy metadata is allowed")
                 .is_none()
         );
@@ -15847,23 +15957,48 @@ mod zk_roots_selector_tests {
                     "ABCDEFabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000"
                         .to_owned(),
                 ),
+                Some(" 1 ".to_owned()),
             )
             .expect("valid metadata")
             .as_ref()
-            .map(|(version, hash)| (*version, hash.as_str())),
+            .map(|(version, hash, instruction_index)| {
+                (*version, hash.as_str(), *instruction_index)
+            }),
             Some((
                 7,
                 "abcdefabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000",
+                Some(1),
             )),
         );
-        assert!(normalize_validation_fee_policy_metadata(Some("7".to_owned()), None).is_err());
         assert!(
-            normalize_validation_fee_policy_metadata(Some("x".to_owned()), Some("0".repeat(64)))
-                .is_err()
+            normalize_validation_fee_policy_metadata(None, None, Some("1".to_owned())).is_err()
         );
         assert!(
-            normalize_validation_fee_policy_metadata(Some("7".to_owned()), Some("0".repeat(63)))
-                .is_err()
+            normalize_validation_fee_policy_metadata(Some("7".to_owned()), None, None,).is_err()
+        );
+        assert!(
+            normalize_validation_fee_policy_metadata(
+                Some("x".to_owned()),
+                Some("0".repeat(64)),
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            normalize_validation_fee_policy_metadata(
+                Some("7".to_owned()),
+                Some("0".repeat(64)),
+                Some("not-integer".to_owned()),
+            )
+            .is_err()
+        );
+        assert!(
+            normalize_validation_fee_policy_metadata(
+                Some("7".to_owned()),
+                Some("0".repeat(63)),
+                None,
+            )
+            .is_err()
         );
     }
 
@@ -22117,19 +22252,26 @@ fn normalize_transaction_memo(memo: Option<String>) -> Option<String> {
 fn normalize_validation_fee_policy_metadata(
     version: Option<String>,
     hash: Option<String>,
-) -> Result<Option<(u64, String)>> {
+    instruction_index: Option<String>,
+) -> Result<Option<(u64, String, Option<u64>)>> {
     let version = version
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
     let hash = hash
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
-    match (version, hash) {
-        (None, None) => Ok(None),
-        (Some(_), None) | (None, Some(_)) => Err(conversion_error(
+    let instruction_index = instruction_index
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    match (version, hash, instruction_index) {
+        (None, None, None) => Ok(None),
+        (None, None, Some(_)) => Err(conversion_error(
+            "validation_fee_instruction_index requires validation fee policy metadata".to_owned(),
+        )),
+        (Some(_), None, _) | (None, Some(_), _) => Err(conversion_error(
             "validation fee policy metadata requires both version and hash".to_owned(),
         )),
-        (Some(version), Some(hash)) => {
+        (Some(version), Some(hash), instruction_index) => {
             let version = version.parse::<u64>().map_err(|_| {
                 conversion_error(
                     "validation_fee_policy_version must be an unsigned integer".to_owned(),
@@ -22140,7 +22282,21 @@ fn normalize_validation_fee_policy_metadata(
                     "validation_fee_policy_hash must be a 64-character hex string".to_owned(),
                 ));
             }
-            Ok(Some((version, hash.to_ascii_lowercase())))
+            let instruction_index = instruction_index
+                .map(|value| {
+                    value.parse::<u64>().map_err(|_| {
+                        conversion_error(
+                            "validation_fee_instruction_index must be an unsigned integer"
+                                .to_owned(),
+                        )
+                    })
+                })
+                .transpose()?;
+            Ok(Some((
+                version,
+                hash.to_ascii_lowercase(),
+                instruction_index,
+            )))
         }
     }
 }
@@ -22183,14 +22339,14 @@ fn build_multisig_propose_metadata_with_default_gas_asset(
     state: &CoreState,
     fee_sponsor: Option<&str>,
     memo: Option<&str>,
-    validation_fee_policy_metadata: Option<(u64, &str)>,
+    validation_fee_policy_metadata: Option<(u64, &str, Option<u64>)>,
 ) -> Metadata {
     let mut metadata = build_fee_sponsor_metadata_with_default_gas_asset(state, fee_sponsor);
     if let Some(memo) = memo {
         let memo_key = Name::from_str("memo").expect("static metadata key `memo`");
         metadata.insert(memo_key, IrohaJson::new(memo.to_owned()));
     }
-    if let Some((policy_version, policy_hash)) = validation_fee_policy_metadata {
+    if let Some((policy_version, policy_hash, instruction_index)) = validation_fee_policy_metadata {
         let version_key = Name::from_str(
             iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
         )
@@ -22201,6 +22357,13 @@ fn build_multisig_propose_metadata_with_default_gas_asset(
         )
         .expect("static metadata key `validation_fee_policy_hash`");
         metadata.insert(hash_key, IrohaJson::new(policy_hash.to_owned()));
+        if let Some(instruction_index) = instruction_index {
+            let instruction_index_key = Name::from_str(
+                iroha_data_model::validation_fee::VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
+            )
+            .expect("static metadata key `validation_fee_instruction_index`");
+            metadata.insert(instruction_index_key, IrohaJson::new(instruction_index));
+        }
     }
     metadata
 }
@@ -27299,6 +27462,7 @@ seiyaku BlobPayloadNormalizeTest {
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
+                validation_fee_instruction_index: None,
                 instructions: vec![instruction],
             }),
         )
@@ -27346,6 +27510,7 @@ seiyaku BlobPayloadNormalizeTest {
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
+                validation_fee_instruction_index: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27369,6 +27534,7 @@ seiyaku BlobPayloadNormalizeTest {
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
+                validation_fee_instruction_index: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27392,6 +27558,7 @@ seiyaku BlobPayloadNormalizeTest {
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
+                validation_fee_instruction_index: None,
                 instructions: vec![instruction],
             }),
         )
@@ -27425,6 +27592,7 @@ seiyaku BlobPayloadNormalizeTest {
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
+                validation_fee_instruction_index: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27457,6 +27625,7 @@ seiyaku BlobPayloadNormalizeTest {
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
+                validation_fee_instruction_index: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27485,6 +27654,7 @@ seiyaku BlobPayloadNormalizeTest {
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
+                validation_fee_instruction_index: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27509,6 +27679,7 @@ seiyaku BlobPayloadNormalizeTest {
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
+                validation_fee_instruction_index: None,
                 instructions: vec![instruction],
             }),
         )
@@ -27618,6 +27789,7 @@ seiyaku BlobPayloadNormalizeTest {
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
+                validation_fee_instruction_index: None,
                 instructions: inner_instructions,
             }),
         )
@@ -27720,6 +27892,7 @@ seiyaku BlobPayloadNormalizeTest {
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
+                validation_fee_instruction_index: None,
                 instructions: vec![instruction],
             }),
         )
@@ -27753,6 +27926,7 @@ seiyaku BlobPayloadNormalizeTest {
             memo: None,
             validation_fee_policy_version: None,
             validation_fee_policy_hash: None,
+            validation_fee_instruction_index: None,
             instructions: vec![instruction.clone()],
         };
 
@@ -27890,6 +28064,7 @@ seiyaku BlobPayloadNormalizeTest {
             memo: None,
             validation_fee_policy_version: None,
             validation_fee_policy_hash: None,
+            validation_fee_instruction_index: None,
             instructions: vec![instruction],
         };
         let raw = norito::json::to_string(&request).expect("serialize multisig propose dto");
@@ -28575,6 +28750,7 @@ pub async fn handle_post_multisig_propose(
         memo,
         validation_fee_policy_version,
         validation_fee_policy_hash,
+        validation_fee_instruction_index,
         instructions,
     } = req;
     let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
@@ -28582,6 +28758,7 @@ pub async fn handle_post_multisig_propose(
     let validation_fee_policy_metadata = normalize_validation_fee_policy_metadata(
         validation_fee_policy_version,
         validation_fee_policy_hash,
+        validation_fee_instruction_index,
     )?;
     let (multisig_account_id, spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
@@ -28618,7 +28795,9 @@ pub async fn handle_post_multisig_propose(
         memo.as_deref(),
         validation_fee_policy_metadata
             .as_ref()
-            .map(|(version, hash)| (*version, hash.as_str())),
+            .map(|(version, hash, instruction_index)| {
+                (*version, hash.as_str(), *instruction_index)
+            }),
     );
     let builder = builder
         .with_metadata(tx_metadata.clone())
@@ -31809,6 +31988,9 @@ pub struct MultisigProposeDto {
     pub validation_fee_policy_hash: Option<String>,
     /// Instruction batch that will be wrapped inside `MultisigPropose`.
     pub instructions: Vec<iroha_data_model::isi::InstructionBox>,
+    /// Optional validation-fee instruction index forwarded to transaction metadata.
+    #[norito(default)]
+    pub validation_fee_instruction_index: Option<String>,
 }
 
 #[cfg(feature = "app_api")]

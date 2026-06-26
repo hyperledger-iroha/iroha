@@ -172,6 +172,10 @@ PrevalidatedCommitArtifactFastSafety ==
   /\ PrevalidatedCommitArtifactExactness
   /\ CaseTupleExact
 
+PrevalidatedCommitArtifactCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PrevalidatedCommitArtifactFastSafety
+
 SafetyFast ==
   PrevalidatedCommitArtifactFastSafety
 

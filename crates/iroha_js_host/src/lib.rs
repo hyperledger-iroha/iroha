@@ -100,6 +100,7 @@ use iroha_data_model::{
         RecordKaigiUsage, Register, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
         RemoveKeyValue, ReportKaigiRelayHealth, SetAssetDefinitionAlias, SetKaigiRelayManifest,
         SetKeyValue, Transfer, TransferBox, Unregister, UnregisterBox,
+        bridge::{RemoveSccpRouteManifest, UpsertSccpRouteManifest},
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
             FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, RegisterCitizen,
@@ -8022,6 +8023,18 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
             {
                 return kagemusha_instruction_archive_from_json(kagemusha_value);
             }
+            if let Some(upsert_value) = remove_case_insensitive(&mut map, "UpsertSccpRouteManifest")
+            {
+                let instruction: UpsertSccpRouteManifest =
+                    json::from_value(upsert_value).map_err(norito_to_napi)?;
+                return Ok(InstructionBox::from(instruction));
+            }
+            if let Some(remove_value) = remove_case_insensitive(&mut map, "RemoveSccpRouteManifest")
+            {
+                let instruction: RemoveSccpRouteManifest =
+                    json::from_value(remove_value).map_err(norito_to_napi)?;
+                return Ok(InstructionBox::from(instruction));
+            }
 
             if let Some(json::Value::Object(mut register_map)) = map.remove("Register") {
                 if let Some(domain_value) = register_map.remove("Domain") {
@@ -10675,6 +10688,7 @@ fn assemble_executable_transaction(
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
     secret: &[u8],
+    algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
     let mut builder = TransactionBuilder::new(chain_id, authority).with_executable(executable);
 
@@ -10709,7 +10723,8 @@ fn assemble_executable_transaction(
         builder = builder.with_attachments(attachments);
     }
 
-    let private_key = PrivateKey::from_bytes(Algorithm::Ed25519, secret).map_err(norito_to_napi)?;
+    let algorithm = parse_crypto_algorithm(algorithm.as_deref())?;
+    let private_key = PrivateKey::from_bytes(algorithm, secret).map_err(norito_to_napi)?;
     let signed = sign_js_transaction(builder, &private_key, "JavaScript host assembled")?;
     let signed_bytes = Encode::encode(&signed);
     let hash = Buffer::from(signed.hash().as_ref().to_vec());
@@ -10730,6 +10745,7 @@ fn assemble_transaction(
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
     secret: &[u8],
+    algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
     if instructions.is_empty() {
         return Err(napi::Error::new(
@@ -10748,6 +10764,7 @@ fn assemble_transaction(
         ttl_ms,
         nonce,
         secret,
+        algorithm,
     )
 }
 
@@ -14006,6 +14023,7 @@ pub fn build_register_domain_transaction(
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
     secret: Uint8Array,
+    private_key_algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
     let chain_id: ChainId = chain_id.parse().map_err(|err| {
         napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
@@ -14030,6 +14048,7 @@ pub fn build_register_domain_transaction(
         ttl_ms,
         nonce,
         secret.as_ref(),
+        private_key_algorithm,
     )
 }
 
@@ -14043,6 +14062,7 @@ fn build_transaction_from_instructions_json(
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
     secret: &[u8],
+    private_key_algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
     let instructions = parse_instruction_payloads(instructions_json)?;
 
@@ -14056,6 +14076,7 @@ fn build_transaction_from_instructions_json(
         ttl_ms,
         nonce,
         secret,
+        private_key_algorithm,
     )
 }
 
@@ -14071,6 +14092,7 @@ pub fn build_transaction(
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
     secret: Uint8Array,
+    private_key_algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
     let chain_id: ChainId = chain_id.parse().map_err(|err| {
         napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
@@ -14087,6 +14109,7 @@ pub fn build_transaction(
         ttl_ms,
         nonce,
         secret.as_ref(),
+        private_key_algorithm,
     )
 }
 
@@ -14103,6 +14126,7 @@ pub fn build_ivm_proved_transaction(
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
     secret: Uint8Array,
+    private_key_algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
     let chain_id: ChainId = chain_id.parse().map_err(|err| {
         napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
@@ -14133,6 +14157,7 @@ pub fn build_ivm_proved_transaction(
         ttl_ms,
         nonce,
         secret.as_ref(),
+        private_key_algorithm,
     )
 }
 
@@ -24597,6 +24622,7 @@ mod tests {
             Some(5_000),
             Some(42),
             &secret_bytes,
+            None,
         )
         .expect("transaction built");
 
@@ -24640,6 +24666,7 @@ mod tests {
             Some(5_000),
             Some(42),
             &secret_bytes,
+            None,
         )
         .expect("transaction built");
 
@@ -24936,6 +24963,7 @@ mod tests {
             None,
             None,
             &secret_bytes,
+            None,
         );
 
         assert!(result.is_err());

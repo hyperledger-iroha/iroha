@@ -2,11 +2,8 @@ package org.hyperledger.iroha.sdk.tools
 
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.IOException
-import java.nio.charset.StandardCharsets
-import java.nio.file.Files
-import java.nio.file.Path
-import java.nio.file.Paths
 import java.security.cert.CertificateException
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
@@ -59,8 +56,8 @@ object AndroidKeystoreAttestationHarness {
             return readCertificates(arguments.chainFile)
         }
         val bundleDir = checkNotNull(arguments.bundleDir) { "bundle directory must be specified" }
-        val chainPem = bundleDir.resolve("chain.pem")
-        return if (Files.isRegularFile(chainPem)) {
+        val chainPem = File(bundleDir, "chain.pem")
+        return if (chainPem.isFile) {
             readCertificates(chainPem)
         } else {
             readCertificatesFromDirectory(bundleDir)
@@ -71,20 +68,20 @@ object AndroidKeystoreAttestationHarness {
     @JvmStatic
     @Throws(IOException::class, CertificateException::class)
     fun loadTrustedRoots(
-        rootPaths: List<Path>,
-        rootDirectories: List<Path>,
-        rootBundles: List<Path>,
+        rootPaths: List<File>,
+        rootDirectories: List<File>,
+        rootBundles: List<File>,
     ): Set<X509Certificate> {
         require(rootPaths.isNotEmpty() || rootDirectories.isNotEmpty() || rootBundles.isNotEmpty()) {
             "At least one --trust-root, --trust-root-dir, or --trust-root-bundle must be supplied"
         }
         val roots = LinkedHashSet<X509Certificate>()
         for (path in rootPaths) {
-            require(Files.isRegularFile(path)) { "--trust-root does not refer to a file: $path" }
+            require(path.isFile) { "--trust-root does not refer to a file: $path" }
             roots.addAll(readCertificates(path))
         }
         for (directory in rootDirectories) {
-            require(Files.isDirectory(directory)) { "--trust-root-dir does not refer to a directory: $directory" }
+            require(directory.isDirectory) { "--trust-root-dir does not refer to a directory: $directory" }
             collectCertificatesFromDirectory(directory, roots)
         }
         for (bundle in rootBundles) {
@@ -96,23 +93,21 @@ object AndroidKeystoreAttestationHarness {
         return roots
     }
 
-    private fun readCertificatesFromDirectory(directory: Path): List<X509Certificate> {
-        val candidates = mutableListOf<Path>()
-        Files.newDirectoryStream(directory).use { stream ->
-            for (path in stream) {
-                if (!Files.isRegularFile(path)) continue
-                val lower = path.fileName.toString().lowercase(Locale.US)
-                if (lower.endsWith(".pem") || lower.endsWith(".crt") || lower.endsWith(".cer") || lower.endsWith(".der")) {
-                    candidates.add(path)
-                }
+    private fun readCertificatesFromDirectory(directory: File): List<X509Certificate> {
+        val candidates = mutableListOf<File>()
+        for (file in listFilesOrThrow(directory)) {
+            if (!file.isFile) continue
+            val lower = file.name.lowercase(Locale.US)
+            if (lower.endsWith(".pem") || lower.endsWith(".crt") || lower.endsWith(".cer") || lower.endsWith(".der")) {
+                candidates.add(file)
             }
         }
         candidates.sort()
         return candidates.flatMap { readCertificates(it) }
     }
 
-    private fun readCertificates(file: Path): List<X509Certificate> {
-        val bytes = Files.newInputStream(file).use { it.readBytes() }
+    private fun readCertificates(file: File): List<X509Certificate> {
+        val bytes = file.inputStream().use { it.readBytes() }
         return readCertificates(bytes)
     }
 
@@ -133,12 +128,12 @@ object AndroidKeystoreAttestationHarness {
         }
     }
 
-    private fun loadCertificatesFromBundle(bundle: Path, roots: MutableSet<X509Certificate>) {
-        require(Files.isRegularFile(bundle)) { "--trust-root-bundle does not refer to a file: $bundle" }
-        val filename = bundle.fileName.toString().lowercase(Locale.US)
+    private fun loadCertificatesFromBundle(bundle: File, roots: MutableSet<X509Certificate>) {
+        require(bundle.isFile) { "--trust-root-bundle does not refer to a file: $bundle" }
+        val filename = bundle.name.lowercase(Locale.US)
         require(filename.endsWith(".zip")) { "--trust-root-bundle must reference a .zip archive: $bundle" }
         var added = false
-        ZipInputStream(Files.newInputStream(bundle)).use { zip ->
+        ZipInputStream(bundle.inputStream()).use { zip ->
             var entry = zip.nextEntry
             while (entry != null) {
                 if (!entry.isDirectory && isCertificateFilename(entry.name)) {
@@ -150,17 +145,15 @@ object AndroidKeystoreAttestationHarness {
                 entry = zip.nextEntry
             }
         }
-        require(added) { "No certificates were found inside bundle: ${bundle.toAbsolutePath()}" }
+        require(added) { "No certificates were found inside bundle: ${bundle.absolutePath}" }
     }
 
-    private fun collectCertificatesFromDirectory(directory: Path, roots: MutableSet<X509Certificate>) {
-        Files.newDirectoryStream(directory).use { entries ->
-            for (entry in entries) {
-                when {
-                    Files.isDirectory(entry) -> collectCertificatesFromDirectory(entry, roots)
-                    isCertificateFilename(entry.fileName.toString()) -> roots.addAll(readCertificates(entry))
-                    isZipFilename(entry.fileName.toString()) -> loadCertificatesFromBundle(entry, roots)
-                }
+    private fun collectCertificatesFromDirectory(directory: File, roots: MutableSet<X509Certificate>) {
+        for (entry in listFilesOrThrow(directory)) {
+            when {
+                entry.isDirectory -> collectCertificatesFromDirectory(entry, roots)
+                isCertificateFilename(entry.name) -> roots.addAll(readCertificates(entry))
+                isZipFilename(entry.name) -> loadCertificatesFromBundle(entry, roots)
             }
         }
     }
@@ -172,6 +165,9 @@ object AndroidKeystoreAttestationHarness {
 
     private fun isZipFilename(filename: String): Boolean =
         filename.lowercase(Locale.US).endsWith(".zip")
+
+    private fun listFilesOrThrow(directory: File): Array<File> =
+        directory.listFiles() ?: throw IOException("Unable to list directory: ${directory.absolutePath}")
 
     private fun parseHex(value: String?): ByteArray? {
         if (value.isNullOrEmpty()) return null
@@ -203,44 +199,44 @@ object AndroidKeystoreAttestationHarness {
     }
 
     class Arguments(
-        val bundleDir: Path?,
-        val chainFile: Path?,
-        val trustedRoots: List<Path>,
-        val trustedRootDirs: List<Path>,
-        val trustedRootBundles: List<Path>,
+        val bundleDir: File?,
+        val chainFile: File?,
+        val trustedRoots: List<File>,
+        val trustedRootDirs: List<File>,
+        val trustedRootBundles: List<File>,
         val requireStrongBox: Boolean,
         val alias: String,
         val challenge: ByteArray?,
-        val output: Path?,
+        val output: File?,
     ) {
         companion object {
             @Throws(IOException::class)
             fun parse(args: Array<String>): Arguments {
-                var bundleDir: Path? = null
-                var chainFile: Path? = null
-                val trustedRoots = mutableListOf<Path>()
-                val trustedRootDirs = mutableListOf<Path>()
-                val trustedRootBundles = mutableListOf<Path>()
+                var bundleDir: File? = null
+                var chainFile: File? = null
+                val trustedRoots = mutableListOf<File>()
+                val trustedRootDirs = mutableListOf<File>()
+                val trustedRootBundles = mutableListOf<File>()
                 var requireStrongBox = false
                 var alias = "android-keystore-alias"
                 var challenge: ByteArray? = null
-                var output: Path? = null
+                var output: File? = null
 
                 var i = 0
                 while (i < args.size) {
                     when (args[i]) {
-                        "--bundle-dir" -> bundleDir = Paths.get(requireValue(args, ++i, "--bundle-dir"))
-                        "--chain" -> chainFile = Paths.get(requireValue(args, ++i, "--chain"))
-                        "--trust-root" -> trustedRoots.add(Paths.get(requireValue(args, ++i, "--trust-root")))
-                        "--trust-root-dir" -> trustedRootDirs.add(Paths.get(requireValue(args, ++i, "--trust-root-dir")))
-                        "--trust-root-bundle" -> trustedRootBundles.add(Paths.get(requireValue(args, ++i, "--trust-root-bundle")))
+                        "--bundle-dir" -> bundleDir = File(requireValue(args, ++i, "--bundle-dir"))
+                        "--chain" -> chainFile = File(requireValue(args, ++i, "--chain"))
+                        "--trust-root" -> trustedRoots.add(File(requireValue(args, ++i, "--trust-root")))
+                        "--trust-root-dir" -> trustedRootDirs.add(File(requireValue(args, ++i, "--trust-root-dir")))
+                        "--trust-root-bundle" -> trustedRootBundles.add(File(requireValue(args, ++i, "--trust-root-bundle")))
                         "--require-strongbox" -> requireStrongBox = true
                         "--alias" -> alias = requireValue(args, ++i, "--alias")
                         "--challenge-hex" -> challenge = parseHex(requireValue(args, ++i, "--challenge-hex"))
                         "--challenge-file" -> challenge = parseHex(
-                            String(Files.readAllBytes(Paths.get(requireValue(args, ++i, "--challenge-file")))).trim()
+                            File(requireValue(args, ++i, "--challenge-file")).readText().trim()
                         )
-                        "--output" -> output = Paths.get(requireValue(args, ++i, "--output"))
+                        "--output" -> output = File(requireValue(args, ++i, "--output"))
                         "--help", "-h" -> throw IllegalArgumentException(usage())
                         else -> throw IllegalArgumentException("Unknown argument: ${args[i]}")
                     }
@@ -252,16 +248,16 @@ object AndroidKeystoreAttestationHarness {
                 }
 
                 if (bundleDir != null) {
-                    require(Files.isDirectory(bundleDir)) { "--bundle-dir does not refer to a directory: $bundleDir" }
+                    require(bundleDir.isDirectory) { "--bundle-dir does not refer to a directory: $bundleDir" }
                     if (challenge == null) {
-                        val challengeFile = bundleDir.resolve("challenge.hex")
-                        if (Files.isRegularFile(challengeFile)) {
-                            challenge = parseHex(String(Files.readAllBytes(challengeFile)).trim())
+                        val challengeFile = File(bundleDir, "challenge.hex")
+                        if (challengeFile.isFile) {
+                            challenge = parseHex(challengeFile.readText().trim())
                         }
                     }
-                    val aliasFile = bundleDir.resolve("alias.txt")
-                    if (Files.isRegularFile(aliasFile)) {
-                        alias = String(Files.readAllBytes(aliasFile)).trim()
+                    val aliasFile = File(bundleDir, "alias.txt")
+                    if (aliasFile.isFile) {
+                        alias = aliasFile.readText().trim()
                     }
                     collectTrustRootsFromBundle(bundleDir, trustedRoots, trustedRootBundles)
                 }
@@ -269,15 +265,15 @@ object AndroidKeystoreAttestationHarness {
                 if (challenge == null) challenge = ByteArray(0)
 
                 return Arguments(
-                    bundleDir = bundleDir?.toAbsolutePath(),
-                    chainFile = chainFile?.toAbsolutePath(),
-                    trustedRoots = trustedRoots.map { it.toAbsolutePath() },
-                    trustedRootDirs = trustedRootDirs.map { it.toAbsolutePath() },
-                    trustedRootBundles = trustedRootBundles.map { it.toAbsolutePath() },
+                    bundleDir = bundleDir?.absoluteFile,
+                    chainFile = chainFile?.absoluteFile,
+                    trustedRoots = trustedRoots.map { it.absoluteFile },
+                    trustedRootDirs = trustedRootDirs.map { it.absoluteFile },
+                    trustedRootBundles = trustedRootBundles.map { it.absoluteFile },
                     requireStrongBox = requireStrongBox,
                     alias = alias,
                     challenge = challenge,
-                    output = output?.toAbsolutePath(),
+                    output = output?.absoluteFile,
                 )
             }
 
@@ -307,21 +303,18 @@ object AndroidKeystoreAttestationHarness {
 
             @Throws(IOException::class)
             private fun collectTrustRootsFromBundle(
-                bundleDir: Path,
-                trustedRoots: MutableList<Path>,
-                trustedRootBundles: MutableList<Path>,
+                bundleDir: File,
+                trustedRoots: MutableList<File>,
+                trustedRootBundles: MutableList<File>,
             ) {
-                Files.newDirectoryStream(bundleDir).use { entries ->
-                    for (entry in entries) {
-                        if (!Files.isRegularFile(entry)) continue
-                        val filename = entry.fileName.toString()
-                        val lower = filename.lowercase(Locale.US)
-                        when {
-                            lower.startsWith("trust_root_bundle_") && lower.endsWith(".zip") ->
-                                trustedRootBundles.add(entry)
-                            lower.startsWith("trust_root_") && isCertificateFilename(lower) ->
-                                trustedRoots.add(entry)
-                        }
+                for (entry in listFilesOrThrow(bundleDir)) {
+                    if (!entry.isFile) continue
+                    val lower = entry.name.lowercase(Locale.US)
+                    when {
+                        lower.startsWith("trust_root_bundle_") && lower.endsWith(".zip") ->
+                            trustedRootBundles.add(entry)
+                        lower.startsWith("trust_root_") && isCertificateFilename(lower) ->
+                            trustedRoots.add(entry)
                     }
                 }
             }

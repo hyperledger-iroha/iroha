@@ -237,6 +237,7 @@ public final class TronSccpProverTests {
     final SampleBundleFixture nonSoraBundle =
         sampleBundleFixture(SourceSccpProofs.DOMAIN_ETH, 327L);
     threw = false;
+    String error = "";
     try {
       TronSccpProver.buildProofRequest(
           new TronSccpProver.ProofRequestInput(
@@ -245,14 +246,18 @@ public final class TronSccpProverTests {
               new byte[] {9, 10},
               repeat("56", 32),
               repeat("78", 32),
-              TronSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
-              TronSccpProver.DOMAIN_SORA));
+                TronSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+                TronSccpProver.DOMAIN_SORA));
     } catch (final IllegalArgumentException ex) {
+      error = ex.getMessage();
       threw = ex.getMessage().contains("sourceProofBytes must match bundleBytes finality proof");
     }
-    assert threw : "TRON proof requests must bind non-SORA source proofs to bundle finality proofs";
+    assert threw
+        : "TRON proof requests must bind non-SORA source proofs to bundle finality proofs, actual error: "
+            + error;
 
     threw = false;
+    error = "";
     final SampleBundleFixture replaySourceFixture =
         sampleBundleFixture(SourceSccpProofs.DOMAIN_ETH, 328L);
     final SampleBundleFixture replayBoundSourceFixture =
@@ -268,14 +273,16 @@ public final class TronSccpProverTests {
               testCanonicalSccpSourceProofBytes(SourceSccpProofs.DOMAIN_ETH, replaySourceFixture),
               repeat("56", 32),
               repeat("78", 32),
-              TronSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
-              TronSccpProver.DOMAIN_SORA));
+                TronSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+                TronSccpProver.DOMAIN_SORA));
     } catch (final IllegalArgumentException ex) {
+      error = ex.getMessage();
       threw = ex.getMessage().contains("sourceProofBytes must match bundleBytes finality proof");
     }
-    assert threw : "TRON proof requests must reject replayed canonical source proof bytes";
+    assert threw : "TRON proof requests must reject replayed canonical source proof bytes, actual error: " + error;
 
     threw = false;
+    error = "";
     try {
       TronSccpProver.buildProofRequest(
           new TronSccpProver.ProofRequestInput(
@@ -284,12 +291,13 @@ public final class TronSccpProverTests {
               new byte[] {0x01, 0x02, 0x03},
               repeat("56", 32),
               repeat("78", 32),
-              TronSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
-              TronSccpProver.DOMAIN_SORA));
+                TronSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+                TronSccpProver.DOMAIN_SORA));
     } catch (final IllegalArgumentException ex) {
+      error = ex.getMessage();
       threw = ex.getMessage().contains("sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1");
     }
-    assert threw : "TRON proof requests must reject undecodable non-SORA source proof bytes";
+    assert threw : "TRON proof requests must reject undecodable non-SORA source proof bytes, actual error: " + error;
 
     threw = false;
     try {
@@ -330,12 +338,36 @@ public final class TronSccpProverTests {
     threw = false;
     try {
       TronSccpProver.buildProofRequest(
+          sampleProofRequestInput(
+              samplePublicInputs("0x" + repeat("AA", 32)),
+              new byte[0],
+              repeat("56", 32),
+              repeat("78", 32),
+              TronSccpProver.DOMAIN_SORA));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("payloadHash") && ex.getMessage().contains("canonical hex");
+    }
+    assert threw : "uppercase TRON payload hash must be rejected";
+
+    threw = false;
+    try {
+      TronSccpProver.buildProofRequest(
           sampleProofRequestInput(new byte[0], repeat("56", 32) + " "));
     } catch (final IllegalArgumentException ex) {
       threw =
           ex.getMessage().contains("statementHash") && ex.getMessage().contains("canonical hex");
     }
     assert threw : "padded TRON statement hash must be rejected";
+
+    threw = false;
+    try {
+      TronSccpProver.buildProofRequest(
+          sampleProofRequestInput(new byte[0], "0X" + repeat("56", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw =
+          ex.getMessage().contains("statementHash") && ex.getMessage().contains("canonical hex");
+    }
+    assert threw : "uppercase TRON statement hash must be rejected";
 
     for (final String finalityHeight : new String[] {"019", "0x13", "+19", " 19", "19 "}) {
       threw = false;

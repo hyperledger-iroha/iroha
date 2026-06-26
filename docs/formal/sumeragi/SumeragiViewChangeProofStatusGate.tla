@@ -326,4 +326,9 @@ SafetyAnchors ==
   /\ SnapshotProjectionAnchors
   /\ ResetAnchors
 
+ViewChangeProofStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ Safety
+  /\ SafetyAnchors
+
 ====

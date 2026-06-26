@@ -854,11 +854,48 @@ class HttpClientTransport(
             }
             if (request.feeSponsor != null) payload["fee_sponsor"] = normalizeNonBlank(request.feeSponsor, "feeSponsor")
             if (request.memo != null) payload["memo"] = normalizeNonBlank(request.memo, "memo")
+            putValidationFeePolicyMetadata(
+                payload,
+                request.validationFeePolicyVersion,
+                request.validationFeePolicyHash,
+                request.validationFeeInstructionIndex,
+            )
             payload["instructions"] = request.instructions.mapIndexed { index, instruction ->
                 require(instruction.isNotEmpty()) { "instructions[$index] must not be empty" }
                 Base64.getEncoder().encodeToString(instruction)
             }
             return payload
+        }
+
+        @JvmStatic internal fun putValidationFeePolicyMetadata(
+            payload: MutableMap<String, Any>,
+            validationFeePolicyVersion: Long?,
+            validationFeePolicyHash: String?,
+            validationFeeInstructionIndex: Long?,
+        ) {
+            val hasPolicyVersion = validationFeePolicyVersion != null
+            val hasPolicyHash = validationFeePolicyHash != null
+            val hasInstructionIndex = validationFeeInstructionIndex != null
+            require(hasPolicyVersion == hasPolicyHash) {
+                "validationFeePolicyVersion and validationFeePolicyHash must be provided together"
+            }
+            require(hasPolicyVersion || !hasInstructionIndex) {
+                "validationFeeInstructionIndex requires validation fee policy metadata"
+            }
+            val policyVersion = validationFeePolicyVersion ?: return
+            val policyHash = requireNotNull(validationFeePolicyHash) {
+                "validationFeePolicyVersion and validationFeePolicyHash must be provided together"
+            }
+            require(policyVersion >= 0L) { "validationFeePolicyVersion must be non-negative" }
+            val instructionIndex = validationFeeInstructionIndex
+            if (instructionIndex != null) {
+                require(instructionIndex >= 0L) { "validationFeeInstructionIndex must be non-negative" }
+            }
+            payload["validation_fee_policy_version"] = policyVersion.toString()
+            payload["validation_fee_policy_hash"] = normalizeHex32(policyHash, "validationFeePolicyHash")
+            if (instructionIndex != null) {
+                payload["validation_fee_instruction_index"] = instructionIndex.toString()
+            }
         }
 
         @JvmStatic internal fun buildVerifyingKeyRegisterPayload(request: VerifyingKeyRegisterRequest): Map<String, Any> {

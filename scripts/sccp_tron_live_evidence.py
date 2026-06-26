@@ -1906,7 +1906,7 @@ def _source_event_solid_block_header_proof_summary(
             proof_input
         )
         proof_hash = sccp_client.tron_solid_block_header_proof_hash(proof_input)
-    except (RuntimeError, TypeError, ValueError):
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         return {
             "solid_block_header_proof_ready": False,
             "solid_block_header_proof_blocker": "solid block header proof is invalid",
@@ -1986,15 +1986,16 @@ def _source_event_witness_schedule_summary(
     try:
         payload_hash = sccp_client.tron_witness_schedule_payload_hash(payload)
         schedule_hash = sccp_client.tron_witness_schedule_hash_from_payload(payload)
-    except (RuntimeError, TypeError, ValueError):
+        schedule_hash_bytes = _parse_hex32_blob(
+            schedule_hash,
+            label="witness schedule hash",
+        )
+        witnesses = _decode_tron_witness_schedule_payload(payload)
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         return {
             "witness_schedule_proof_ready": False,
             "witness_schedule_proof_blocker": "witness schedule payload is invalid",
         }
-    schedule_hash_bytes = _parse_hex32_blob(
-        schedule_hash,
-        label="witness schedule hash",
-    )
     expected_matches = (
         expected_schedule_hash is not None
         and schedule_hash_bytes == expected_schedule_hash
@@ -2007,7 +2008,6 @@ def _source_event_witness_schedule_summary(
         raise RuntimeError(
             "witness schedule hash does not match expected witness schedule hash"
         )
-    witnesses = _decode_tron_witness_schedule_payload(payload)
     weight_by_address = {address: weight for address, weight in witnesses}
     child_weight = weight_by_address.get(child_witness_address)
     if child_weight is None:
@@ -2112,12 +2112,22 @@ def _source_event_witness_schedule_transition_chain_summary(
             "witness_schedule_transition_count": len(transition_inputs),
         }
 
-    active_schedule_hash = _parse_hex32_blob(
-        sccp_client.tron_witness_schedule_hash_from_payload(
-            active_witness_schedule_payload
-        ),
-        label="active witness schedule hash",
-    )
+    try:
+        active_schedule_hash = _parse_hex32_blob(
+            sccp_client.tron_witness_schedule_hash_from_payload(
+                active_witness_schedule_payload
+            ),
+            label="active witness schedule hash",
+        )
+    except (SystemExit, RuntimeError, TypeError, ValueError):
+        return {
+            "witness_schedule_transition_chain_ready": False,
+            "witness_schedule_transition_chain_required": True,
+            "witness_schedule_transition_chain_blocker": (
+                "active witness schedule payload is invalid"
+            ),
+            "witness_schedule_transition_count": len(transition_inputs),
+        }
     expected_parent_hash = expected_schedule_hash
     previous_to_epoch = None
     previous_block_number = None
@@ -2139,35 +2149,65 @@ def _source_event_witness_schedule_transition_chain_summary(
                 )
             parent_payload = previous_next_payload
         else:
-            parent_payload = _witness_schedule_payload_from_value(
-                parent_payload_value,
-                label=f"witness schedule transition {index} parent payload",
+            try:
+                parent_payload = _witness_schedule_payload_from_value(
+                    parent_payload_value,
+                    label=f"witness schedule transition {index} parent payload",
+                )
+            except (SystemExit, RuntimeError, TypeError, ValueError):
+                return {
+                    "witness_schedule_transition_chain_ready": False,
+                    "witness_schedule_transition_chain_required": True,
+                    "witness_schedule_transition_chain_blocker": (
+                        f"witness schedule transition {index} parent payload is invalid"
+                    ),
+                    "witness_schedule_transition_count": len(transition_inputs),
+                }
+        try:
+            parent_schedule_hash = _parse_hex32_blob(
+                sccp_client.tron_witness_schedule_hash_from_payload(parent_payload),
+                label=f"witness schedule transition {index} parent schedule hash",
             )
-        parent_schedule_hash = _parse_hex32_blob(
-            sccp_client.tron_witness_schedule_hash_from_payload(parent_payload),
-            label=f"witness schedule transition {index} parent schedule hash",
-        )
+        except (SystemExit, RuntimeError, TypeError, ValueError):
+            return {
+                "witness_schedule_transition_chain_ready": False,
+                "witness_schedule_transition_chain_required": True,
+                "witness_schedule_transition_chain_blocker": (
+                    f"witness schedule transition {index} parent payload is invalid"
+                ),
+                "witness_schedule_transition_count": len(transition_inputs),
+            }
         if parent_schedule_hash != expected_parent_hash:
             raise RuntimeError(
                 f"witness schedule transition {index} parent schedule hash does not match chain"
             )
 
-        next_payload = _witness_schedule_payload_from_value(
-            _mapping_value(
-                raw_transition,
-                "nextWitnessSchedulePayload",
-                "next_witness_schedule_payload",
-            ),
-            label=f"witness schedule transition {index} next payload",
-        )
-        next_schedule_hash = _parse_hex32_blob(
-            sccp_client.tron_witness_schedule_hash_from_payload(next_payload),
-            label=f"witness schedule transition {index} next schedule hash",
-        )
-        next_payload_hash = _parse_hex32_blob(
-            sccp_client.tron_witness_schedule_payload_hash(next_payload),
-            label=f"witness schedule transition {index} next payload hash",
-        )
+        try:
+            next_payload = _witness_schedule_payload_from_value(
+                _mapping_value(
+                    raw_transition,
+                    "nextWitnessSchedulePayload",
+                    "next_witness_schedule_payload",
+                ),
+                label=f"witness schedule transition {index} next payload",
+            )
+            next_schedule_hash = _parse_hex32_blob(
+                sccp_client.tron_witness_schedule_hash_from_payload(next_payload),
+                label=f"witness schedule transition {index} next schedule hash",
+            )
+            next_payload_hash = _parse_hex32_blob(
+                sccp_client.tron_witness_schedule_payload_hash(next_payload),
+                label=f"witness schedule transition {index} next payload hash",
+            )
+        except (SystemExit, RuntimeError, TypeError, ValueError):
+            return {
+                "witness_schedule_transition_chain_ready": False,
+                "witness_schedule_transition_chain_required": True,
+                "witness_schedule_transition_chain_blocker": (
+                    f"witness schedule transition {index} next payload is invalid"
+                ),
+                "witness_schedule_transition_count": len(transition_inputs),
+            }
         from_epoch = _parse_protobuf_nonnegative_int(
             _mapping_value(
                 raw_transition,
@@ -2251,7 +2291,7 @@ def _source_event_witness_schedule_transition_chain_summary(
                     message_input
                 )
             )
-        except (RuntimeError, TypeError, ValueError):
+        except (SystemExit, RuntimeError, TypeError, ValueError):
             return {
                 "witness_schedule_transition_chain_ready": False,
                 "witness_schedule_transition_chain_required": True,
@@ -2273,7 +2313,17 @@ def _source_event_witness_schedule_transition_chain_summary(
                 f"witness schedule transition {index} message hash does not match"
             )
 
-        parent_witnesses = _decode_tron_witness_schedule_payload(parent_payload)
+        try:
+            parent_witnesses = _decode_tron_witness_schedule_payload(parent_payload)
+        except (SystemExit, RuntimeError, TypeError, ValueError):
+            return {
+                "witness_schedule_transition_chain_ready": False,
+                "witness_schedule_transition_chain_required": True,
+                "witness_schedule_transition_chain_blocker": (
+                    f"witness schedule transition {index} parent payload is invalid"
+                ),
+                "witness_schedule_transition_count": len(transition_inputs),
+            }
         parent_weights = [weight for _address, weight in parent_witnesses]
         signers_bitmap = _parse_exact_hex_blob(
             _mapping_value(raw_transition, "signersBitmap", "signers_bitmap"),
@@ -2339,7 +2389,7 @@ def _source_event_witness_schedule_transition_chain_summary(
             seal_hash = sccp_client.tron_witness_schedule_transition_seal_hash(
                 seal_input
             )
-        except (RuntimeError, TypeError, ValueError):
+        except (SystemExit, RuntimeError, TypeError, ValueError):
             return {
                 "witness_schedule_transition_chain_ready": False,
                 "witness_schedule_transition_chain_required": True,
@@ -2488,13 +2538,33 @@ def _source_event_witness_seal_summary(
     assert receipt_proof_hash is not None
     assert signers_bitmap is not None
 
-    witnesses = _decode_tron_witness_schedule_payload(payload)
+    try:
+        witnesses = _decode_tron_witness_schedule_payload(payload)
+    except (SystemExit, RuntimeError, TypeError, ValueError):
+        return {
+            "witness_seal_proof_ready": False,
+            "witness_seal_proof_blocker": "witness schedule payload is invalid",
+        }
     witness_addresses = [address for address, _weight in witnesses]
     witness_weights = [weight for _address, weight in witnesses]
-    signer_indices = _signer_indices_from_bitmap(signers_bitmap, len(witnesses))
+    try:
+        signer_indices = _signer_indices_from_bitmap(signers_bitmap, len(witnesses))
+    except (SystemExit, RuntimeError, TypeError, ValueError):
+        return {
+            "witness_seal_proof_ready": False,
+            "witness_seal_proof_blocker": "witness seal signer bitmap is invalid",
+        }
     if len(signatures) != len(signer_indices):
         raise RuntimeError("witness seal signature count does not match signer bitmap")
-    witness_schedule_hash = sccp_client.tron_witness_schedule_hash_from_payload(payload)
+    try:
+        witness_schedule_hash = sccp_client.tron_witness_schedule_hash_from_payload(
+            payload
+        )
+    except (SystemExit, RuntimeError, TypeError, ValueError):
+        return {
+            "witness_seal_proof_ready": False,
+            "witness_seal_proof_blocker": "witness schedule payload is invalid",
+        }
     solid_block_message_input = {
         "source_domain": sccp_client.SCCP_DOMAIN_TRON,
         "solid_block_number": block_number,
@@ -2513,7 +2583,11 @@ def _source_event_witness_seal_summary(
         solid_block_message_hash = sccp_client.tron_solid_block_message_hash(
             solid_block_message_input
         )
-    except (RuntimeError, TypeError, ValueError):
+        solid_message_hash_bytes = _parse_hex32_blob(
+            solid_block_message_hash,
+            label="solid block message hash",
+        )
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         return {
             "witness_seal_proof_ready": False,
             "witness_seal_proof_blocker": "witness seal solid-block message is invalid",
@@ -2522,10 +2596,6 @@ def _source_event_witness_seal_summary(
     signed_weight = sum(witness_weights[index] for index in signer_indices)
     if signed_weight * 3 <= total_weight * 2:
         raise RuntimeError("witness seal signed weight does not exceed two thirds")
-    solid_message_hash_bytes = _parse_hex32_blob(
-        solid_block_message_hash,
-        label="solid block message hash",
-    )
     recovered_addresses = _verify_tron_witness_signature_signers(
         message_hash=solid_message_hash_bytes,
         signatures=signatures,
@@ -2546,12 +2616,12 @@ def _source_event_witness_seal_summary(
     try:
         seal_bytes = sccp_client.canonical_tron_witness_seal_bytes(seal_input)
         seal_hash = sccp_client.tron_witness_seal_hash(seal_input)
-    except (RuntimeError, TypeError, ValueError):
+        seal_hash_bytes = _parse_hex32_blob(seal_hash, label="witness seal hash")
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         return {
             "witness_seal_proof_ready": False,
             "witness_seal_proof_blocker": "witness seal proof is invalid",
         }
-    seal_hash_bytes = _parse_hex32_blob(seal_hash, label="witness seal hash")
     if expected_seal_hash is not None and seal_hash_bytes != expected_seal_hash:
         raise RuntimeError("witness seal hash does not match expected witness seal hash")
     return {
@@ -2833,7 +2903,11 @@ def _source_event_transaction_source_proof_summary(
         proof_hash = sccp_client.tron_sccp_transaction_source_proof_hash(
             proof_input
         )
-    except (RuntimeError, TypeError, ValueError):
+        proof_hash_bytes = _parse_hex32_blob(
+            proof_hash,
+            label="transaction source proof hash",
+        )
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         return (
             {
                 "transaction_source_proof_ready": False,
@@ -2841,10 +2915,6 @@ def _source_event_transaction_source_proof_summary(
             },
             None,
         )
-    proof_hash_bytes = _parse_hex32_blob(
-        proof_hash,
-        label="transaction source proof hash",
-    )
     if (
         expected_receipt_proof_hash is not None
         and proof_hash_bytes != expected_receipt_proof_hash
@@ -2927,12 +2997,15 @@ def _source_event_solid_block_summary(
     ]
     witness_weights = None
     if active_witness_schedule_payload is not None:
-        witness_weights = {
-            address: weight
-            for address, weight in _decode_tron_witness_schedule_payload(
-                active_witness_schedule_payload
-            )
-        }
+        try:
+            witness_weights = {
+                address: weight
+                for address, weight in _decode_tron_witness_schedule_payload(
+                    active_witness_schedule_payload
+                )
+            }
+        except (SystemExit, RuntimeError, TypeError, ValueError):
+            witness_weights = None
     tx_trie_root = child_header["tx_trie_root"]
     transactions = response.get("transactions")
     if not isinstance(transactions, list) or not transactions:
@@ -3109,7 +3182,7 @@ def _parse_transaction_address_payload(value: Any, *, label: str) -> bytes:
         raise RuntimeError(f"{label} must be a TRON address")
     try:
         return parse_tron_address_payload(value, label=label)
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise RuntimeError(f"{label} is not a valid TRON address") from None
 
 
@@ -3248,7 +3321,7 @@ def _source_event_transaction_summary(
         try:
             topic0 = _parse_exact_hex32(topics[0], label="source-event log topic0")
             topic1 = _parse_exact_hex32(topics[1], label="source-event log topic1")
-        except (argparse.ArgumentTypeError, TypeError, RuntimeError, ValueError):
+        except (argparse.ArgumentTypeError, SystemExit, TypeError, RuntimeError, ValueError):
             continue
         data = log.get("data", "")
         if not isinstance(data, str):
@@ -3566,7 +3639,7 @@ def _route_canary_message_proof_event_summary(
         return None
     try:
         topic0 = _parse_exact_hex32(topics[0], label="route-canary log topic0")
-    except (argparse.ArgumentTypeError, TypeError, RuntimeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, TypeError, RuntimeError, ValueError):
         return None
     if log_address != verifier_address20 or topic0 != TRON_MESSAGE_PROOF_ACCEPTED_TOPIC:
         return None
@@ -4415,7 +4488,7 @@ def _metadata_runtime_bytecode(metadata: dict[str, Any], *, label: str) -> bytes
             bytecode,
             label=f"{label} bytecode",
         )
-    except (argparse.ArgumentTypeError, TypeError, RuntimeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, TypeError, RuntimeError, ValueError):
         raise RuntimeError(
             f"/wallet/getcontract returned malformed {label} bytecode"
         ) from None
@@ -4435,7 +4508,7 @@ def _check_contract_metadata_address(
             value,
             label=f"{label} contract_address",
         )
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise RuntimeError(
             f"/wallet/getcontract returned malformed {label} contract_address"
         ) from None
@@ -5295,7 +5368,7 @@ def _source_event_trigger_request_verified(
             str(trigger_request["contract_address"]),
             label="source-event trigger contract address",
         )
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         return False
     return (
         trigger_request.get("endpoint") == "wallet/triggersmartcontract"
@@ -5929,7 +6002,7 @@ def _destination_bytecode_metadata_error(destination: dict[str, Any]) -> str | N
             destination_bytecode,
             label="destination verifier runtime bytecode",
         )
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         return "TRON destination verifier runtime bytecode metadata is invalid"
     recomputed_hash = _hex(evidence.runtime_bytecode_hash(runtime))
     if recomputed_hash != destination_code_hash:

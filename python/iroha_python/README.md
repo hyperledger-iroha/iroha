@@ -56,8 +56,9 @@ client = create_torii_client(
 ## Offline readiness
 
 Torii exposes only the Offline readiness endpoint for offline HTTP discovery.
-Offline note issuance, redemption, and audit payloads are submitted as
-transaction instructions.
+Classic Offline Note issuance, redemption, and audit transaction paths are
+retired. Kagemusha readiness fields advertise the active offline payment
+implementation.
 
 ```python
 from iroha_python import ToriiClient
@@ -65,7 +66,7 @@ from iroha_python import ToriiClient
 client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")
 
 readiness = client.get_offline_readiness()
-print("offline notes", readiness.offline_note)
+print("kagemusha", readiness.offline_kagemusha_abi7)
 ```
 
 For app-facing offline cash flows, use `iroha_python.offline_cash` to keep the

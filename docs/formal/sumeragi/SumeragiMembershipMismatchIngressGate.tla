@@ -354,6 +354,10 @@ MembershipMismatchIngressExactness ==
   /\ MembershipMismatchIngressTelemetryExact
   /\ MembershipMismatchIngressFailClosedExact
 
+MembershipMismatchIngressCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MembershipMismatchIngressExactness
+
 ResultMatchesSpec ==
   MembershipMismatchIngressExactness
 

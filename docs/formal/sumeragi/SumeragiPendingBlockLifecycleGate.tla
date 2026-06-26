@@ -279,9 +279,13 @@ PendingBlockLifecycleExactness ==
 PendingBlockLifecycleCoreSafety ==
   PendingBlockLifecycleExactness
 
+PendingBlockLifecycleCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PendingBlockLifecycleExactness
+
 NoBugInvariant == PendingBlockLifecycleCoreSafety
 
-SafetyFast == PendingBlockLifecycleCoreSafety
+SafetyFast == PendingBlockLifecycleCorrectnessEnvelope
 
 BugNewNotPending == NoBugInvariant
 BugNewSetsInactive == NoBugInvariant

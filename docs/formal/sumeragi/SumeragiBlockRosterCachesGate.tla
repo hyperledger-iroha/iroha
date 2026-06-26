@@ -410,6 +410,10 @@ BlockRosterCacheExactness ==
   /\ BlockRosterCacheSelectionLookupExact
   /\ BlockRosterCacheSelectionInsertEvictExact
 
+BlockRosterCacheCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockRosterCacheExactness
+
 BugRosterKeyAcceptsNoArtifacts ==
   ImplementationActions(RosterKeyRejectsNoArtifacts) =
     SpecActions(RosterKeyRejectsNoArtifacts)

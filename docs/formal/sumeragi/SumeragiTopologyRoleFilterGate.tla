@@ -306,6 +306,10 @@ TopologyRoleFilterExactness ==
   /\ TopologySignatureFilterExact
   /\ TopologyAuditRoleRotationExact
 
+TopologyRoleFilterCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ TopologyRoleFilterExactness
+
 Safety ==
   checked = 1 => SafetyFast
 

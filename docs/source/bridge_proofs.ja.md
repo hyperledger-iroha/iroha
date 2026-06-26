@@ -16,8 +16,11 @@ Bridge proof の提出は標準の命令パス (`SubmitBridgeProof`) を通過�
 ## SCCP ローンチ範囲
 
 現在の SCCP surface は Ethereum、BSC、Solana、TON、TRON に限定されます。
+Retired runtime-network families outside that launch scope are not supported for now.
 SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.
 この文は現在リリースのサポート境界であり、延期された SCCP ローンチ作業ではありません。
+That exclusion is intentional current-launch scope, not a hidden compatibility lane.
+Do not track that family as remaining SCCP launch work in this cycle.
 このネットワーク family 向けの relayer adapter、route manifest、proof fixture、public discovery route は、現在の SCCP ローンチ範囲には含まれません。
 
 ## 受け入れルール

@@ -941,40 +941,49 @@ function assertRunnerRejectsJavaHome(script, envName, label) {
 }
 
 function assertRunnerRejectsDotnetSdk(script, envName, label) {
-  const tmp = mkdtempSync(`${tmpdir()}/iroha-dotnet-runner-`);
-  const fakeDotnet = `${tmp}/dotnet`;
-  try {
-    writeFileSync(
-      fakeDotnet,
-      [
-        "#!/usr/bin/env bash",
-        "if [[ \"${1:-}\" == \"--version\" ]]; then",
-        "  printf '%s\\n' '7.0.404'",
-        "  exit 0",
-        "fi",
-        "printf '%s\\n' \"unexpected fake dotnet invocation: $*\" >&2",
-        "exit 64",
-        "",
-      ].join("\n"),
-    );
-    chmodSync(fakeDotnet, 0o755);
+  for (const invalidVersion of ["7.0.404", "8.0.0", "8.0.010", "8.0.128-preview.1"]) {
+    const tmp = mkdtempSync(`${tmpdir()}/iroha-dotnet-runner-`);
+    const fakeDotnet = `${tmp}/dotnet`;
+    try {
+      writeFileSync(
+        fakeDotnet,
+        [
+          "#!/usr/bin/env bash",
+          "if [[ \"${1:-}\" == \"--version\" ]]; then",
+          `  printf '%s\\n' '${invalidVersion}'`,
+          "  exit 0",
+          "fi",
+          "printf '%s\\n' \"unexpected fake dotnet invocation: $*\" >&2",
+          "exit 64",
+          "",
+        ].join("\n"),
+      );
+      chmodSync(fakeDotnet, 0o755);
 
-    const result = spawnSync("bash", [script], {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-      env: { ...process.env, [envName]: fakeDotnet },
-    });
+      const result = spawnSync("bash", [script], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        env: { ...process.env, [envName]: fakeDotnet },
+      });
 
-    assert.notEqual(result.status, 0, `${label} must reject non-.NET-8 SDKs`);
-    assert.match(result.stdout, /^7\.0\.404$/m, `${label} must print dotnet version evidence`);
-    assert.match(result.stderr, /\.NET SDK 8\.0\.x/u, `${label} must explain the .NET 8 gate`);
-    assert.doesNotMatch(
-      result.stderr,
-      /unexpected fake dotnet invocation/u,
-      `${label} must fail before dotnet test`,
-    );
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
+      assert.notEqual(result.status, 0, `${label} must reject SDK ${invalidVersion}`);
+      assert.ok(
+        result.stdout.split(/\r?\n/u).includes(invalidVersion),
+        `${label} must print dotnet version evidence for ${invalidVersion}`,
+      );
+      assert.match(
+        result.stderr,
+        /stable canonical \.NET SDK 8\.0\.x.+non-zero patch/u,
+        `${label} must explain the strict .NET 8 gate`,
+      );
+      assert.doesNotMatch(
+        result.stderr,
+        /unexpected fake dotnet invocation/u,
+        `${label} must fail before dotnet test for ${invalidVersion}`,
+      );
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   }
 }
 
@@ -1208,7 +1217,9 @@ function rustEnumVariants(text, name) {
 function assertRustNoMangleExport(text, name, signaturePattern, label) {
   assert.match(
     text,
-    new RegExp(`#\\[unsafe\\(no_mangle\\)\\]\\s*pub\\s+${signaturePattern}\\s+${name}\\s*\\(`),
+    new RegExp(
+      `#\\[unsafe\\(no_mangle\\)\\]\\s*(?:#\\[[^\\]]+\\]\\s*)*pub\\s+${signaturePattern}\\s+${name}\\s*\\(`,
+    ),
     `${label} must export ${name} with the stable privacy FFI symbol`,
   );
 }
@@ -1757,12 +1768,19 @@ test("native privacy FFI hosts remain Norito-only and JSON-free", () => {
     );
   }
 
-  const javaPrivacyAdapter = sliceBetween(
+  const javaPrivacyHelpers = sliceBetween(
     connectBridge,
     "fn java_privacy_public_archive",
-    "pub unsafe extern \"system\" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCompactPaymentTokenProver",
-    "C bridge Java privacy JNI adapter",
+    "pub unsafe extern \"system\" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativePublicKeyFromPrivate",
+    "C bridge Java privacy JNI helpers",
   );
+  const javaPrivacyExports = sliceBetween(
+    connectBridge,
+    "pub unsafe extern \"system\" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeBridgeAbiVersion",
+    "pub unsafe extern \"system\" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeBridgeAbiVersion",
+    "C bridge Java privacy JNI exports",
+  );
+  const javaPrivacyAdapter = `${javaPrivacyHelpers}\n${javaPrivacyExports}`;
   assert.match(javaPrivacyAdapter, /norito::to_bytes/, "Java privacy JNI must encode Norito archives");
   assert.match(
     javaPrivacyAdapter,
@@ -5109,6 +5127,11 @@ test("privacy SDK guard runs wrong-operation result schema regressions", () => {
     csharpRunner,
     /DOTNET_BIN="\$\{PRIVACY_CSHARP_DOTNET_BIN:-dotnet\}"/,
     "Privacy C# SDK runner must keep the documented dotnet override variable",
+  );
+  assert.match(
+    csharpRunner,
+    /\[\[ ! "\$\{DOTNET_VERSION\}" =~ \^8\\\.0\\\.\[1-9\]\[0-9\]\*\$ \]\][\s\S]*stable canonical \.NET SDK 8\.0\.x[\s\S]*non-zero patch/,
+    "Privacy C# SDK runner must reject prerelease and noncanonical .NET 8 SDK versions",
   );
   assert.match(
     csharpRunner,

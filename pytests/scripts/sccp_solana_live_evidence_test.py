@@ -843,6 +843,8 @@ def test_live_solana_evidence_redacts_imported_parser_failures(monkeypatch):
 
     parser_exception_types = (
         module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
         TypeError,
         ValueError,
     )
@@ -934,7 +936,7 @@ def test_live_solana_account_data_redacts_base64_parser_causes(monkeypatch):
     else:
         raise AssertionError("Solana account data accepted invalid base64")
 
-    account_exception_types = (TypeError, ValueError)
+    account_exception_types = (SystemExit, RuntimeError, TypeError, ValueError)
     for exception_type in account_exception_types:
 
         def fail_decode(*_args, exception_type=exception_type, **_kwargs):
@@ -963,7 +965,7 @@ def test_live_solana_metadata_base64_redacts_parser_causes(monkeypatch):
     module = load_live_module()
     live = {"programdata_metadata_base64": "secret-token live metadata base64"}
 
-    for exception_type in (TypeError, ValueError):
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
 
         def fail_decode(*_args, exception_type=exception_type, **_kwargs):
             raise exception_type("secret-token live metadata base64")

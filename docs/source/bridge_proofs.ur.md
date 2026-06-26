@@ -20,8 +20,11 @@ Bridge proof submissions معیاری instruction path (`SubmitBridgeProof`) س�
 ## SCCP launch scope
 
 موجودہ SCCP سطح Ethereum، BSC، Solana، TON، اور TRON تک محدود ہے۔
+Retired runtime-network families outside that launch scope are not supported for now.
 SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.
 یہ جملہ موجودہ ریلیز کی support boundary ہے، کوئی postponed SCCP launch task نہیں۔
+That exclusion is intentional current-launch scope, not a hidden compatibility lane.
+Do not track that family as remaining SCCP launch work in this cycle.
 اس network family کیلئے relayer adapter، route manifest، proof fixture، یا public discovery route موجودہ SCCP launch scope کا حصہ نہیں۔
 
 ## قبولیت کے قواعد

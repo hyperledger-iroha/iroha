@@ -526,6 +526,10 @@ StalledPendingFrontierTimeoutExactness ==
   /\ StalledPendingFrontierArithmeticExact
   /\ StalledPendingFrontierProjectionExact
 
+StalledPendingFrontierTimeoutCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ StalledPendingFrontierTimeoutExactness
+
 SafetyFast ==
   StalledPendingFrontierTimeoutExactness
 

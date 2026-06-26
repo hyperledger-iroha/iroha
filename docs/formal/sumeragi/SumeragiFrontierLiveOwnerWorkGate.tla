@@ -546,4 +546,8 @@ NoBugInvariant ==
 
 SafetyFast == NoBugInvariant
 
+FrontierLiveOwnerWorkCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ NoBugInvariant
+
 ====

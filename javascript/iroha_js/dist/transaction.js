@@ -69,9 +69,19 @@ function resolveNativeBinding() {
   return globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
 }
 
-function composeAssetHoldingIdFromDefinitionAndAccount(assetDefinitionId, accountId, context) {
-  const definition = normalizeTransactionAssetDefinitionId(assetDefinitionId, `${context}.assetDefinitionId`);
-  const normalizedAccountId = normalizeAccountId(accountId, `${context}.accountId`);
+function composeAssetHoldingIdFromDefinitionAndAccount(
+  assetDefinitionId,
+  accountId,
+  context,
+) {
+  const definition = normalizeTransactionAssetDefinitionId(
+    assetDefinitionId,
+    `${context}.assetDefinitionId`,
+  );
+  const normalizedAccountId = normalizeAccountId(
+    accountId,
+    `${context}.accountId`,
+  );
   return `${definition}#${normalizedAccountId}`;
 }
 
@@ -125,14 +135,13 @@ function normalizeMetadataPayload(metadata, context) {
   if (typeof metadata === "object" && !Array.isArray(metadata)) {
     return JSON.stringify(metadata);
   }
-  throw new TypeError(`${context} must be an object or JSON string when provided`);
+  throw new TypeError(
+    `${context} must be an object or JSON string when provided`,
+  );
 }
 
 const KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES = new Map([
-  [
-    "KagemushaTransfer",
-    "iroha_data_model::isi::offline::KagemushaTransfer",
-  ],
+  ["KagemushaTransfer", "iroha_data_model::isi::offline::KagemushaTransfer"],
   [
     "RedeemKagemushaRecursive",
     "iroha_data_model::isi::offline::RedeemKagemushaRecursive",
@@ -163,7 +172,10 @@ const NORITO_CRC64_TABLE = (() => {
 })();
 
 function normalizeKagemushaInstructionArchiveType(type, context) {
-  if (typeof type !== "string" || !KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES.has(type)) {
+  if (
+    typeof type !== "string" ||
+    !KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES.has(type)
+  ) {
     throw new TypeError(
       `${context}.type must be KagemushaTransfer or RedeemKagemushaRecursive`,
     );
@@ -194,14 +206,20 @@ function kagemushaArchiveBuffer(source, context) {
   const canonicalBase64Pattern =
     /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
   if (encoded !== normalized || !canonicalBase64Pattern.test(normalized)) {
-    throw new TypeError(`${context}.bytesBase64 must be canonical standard base64`);
+    throw new TypeError(
+      `${context}.bytesBase64 must be canonical standard base64`,
+    );
   }
   const buffer = Buffer.from(normalized, "base64");
   if (buffer.toString("base64") !== normalized) {
-    throw new TypeError(`${context}.bytesBase64 must be canonical standard base64`);
+    throw new TypeError(
+      `${context}.bytesBase64 must be canonical standard base64`,
+    );
   }
   if (buffer.length === 0) {
-    throw new TypeError(`${context}.bytesBase64 must decode to non-empty bytes`);
+    throw new TypeError(
+      `${context}.bytesBase64 must decode to non-empty bytes`,
+    );
   }
   return buffer;
 }
@@ -300,7 +318,9 @@ function validateKagemushaInstructionArchive(type, archive, context) {
  */
 export function buildKagemushaInstructionArchiveInstruction(input) {
   if (!input || typeof input !== "object") {
-    throw new TypeError("Kagemusha instruction archive input must be an object");
+    throw new TypeError(
+      "Kagemusha instruction archive input must be an object",
+    );
   }
   const type = normalizeKagemushaInstructionArchiveType(
     input.type ?? input.instructionType ?? input.instruction_type,
@@ -332,6 +352,49 @@ function normalizeJsonObjectPayload(value, context) {
     return JSON.stringify(value);
   }
   throw new TypeError(`${context} must be an object or JSON string`);
+}
+
+function normalizePlainObject(value, context) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value;
+  }
+  throw new TypeError(`${context} must be a non-null object`);
+}
+
+function normalizeNonEmptyString(value, context) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a non-empty string`);
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new TypeError(`${context} must be a non-empty string`);
+  }
+  return trimmed;
+}
+
+function normalizeUint32(value, context) {
+  const max = 0xffff_ffffn;
+  let parsed;
+  if (typeof value === "bigint") {
+    parsed = value;
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) {
+      throw new TypeError(`${context} must be a uint32 integer`);
+    }
+    parsed = BigInt(value);
+  } else if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!/^(?:0|[1-9][0-9]*)$/u.test(trimmed)) {
+      throw new TypeError(`${context} must be a uint32 integer`);
+    }
+    parsed = BigInt(trimmed);
+  } else {
+    throw new TypeError(`${context} must be a uint32 integer`);
+  }
+  if (parsed < 0n || parsed > max) {
+    throw new RangeError(`${context} must be between 0 and 4294967295`);
+  }
+  return Number(parsed);
 }
 
 function normalizeOptionalPositiveInteger(value, context) {
@@ -392,14 +455,17 @@ export function resignSignedTransaction(signedTransaction, privateKey) {
  *   creationTimeMs?: number,
  *   ttlMs?: number,
  *   nonce?: number,
- *   privateKey: ArrayBufferView | ArrayBuffer | Buffer
+ *   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
+ *   privateKeyAlgorithm?: string
  * }} input
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
 export function buildRegisterDomainTransaction(input) {
   const native = resolveNativeBinding();
   if (!native || typeof native.buildRegisterDomainTransaction !== "function") {
-    throw new Error("native binding 'build_register_domain_transaction' is unavailable");
+    throw new Error(
+      "native binding 'build_register_domain_transaction' is unavailable",
+    );
   }
   const {
     chainId,
@@ -410,6 +476,7 @@ export function buildRegisterDomainTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
+    privateKeyAlgorithm = null,
   } = input;
 
   const canonicalAuthority = normalizeAuthority(authority);
@@ -430,11 +497,10 @@ export function buildRegisterDomainTransaction(input) {
     ttlMs,
     nonce,
     toBuffer(privateKey),
+    privateKeyAlgorithm,
   );
   const signed =
-    result?.signed_transaction ??
-    result?.signedTransaction ??
-    null;
+    result?.signed_transaction ?? result?.signedTransaction ?? null;
   const hashBytes = result?.hash ?? result?.hashBytes ?? null;
   if (!signed || !hashBytes) {
     throw new Error(
@@ -457,7 +523,8 @@ export function buildRegisterDomainTransaction(input) {
  *   creationTimeMs?: number,
  *   ttlMs?: number,
  *   nonce?: number,
- *   privateKey: ArrayBufferView | ArrayBuffer | Buffer
+ *   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
+ *   privateKeyAlgorithm?: string
  * }} input
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
@@ -476,6 +543,7 @@ export function buildTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
+    privateKeyAlgorithm = null,
   } = input;
 
   const normalizedInstructions = serializeInstructionPayloads(
@@ -483,7 +551,10 @@ export function buildTransaction(input) {
     "instructions",
   );
 
-  const metadataPayload = normalizeMetadataPayload(metadata, "transaction metadata");
+  const metadataPayload = normalizeMetadataPayload(
+    metadata,
+    "transaction metadata",
+  );
 
   const canonicalAuthority = normalizeAuthority(authority);
 
@@ -496,21 +567,157 @@ export function buildTransaction(input) {
     ttlMs,
     nonce,
     toBuffer(privateKey),
+    privateKeyAlgorithm,
   );
 
   const signed =
-    result?.signed_transaction ??
-    result?.signedTransaction ??
-    null;
+    result?.signed_transaction ?? result?.signedTransaction ?? null;
   const hashBytes = result?.hash ?? result?.hashBytes ?? null;
   if (!signed || !hashBytes) {
-    throw new Error("native binding 'build_transaction' returned missing fields");
+    throw new Error(
+      "native binding 'build_transaction' returned missing fields",
+    );
   }
 
   return {
     signedTransaction: Buffer.from(signed),
     hash: Buffer.from(hashBytes),
   };
+}
+
+/**
+ * Build an `UpsertSccpRouteManifest` instruction from a canonical data-model
+ * route manifest. The manifest should use snake_case fields accepted by the
+ * native host and chain-side ISI validation.
+ * @param {{manifest?: object, routeManifest?: object, route_manifest?: object} | object} input
+ * @returns {{UpsertSccpRouteManifest: {manifest: object}}}
+ */
+export function buildUpsertSccpRouteManifestInstruction(input) {
+  const source = normalizePlainObject(
+    input,
+    "buildUpsertSccpRouteManifestInstruction input",
+  );
+  const hasExplicitManifest =
+    Object.prototype.hasOwnProperty.call(source, "manifest") ||
+    Object.prototype.hasOwnProperty.call(source, "routeManifest") ||
+    Object.prototype.hasOwnProperty.call(source, "route_manifest");
+  const manifest = hasExplicitManifest
+    ? source.manifest ?? source.routeManifest ?? source.route_manifest
+    : source;
+  return {
+    UpsertSccpRouteManifest: {
+      manifest: normalizePlainObject(
+        manifest,
+        "buildUpsertSccpRouteManifestInstruction.manifest",
+      ),
+    },
+  };
+}
+
+/**
+ * Build a `RemoveSccpRouteManifest` instruction.
+ * @param {{routeId?: string, route_id?: string, assetKey?: string, asset_key?: string, counterpartyDomain?: number|string|bigint, counterparty_domain?: number|string|bigint, chainIdHex?: string, chain_id_hex?: string}} input
+ * @returns {{RemoveSccpRouteManifest: {route_id: string, asset_key: string, counterparty_domain: number, chain_id_hex: string}}}
+ */
+export function buildRemoveSccpRouteManifestInstruction(input) {
+  const source = normalizePlainObject(
+    input,
+    "buildRemoveSccpRouteManifestInstruction input",
+  );
+  return {
+    RemoveSccpRouteManifest: {
+      route_id: normalizeNonEmptyString(
+        source.route_id ?? source.routeId,
+        "buildRemoveSccpRouteManifestInstruction.routeId",
+      ),
+      asset_key: normalizeNonEmptyString(
+        source.asset_key ?? source.assetKey,
+        "buildRemoveSccpRouteManifestInstruction.assetKey",
+      ),
+      counterparty_domain: normalizeUint32(
+        source.counterparty_domain ?? source.counterpartyDomain,
+        "buildRemoveSccpRouteManifestInstruction.counterpartyDomain",
+      ),
+      chain_id_hex: normalizeNonEmptyString(
+        source.chain_id_hex ?? source.chainIdHex,
+        "buildRemoveSccpRouteManifestInstruction.chainIdHex",
+      ),
+    },
+  };
+}
+
+/**
+ * Build and sign a transaction containing one `UpsertSccpRouteManifest`
+ * instruction.
+ */
+export function buildUpsertSccpRouteManifestTransaction({
+  chainId,
+  authority,
+  manifest,
+  routeManifest,
+  route_manifest,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+  privateKeyAlgorithm = null,
+}) {
+  const instruction = buildUpsertSccpRouteManifestInstruction({
+    manifest: manifest ?? routeManifest ?? route_manifest,
+  });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+    privateKeyAlgorithm,
+  });
+}
+
+/**
+ * Build and sign a transaction containing one `RemoveSccpRouteManifest`
+ * instruction.
+ */
+export function buildRemoveSccpRouteManifestTransaction({
+  chainId,
+  authority,
+  routeId,
+  route_id,
+  assetKey,
+  asset_key,
+  counterpartyDomain,
+  counterparty_domain,
+  chainIdHex,
+  chain_id_hex,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+  privateKeyAlgorithm = null,
+}) {
+  const instruction = buildRemoveSccpRouteManifestInstruction({
+    routeId: routeId ?? route_id,
+    assetKey: assetKey ?? asset_key,
+    counterpartyDomain: counterpartyDomain ?? counterparty_domain,
+    chainIdHex: chainIdHex ?? chain_id_hex,
+  });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+    privateKeyAlgorithm,
+  });
 }
 
 /**
@@ -523,7 +730,8 @@ export function buildTransaction(input) {
  *   creationTimeMs?: number,
  *   ttlMs?: number,
  *   nonce?: number,
- *   privateKey: ArrayBufferView | ArrayBuffer | Buffer
+ *   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
+ *   privateKeyAlgorithm?: string
  * }} input
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
@@ -556,7 +764,9 @@ export function buildRegisterSnsNameTransaction(input) {
 export function buildIvmProvedTransaction(input) {
   const native = resolveNativeBinding();
   if (!native || typeof native.buildIvmProvedTransaction !== "function") {
-    throw new Error("native binding 'build_ivm_proved_transaction' is unavailable");
+    throw new Error(
+      "native binding 'build_ivm_proved_transaction' is unavailable",
+    );
   }
 
   const {
@@ -569,12 +779,19 @@ export function buildIvmProvedTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
+    privateKeyAlgorithm = null,
   } = input;
 
   const canonicalAuthority = normalizeAuthority(authority);
   const provedPayload = normalizeJsonObjectPayload(proved, "proved");
-  const attachmentPayload = normalizeJsonObjectPayload(attachment, "attachment");
-  const metadataPayload = normalizeMetadataPayload(metadata, "transaction metadata");
+  const attachmentPayload = normalizeJsonObjectPayload(
+    attachment,
+    "attachment",
+  );
+  const metadataPayload = normalizeMetadataPayload(
+    metadata,
+    "transaction metadata",
+  );
   const result = native.buildIvmProvedTransaction(
     chainId,
     canonicalAuthority,
@@ -585,12 +802,11 @@ export function buildIvmProvedTransaction(input) {
     ttlMs,
     nonce,
     toBuffer(privateKey),
+    privateKeyAlgorithm,
   );
 
   const signed =
-    result?.signed_transaction ??
-    result?.signedTransaction ??
-    null;
+    result?.signed_transaction ?? result?.signedTransaction ?? null;
   const hashBytes = result?.hash ?? result?.hashBytes ?? null;
   if (!signed || !hashBytes) {
     throw new Error(
@@ -624,6 +840,7 @@ export function buildKagemushaInstructionTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildKagemushaInstructionArchiveInstruction({
     type: instructionType ?? type ?? instruction_type,
@@ -643,6 +860,7 @@ export function buildKagemushaInstructionTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -661,16 +879,22 @@ export function buildKagemushaRecursiveRedeemTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const native = resolveNativeBinding();
   if (!native || typeof native.kagemushaRecursiveSpendRedeem !== "function") {
-    throw new Error("native binding 'kagemushaRecursiveSpendRedeem' is unavailable");
+    throw new Error(
+      "native binding 'kagemushaRecursiveSpendRedeem' is unavailable",
+    );
   }
   const selectedArchive =
     redeemRequestArchive ?? redeem_request_archive ?? requestArchive;
   const instructionArchive = Buffer.from(
     native.kagemushaRecursiveSpendRedeem(
-      toBuffer(selectedArchive, "kagemushaRecursiveRedeem.redeemRequestArchive"),
+      toBuffer(
+        selectedArchive,
+        "kagemushaRecursiveRedeem.redeemRequestArchive",
+      ),
     ),
   );
   return buildKagemushaInstructionTransaction({
@@ -683,6 +907,7 @@ export function buildKagemushaRecursiveRedeemTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -740,12 +965,16 @@ export function buildTimeTriggerAction(options) {
 
 export function buildPrecommitTriggerAction(options) {
   if (!options || typeof options !== "object") {
-    throw new TypeError("buildPrecommitTriggerAction options must be an object");
+    throw new TypeError(
+      "buildPrecommitTriggerAction options must be an object",
+    );
   }
   const { authority, instructions, repeats = null, metadata = null } = options;
   const native = resolveNativeBinding();
   if (!native || typeof native.buildPrecommitTriggerAction !== "function") {
-    throw new Error("native binding 'buildPrecommitTriggerAction' is unavailable");
+    throw new Error(
+      "native binding 'buildPrecommitTriggerAction' is unavailable",
+    );
   }
   const canonicalAuthority = normalizeAuthority(authority);
   const instructionPayloads = serializeInstructionPayloads(
@@ -783,8 +1012,12 @@ export function buildMintAssetTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
-  const instruction = buildMintAssetInstruction({ assetHoldingId: assetHoldingId ?? assetId, quantity });
+  const instruction = buildMintAssetInstruction({
+    assetHoldingId: assetHoldingId ?? assetId,
+    quantity,
+  });
   return buildTransaction({
     chainId,
     authority,
@@ -794,6 +1027,7 @@ export function buildMintAssetTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -812,8 +1046,12 @@ export function buildBurnAssetTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
-  const instruction = buildBurnAssetInstruction({ assetHoldingId: assetHoldingId ?? assetId, quantity });
+  const instruction = buildBurnAssetInstruction({
+    assetHoldingId: assetHoldingId ?? assetId,
+    quantity,
+  });
   return buildTransaction({
     chainId,
     authority,
@@ -823,6 +1061,7 @@ export function buildBurnAssetTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -839,6 +1078,7 @@ export function buildBurnTriggerTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildBurnTriggerRepetitionsInstruction({
     triggerId,
@@ -853,6 +1093,7 @@ export function buildBurnTriggerTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -869,6 +1110,7 @@ export function buildMintTriggerTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildMintTriggerRepetitionsInstruction({
     triggerId,
@@ -883,6 +1125,7 @@ export function buildMintTriggerTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -901,6 +1144,7 @@ export function buildTransferAssetTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildTransferAssetInstruction({
     sourceAssetHoldingId: sourceAssetHoldingId ?? sourceAssetId,
@@ -916,6 +1160,7 @@ export function buildTransferAssetTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -947,7 +1192,9 @@ function buildRegisterDomainInstructions({ domain, mints = [] }) {
  */
 function buildRegisterAccountInstructions({ account, transfers = [] }) {
   if (account.domainId !== undefined || account.domain !== undefined) {
-    throw new TypeError("account registration is domainless; bind account aliases separately");
+    throw new TypeError(
+      "account registration is domainless; bind account aliases separately",
+    );
   }
   const instructions = [];
   instructions.push(
@@ -957,7 +1204,8 @@ function buildRegisterAccountInstructions({ account, transfers = [] }) {
     }),
   );
   transfers.forEach((transfer) => {
-    const sourceAssetHoldingId = transfer.sourceAssetHoldingId ?? transfer.sourceAssetId;
+    const sourceAssetHoldingId =
+      transfer.sourceAssetHoldingId ?? transfer.sourceAssetId;
     if (!sourceAssetHoldingId) {
       throw new TypeError("transfer.sourceAssetHoldingId is required");
     }
@@ -985,6 +1233,7 @@ export function buildRegisterMultisigTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildRegisterMultisigInstruction({ accountId, spec });
   return buildTransaction({
@@ -996,13 +1245,17 @@ export function buildRegisterMultisigTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
 /**
  * Build instructions combining an asset definition registration with an optional mint.
  */
-function buildRegisterAssetDefinitionInstructions({ assetDefinition, mints = [] }) {
+function buildRegisterAssetDefinitionInstructions({
+  assetDefinition,
+  mints = [],
+}) {
   const instructions = [];
   const assetDefinitionId = normalizeTransactionAssetDefinitionId(
     assetDefinition.assetDefinitionId,
@@ -1042,12 +1295,18 @@ function buildRegisterAssetDefinitionInstructions({ assetDefinition, mints = [] 
   return instructions;
 }
 
-function resolveAssetHoldingIdForMint(assetDefinitionId, mint, context = "mint") {
+function resolveAssetHoldingIdForMint(
+  assetDefinitionId,
+  mint,
+  context = "mint",
+) {
   const providedAssetHoldingId = mint.assetHoldingId ?? mint.assetId;
   if (providedAssetHoldingId) {
     const normalizedAssetHoldingId = ToriiClient._normalizeAssetHoldingId(
       providedAssetHoldingId,
-      mint.assetHoldingId !== undefined ? `${context}.assetHoldingId` : `${context}.assetId`,
+      mint.assetHoldingId !== undefined
+        ? `${context}.assetHoldingId`
+        : `${context}.assetId`,
     );
     if (!mint.accountId) {
       return normalizedAssetHoldingId;
@@ -1069,7 +1328,11 @@ function resolveAssetHoldingIdForMint(assetDefinitionId, mint, context = "mint")
       `${context}.assetId, ${context}.assetHoldingId, or ${context}.accountId must be provided`,
     );
   }
-  return composeAssetHoldingIdFromDefinitionAndAccount(assetDefinitionId, mint.accountId, context);
+  return composeAssetHoldingIdFromDefinitionAndAccount(
+    assetDefinitionId,
+    mint.accountId,
+    context,
+  );
 }
 
 function normalizeDomainMintSpec(value, context) {
@@ -1083,7 +1346,9 @@ function normalizeDomainMintSpec(value, context) {
   return {
     assetHoldingId: ToriiClient._normalizeAssetHoldingId(
       assetHoldingId,
-      value.assetHoldingId !== undefined ? `${context}.assetHoldingId` : `${context}.assetId`,
+      value.assetHoldingId !== undefined
+        ? `${context}.assetHoldingId`
+        : `${context}.assetId`,
     ),
     quantity: value.quantity,
   };
@@ -1093,14 +1358,20 @@ function normalizeDomainMintSpecs(value, context) {
   if (!Array.isArray(value)) {
     throw new TypeError(`${context} must be an array of mint descriptors`);
   }
-  return value.map((item, index) => normalizeDomainMintSpec(item, `${context}[${index}]`));
+  return value.map((item, index) =>
+    normalizeDomainMintSpec(item, `${context}[${index}]`),
+  );
 }
 
 function normalizeAssetDefinitionMintSpec(assetDefinitionId, value, context) {
   if (!value || typeof value !== "object") {
     throw new TypeError(`${context} must be an object`);
   }
-  const assetHoldingId = resolveAssetHoldingIdForMint(assetDefinitionId, value, context);
+  const assetHoldingId = resolveAssetHoldingIdForMint(
+    assetDefinitionId,
+    value,
+    context,
+  );
   return {
     assetHoldingId,
     accountId:
@@ -1113,13 +1384,19 @@ function normalizeAssetDefinitionMintSpec(assetDefinitionId, value, context) {
 
 function normalizeAssetDefinitionMintSpecs(assetDefinitionId, value, context) {
   if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array of asset mint descriptors`);
+    throw new TypeError(
+      `${context} must be an array of asset mint descriptors`,
+    );
   }
   if (value.length === 0) {
     throw new TypeError(`${context} must contain at least one entry`);
   }
   return value.map((item, index) =>
-    normalizeAssetDefinitionMintSpec(assetDefinitionId, item, `${context}[${index}]`),
+    normalizeAssetDefinitionMintSpec(
+      assetDefinitionId,
+      item,
+      `${context}[${index}]`,
+    ),
   );
 }
 
@@ -1165,6 +1442,7 @@ export function buildMintAndTransferTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   if (!mint || typeof mint !== "object") {
     throw new TypeError("mint options are required");
@@ -1183,7 +1461,10 @@ export function buildMintAndTransferTransaction({
   }
   const mintInstruction = buildMintAssetInstruction(mint);
   const defaultSource = mint.assetHoldingId ?? mint.assetId;
-  if (!defaultSource && transferSpecs.some((spec) => spec.sourceAssetHoldingId === undefined)) {
+  if (
+    !defaultSource &&
+    transferSpecs.some((spec) => spec.sourceAssetHoldingId === undefined)
+  ) {
     throw new TypeError(
       "mint.assetHoldingId is required when transfer sourceAssetHoldingId is omitted",
     );
@@ -1208,6 +1489,7 @@ export function buildMintAndTransferTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1225,6 +1507,7 @@ export function buildRegisterDomainAndMintTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   if (!domain || typeof domain !== "object") {
     throw new TypeError("domain registration parameters are required");
@@ -1251,6 +1534,7 @@ export function buildRegisterDomainAndMintTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1268,6 +1552,7 @@ export function buildRegisterAccountAndTransferTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   if (!account || typeof account !== "object") {
     throw new TypeError("account registration parameters are required");
@@ -1294,6 +1579,7 @@ export function buildRegisterAccountAndTransferTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1311,6 +1597,7 @@ export function buildTransferAssetDefinitionTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildTransferAssetDefinitionInstruction({
     sourceAccountId,
@@ -1326,6 +1613,7 @@ export function buildTransferAssetDefinitionTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1343,6 +1631,7 @@ export function buildRegisterAssetDefinitionAndMintTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   if (!assetDefinition || typeof assetDefinition !== "object") {
     throw new TypeError("assetDefinition registration parameters are required");
@@ -1352,7 +1641,11 @@ export function buildRegisterAssetDefinitionAndMintTransaction({
   }
   const mintSpecs =
     mints !== undefined
-      ? normalizeAssetDefinitionMintSpecs(assetDefinition.assetDefinitionId, mints, "mints")
+      ? normalizeAssetDefinitionMintSpecs(
+          assetDefinition.assetDefinitionId,
+          mints,
+          "mints",
+        )
       : mint
         ? [
             normalizeAssetDefinitionMintSpec(
@@ -1375,6 +1668,7 @@ export function buildRegisterAssetDefinitionAndMintTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1395,6 +1689,7 @@ export function buildRegisterAssetDefinitionMintAndTransferTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   if (!assetDefinition || typeof assetDefinition !== "object") {
     throw new TypeError("assetDefinition registration parameters are required");
@@ -1407,7 +1702,11 @@ export function buildRegisterAssetDefinitionMintAndTransferTransaction({
   }
   const mintSpecs =
     mints !== undefined
-      ? normalizeAssetDefinitionMintSpecs(assetDefinition.assetDefinitionId, mints, "mints")
+      ? normalizeAssetDefinitionMintSpecs(
+          assetDefinition.assetDefinitionId,
+          mints,
+          "mints",
+        )
       : [
           normalizeAssetDefinitionMintSpec(
             assetDefinition.assetDefinitionId,
@@ -1455,6 +1754,7 @@ export function buildRegisterAssetDefinitionMintAndTransferTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1472,6 +1772,7 @@ export function buildTransferDomainTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildTransferDomainInstruction({
     sourceAccountId,
@@ -1487,6 +1788,7 @@ export function buildTransferDomainTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1504,6 +1806,7 @@ export function buildTransferNftTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildTransferNftInstruction({
     sourceAccountId,
@@ -1519,6 +1822,7 @@ export function buildTransferNftTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1535,6 +1839,7 @@ export function buildRegisterRwaTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildRegisterRwaInstruction({ rwa, rwaJson });
   return buildTransaction({
@@ -1546,6 +1851,7 @@ export function buildRegisterRwaTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1564,6 +1870,7 @@ export function buildTransferRwaTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildTransferRwaInstruction({
     sourceAccountId,
@@ -1580,6 +1887,7 @@ export function buildTransferRwaTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1596,6 +1904,7 @@ export function buildMergeRwasTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildMergeRwasInstruction({ merge, mergeJson });
   return buildTransaction({
@@ -1607,6 +1916,7 @@ export function buildMergeRwasTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1623,6 +1933,7 @@ export function buildRedeemRwaTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildRedeemRwaInstruction({ rwaId, quantity });
   return buildTransaction({
@@ -1634,6 +1945,7 @@ export function buildRedeemRwaTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1649,6 +1961,7 @@ export function buildFreezeRwaTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildFreezeRwaInstruction({ rwaId });
   return buildTransaction({
@@ -1660,6 +1973,7 @@ export function buildFreezeRwaTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1675,6 +1989,7 @@ export function buildUnfreezeRwaTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildUnfreezeRwaInstruction({ rwaId });
   return buildTransaction({
@@ -1686,6 +2001,7 @@ export function buildUnfreezeRwaTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1702,6 +2018,7 @@ export function buildHoldRwaTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildHoldRwaInstruction({ rwaId, quantity });
   return buildTransaction({
@@ -1713,6 +2030,7 @@ export function buildHoldRwaTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1729,6 +2047,7 @@ export function buildReleaseRwaTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildReleaseRwaInstruction({ rwaId, quantity });
   return buildTransaction({
@@ -1740,6 +2059,7 @@ export function buildReleaseRwaTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1757,6 +2077,7 @@ export function buildForceTransferRwaTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildForceTransferRwaInstruction({
     rwaId,
@@ -1772,6 +2093,7 @@ export function buildForceTransferRwaTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1789,6 +2111,7 @@ export function buildSetRwaControlsTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildSetRwaControlsInstruction({
     rwaId,
@@ -1804,6 +2127,7 @@ export function buildSetRwaControlsTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1821,6 +2145,7 @@ export function buildSetRwaKeyValueTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildSetRwaKeyValueInstruction({ rwaId, key, value });
   return buildTransaction({
@@ -1832,6 +2157,7 @@ export function buildSetRwaKeyValueTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1848,6 +2174,7 @@ export function buildRemoveRwaKeyValueTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildRemoveRwaKeyValueInstruction({ rwaId, key });
   return buildTransaction({
@@ -1859,6 +2186,7 @@ export function buildRemoveRwaKeyValueTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1874,6 +2202,7 @@ export function buildCreateKaigiTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildCreateKaigiInstruction(call);
   return buildTransaction({
@@ -1885,6 +2214,7 @@ export function buildCreateKaigiTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1900,6 +2230,7 @@ export function buildJoinKaigiTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildJoinKaigiInstruction(join);
   return buildTransaction({
@@ -1911,6 +2242,7 @@ export function buildJoinKaigiTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1926,6 +2258,7 @@ export function buildLeaveKaigiTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildLeaveKaigiInstruction(leave);
   return buildTransaction({
@@ -1937,6 +2270,7 @@ export function buildLeaveKaigiTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -1952,6 +2286,7 @@ export function buildEndKaigiTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildEndKaigiInstruction(end);
   return buildTransaction({
@@ -1963,31 +2298,27 @@ export function buildEndKaigiTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
 function normalizeInlineVerifyingKeyRecord(value, context) {
   const record =
-    value && typeof value === "object" && !Array.isArray(value)
-      ? value
-      : null;
+    value && typeof value === "object" && !Array.isArray(value) ? value : null;
   if (!record) {
     throw new TypeError(`${context}.verifyingKey must be an object`);
   }
-  const inlineKey =
-    record.inline_key ??
-    record.inlineKey ??
-    null;
+  const inlineKey = record.inline_key ?? record.inlineKey ?? null;
   if (!inlineKey || typeof inlineKey !== "object" || Array.isArray(inlineKey)) {
     throw new TypeError(`${context}.verifyingKey.inline_key must be present`);
   }
   const bytesBase64 = String(
-    inlineKey.bytes_b64 ??
-      inlineKey.bytesBase64 ??
-      "",
+    inlineKey.bytes_b64 ?? inlineKey.bytesBase64 ?? "",
   ).trim();
   if (!bytesBase64) {
-    throw new TypeError(`${context}.verifyingKey.inline_key.bytes_b64 must be present`);
+    throw new TypeError(
+      `${context}.verifyingKey.inline_key.bytes_b64 must be present`,
+    );
   }
   const backend = normalizeExactMetadataString(
     record.id?.backend ?? record.backend,
@@ -2095,20 +2426,26 @@ export function buildPrivateKaigiFeeSpend({
     vk.bytes,
   );
   return {
-    asset_definition_id: String(result.assetDefinitionId ?? result.asset_definition_id),
+    asset_definition_id: String(
+      result.assetDefinitionId ?? result.asset_definition_id,
+    ),
     anchor_root: Buffer.from(result.anchorRoot ?? result.anchor_root),
     nullifiers: Array.isArray(result.nullifiers)
       ? result.nullifiers.map((entry) => Buffer.from(entry))
       : [],
-    output_commitments: Array.isArray(result.outputCommitments ?? result.output_commitments)
-      ? (result.outputCommitments ?? result.output_commitments).map((entry) => Buffer.from(entry))
+    output_commitments: Array.isArray(
+      result.outputCommitments ?? result.output_commitments,
+    )
+      ? (result.outputCommitments ?? result.output_commitments).map((entry) =>
+          Buffer.from(entry),
+        )
       : [],
     encrypted_change_payloads: Array.isArray(
       result.encryptedChangePayloads ?? result.encrypted_change_payloads,
     )
-      ? (result.encryptedChangePayloads ?? result.encrypted_change_payloads).map((entry) =>
-          Buffer.from(entry),
-        )
+      ? (
+          result.encryptedChangePayloads ?? result.encrypted_change_payloads
+        ).map((entry) => Buffer.from(entry))
       : [],
     proof: Buffer.from(result.proof),
   };
@@ -2128,7 +2465,10 @@ export function buildConfidentialTransferProofV2({
   verifyingKey,
 }) {
   const native = resolveNativeBinding();
-  if (!native || typeof native.buildConfidentialTransferProofV2 !== "function") {
+  if (
+    !native ||
+    typeof native.buildConfidentialTransferProofV2 !== "function"
+  ) {
     throw new Error(
       "native binding 'buildConfidentialTransferProofV2' is unavailable",
     );
@@ -2143,7 +2483,10 @@ export function buildConfidentialTransferProofV2({
   }
   const normalizedInputs = Array.isArray(inputs)
     ? inputs.map((input, index) => ({
-        amount: normalizeWholeNumberLiteral(input?.amount, `inputs[${index}].amount`),
+        amount: normalizeWholeNumberLiteral(
+          input?.amount,
+          `inputs[${index}].amount`,
+        ),
         rhoHex: normalizeFixed32HexInput(
           input?.rhoHex ?? input?.rho,
           `inputs[${index}].rho`,
@@ -2153,7 +2496,9 @@ export function buildConfidentialTransferProofV2({
           input?.diversifier_hex !== undefined ||
           input?.diversifier !== undefined
             ? normalizeFixed32HexInput(
-                input?.diversifierHex ?? input?.diversifier_hex ?? input?.diversifier,
+                input?.diversifierHex ??
+                  input?.diversifier_hex ??
+                  input?.diversifier,
                 `inputs[${index}].diversifier`,
               )
             : undefined,
@@ -2162,7 +2507,10 @@ export function buildConfidentialTransferProofV2({
     : [];
   const normalizedOutputs = Array.isArray(outputs)
     ? outputs.map((output, index) => ({
-        amount: normalizeWholeNumberLiteral(output?.amount, `outputs[${index}].amount`),
+        amount: normalizeWholeNumberLiteral(
+          output?.amount,
+          `outputs[${index}].amount`,
+        ),
         rhoHex: normalizeFixed32HexInput(
           output?.rhoHex ?? output?.rho,
           `outputs[${index}].rho`,
@@ -2197,8 +2545,12 @@ export function buildConfidentialTransferProofV2({
     nullifiers: Array.isArray(result.nullifiers)
       ? result.nullifiers.map((entry) => Buffer.from(entry))
       : [],
-    outputCommitments: Array.isArray(result.outputCommitments ?? result.output_commitments)
-      ? (result.outputCommitments ?? result.output_commitments).map((entry) => Buffer.from(entry))
+    outputCommitments: Array.isArray(
+      result.outputCommitments ?? result.output_commitments,
+    )
+      ? (result.outputCommitments ?? result.output_commitments).map((entry) =>
+          Buffer.from(entry),
+        )
       : [],
     root: Buffer.from(result.root),
     proof: Buffer.from(result.proof),
@@ -2224,7 +2576,10 @@ export function buildConfidentialAssetHiddenTransferProofV1({
   verifyingKey,
 }) {
   const native = resolveNativeBinding();
-  if (!native || typeof native.buildConfidentialAssetHiddenTransferProofV1 !== "function") {
+  if (
+    !native ||
+    typeof native.buildConfidentialAssetHiddenTransferProofV1 !== "function"
+  ) {
     throw new Error(
       "native binding 'buildConfidentialAssetHiddenTransferProofV1' is unavailable",
     );
@@ -2235,7 +2590,9 @@ export function buildConfidentialAssetHiddenTransferProofV1({
   );
   const normalizeList = (values, context) =>
     Array.isArray(values)
-      ? values.map((entry, index) => normalizeFixed32HexInput(entry, `${context}[${index}]`))
+      ? values.map((entry, index) =>
+          normalizeFixed32HexInput(entry, `${context}[${index}]`),
+        )
       : [];
   const result = native.buildConfidentialAssetHiddenTransferProofV1(
     normalizeExactMetadataString(chainId, "confidentialAssetHiddenTransferProofV1.chainId"),
@@ -2243,21 +2600,32 @@ export function buildConfidentialAssetHiddenTransferProofV1({
     normalizeFixed32HexInput(assetSetRootHex ?? assetSetRoot, "assetSetRoot"),
     normalizeList(inputCommitmentsHex ?? inputCommitments, "inputCommitments"),
     normalizeList(nullifiersHex ?? nullifiers, "nullifiers"),
-    normalizeList(outputCommitmentsHex ?? outputCommitments, "outputCommitments"),
+    normalizeList(
+      outputCommitmentsHex ?? outputCommitments,
+      "outputCommitments",
+    ),
     normalizeFixed32HexInput(rootHintHex ?? rootHint, "rootHint"),
     vk.backend,
     vk.circuitId,
     vk.bytes,
   );
   return {
-    inputCommitments: Array.isArray(result.inputCommitments ?? result.input_commitments)
-      ? (result.inputCommitments ?? result.input_commitments).map((entry) => Buffer.from(entry))
+    inputCommitments: Array.isArray(
+      result.inputCommitments ?? result.input_commitments,
+    )
+      ? (result.inputCommitments ?? result.input_commitments).map((entry) =>
+          Buffer.from(entry),
+        )
       : [],
     nullifiers: Array.isArray(result.nullifiers)
       ? result.nullifiers.map((entry) => Buffer.from(entry))
       : [],
-    outputCommitments: Array.isArray(result.outputCommitments ?? result.output_commitments)
-      ? (result.outputCommitments ?? result.output_commitments).map((entry) => Buffer.from(entry))
+    outputCommitments: Array.isArray(
+      result.outputCommitments ?? result.output_commitments,
+    )
+      ? (result.outputCommitments ?? result.output_commitments).map((entry) =>
+          Buffer.from(entry),
+        )
       : [],
     root: Buffer.from(result.root),
     proof: Buffer.from(result.proof),
@@ -2278,7 +2646,10 @@ export function buildConfidentialUnshieldProofV2({
   verifyingKey,
 }) {
   const native = resolveNativeBinding();
-  if (!native || typeof native.buildConfidentialUnshieldProofV2 !== "function") {
+  if (
+    !native ||
+    typeof native.buildConfidentialUnshieldProofV2 !== "function"
+  ) {
     throw new Error(
       "native binding 'buildConfidentialUnshieldProofV2' is unavailable",
     );
@@ -2293,7 +2664,10 @@ export function buildConfidentialUnshieldProofV2({
   }
   const normalizedInputs = Array.isArray(inputs)
     ? inputs.map((input, index) => ({
-        amount: normalizeWholeNumberLiteral(input?.amount, `inputs[${index}].amount`),
+        amount: normalizeWholeNumberLiteral(
+          input?.amount,
+          `inputs[${index}].amount`,
+        ),
         rhoHex: normalizeFixed32HexInput(
           input?.rhoHex ?? input?.rho,
           `inputs[${index}].rho`,
@@ -2303,7 +2677,9 @@ export function buildConfidentialUnshieldProofV2({
           input?.diversifier_hex !== undefined ||
           input?.diversifier !== undefined
             ? normalizeFixed32HexInput(
-                input?.diversifierHex ?? input?.diversifier_hex ?? input?.diversifier,
+                input?.diversifierHex ??
+                  input?.diversifier_hex ??
+                  input?.diversifier,
                 `inputs[${index}].diversifier`,
               )
             : undefined,
@@ -2354,7 +2730,10 @@ export function buildConfidentialUnshieldProofV3({
   verifyingKey,
 }) {
   const native = resolveNativeBinding();
-  if (!native || typeof native.buildConfidentialUnshieldProofV3 !== "function") {
+  if (
+    !native ||
+    typeof native.buildConfidentialUnshieldProofV3 !== "function"
+  ) {
     throw new Error(
       "native binding 'buildConfidentialUnshieldProofV3' is unavailable",
     );
@@ -2369,7 +2748,10 @@ export function buildConfidentialUnshieldProofV3({
   }
   const normalizedInputs = Array.isArray(inputs)
     ? inputs.map((input, index) => ({
-        amount: normalizeWholeNumberLiteral(input?.amount, `inputs[${index}].amount`),
+        amount: normalizeWholeNumberLiteral(
+          input?.amount,
+          `inputs[${index}].amount`,
+        ),
         rhoHex: normalizeFixed32HexInput(
           input?.rhoHex ?? input?.rho,
           `inputs[${index}].rho`,
@@ -2379,7 +2761,9 @@ export function buildConfidentialUnshieldProofV3({
           input?.diversifier_hex !== undefined ||
           input?.diversifier !== undefined
             ? normalizeFixed32HexInput(
-                input?.diversifierHex ?? input?.diversifier_hex ?? input?.diversifier,
+                input?.diversifierHex ??
+                  input?.diversifier_hex ??
+                  input?.diversifier,
                 `inputs[${index}].diversifier`,
               )
             : undefined,
@@ -2388,7 +2772,10 @@ export function buildConfidentialUnshieldProofV3({
     : [];
   const normalizedOutputs = Array.isArray(outputs)
     ? outputs.map((output, index) => ({
-        amount: normalizeWholeNumberLiteral(output?.amount, `outputs[${index}].amount`),
+        amount: normalizeWholeNumberLiteral(
+          output?.amount,
+          `outputs[${index}].amount`,
+        ),
         rhoHex: normalizeFixed32HexInput(
           output?.rhoHex ?? output?.rho,
           `outputs[${index}].rho`,
@@ -2420,8 +2807,12 @@ export function buildConfidentialUnshieldProofV3({
     nullifiers: Array.isArray(result.nullifiers)
       ? result.nullifiers.map((entry) => Buffer.from(entry))
       : [],
-    outputCommitments: Array.isArray(result.outputCommitments ?? result.output_commitments)
-      ? (result.outputCommitments ?? result.output_commitments).map((entry) => Buffer.from(entry))
+    outputCommitments: Array.isArray(
+      result.outputCommitments ?? result.output_commitments,
+    )
+      ? (result.outputCommitments ?? result.output_commitments).map((entry) =>
+          Buffer.from(entry),
+        )
       : [],
     root: Buffer.from(result.root),
     proof: Buffer.from(result.proof),
@@ -2441,7 +2832,10 @@ export function buildPrivateCreateKaigiTransaction({
   nonce = null,
 }) {
   const native = resolveNativeBinding();
-  if (!native || typeof native.buildPrivateCreateKaigiTransaction !== "function") {
+  if (
+    !native ||
+    typeof native.buildPrivateCreateKaigiTransaction !== "function"
+  ) {
     throw new Error(
       "native binding 'buildPrivateCreateKaigiTransaction' is unavailable",
     );
@@ -2475,7 +2869,10 @@ export function buildPrivateJoinKaigiTransaction({
   nonce = null,
 }) {
   const native = resolveNativeBinding();
-  if (!native || typeof native.buildPrivateJoinKaigiTransaction !== "function") {
+  if (
+    !native ||
+    typeof native.buildPrivateJoinKaigiTransaction !== "function"
+  ) {
     throw new Error(
       "native binding 'buildPrivateJoinKaigiTransaction' is unavailable",
     );
@@ -2544,6 +2941,7 @@ export function buildRecordKaigiUsageTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildRecordKaigiUsageInstruction(usage);
   return buildTransaction({
@@ -2555,6 +2953,7 @@ export function buildRecordKaigiUsageTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -2570,6 +2969,7 @@ export function buildSetKaigiRelayManifestTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildSetKaigiRelayManifestInstruction(manifest);
   return buildTransaction({
@@ -2581,6 +2981,7 @@ export function buildSetKaigiRelayManifestTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -2596,6 +2997,7 @@ export function buildRegisterKaigiRelayTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildRegisterKaigiRelayInstruction(relay);
   return buildTransaction({
@@ -2607,6 +3009,7 @@ export function buildRegisterKaigiRelayTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -2622,6 +3025,7 @@ export function buildProposeDeployContractTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildProposeDeployContractInstruction(proposal);
   return buildTransaction({
@@ -2633,6 +3037,7 @@ export function buildProposeDeployContractTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -2648,6 +3053,7 @@ export function buildCastZkBallotTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildCastZkBallotInstruction(ballot);
   return buildTransaction({
@@ -2659,6 +3065,7 @@ export function buildCastZkBallotTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -2674,6 +3081,7 @@ export function buildCastPlainBallotTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildCastPlainBallotInstruction(ballot);
   return buildTransaction({
@@ -2685,6 +3093,7 @@ export function buildCastPlainBallotTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -2700,6 +3109,7 @@ export function buildEnactReferendumTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildEnactReferendumInstruction(enactment);
   return buildTransaction({
@@ -2711,6 +3121,7 @@ export function buildEnactReferendumTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -2726,6 +3137,7 @@ export function buildFinalizeReferendumTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildFinalizeReferendumInstruction(finalization);
   return buildTransaction({
@@ -2737,6 +3149,7 @@ export function buildFinalizeReferendumTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -2752,6 +3165,7 @@ export function buildPersistCouncilForEpochTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildPersistCouncilForEpochInstruction(record);
   return buildTransaction({
@@ -2763,6 +3177,7 @@ export function buildPersistCouncilForEpochTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -2775,6 +3190,7 @@ export function buildRegisterZkAssetTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildRegisterZkAssetInstruction(registration);
   return buildTransaction({
@@ -2786,6 +3202,7 @@ export function buildRegisterZkAssetTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -2798,8 +3215,10 @@ export function buildScheduleConfidentialPolicyTransitionTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
-  const instruction = buildScheduleConfidentialPolicyTransitionInstruction(transition);
+  const instruction =
+    buildScheduleConfidentialPolicyTransitionInstruction(transition);
   return buildTransaction({
     chainId,
     authority,
@@ -2809,6 +3228,7 @@ export function buildScheduleConfidentialPolicyTransitionTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -2821,8 +3241,10 @@ export function buildCancelConfidentialPolicyTransitionTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
-  const instruction = buildCancelConfidentialPolicyTransitionInstruction(cancellation);
+  const instruction =
+    buildCancelConfidentialPolicyTransitionInstruction(cancellation);
   return buildTransaction({
     chainId,
     authority,
@@ -2832,6 +3254,7 @@ export function buildCancelConfidentialPolicyTransitionTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -2844,6 +3267,7 @@ export function buildShieldTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildShieldInstruction(shield);
   return buildTransaction({
@@ -2855,6 +3279,7 @@ export function buildShieldTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -2867,6 +3292,7 @@ export function buildZkTransferTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildZkTransferInstruction(transfer);
   return buildTransaction({
@@ -2878,6 +3304,7 @@ export function buildZkTransferTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -2890,6 +3317,7 @@ export function buildUnshieldTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildUnshieldInstruction(unshield);
   return buildTransaction({
@@ -2901,6 +3329,7 @@ export function buildUnshieldTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -2913,6 +3342,7 @@ export function buildCreateElectionTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildCreateElectionInstruction(election);
   return buildTransaction({
@@ -2924,6 +3354,7 @@ export function buildCreateElectionTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -2936,6 +3367,7 @@ export function buildSubmitBallotTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildSubmitBallotInstruction(ballot);
   return buildTransaction({
@@ -2947,6 +3379,7 @@ export function buildSubmitBallotTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -2959,6 +3392,7 @@ export function buildFinalizeElectionTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildFinalizeElectionInstruction(finalization);
   return buildTransaction({
@@ -2970,9 +3404,9 @@ export function buildFinalizeElectionTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
-
 
 /**
  * Build a transaction containing a `RegisterSmartContractCode` instruction.
@@ -2986,6 +3420,7 @@ export function buildRegisterSmartContractCodeTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildRegisterSmartContractCodeInstruction({ manifest });
   return buildTransaction({
@@ -2997,6 +3432,7 @@ export function buildRegisterSmartContractCodeTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -3013,6 +3449,7 @@ export function buildRegisterSmartContractBytesTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildRegisterSmartContractBytesInstruction({
     codeHash,
@@ -3027,6 +3464,7 @@ export function buildRegisterSmartContractBytesTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -3043,6 +3481,7 @@ export function buildRemoveSmartContractBytesTransaction({
   ttlMs = null,
   nonce = null,
   privateKey,
+  privateKeyAlgorithm = null,
 }) {
   const instruction = buildRemoveSmartContractBytesInstruction({
     codeHash,
@@ -3057,6 +3496,7 @@ export function buildRemoveSmartContractBytesTransaction({
     ttlMs,
     nonce,
     privateKey,
+    privateKeyAlgorithm,
   });
 }
 
@@ -3168,7 +3608,11 @@ export async function registerSnsNameViaConsensus(input) {
     };
   } catch (error) {
     const message = String(error?.message ?? error);
-    if (!message.toLowerCase().includes("timed out waiting for transaction status")) {
+    if (
+      !message
+        .toLowerCase()
+        .includes("timed out waiting for transaction status")
+    ) {
       throw error;
     }
     return {
@@ -3200,7 +3644,9 @@ export async function submitTransactionEntrypoint(
     throw new TypeError("client must be an instance of ToriiClient");
   }
   if (!options || typeof options !== "object") {
-    throw new TypeError("options.hashHex is required for entrypoint submission");
+    throw new TypeError(
+      "options.hashHex is required for entrypoint submission",
+    );
   }
   const hashHex = String(options.hashHex ?? "").trim();
   if (!/^[0-9a-fA-F]{64}$/.test(hashHex)) {

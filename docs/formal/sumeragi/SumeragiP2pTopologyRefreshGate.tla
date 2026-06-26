@@ -353,6 +353,10 @@ P2pTopologyRefreshExactness ==
   /\ P2pRefreshLocalRemovalExact
   /\ P2pRefreshIdleSkipExact
 
+P2pTopologyRefreshCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ P2pTopologyRefreshExactness
+
 BugNoPeersAdvertises ==
   ActualCase("no_peers_empty_unseen") = SpecCase("no_peers_empty_unseen")
 

@@ -38,6 +38,9 @@ requires a new source-proof design, fresh fixtures, SDK/Torii surface review,
 and explicit governance approval rather than reviving diagnostic code paths.
 The retired-network surface guard requires explicit no-support launch-scope
 wording in the docs and status files before release evidence can pass.
+Translated public bridge-proof launch-scope docs carry the same generic
+unsupported-family and not-remaining-work boundary so localized docs cannot
+silently preserve a narrower SCCP support statement.
 Generated release-readiness Markdown and verifier-owned release-bundle Markdown
 also carry the exact no-support sentence so public operator artifacts cannot
 imply hidden Sub&#115;trate/Pol&#107;adot compatibility.
@@ -76,6 +79,39 @@ The Rust readiness path requires those route allowlist and canary hashes to use
 the canonical lowercase `0x` spelling; bare hex, `0X` prefixes, uppercase byte
 aliases, and padded strings stay blockers. Deployment-bound EVM lane readiness
 replays that same canonical check for copied route-canary transaction hashes.
+User-level SCCP route manifests apply the same fail-closed spelling rule for
+BSC/TRON route hashes, BSC EVM addresses, chain ids, optional proof/deployment
+evidence hashes, and BSC explorer transaction hashes; uppercase, whitespace
+padded, or repeated-prefix operator input is rejected instead of normalized into
+readiness metadata. EVM destination rollout evidence helpers also require the
+same canonical lowercase `0x` spelling for fixed hashes, EVM addresses, and
+runtime bytecode; bare lowercase hex is rejected before destination binding or
+route-allowlist TOML can be rendered. Direct ETH/BSC source-bridge evidence
+helpers enforce the same `0x` prefix requirement for source bridge addresses,
+fixed component hashes, and runtime bytecode before source material or
+deployment-record TOML can be rendered. The TRON source-bridge evidence helper
+applies that canonical prefix rule to fixed component hashes and runtime
+bytecode while keeping TRON address decoding on its separate Base58/`0x41`
+address path. All-lanes evidence validation now applies the same rule to copied
+fixed-width hashes, including EVM source deployment transaction input SHA-256
+metadata, so bare lowercase aliases cannot be normalized into public readiness
+summaries.
+Direct Solana and TON destination evidence helpers now also require canonical
+lowercase `0x` spellings for fixed verifier hashes and inline verifier program
+or code-BoC hex preimages, so bare hex, `0X` prefixes, and uppercase byte
+aliases fail before destination or route-allowlist TOML can be rendered.
+The Solana and TON source-state evidence helpers apply the same canonical
+fixed-hash rule to trust-anchor, consensus, message-inclusion, source-state,
+finality-policy, adapter verifier, deployment receipt, and full-light-client
+audit hashes before source material or deployment TOML can be rendered.
+Python Torii-client, JavaScript, Swift, Kotlin/JVM, and Java Android SCCP
+proof-request, message-bundle, and source-proof hex normalization now reject
+`0X` prefixes and uppercase byte aliases for public-input hashes, statement
+hashes, optional Groth16 prover artifact/proving-key hashes, fixed source-proof
+hashes, and canonical SCCP message-bundle hash fields, while preserving
+lowercase bare and lowercase `0x` spellings where those SDK APIs already
+accepted both forms. Solana base58 identifiers remain on the separate Solana
+decoding path rather than being treated as hex aliases.
 Normalized codec JSON fixed-byte variants and shared public SCCP JSON hex
 helpers use the same canonical lowercase `0x` syntax for fixed hashes,
 byte-vector fields, and vector-of-byte-vector fields; bare, `0X`,
@@ -2055,7 +2091,10 @@ account to be `active`, requires a present `code_boc`, normalizes the returned
 `code_hash`, `account_state_hash`, and last-transaction hash to 32-byte hex,
 and recomputes the `code_boc` single-root representation hash to reject any
 remote `code_hash` drift. Padded raw addresses or padded remote hash text fail
-closed instead of being trimmed into rollout evidence, and padded `code_boc`
+closed instead of being trimmed into rollout evidence. Remote TON hash text may
+use canonical base64/base64url, lowercase bare hex, or lowercase `0x` hex;
+`0X` prefixes and uppercase hex-byte aliases fail before rollout evidence is
+derived. Padded `code_boc`
 base64 fails both live collection and imported summary rendering before offline
 replay arguments or TOML comments are produced. The collector also rejects API
 URLs that embed credentials, params, queries, or fragments and caps the
@@ -2855,7 +2894,13 @@ generation, the mirrored Java Android SDK checks, the native .NET/C# ETH/BSC
 facade tests, the EVM/TRON Groth16 contract smoke, and core bridge-proof
 admission. The `eth,bsc` public release row is blocked unless the `dotnet-sdk`
 phase also passes, so the native C# BSC facade cannot be validated only by
-ad-hoc local output.
+ad-hoc local output. The Windows `.NET` phase also inspects the direct
+`sccp-dotnet-sdk.trx` file before publishing release markers: the TRX must name
+`Hyperledger.Iroha.Sdk.Tests.dll`, include at least one passed SCCP
+`UnitTestResult`, and contain no failed, skipped, timed-out, or aborted SCCP
+test results. Empty placeholder TRX files, wrong-assembly TRX files, and
+failed/skipped result XML remain forged evidence even if the console summary
+looks successful.
 `.github/workflows/sccp_production_corridor.yml` attaches the same
 phase list to pull requests touching SCCP surfaces, a nightly scheduled run,
 and manual `workflow_dispatch` runs for either the full corridor or one named

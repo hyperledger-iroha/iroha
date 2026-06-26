@@ -812,13 +812,13 @@ Map<String, String> headers =
 Signatures cover the canonical method/path/query/body layout plus freshness
 metadata, matching the Rust verifier Torii uses on app-facing endpoints.
 
-Offline V2 issuer POST endpoints (`/v1/offline/v2/keys/refill`,
-`/v1/offline/v2/notes/issue`, `/v1/offline/v2/notes/redeem`, and
-`/v1/offline/v2/audit`) carry auth in the JSON body instead of `X-Iroha-*`
-headers. Use `CanonicalRequestSigner.withBodySignature(...)` to add
-`account_id`, `timestamp_ms`, `nonce`, and `signature_base64` to a request
-body. Multisig callers should build the canonical request witness separately
-and pass it as `witness_base64` with `withBodyWitness(...)`.
+Offline V2 key-refill compatibility requests carry auth in the JSON body instead
+of `X-Iroha-*` headers. Use `CanonicalRequestSigner.withBodySignature(...)` to
+add `account_id`, `timestamp_ms`, `nonce`, and `signature_base64` to a request
+body. Multisig callers should build the canonical request witness separately and
+pass it as `witness_base64` with `withBodyWitness(...)`. Classic Offline Note
+issue, redeem, audit, and defund submission paths are retired; production
+offline payments use Kagemusha flows.
 `ToriiOfflineNoteIssuerClient` requires `ToriiCanonicalRequestAuth` for
 issuer requests, including flows that also attach device-proof payloads.
 
@@ -1179,30 +1179,12 @@ Licensed under the Apache License, Version 2.0. See `LICENSE` for details.
 ## Offline readiness and auditing
 
 The SDK exposes a lightweight `OfflineToriiClient` for the maintained Offline
-readiness surface. Torii also keeps issuer POST endpoints for key refill and
-note issuance: wallets derive the Offline Note commitment locally and pass
-the bare 64-character `note_commitment` hex to
-`/v1/offline/v2/notes/issue`.
-Torii issues that exact commitment and returns settlement lineage metadata;
-`settlement.entry_hash` is no longer used as the note commitment. Redemption
-and audit payloads are submitted as direct transaction instructions.
-`OfflineNoteWallet` provides the Java Android one-call app flow for load,
-receive request preparation, P2P pay, accept, optional audit publication,
-redeem submission, and sync. Offline-to-offline pay/accept is local-final and
-irrevocable: the sender immediately records spent inputs and spendable change,
-while the recipient marks the matched pending output spendable after local
-token and proof verification. No online sync is required for the value transfer.
-`publishAudit` is a separate online evidence-submission step and does not change
-wallet note spendability. The wallet keeps issuer, attestation, random, proof
-provider/verifier, store, and direct transaction submission behind public
-interfaces so Android apps can bind them to Torii, Android Keystore, and
-app-specific persistence; `sync()` additionally accepts a transaction-outcome
-resolver for finalizing redeem-pending note records after Torii observes the
-redeem transaction outcome.
-`OfflineBearerCashWallet` is the Java Android app-facing cash surface. It wraps
-the Offline Note wallet so value is carried by note commitments, note secrets,
-nullifiers, audit lineage, and issuer-signed hardware key certificates instead
-of a separate mutable purse protocol.
+readiness surface. Torii keeps body-signed key refill for compatibility, but
+classic note issue, redemption, audit, and defund submission paths are retired.
+`OfflineNoteWallet` and `OfflineBearerCashWallet` remain available for
+historical model and fixture compatibility, but their default issuer and
+transaction submitter surfaces fail closed for classic note issue, audit,
+redeem, and defund paths. Production offline payments use Kagemusha flows.
 `KagemushaCompactPaymentTokenProver` exposes the native record-backed compact
 token prover for shielded offline-offline payments. Pass a Norito-encoded
 `KagemushaVerifiedFoldRecordBundle`; the JNI bridge verifies each private hop
@@ -1414,10 +1396,11 @@ on every committed wallet-state revision and rejects app-data rollback or
 cloned preference snapshots after the old revision key has been deleted. Legacy
 `SPEND_PENDING` records decode as `SPENT`, and legacy `CHANGE_PENDING` records
 decode as `SPENDABLE`.
-the core module includes an in-memory store,
-`IrohaOfflineNoteTransactionSubmitter`, and
-`ToriiOfflineNoteIssuerClient` for body-signed key-refill plus note-issue
-loads in tests and JVM tooling.
+the core module includes an in-memory store and `ToriiOfflineNoteIssuerClient`
+for body-signed key-refill in tests and JVM tooling. Legacy note issue and
+`IrohaOfflineNoteTransactionSubmitter` audit/redeem/defund submissions remain
+for source compatibility, but fail closed; production offline payments use
+Kagemusha flows.
 
 The client reuses the existing `ClientConfig` headers/observers and can be
 created from any `HttpClientTransport`:

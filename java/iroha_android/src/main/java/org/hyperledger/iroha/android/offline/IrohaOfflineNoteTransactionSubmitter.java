@@ -1,37 +1,24 @@
 package org.hyperledger.iroha.android.offline;
 
 import java.util.Collections;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.LongSupplier;
-import org.hyperledger.iroha.android.IrohaKeyManager;
-import org.hyperledger.iroha.android.SigningException;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.IrohaClient;
 import org.hyperledger.iroha.android.crypto.Signer;
-import org.hyperledger.iroha.android.model.InstructionBox;
-import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
-import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
-import org.hyperledger.iroha.android.tx.TransactionBuilder;
 
-/** Transaction submitter that wraps Offline instructions in signed Iroha transactions. */
+/** Compatibility submitter that rejects retired classic Offline Note payment transactions. */
 public final class IrohaOfflineNoteTransactionSubmitter implements OfflineNoteTransactionSubmitter {
   public static final String GAS_ASSET_ID_METADATA_KEY = "gas_asset_id";
   public static final String FEE_SPONSOR_METADATA_KEY = "fee_sponsor";
-
-  private final IrohaClient client;
-  private final Signer signer;
-  private final String chainId;
-  private final String authority;
-  private final LongSupplier clock;
-  private final TransactionBuilder transactionBuilder;
-  private final Map<String, String> transactionMetadata;
+  public static final String RETIRED_OFFLINE_NOTE_PAYMENT_MESSAGE =
+      "Classic Offline Note payment transactions are retired; use Kagemusha payment flows.";
 
   public IrohaOfflineNoteTransactionSubmitter(
       final IrohaClient client,
@@ -82,14 +69,7 @@ public final class IrohaOfflineNoteTransactionSubmitter implements OfflineNoteTr
       final NoritoCodecAdapter codecAdapter,
       final LongSupplier clock,
       final Map<String, String> transactionMetadata) {
-    this.client = client;
-    this.signer = signer;
-    this.chainId = chainId;
-    this.authority = authority;
-    this.clock = clock;
-    this.transactionBuilder =
-        new TransactionBuilder(codecAdapter, IrohaKeyManager.withSoftwareProvider());
-    this.transactionMetadata = copyMetadata(transactionMetadata);
+    copyMetadata(transactionMetadata);
   }
 
   public static Map<String, String> gasAssetMetadata(final String gasAssetId) {
@@ -108,44 +88,24 @@ public final class IrohaOfflineNoteTransactionSubmitter implements OfflineNoteTr
 
   @Override
   public CompletableFuture<ClientResponse> submitAudit(final OfflineNote.AuditBundle audit) {
-    return submit(OfflineNote.auditInstruction(audit));
+    return retiredOfflineNotePaymentFuture();
   }
 
   @Override
   public CompletableFuture<ClientResponse> submitRedeem(final OfflineNote.Redeem redemption) {
-    return submit(OfflineNote.redeemInstruction(redemption));
+    return retiredOfflineNotePaymentFuture();
   }
 
   @Override
   public CompletableFuture<ClientResponse> submitDefund(
       final OfflineNote.Redeem redemption,
       final List<OfflineNote.AuditBundle> bearerAuditTrail) {
-    final List<InstructionBox> instructions = new ArrayList<>();
-    for (final OfflineNote.AuditBundle audit : bearerAuditTrail) {
-      instructions.add(OfflineNote.auditInstruction(audit));
-    }
-    instructions.add(OfflineNote.redeemInstruction(redemption));
-    return submit(instructions);
+    return retiredOfflineNotePaymentFuture();
   }
 
-  private CompletableFuture<ClientResponse> submit(final InstructionBox instruction) {
-    return submit(Collections.singletonList(instruction));
-  }
-
-  private CompletableFuture<ClientResponse> submit(final List<InstructionBox> instructions) {
-    final TransactionPayload payload =
-        TransactionPayload.builder()
-            .setChainId(chainId)
-            .setAuthority(authority)
-            .setCreationTimeMs(clock.getAsLong())
-            .setInstructions(instructions)
-            .setMetadata(transactionMetadata)
-            .build();
-    try {
-      return client.submitTransaction(transactionBuilder.encodeAndSign(payload, signer));
-    } catch (final NoritoException | SigningException ex) {
-      return OfflineNoteWallet.failedFuture(ex);
-    }
+  private static CompletableFuture<ClientResponse> retiredOfflineNotePaymentFuture() {
+    return OfflineNoteWallet.failedFuture(
+        new IllegalStateException(RETIRED_OFFLINE_NOTE_PAYMENT_MESSAGE));
   }
 
   private static Map<String, String> copyMetadata(final Map<String, String> metadata) {

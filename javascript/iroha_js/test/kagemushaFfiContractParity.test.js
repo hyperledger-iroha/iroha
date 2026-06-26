@@ -250,40 +250,49 @@ function assertRunnerRejectsJavaHome(script, envName, label) {
 }
 
 function assertRunnerRejectsDotnetSdk(script, envName, label) {
-  const tmp = mkdtempSync(`${tmpdir()}/iroha-dotnet-runner-`);
-  const fakeDotnet = `${tmp}/dotnet`;
-  try {
-    writeFileSync(
-      fakeDotnet,
-      [
-        "#!/usr/bin/env bash",
-        "if [[ \"${1:-}\" == \"--version\" ]]; then",
-        "  printf '%s\\n' '7.0.404'",
-        "  exit 0",
-        "fi",
-        "printf '%s\\n' \"unexpected fake dotnet invocation: $*\" >&2",
-        "exit 64",
-        "",
-      ].join("\n"),
-    );
-    chmodSync(fakeDotnet, 0o755);
+  for (const invalidVersion of ["7.0.404", "8.0.0", "8.0.010", "8.0.128-preview.1"]) {
+    const tmp = mkdtempSync(`${tmpdir()}/iroha-dotnet-runner-`);
+    const fakeDotnet = `${tmp}/dotnet`;
+    try {
+      writeFileSync(
+        fakeDotnet,
+        [
+          "#!/usr/bin/env bash",
+          "if [[ \"${1:-}\" == \"--version\" ]]; then",
+          `  printf '%s\\n' '${invalidVersion}'`,
+          "  exit 0",
+          "fi",
+          "printf '%s\\n' \"unexpected fake dotnet invocation: $*\" >&2",
+          "exit 64",
+          "",
+        ].join("\n"),
+      );
+      chmodSync(fakeDotnet, 0o755);
 
-    const result = spawnSync("bash", [script], {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-      env: { ...process.env, [envName]: fakeDotnet },
-    });
+      const result = spawnSync("bash", [script], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        env: { ...process.env, [envName]: fakeDotnet },
+      });
 
-    assert.notEqual(result.status, 0, `${label} must reject non-.NET-8 SDKs`);
-    assert.match(result.stdout, /^7\.0\.404$/m, `${label} must print dotnet version evidence`);
-    assert.match(result.stderr, /\.NET SDK 8\.0\.x/u, `${label} must explain the .NET 8 gate`);
-    assert.doesNotMatch(
-      result.stderr,
-      /unexpected fake dotnet invocation/u,
-      `${label} must fail before dotnet test`,
-    );
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
+      assert.notEqual(result.status, 0, `${label} must reject SDK ${invalidVersion}`);
+      assert.ok(
+        result.stdout.split(/\r?\n/u).includes(invalidVersion),
+        `${label} must print dotnet version evidence for ${invalidVersion}`,
+      );
+      assert.match(
+        result.stderr,
+        /stable canonical \.NET SDK 8\.0\.x.+non-zero patch/u,
+        `${label} must explain the strict .NET 8 gate`,
+      );
+      assert.doesNotMatch(
+        result.stderr,
+        /unexpected fake dotnet invocation/u,
+        `${label} must fail before dotnet test for ${invalidVersion}`,
+      );
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   }
 }
 
@@ -360,7 +369,7 @@ function assertRunnerPrintsDotnetAndBridgeEvidence(script, envName, label) {
     );
     assert.match(
       result.stdout,
-      /connect_norito_bridge native bridge sha256: [0-9a-fA-F]{64}/u,
+      /connect_norito_bridge native bridge sha256: [0-9a-f]{64}/u,
       `${label} must print the built native bridge digest`,
     );
     assert.match(result.stdout, /fake dotnet test: test /u, `${label} must invoke dotnet test`);
@@ -4546,6 +4555,33 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-abi7-fixture-duplicate-archive",
     "--negative-control-lineage-key-release-source-marker-aliases",
     "--negative-control-lineage-key-release-source-marker-non-utf8-read",
+    "--negative-control-100tps-profile-pid-safety-test",
+    "--negative-control-android-device-lab-capture-adb-diagnostic-state-test",
+    "--negative-control-android-device-lab-capture-expected-family-cli-secret-test",
+    "--negative-control-android-device-lab-capture-expected-family-cli-value-test",
+    "--negative-control-android-device-lab-capture-expected-family-crlf-test",
+    "--negative-control-android-device-lab-capture-expected-family-nondisruptive-test",
+    "--negative-control-android-device-lab-capture-expected-family-order-test",
+    "--negative-control-android-device-lab-capture-expected-family-redaction-test",
+    "--negative-control-android-device-lab-capture-expected-family-wrong-device-test",
+    "--negative-control-compact-key-finalizer-runner-temp-test",
+    "--negative-control-deploy-localnet-pid-safety-test",
+    "--negative-control-kagami-localnet-stop-script-pid-safety",
+    "--negative-control-lineage-proof-finalizer-runner-temp-test",
+    "--negative-control-local-swarm-pid-safety-test",
+    "--negative-control-localnet-lifecycle-acceptance-source-document-fields",
+    "--negative-control-localnet-lifecycle-acceptance-source-document-hash-shape",
+    "--negative-control-localnet-lifecycle-acceptance-source-document-string-safety",
+    "--negative-control-localnet-lifecycle-acceptance-source-event-marker",
+    "--negative-control-release-bundle-android-manifest-named-duplicate-binding-test",
+    "--negative-control-release-bundle-android-manifest-well-formed-duplicate-binding-test",
+    "--negative-control-release-bundle-android-max-signed-bound-drift-test",
+    "--negative-control-release-bundle-android-min-signed-bound-drift-test",
+    "--negative-control-release-bundle-android-summary-named-duplicate-binding-test",
+    "--negative-control-release-bundle-android-summary-well-formed-duplicate-binding-test",
+    "--negative-control-release-bundle-manifest-android-max-signed-bound-test",
+    "--negative-control-release-bundle-manifest-android-min-signed-bound-test",
+    "--negative-control-training-script-pid-safety-test",
   ];
 
   const expectedModeInventory = [
@@ -9942,6 +9978,10 @@ test("recursive Kagemusha policy workflow and doc negative controls require exac
       "roadmap.md is missing complete recursive spend ABI-6 surface documentation: Bridge ABI 6 adds recursive spend `init`, `append`, both transition-profile helpers, append-boundary derivation, both lineage-witness assembly helpers, `verify`, and `redeem` entry points",
     ],
     [
+      "--negative-control-readiness-section-consistency",
+      "scripts/kagemusha_production_readiness.py is missing production-readiness section consistency coverage: all_blockers.extend(_section_readiness_blockers(section_key, section))",
+    ],
+    [
       "--negative-control-policy-negative-controls-workflow",
       "Kagemusha payload workflow must run the policy core redeem execution-order negative control",
     ],
@@ -10031,6 +10071,7 @@ test("recursive Kagemusha active marker scan covers workflow-backed non-C# test 
     "crates/iroha_torii/src/offline_v2_issuer.rs",
     "crates/iroha_torii/src/openapi.rs",
     "crates/iroha_torii/src/zk_prover.rs",
+    "crates/iroha_torii/tests/offline_kagemusha_only_smoke.rs",
     "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs",
     "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java",
     "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
@@ -10038,12 +10079,20 @@ test("recursive Kagemusha active marker scan covers workflow-backed non-C# test 
   ];
   const genericContentSurfaces = [
     "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+    "IrohaSwift/Sources/IrohaSwift/ToriiOfflineNoteIssuerClient.swift",
+    "IrohaSwift/Sources/IrohaSwift/TransactionEncoder.swift",
     "crates/iroha_cli/src/main_shared.rs",
+    "crates/iroha_core/src/executor.rs",
     "crates/iroha_core/src/queue/router.rs",
+    "crates/iroha_torii/src/offline_issuer.rs",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/IrohaOfflineNoteTransactionSubmitter.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/ToriiOfflineNoteIssuerClient.java",
     "javascript/iroha_js/src/toriiClient.js",
+    "javascript/iroha_js/test/integrationTorii.test.js",
     "javascript/iroha_js/test/privacyCatalogParity.test.js",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/ToriiOfflineNoteIssuerClient.kt",
     "python/iroha_python/src/iroha_python/offline_cash.py",
   ];
 
@@ -10058,6 +10107,7 @@ test("recursive Kagemusha active marker scan covers workflow-backed non-C# test 
       ...workflowBackedSurfaces,
       "core offline ISI active marker",
       "payload workflow active marker",
+      "Torii Kagemusha-only smoke active marker",
       "Torii offline-v2 smoke active marker",
       "Android device-lab instrumentation active marker",
       "Android recursive spend instrumentation active marker",
@@ -14055,6 +14105,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-csharp-sdk-dotnet-major-script",
     "--negative-control-csharp-sdk-native-bridge-script",
     "--negative-control-csharp-sdk-native-library-evidence-script",
+    "--negative-control-csharp-sdk-native-library-sha-case-script",
     "--negative-control-csharp-sdk-test-filter-script",
     "--negative-control-csharp-sdk-verifier-backend-test-filter-script",
     "--negative-control-csharp-sdk-workflow-inventory",
@@ -25291,7 +25342,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     csharpRunner,
-    /printf 'dotnet --info:\\n'[\s\S]*"\$\{DOTNET_BIN\}" --info[\s\S]*connect_norito_bridge native bridge sha256:/,
+    /printf 'dotnet --info:\\n'[\s\S]*"\$\{DOTNET_BIN\}" --info[\s\S]*\^\[0-9a-f\]\{64\}\$[\s\S]*connect_norito_bridge native bridge sha256:/,
     "Kagemusha C# SDK runner must print host and bridge digest evidence",
   );
   assert.match(
