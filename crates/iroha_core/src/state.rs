@@ -27732,12 +27732,16 @@ impl<'state> StateBlock<'state> {
     ///
     /// # Errors
     /// Returns [`TransactionsBlockError`] when flushing the transaction batch fails.
-    pub fn commit(self) -> Result<(), TransactionsBlockError> {
+    pub fn commit(mut self) -> Result<(), TransactionsBlockError> {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
         if self.mode_cutover_next_set_in_block ^ self.mode_cutover_activation_set_in_block {
             return Err(TransactionsBlockError::ModeStagingInvariant);
         }
         let block_height = self._curr_block.height().get();
+        let current_axt_slot =
+            current_axt_slot_from_block(&self._curr_block, self.nexus.axt.slot_length_ms);
+        let axt_replay_retention_slots = self.nexus.axt.replay_retention_slots.get();
+        self.prune_axt_replay_ledger(current_axt_slot, axt_replay_retention_slots);
         // NOTE: intentionally destruct self not to forget commit some fields
         let Self {
             state_ref,
@@ -37925,6 +37929,10 @@ mod tests {
             tron_network: "nile".to_owned(),
             chain: "tron-nile".to_owned(),
             chain_id_hex: "0xcd8690dc".to_owned(),
+            explorer_url: None,
+            explorer_host: None,
+            counterparty_account_codec: None,
+            counterparty_account_codec_key: None,
             counterparty_domain: iroha_sccp::SCCP_DOMAIN_TRON,
             verifier_target: "TronContract".to_owned(),
             production_ready: false,
@@ -37940,6 +37948,7 @@ mod tests {
             proof_artifact_hash: None,
             proving_key_hash: None,
             native_evm_prover_bundle_hash: None,
+            native_evm_prover_bundle: None,
             destination_browser_prover: None,
             source_browser_prover: None,
             deployment_evidence_sha256: None,
@@ -50354,7 +50363,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_block_apply_does_not_prune_axt_replay_ledger() {
+    fn ordinary_block_apply_defers_axt_replay_pruning_until_commit() {
         let dsid = DataSpaceId::new(42);
         let lane = LaneId::new(0);
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
@@ -50395,12 +50404,18 @@ mod tests {
         let committed = valid.commit_unchecked().unpack(|_| {});
 
         let _ = state_block.apply_without_execution(&committed, Vec::new());
-        state_block.commit().expect("ordinary block should commit");
 
         assert_eq!(
-            state.world.axt_replay_ledger.view().get(&key).copied(),
+            state_block.world.axt_replay_ledger.get(&key).copied(),
             Some(stale),
-            "ordinary block apply must not scan and prune the AXT replay ledger"
+            "ordinary block apply should leave AXT replay pruning to commit"
+        );
+
+        state_block.commit().expect("ordinary block should commit");
+
+        assert!(
+            state.world.axt_replay_ledger.view().get(&key).is_none(),
+            "ordinary block commit should prune expired AXT replay entries"
         );
     }
 
