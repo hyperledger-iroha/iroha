@@ -250,6 +250,7 @@ export const DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV =
 export const DEFAULT_TAIRA_TORII_URL = "https://taira.sora.org";
 export const DEFAULT_TAIRA_CHAIN_ID =
   "809574f5-fee7-5e69-bfcf-52451e42d50f";
+export const DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT = 2_000_000;
 export const TAIRA_BURN_RECORD_ARTIFACT_MIN_BYTES = 32;
 export const TAIRA_BURN_RECORD_ARTIFACT_MAX_BYTES = 8 * 1024 * 1024;
 export const TAIRA_BURN_RECORD_PRODUCTION_ARTIFACT_MIN_BYTES = 256;
@@ -745,7 +746,7 @@ function usage() {
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-inventory --request <attestation-request.json> --scan-dir <dir> --trusted-attestation-signer <0x...>
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material finalize-attestations --request <attestation-request.json> --semantic-attestation <json> --circuit-security-attestation <json> --trusted-setup-attestation <json> --reproducible-build-attestation <json> --trusted-attestation-signer <0x...> [--out-dir ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT}/testnet]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs native-prover-bundle --route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT} --artifact-root ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT} --proof-artifact <relative-file> --proving-key <relative-file> --verifier-key <relative-file> --groth16-material-manifest <relative-json> --groth16-proof-self-test <relative-json> --snarkjs-bin <snarkjs> --trusted-attestation-signer <0x...> --cross-sdk-parity <relative-json> --native-prover-self-test <relative-json> --javascript-implementation <relative-file> --swift-implementation <relative-file> --kotlin-implementation <relative-file> --java-android-implementation <relative-file> --dotnet-implementation <relative-file> --audit-circuit-security <hex-or-relative-file> --audit-native-implementation <hex-or-relative-file> --audit-reproducible-build <hex-or-relative-file> --audit-no-wasm-no-remote-scan <hex-or-relative-file> [--audit-cross-sdk-parity <matching-hex-or-relative-file>] [--audit-native-prover-self-test <matching-hex-or-relative-file>] [--out ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--attach-route-manifest-out ${DEFAULT_ROUTE_MANIFEST_OUT}]
-  node scripts/sccp_bsc_taira_xor_deploy.mjs publish-route-manifest [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--out ${DEFAULT_ROUTE_MANIFEST_ISI_OUT}] [--submit true --torii-url ${DEFAULT_TAIRA_TORII_URL} --chain-id ${DEFAULT_TAIRA_CHAIN_ID} --authority <account> --private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV} --gas-asset-id <asset-definition-id>] [--wait-for-commit true|false] [--commit-timeout-ms 120000]
+  node scripts/sccp_bsc_taira_xor_deploy.mjs publish-route-manifest [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--out ${DEFAULT_ROUTE_MANIFEST_ISI_OUT}] [--submit true --torii-url ${DEFAULT_TAIRA_TORII_URL} --chain-id ${DEFAULT_TAIRA_CHAIN_ID} --authority <account> --private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV} --gas-asset-id <asset-definition-id> --gas-limit ${DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT}] [--wait-for-commit true|false] [--commit-timeout-ms 120000]
   node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--allow-unready true|false] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}] [--write-offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs requirements [--bsc-network testnet|mainnet] [--out ${DEFAULT_PRODUCTION_REQUIREMENTS_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs self-test
@@ -856,7 +857,7 @@ stanza. Production-ready manifests must not use --allow-unready; draft
 manifests must opt in to --allow-unready true and cannot be written as
 canonical production material.`,
   "publish-route-manifest": `Usage:
-  node scripts/sccp_bsc_taira_xor_deploy.mjs publish-route-manifest [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--out ${DEFAULT_ROUTE_MANIFEST_ISI_OUT}] [--submit true --torii-url ${DEFAULT_TAIRA_TORII_URL} --chain-id ${DEFAULT_TAIRA_CHAIN_ID} --authority <account> --private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV} --gas-asset-id <asset-definition-id>] [--wait-for-commit true|false] [--commit-timeout-ms 120000]
+  node scripts/sccp_bsc_taira_xor_deploy.mjs publish-route-manifest [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--out ${DEFAULT_ROUTE_MANIFEST_ISI_OUT}] [--submit true --torii-url ${DEFAULT_TAIRA_TORII_URL} --chain-id ${DEFAULT_TAIRA_CHAIN_ID} --authority <account> --private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV} --gas-asset-id <asset-definition-id> --gas-limit ${DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT}] [--wait-for-commit true|false] [--commit-timeout-ms 120000]
 
 Builds the UpsertSccpRouteManifest ISI payload from a production BSC route
 manifest. By default the command writes the public ISI artifact without
@@ -1122,7 +1123,8 @@ export function bscProductionRequirements(options = {}) {
         `--submit true --torii-url ${DEFAULT_TAIRA_TORII_URL} ` +
         `--chain-id ${DEFAULT_TAIRA_CHAIN_ID} ` +
         "--authority <taira-route-manifest-manager-account> " +
-        `--private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV}`,
+        `--private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV} ` +
+        `--gas-limit ${DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT}`,
       routeConfig:
         `node scripts/sccp_bsc_taira_xor_deploy.mjs route-config --manifest ${routeManifestOut} ` +
         `--base-config <deployed-taira-config.toml> --write-offline-full-toml-evidence ${fullConfigEvidenceOut}`,
@@ -14159,11 +14161,17 @@ async function commandPublishRouteManifest(options) {
           options["gas-asset-id"],
           "--gas-asset-id",
         );
+  const gasLimit = normalizePositiveSafeInteger(
+    options["gas-limit"],
+    "--gas-limit",
+    DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT,
+  );
   const metadata = {
     routeId: publication.routeKey.routeId,
     assetKey: publication.routeKey.assetKey,
     action: "publish_sccp_route_manifest",
     gas_asset_id: gasAssetId,
+    gas_limit: gasLimit,
   };
   const { buildTransaction, submitSignedTransaction } = await import(
     "../javascript/iroha_js/src/transaction.js"
@@ -14201,6 +14209,7 @@ async function commandPublishRouteManifest(options) {
     statusKind,
     status: submission.status ?? null,
     gasAssetId,
+    gasLimit,
     waitForCommit,
     commitTimeoutMs,
   };
@@ -14225,6 +14234,7 @@ async function commandPublishRouteManifest(options) {
     statusKind,
     status: submission.status ?? null,
     gasAssetId,
+    gasLimit,
     waitForCommit,
     commitTimeoutMs,
     routeId: publication.routeKey.routeId,

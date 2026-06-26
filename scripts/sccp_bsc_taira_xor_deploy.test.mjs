@@ -22,6 +22,7 @@ import {
   SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
   validateBscTestnetNativeEvmProverBundle,
 } from "../javascript/iroha_js/src/sccp.js";
+import { AccountAddress } from "../javascript/iroha_js/src/address.js";
 import {
   BSC_MAINNET_NETWORK_ID_HEX,
   BSC_TESTNET_NETWORK_ID_HEX,
@@ -29,6 +30,7 @@ import {
   PRODUCTION_REQUIREMENTS_SCHEMA,
   ROUTE_MANIFEST_SCHEMA,
   SOURCE_PARITY_ATTESTATION_SCHEMA,
+  DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT,
   SCCP_BSC_BINARY_ARTIFACT_INPUT_MAX_BYTES,
   SCCP_BSC_JSON_INPUT_MAX_BYTES,
   SCCP_BSC_TEXT_INPUT_MAX_BYTES,
@@ -74,6 +76,12 @@ const HASH_55 = `0x${"55".repeat(32)}`;
 const HASH_66 = `0x${"66".repeat(32)}`;
 const HASH_77 = `0x${"77".repeat(32)}`;
 const HASH_88 = `0x${"88".repeat(32)}`;
+const TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY = AccountAddress.fromAccount({
+  publicKey: Buffer.from(
+    "CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+    "hex",
+  ),
+}).toI105();
 const EVM_EMPTY_CODE_HASH =
   "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470";
 const hex32 = (byte) => `0x${byte.repeat(32)}`;
@@ -813,6 +821,127 @@ const productionReadyRouteManifest = (overrides = {}) => {
   }
   return attachNativeProverBundle(manifest, bundleOverrides ?? {});
 };
+
+const tairaCapabilitiesResponse = () =>
+  new Response(
+    JSON.stringify({
+      abi_version: 1,
+      data_model_version: 1,
+      crypto: {
+        sm: {
+          enabled: false,
+          default_hash: "sha2_256",
+          allowed_signing: ["ed25519"],
+          sm2_distid_default: "",
+          openssl_preview: false,
+          acceleration: {
+            scalar: true,
+            neon_sm3: false,
+            neon_sm4: false,
+            policy: "scalar-only",
+          },
+        },
+        curves: {
+          registry_version: 1,
+          allowed_curve_ids: [1],
+        },
+      },
+    }),
+    {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    },
+  );
+
+async function withRouteManifestPublishHarness(callback) {
+  const previousBinding = globalThis.__IROHA_NATIVE_BINDING__;
+  const previousFetch = globalThis.fetch;
+  const envName = "SCCP_TAIRA_ROUTE_MANIFEST_TEST_PRIVATE_KEY";
+  const previousPrivateKey = process.env[envName];
+  const calls = {
+    buildTransaction: [],
+    fetch: [],
+  };
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    buildTransaction: (
+      chainId,
+      authority,
+      instructions,
+      metadataPayload,
+      creationTimeMs,
+      ttlMs,
+      nonce,
+      privateKey,
+      privateKeyAlgorithm,
+    ) => {
+      calls.buildTransaction.push({
+        chainId,
+        authority,
+        instructions,
+        metadata: JSON.parse(metadataPayload),
+        creationTimeMs,
+        ttlMs,
+        nonce,
+        privateKey: Buffer.from(privateKey),
+        privateKeyAlgorithm,
+      });
+      return {
+        signed_transaction: Buffer.from([0xaa, 0xbb, 0xcc]),
+        hash: Buffer.alloc(32, 0x11),
+      };
+    },
+    hashSignedTransaction: (signedTransaction) => {
+      assert.deepEqual(
+        [...Buffer.from(signedTransaction).values()],
+        [0xaa, 0xbb, 0xcc],
+      );
+      return Buffer.alloc(32, 0x22);
+    },
+  };
+  process.env[envName] = `0x${"33".repeat(32)}`;
+  globalThis.fetch = async (url, init = {}) => {
+    calls.fetch.push({
+      url: String(url),
+      method: init.method ?? "GET",
+      body: init.body ? Buffer.from(init.body) : null,
+    });
+    if (String(url) === "https://taira.sora.org/v1/node/capabilities") {
+      return tairaCapabilitiesResponse();
+    }
+    if (String(url) === "https://taira.sora.org/v1/pipeline/transactions") {
+      assert.equal(init.method, "POST");
+      assert.deepEqual(
+        [...Buffer.from(init.body).values()],
+        [0x01, 0xaa, 0xbb, 0xcc],
+      );
+      return new Response(JSON.stringify({ accepted: true }), {
+        status: 202,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  try {
+    return await callback({ calls, privateKeyEnv: envName });
+  } finally {
+    if (previousBinding === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previousBinding;
+    }
+    if (previousFetch === undefined) {
+      delete globalThis.fetch;
+    } else {
+      globalThis.fetch = previousFetch;
+    }
+    if (previousPrivateKey === undefined) {
+      delete process.env[envName];
+    } else {
+      process.env[envName] = previousPrivateKey;
+    }
+  }
+}
 
 const offlineFullTomlEvidence = (overrides = {}) => ({
   schema: "iroha-sccp-bsc-taira-xor-offline-full-toml-evidence/v1",
@@ -2013,6 +2142,135 @@ test("BSC route-manifest command binds deployment evidence and TAIRA burn-record
     JSON.stringify(manifest),
     /private[_-]?key|mnemonic|seed/iu,
   );
+});
+
+test("BSC publish-route-manifest records default gas limit in transaction metadata and evidence", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-publish-route-"));
+  const manifestPath = join(dir, "route.manifest.json");
+  const out = join(dir, "route.upsert-isi.json");
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+  );
+
+  await withRouteManifestPublishHarness(async ({ calls, privateKeyEnv }) => {
+    const result = await main([
+      "publish-route-manifest",
+      "--manifest",
+      manifestPath,
+      "--out",
+      out,
+      "--submit",
+      "true",
+      "--authority",
+      TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY,
+      "--private-key-env",
+      privateKeyEnv,
+      "--wait-for-commit",
+      "false",
+    ]);
+    const artifact = JSON.parse(await readFile(out, "utf8"));
+
+    assert.equal(result.ok, true);
+    assert.equal(result.submitted, true);
+    assert.equal(result.gasLimit, DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT);
+    assert.equal(result.gasAssetId, "6TEAJqbb8oEPmLncoNiMRbLEK6tw");
+    assert.equal(result.hash, `0x${"11".repeat(32)}`);
+    assert.equal(result.submittedHash, `0x${"22".repeat(32)}`);
+    assert.equal(
+      artifact.submission.gasLimit,
+      DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT,
+    );
+    assert.equal(
+      artifact.submission.gasAssetId,
+      "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    );
+    assert.equal(artifact.submission.waitForCommit, false);
+    assert.equal(calls.buildTransaction.length, 1);
+    assert.equal(
+      calls.buildTransaction[0].authority,
+      TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY,
+    );
+    assert.equal(
+      calls.buildTransaction[0].metadata.gas_limit,
+      DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT,
+    );
+    assert.equal(
+      calls.buildTransaction[0].metadata.gas_asset_id,
+      "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    );
+    assert.equal(
+      calls.buildTransaction[0].metadata.action,
+      "publish_sccp_route_manifest",
+    );
+    assert.deepEqual(calls.fetch.map((call) => call.url), [
+      "https://taira.sora.org/v1/node/capabilities",
+      "https://taira.sora.org/v1/pipeline/transactions",
+    ]);
+    assert.doesNotMatch(
+      JSON.stringify(artifact),
+      /private[_-]?key|mnemonic|seed|SCCP_TAIRA_ROUTE_MANIFEST_TEST_PRIVATE_KEY/iu,
+    );
+  });
+});
+
+test("BSC publish-route-manifest supports explicit gas limit and rejects invalid values before submit", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-publish-route-gas-"));
+  const manifestPath = join(dir, "route.manifest.json");
+  const out = join(dir, "route.upsert-isi.json");
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+  );
+
+  await withRouteManifestPublishHarness(async ({ calls, privateKeyEnv }) => {
+    const result = await main([
+      "publish-route-manifest",
+      "--manifest",
+      manifestPath,
+      "--out",
+      out,
+      "--submit",
+      "true",
+      "--authority",
+      TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY,
+      "--private-key-env",
+      privateKeyEnv,
+      "--gas-limit",
+      "3000000",
+      "--wait-for-commit",
+      "false",
+    ]);
+
+    assert.equal(result.gasLimit, 3_000_000);
+    assert.equal(calls.buildTransaction[0].metadata.gas_limit, 3_000_000);
+
+    for (const badGasLimit of ["0", "-1", "2.5", "abc"]) {
+      await assert.rejects(
+        () =>
+          main([
+            "publish-route-manifest",
+            "--manifest",
+            manifestPath,
+            "--out",
+            join(dir, `route.bad-${badGasLimit}.json`),
+            "--submit",
+            "true",
+            "--authority",
+            TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY,
+            "--private-key-env",
+            privateKeyEnv,
+            "--gas-limit",
+            badGasLimit,
+            "--wait-for-commit",
+            "false",
+          ]),
+        /--gas-limit must be a positive safe integer/u,
+      );
+    }
+    assert.equal(calls.buildTransaction.length, 1);
+    assert.equal(calls.fetch.length, 2);
+  });
 });
 
 test("BSC route-manifest command builds production-ready manifests only with bound native and post-deploy evidence", async () => {
@@ -9130,6 +9388,7 @@ test("BSC deployment helper help documents production network confirmations", as
   assert.match(result.help, /--route-manifest .* --artifact-root/u);
   assert.match(result.help, /--audit-no-wasm-no-remote-scan/u);
   assert.match(result.help, /source-parity-attestation/u);
+  assert.match(result.help, /--gas-limit 2000000/u);
   assert.match(result.help, /requirements \[--bsc-network testnet\|mainnet\]/u);
   assert.match(
     result.help,
@@ -9157,6 +9416,9 @@ test("BSC deployment helper subcommand help does not touch operator inputs", asy
   const routeConfig = await main(["help", "route-config"]);
   assert.match(routeConfig.help, /route-config \[--manifest/u);
   assert.match(routeConfig.help, /--allow-unready true/u);
+
+  const publishRouteManifest = await main(["help", "publish-route-manifest"]);
+  assert.match(publishRouteManifest.help, /--gas-limit 2000000/u);
 
   const deploy = await main(["deploy", "--help"]);
   assert.match(deploy.help, /deploy --bsc-network testnet\|mainnet/u);
@@ -9270,6 +9532,10 @@ test("BSC production requirements expose network-specific public handoff inputs"
   assert.match(
     testnet.commands.nativeProverBundle,
     /--groth16-proof-self-test <relative-groth16-proof-self-test\.json>/u,
+  );
+  assert.match(
+    testnet.commands.publishRouteManifest,
+    /--gas-limit 2000000/u,
   );
   for (const required of [
     "--evidence artifacts/sccp-bsc/taira-bsc-xor-deployment.evidence.json",
