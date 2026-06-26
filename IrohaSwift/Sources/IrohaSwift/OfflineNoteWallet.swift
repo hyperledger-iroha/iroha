@@ -1437,12 +1437,6 @@ public final class IrohaOfflineNoteTransactionSubmitter: OfflineNoteTransactionS
     public static let gasAssetIdMetadataKey = "gas_asset_id"
     public static let feeSponsorMetadataKey = "fee_sponsor"
 
-    private let sdk: IrohaSDK
-    private let signingKey: SigningKey
-    private let chainId: String
-    private let authority: String
-    private let transactionMetadata: [String: ToriiJSONValue]
-
     public static func gasAssetMetadata(_ gasAssetId: String) -> [String: ToriiJSONValue] {
         feeMetadata(gasAssetId: gasAssetId, feeSponsor: nil)
     }
@@ -1469,49 +1463,20 @@ public final class IrohaOfflineNoteTransactionSubmitter: OfflineNoteTransactionS
                 chainId: String,
                 authority: String,
                 transactionMetadata: [String: ToriiJSONValue] = [:]) {
-        self.sdk = sdk
-        self.signingKey = signingKey
-        self.chainId = chainId
-        self.authority = authority
-        self.transactionMetadata = transactionMetadata
+        _ = (sdk, signingKey, chainId, authority, transactionMetadata)
     }
 
     public func submitAudit(_ audit: OfflineNoteAuditBundle) async throws {
-        try await sdk.submit(
-            auditOfflineNote: AuditOfflineNoteRequest(
-                chainId: chainId,
-                authority: authority,
-                audit: audit,
-                metadata: transactionMetadata
-            ),
-            signingKey: signingKey
-        )
+        throw SwiftTransactionEncoderError.retiredOfflineNotePayment
     }
 
     public func submitRedeem(_ redemption: OfflineNoteRedeem) async throws {
-        try await sdk.submit(
-            redeemOfflineNote: RedeemOfflineNoteRequest(
-                chainId: chainId,
-                authority: authority,
-                redemption: redemption,
-                metadata: transactionMetadata
-            ),
-            signingKey: signingKey
-        )
+        throw SwiftTransactionEncoderError.retiredOfflineNotePayment
     }
 
     public func submitDefund(_ redemption: OfflineNoteRedeem,
                              bearerAuditTrail: [OfflineNoteAuditBundle]) async throws {
-        try await sdk.submit(
-            defundOfflineNote: DefundOfflineNoteRequest(
-                chainId: chainId,
-                authority: authority,
-                bearerAuditTrail: bearerAuditTrail,
-                redemption: redemption,
-                metadata: transactionMetadata
-            ),
-            signingKey: signingKey
-        )
+        throw SwiftTransactionEncoderError.retiredOfflineNotePayment
     }
 }
 

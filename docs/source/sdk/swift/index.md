@@ -211,8 +211,9 @@ decide whether to discard or resubmit the affected envelope.
 
 ### Offline circulation modes
 
-Offline value flows use Offline note issuance, redemption, and audit instructions submitted
-through normal transactions. Torii HTTP discovery is limited to the Offline readiness endpoint.
+Classic Offline Note issuance, redemption, and audit transaction paths are retired.
+Production offline value flows use Kagemusha top-up, transfer, and recursive redeem.
+Torii HTTP discovery is limited to the Offline readiness endpoint.
 
 Offline uses note challenges, payment tokens, and receipt acks carried over Fountain QR frames.
 

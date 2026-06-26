@@ -277,8 +277,10 @@ the repeated operator text.
 	counts and rendered labels against the generated source-inventory gate set, so
 	new release gates cannot be added without public Markdown invariant coverage.
 	Release-notes artifact tables now render zero-byte artifact rows as
-	`<invalid bytes>`, matching the strict manifest/readiness positive-byte
-	artifact contract before copied metadata can look valid in public notes.
+	`<invalid bytes>` and all-zero SHA-256 artifact rows as
+	`<invalid artifact.sha256>`, matching the strict manifest/readiness
+	positive-byte and non-zero-hash artifact contract before copied metadata can
+	look valid in public notes.
 	Strict readiness Markdown and release-notes heading parsing must also reject
 noncanonical top-level title/status blocks, non-exact public section-heading
 spelling, unexpected public section headings, Setext headings, repeated public
@@ -982,10 +984,11 @@ redistributable schemas, and official trust/revocation bundles.
   bounded key generation plus key-switch entry generation also resample inert
   all-zero public `a` limbs, and shared key-switch validators reject all-zero
   public `b` or `a` entry components before material can be digested or used.
-  Bounded keygen, encryption, Galois keygen, and full-bootstrap
-  sample-extraction switch-key derivation now use exact/bounded mode-separated
-  deterministic RNG streams so same-seed artifacts do not reuse public limbs or
-  ephemeral masks across modes.
+  Bounded keygen, encryption, Galois keygen, bootstrap refresh-round seed
+  derivation, and full-bootstrap sample-extraction switch-key derivation now use
+  exact/bounded mode-separated deterministic RNG streams so same-seed artifacts
+  do not reuse public limbs, ephemeral masks, or refresh-round seeds across
+  modes.
   Parameter validation now also requires enough ciphertext-modulus
   headroom to keep the configured positive and negative plaintext-multiple
   error representatives distinct. Secret-key diagnostics now expose the exact

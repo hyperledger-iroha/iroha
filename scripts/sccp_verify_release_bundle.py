@@ -13664,6 +13664,9 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
             "def test_release_bundle_release_notes_reject_malformed_artifact_rows",
             "sccp-release-zero-byte-artifact.json",
             "| `sccp-release-zero-byte-artifact.json` | `<invalid bytes>` |",
+            "sccp-release-zero-sha-artifact.json",
+            "| `sccp-release-zero-sha-artifact.json` | 128 | "
+            "`<invalid artifact.sha256>` |",
             "def test_release_bundle_verifier_guards_release_notes_attachment_invariants_inventory",
             "def test_release_bundle_verifier_rejects_missing_release_notes_attachment_invariants_inventory_gate",
         ),
@@ -23345,7 +23348,7 @@ def _release_notes_attachment_invariant_errors(
             continue
         if _release_notes_attachment_artifact_path_is_safe(path) and path not in notes:
             errors.append("release notes attachment does not list artifact")
-        if _is_canonical_sha256_text(digest) and digest not in notes:
+        if _is_nonzero_canonical_sha256_text(digest) and digest not in notes:
             errors.append("release notes attachment does not list artifact hash")
         artifact_row = (
             "| "

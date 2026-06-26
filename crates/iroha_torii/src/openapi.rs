@@ -704,8 +704,8 @@ fn offline_paths() -> Map {
         ),
         (
             "/v1/offline/v2/notes/issue",
-            "Issue an Offline V2 note.",
-            "POST an Offline V2 note issuance request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "Retired Offline V2 note issue route.",
+            "Classic Offline V2 note issuance is retired and this compatibility route fails closed. Use Kagemusha online-to-offline top-up flows. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
         (
             "/v1/offline/v2/notes/redeem",
@@ -714,8 +714,8 @@ fn offline_paths() -> Map {
         ),
         (
             "/v1/offline/v2/audit",
-            "Submit an Offline V2 audit request.",
-            "POST an Offline V2 audit request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "Retired Offline V2 audit route.",
+            "Classic Offline V2 audit is retired and this compatibility route fails closed. Use Kagemusha payment flows. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
     ] {
         paths.insert(
@@ -13377,6 +13377,30 @@ mod tests {
             .expect("offline refill description");
         assert!(refill_description.contains("signature_base64 or witness_base64"));
         assert!(refill_description.contains("X-Iroha-* app-auth headers are rejected"));
+        let issue_post = paths
+            .get("/v1/offline/v2/notes/issue")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("offline issue post operation");
+        let issue_description = issue_post
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("offline issue description");
+        assert!(issue_description.contains("retired"));
+        assert!(issue_description.contains("Kagemusha online-to-offline top-up"));
+        let audit_post = paths
+            .get("/v1/offline/v2/audit")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("offline audit post operation");
+        let audit_description = audit_post
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("offline audit description");
+        assert!(audit_description.contains("retired"));
+        assert!(audit_description.contains("Kagemusha payment flows"));
         let redeem_post = paths
             .get("/v1/offline/v2/notes/redeem")
             .and_then(Value::as_object)

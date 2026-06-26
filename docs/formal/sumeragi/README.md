@@ -3733,6 +3733,8 @@ selection:
 - `CachedSlotTimeoutExactness` composes near-quorum fast-path eligibility,
   shorter/base timeout selection, hysteresis wait boundaries, and
   streak/factor exactness.
+- `CachedSlotTimeoutCorrectnessEnvelope` composes that aggregate with the type
+  invariant.
 
 `SumeragiPendingFastPathTimeoutGate.tla` captures pending fast-path timeout
 derivation:
@@ -3745,6 +3747,8 @@ derivation:
   enabled, and larger fast-path timeouts are left unchanged.
 - `PendingFastPathTimeoutExactness` composes pending fast-path timeout
   derivation and DA inline validation fallback exactness.
+- `PendingFastPathTimeoutCorrectnessEnvelope` composes that aggregate with the
+  type invariant.
 
 `SumeragiStalledPendingTimeoutDecisionGate.tla` captures stalled pending-block
 timeout classification:
@@ -3766,6 +3770,8 @@ timeout classification:
 - `StalledPendingTimeoutExactness` composes base/near timeout selection,
   near-quorum gate inputs, recovery backlog classification, class priority, and
   decision projection exactness.
+- `StalledPendingTimeoutCorrectnessEnvelope` composes that aggregate with the
+  type invariant.
 
 `SumeragiStalledPendingFrontierTimeoutGate.tla` captures stalled
 pending-frontier timeout derivation:
@@ -3785,6 +3791,8 @@ pending-frontier timeout derivation:
 - `StalledPendingFrontierTimeoutExactness` composes recovery backlog extension,
   deferred-QC multiplier selection, uncapped timeout selection, active-gap
   capping, saturating arithmetic, and decision projection exactness.
+- `StalledPendingFrontierTimeoutCorrectnessEnvelope` composes that aggregate
+  with the type invariant.
 
 `SumeragiMissingQcTimingGate.tla` captures missing-QC timing helper semantics:
 - idle-round timeout requires an empty pending map, a nonzero timeout, and age
@@ -3804,6 +3812,8 @@ pending-frontier timeout derivation:
 - `MissingQcTimingExactness` composes idle-round and idle-view timeout
   derivation, missing-QC streak and forced-proposal gating, rotation deferral,
   hard-cap derivation, and saturating multiplication exactness.
+- `MissingQcTimingCorrectnessEnvelope` composes that aggregate with the type
+  invariant.
 
 `SumeragiIdleBacklogSignalsGate.tla` captures idle backlog signal derivation:
 - existing consensus worker backlog is the only raw near-quorum queue backlog,
@@ -3945,6 +3955,8 @@ helper semantics:
 - `TimeoutDerivationExactness` composes control and payload cooldowns,
   backoff bounds, commit/pacemaker timeouts, availability timeout derivation,
   and stale-gate preconditions.
+- `TimeoutDerivationCorrectnessEnvelope` composes that aggregate with the type
+  invariant.
 
 `SumeragiRoundViewHelpersGate.tla` captures round/view helper semantics:
 - active round height advances from the newer available highest or committed
@@ -4364,6 +4376,8 @@ planning:
 The aggregate `MissingBlockFetchExactness` invariant ties the fetch decision,
 request-state, priority/retry, attempts, target-selection, send/deferral, and
 request-field exactness clauses together across all twenty-six bounded cases.
+`MissingBlockFetchCorrectnessEnvelope` composes that aggregate with the type
+invariant.
 
 `SumeragiRecoveryStatusCountersGate.tla` captures recovery status accounting
 around missing-block fetches and stale recovery suppression:
@@ -4640,6 +4654,8 @@ recovery escalation:
 The aggregate `MissingBlockHardCapExactness` invariant ties hard-cap decision,
 duplicate/trigger side-effect, no-actionable cleanup, and range-pull
 non-rotation exactness together across all twenty-eight bounded cases.
+`MissingBlockHardCapCorrectnessEnvelope` composes that aggregate with the type
+invariant.
 
 `SumeragiMissingBlockHardCapCleanupGate.tla` captures missing-block hard-cap
 cleanup preservation:
@@ -4664,6 +4680,8 @@ The aggregate `MissingBlockHardCapCleanupExactness` invariant ties
 preservation-decision, live same-height retention, dead/future pruning,
 quorum-backed repair, and evidence/owner exactness together across all
 twenty-five bounded cases.
+`MissingBlockHardCapCleanupCorrectnessEnvelope` composes that aggregate with
+the type invariant.
 
 `SumeragiMissingBlockViewChangeGate.tla` captures missing-block view-change
 escalation:
@@ -4685,6 +4703,8 @@ escalation:
 The aggregate `MissingBlockViewChangeExactness` invariant ties authority,
 due-window, marking, clear, scheduler, and deferral exactness together across
 all thirty bounded cases.
+`MissingBlockViewChangeCorrectnessEnvelope` composes that aggregate with the
+type invariant.
 
 `SumeragiNativeAmxAttestationGate.tla` captures native AMX proposer-side
 prepare/commit attestation gating:
@@ -15873,18 +15893,18 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `pacemaker-core-fast` | 1 | CI Pacemaker state-machine correctness-envelope check |
 | `pacemaker-evaluation-fast` | 1 | CI direct pacemaker evaluation component check |
 | `pacing-governor-fast` | 1 | CI direct pacing-governor factor evaluation check |
-| `cached-slot-timeout-fast` | 1 | CI cached proposal-slot timeout aggregate check |
-| `pending-fast-path-timeout-fast` | 1 | CI pending fast-path timeout aggregate check |
-| `stalled-pending-timeout-fast` | 1 | CI stalled pending-block timeout decision aggregate check |
-| `stalled-pending-frontier-timeout-fast` | 1 | CI stalled pending-frontier timeout aggregate check |
-| `missing-qc-timing-fast` | 1 | CI missing-QC timing aggregate check |
+| `cached-slot-timeout-fast` | 1 | CI cached proposal-slot timeout correctness-envelope check |
+| `pending-fast-path-timeout-fast` | 1 | CI pending fast-path timeout correctness-envelope check |
+| `stalled-pending-timeout-fast` | 1 | CI stalled pending-block timeout decision correctness-envelope check |
+| `stalled-pending-frontier-timeout-fast` | 1 | CI stalled pending-frontier timeout correctness-envelope check |
+| `missing-qc-timing-fast` | 1 | CI missing-QC timing correctness-envelope check |
 | `idle-backlog-signals-fast` | 1 | CI idle backlog signal aggregate check |
 | `proposal-liveness-fast` | 1 | CI proposal-liveness state aggregate check |
 | `frontier-slot-tracker-fast` | 1 | CI exact-frontier slot tracker aggregate check |
 | `frontier-slot-helpers-fast` | 1 | CI exact-frontier slot helper aggregate check |
 | `frontier-proposal-grace-fast` | 1 | CI exact-frontier proposal grace aggregate check |
 | `slot-tracker-state-fast` | 1 | CI slot tracker state aggregate check |
-| `timeout-derivation-fast` | 1 | CI timeout and cooldown derivation aggregate check |
+| `timeout-derivation-fast` | 1 | CI timeout and cooldown derivation correctness-envelope check |
 | `round-view-helpers-fast` | 1 | CI round/view helper aggregate check |
 | `phase-tracker-fast` | 1 | CI PhaseTracker mutable state component/anchor check |
 | `round-trace-status-fast` | 1 | CI round-trace status recorder direct exactness check |
@@ -15915,7 +15935,7 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `frontier-body-gap-payload-drain-fast` | 1 | CI direct frontier body-gap payload-drain urgency check |
 | `rbc-authoritative-payload-progress-fast` | 1 | CI direct RBC authoritative payload progress lookup check |
 | `slot-authoritative-payload-fast` | 1 | CI direct slot-level authoritative payload no-bug check |
-| `missing-block-fetch-fast` | 1 | CI missing-block fetch planner aggregate check |
+| `missing-block-fetch-fast` | 1 | CI missing-block fetch planner correctness-envelope check |
 | `recovery-status-counters-fast` | 1 | CI recovery status counter/snapshot direct exactness check |
 | `recovery-fsm-reason-fast` | 1 | CI direct recovery-FSM reason classifier/rank/sort check |
 | `qc-rebuild-status-fast` | 1 | CI QC rebuild status counter/snapshot direct exactness check |
@@ -15933,9 +15953,9 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `committed-edge-conflict-fast` | 1 | CI direct committed-edge highest-QC conflict suppression check |
 | `lock-rejected-sink-fast` | 1 | CI direct lock-rejected branch sink lifecycle check |
 | `active-lock-reject-recovery-fast` | 1 | CI active-height lock-reject recovery routing check |
-| `missing-block-hard-cap-fast` | 1 | CI missing-block hard-cap recovery aggregate check |
-| `missing-block-hard-cap-cleanup-fast` | 1 | CI missing-block hard-cap cleanup aggregate check |
-| `missing-block-view-change-fast` | 1 | CI missing-block view-change escalation aggregate check |
+| `missing-block-hard-cap-fast` | 1 | CI missing-block hard-cap recovery correctness-envelope check |
+| `missing-block-hard-cap-cleanup-fast` | 1 | CI missing-block hard-cap cleanup correctness-envelope check |
+| `missing-block-view-change-fast` | 1 | CI missing-block view-change escalation correctness-envelope check |
 | `native-amx-attestation-fast` | 2 | CI native AMX attestation aggregate check |
 | `native-amx-journal-fast` | 1 | CI native AMX queue-journal replay direct component check |
 | `native-amx-routing-plan-fast` | 1 | CI native AMX routing-plan aggregate projection check |
@@ -16188,27 +16208,34 @@ boundaries, invalid-input suppression, streak advancement, streak saturation,
 and capped hysteresis factors. The fast check uses the aggregate
 `CachedSlotTimeoutExactness` invariant tying near-quorum fast-path eligibility,
 shorter/base timeout selection, hysteresis wait boundaries, and streak/factor
-exactness together.
+exactness together, plus `CachedSlotTimeoutCorrectnessEnvelope`, which composes
+that aggregate with the type invariant.
 `pending-fast-path-timeout-fast` and `pending-fast-path-timeout-bug-*`
 cross-check saturated margin subtraction, half-timeout fallback, one
 millisecond minimums, floor boundaries, and DA inline validation floor
 application without capping larger timeouts. The fast check uses the aggregate
 `PendingFastPathTimeoutExactness` invariant tying pending fast-path timeout
-derivation and DA inline validation fallback exactness together.
+derivation and DA inline validation fallback exactness together, plus
+`PendingFastPathTimeoutCorrectnessEnvelope`, which composes that aggregate with
+the type invariant.
 `stalled-pending-timeout-fast` and `stalled-pending-timeout-bug-*` cross-check
 base quorum timeout flooring, near-quorum payload fast timeout priority,
 active recovery backlog classification, same-block recovery suppression, and
 commit-pipeline evidence disjuncts in decision projection fields. The fast
 check uses the aggregate `StalledPendingTimeoutExactness` invariant tying
 base/near timeout selection, near-quorum gate inputs, recovery backlog
-classification, class priority, and decision projection exactness together.
+classification, class priority, and decision projection exactness together,
+plus `StalledPendingTimeoutCorrectnessEnvelope`, which composes that aggregate
+with the type invariant.
 `stalled-pending-frontier-timeout-fast` and
 `stalled-pending-frontier-timeout-bug-*` cross-check recovery backlog timeout
 extension, deferred-QC multiplier selection, active block-production gap caps,
 and saturating arithmetic. The fast check uses the aggregate
 `StalledPendingFrontierTimeoutExactness` invariant tying recovery backlog
 extension, deferred-QC multiplier selection, uncapped timeout selection, active
-gap capping, saturating arithmetic, and decision projection exactness together.
+gap capping, saturating arithmetic, and decision projection exactness together,
+plus `StalledPendingFrontierTimeoutCorrectnessEnvelope`, which composes that
+aggregate with the type invariant.
 `frontier-proposal-grace-fast` and `frontier-proposal-grace-bug-*`
 cross-check transaction-count caps, full-grace transaction-budget coupling,
 proposal assembly windows, ingress drain grace, full and initial frontier
@@ -16249,7 +16276,9 @@ reschedule backoff, DA/non-DA commit and availability timeouts, pacemaker
 interval caps, and stale-gate timeout predicates. The fast check uses the
 aggregate `TimeoutDerivationExactness` invariant tying control/payload
 cooldowns, quorum backoff, commit/pacemaker timeouts, availability timeout
-derivation, and stale-gate preconditions together.
+derivation, and stale-gate preconditions together, plus
+`TimeoutDerivationCorrectnessEnvelope`, which composes that aggregate with the
+type invariant.
 `round-view-helpers-fast` and `round-view-helpers-bug-*` cross-check active
 round height saturation, new-view target selection, quorum-timeout view bump
 state, retained-window pruning, pacemaker reset, and round-phase priority. The
@@ -16347,14 +16376,17 @@ priority/retry windows, attempt accounting, target selection, local send
 filtering, known-block no-deferral, and fetch-request field preservation. The
 fast check uses the aggregate `MissingBlockFetchExactness` invariant tying
 decision, request-state, priority/retry, attempts, target, send/deferral, and
-request-field exactness together.
+request-field exactness together, plus `MissingBlockFetchCorrectnessEnvelope`,
+which composes that aggregate with the type invariant.
 `missing-block-hard-cap-fast` and `missing-block-hard-cap-bug-*` cross-check
 missing-block hard-cap recovery escalation: hard-cap/stall-window and
 lock-lag trigger decisions, convergence/progress suppression,
 duplicate-trigger budget sealing, request latching, missing-payload cause
 selection, no-actionable cleanup, and range-pull-only non-rotation. The fast
 check uses the aggregate `MissingBlockHardCapExactness` invariant tying
-decision, side-effect, no-actionable, and range-pull exactness together.
+decision, side-effect, no-actionable, and range-pull exactness together, plus
+`MissingBlockHardCapCorrectnessEnvelope`, which composes that aggregate with
+the type invariant.
 `missing-block-hard-cap-cleanup-fast` and
 `missing-block-hard-cap-cleanup-bug-*` cross-check missing-block hard-cap
 cleanup preservation: live contiguous frontier material, same-height
@@ -16362,14 +16394,17 @@ metadata/recovery/RBC retention, dead/future-state pruning, quorum-backed
 repair retention, no-live cleanup, and NewView/same-view owner handling. The
 fast check uses the aggregate `MissingBlockHardCapCleanupExactness` invariant
 tying preservation, live-retention, pruning, quorum-repair, and evidence-owner
-exactness together.
+exactness together, plus `MissingBlockHardCapCleanupCorrectnessEnvelope`, which
+composes that aggregate with the type invariant.
 `missing-block-view-change-fast` and `missing-block-view-change-bug-*`
 cross-check missing-block view-change escalation: priority authority,
 dwell/last-trigger/current-view latches, mark/clear state updates, scheduler
 deadline selection, recent-progress deferral, range-pull deferral, and backlog
 expiry. The fast check uses the aggregate
 `MissingBlockViewChangeExactness` invariant tying authority, due-window,
-marking, clear, scheduler, and deferral exactness together.
+marking, clear, scheduler, and deferral exactness together, plus
+`MissingBlockViewChangeCorrectnessEnvelope`, which composes that aggregate with
+the type invariant.
 `native-amx-attestation-fast` and `native-amx-attestation-bug-*` cross-check
 native AMX attestation gating: plan/roster fail-closed behavior,
 prepare/commit request staging, both-QC receipt sealing, partial multi-leg
@@ -16394,7 +16429,9 @@ proposal attempt caps, missing-QC rotation deferral, hard-cap selection, and
 saturating multiplication. The fast check uses the aggregate
 `MissingQcTimingExactness` invariant tying idle timing, missing-QC
 streak/forced proposal gating, rotation deferral, hard-cap derivation, and
-saturating multiplication exactness together.
+saturating multiplication exactness together, plus
+`MissingQcTimingCorrectnessEnvelope`, which composes that aggregate with the
+type invariant.
 `idle-backlog-signals-fast` and `idle-backlog-signals-bug-*` cross-check raw
 near-quorum queue/RBC signals, residual round backlog propagation, method and
 actor fast-timeout gate agreement, and benign backlog isolation. The fast

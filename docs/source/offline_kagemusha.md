@@ -1,70 +1,22 @@
 # Offline Kagemusha
 
-Kagemusha is the default direction for offline-offline payments. Nodes expose it
-through `settlement.offline.kagemusha_enabled`, which defaults to `true`; the
-legacy bearer-audit path remains available only as an explicit migration fallback
-through `settlement.offline.kagemusha_force_legacy`, which defaults to `false`.
-The real chain execution fixture asserts those defaults before running a
-Kagemusha transfer, so default-disabled regressions are caught by focused core
-tests.
+Kagemusha is the only active chain implementation for offline payments. Nodes
+expose offline-offline payments through `settlement.offline.kagemusha_enabled`,
+which defaults to `true`; there is no runtime legacy bearer-audit fallback.
+Classic `IssueOfflineNote`, `AuditOfflineNote`, and `RedeemOfflineNote` payloads
+are retained only as historical data-model compatibility fixtures and are not
+registered or dispatched by the node's default instruction surface.
 
-The current hardening keeps the production `AuditOfflineNote` lineage anchored to
-the original online-to-offline topup. Audit submitters no longer need to be the
-note account, but every input claim must match the sender key certificate that was
-anchored by an earlier topup or audit output, and the exact input-claim hash
-must have been issued by that lineage. The input note commitment must also carry
-an issued commitment replay key from the original topup or from a prior audited
-output before the audit can reach proof verification. A claim mutation under a
-legitimately issued certificate is rejected before recursive proof verification.
-Final `RedeemOfflineNote` admission applies the same trust-anchor rule: the
-redemption must have both the exact issued-claim replay key and the source note
-commitment's issued replay key from the online-to-offline topup or a prior audit
-output before it can reach proof verification. Claim-only redeem lineage is
-rejected as an unissued source note.
-Audit outputs are now one-to-one with public output commitments, and public
-asset definitions and amount totals must conserve before proof verification.
-Output certificates are signature checked against the output account they claim
-before their lineage is recorded, so a relayer can submit audit metadata without
-becoming a certificate issuer.
-Audit output key certificates must also be fresh one-use certificates: any
-output certificate whose replay key was already anchored by an online-to-offline
-topup or prior audit output is rejected before recursive proof verification.
-When a platform exposes a hardware usage-count limit in an offline note key
-certificate, the value must be exactly `1`; multi-use or zero-use counters are
-rejected even if the boolean one-use flag is set. The Torii offline issuer
-enforces the same rule before minting the online-to-offline topup certificate,
-and Swift, Kotlin/JVM, and Java Android SDK certificate constructors enforce it
-before wallet code can serialize or submit certificate metadata. Their Torii
-issuer-response parsers also reject malformed, overflowed, or non-numeric
-certificate versions and counter values before narrowing them into SDK
-certificate models.
-Legacy audit metadata also rejects any output commitment that byte-equals a
-consumed input nullifier before recursive proof verification, matching the
-Kagemusha nullifier/commitment domain-separation guard.
-Note commitments are one-use across both topup issue and audit-output replay
-domains, so a commitment created by an online-to-offline topup cannot be
-reintroduced as a P2P bearer output, and a prior P2P output commitment cannot be
-loaded again through a later topup. Torii topup issuance now builds the wallet
-JSON certificate and the `IssueOfflineNote` chain certificate from the same
-signed certificate object, so the wallet's offline trust anchor is the exact
-payload hash recorded by the online-to-offline transaction.
-Offline recursive audit/redeem proof envelopes must bind the active verifier-key
-commitment exactly and carry empty auxiliary bytes, matching the canonical
-transparent Halo2 IPA prover output. Their verifier records must also carry
-matching inline key bytes, key length, namespace, active circuit/version index,
-schema hash, commitment, canonical `offline-note-recursive` circuit family, and
-proof-size cap before proof verification starts. A verifier record and envelope
-that agree on a non-canonical circuit id are rejected before backend
-verification.
-Inline verifier-key bytes and verifier-key id names must be non-empty, so a
-verifier record cannot silently anchor to absent key material.
-Focused core coverage executes a real online-to-offline topup, an audit
-submitted by an unrelated relayer, and a second audit whose input is the first
-audit's output claim. It also rejects certificate-only or missing-certificate
-lineage, claim-only lineage without an issued input commitment key, exact-claim
-mutations under an issued topup certificate, reused topup certificates as audit
-outputs, forged redeem source commitments even when the forged claim key is
-anchored, and cross-domain note-commitment reuse before proof verification.
+Classic Offline Note hardening notes from earlier drafts are archived with the
+legacy data model. Torii issue/redeem endpoints reject classic payment
+construction, the Norito bridge classic transaction builders fail closed, and
+the core executor does not dispatch classic issue/audit/redeem instructions in
+production. Swift, Kotlin/JVM, and Java Android classic payment submitters also
+fail before signing or sending chain transactions, and their default Torii
+issuer clients reject classic note issue locally before posting to Torii.
+Historical serialization and proof fixtures may still mention those types, but
+production payment admission uses Kagemusha online-to-offline top-ups,
+`KagemushaTransfer`, and `RedeemKagemushaRecursive`.
 
 `KagemushaTransfer` is the chain-side shielded offline-offline instruction. It
 reuses the existing ZK asset accumulator in WSV instead of introducing a second
@@ -1996,8 +1948,7 @@ bundles whose hop count is inside
 witnesslessly when they carry the active lineage verifier record and pass
 chain admission. Semantic v1 recursive bundles still carry a record-backed
 lineage witness for online redemption.
-Chain admission first honors the config gates (`kagemusha_enabled = true` and
-`kagemusha_force_legacy = false`), validates the recursive proof envelope,
+Chain admission first honors the `kagemusha_enabled = true` config gate, validates the recursive proof envelope,
 checks the bundle chain id, and checks the final root and note commitment
 against the final unshield proof public inputs. If a semantic lineage witness is
 present, admission verifies every private hop against the supplied verifier

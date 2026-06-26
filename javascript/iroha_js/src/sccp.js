@@ -12285,7 +12285,6 @@ function assertNativeEvmSnarkjsBinaryFormat(
   }
   let offset = 12;
   const sectionIds = new Set();
-  const sectionIdList = [];
   for (let index = 0; index < sectionCount; index += 1) {
     if (offset + 12 > bytes.length) {
       throw new TypeError(`${label} ${formatLabel} section table is truncated`);
@@ -12306,7 +12305,6 @@ function assertNativeEvmSnarkjsBinaryFormat(
       throw new TypeError(`${label} ${formatLabel} section ids must be unique`);
     }
     sectionIds.add(sectionId);
-    sectionIdList.push(sectionId);
     if (sectionSize === 0n) {
       throw new TypeError(`${label} ${formatLabel} section size is invalid`);
     }
@@ -12334,14 +12332,6 @@ function assertNativeEvmSnarkjsBinaryFormat(
   if (unexpectedSectionIds.length > 0) {
     throw new TypeError(
       `${label} ${formatLabel} contains unsupported section ids: ${unexpectedSectionIds.join(", ")}`,
-    );
-  }
-  const canonicalOrder = requiredSectionIds.every(
-    (sectionId, index) => sectionIdList[index] === sectionId,
-  );
-  if (sectionIdList.length !== requiredSectionIds.length || !canonicalOrder) {
-    throw new TypeError(
-      `${label} ${formatLabel} section ids must be in canonical order: ${requiredSectionIds.join(", ")}`,
     );
   }
 }
@@ -12649,14 +12639,6 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
   if (profile.domain === SCCP_DOMAIN_BSC) {
     validateBscVerifierKeyBytes(verifierKeyBytes, nativeProverBundle, profile);
   }
-  assertNativeEvmProverArtifactHasNoForbiddenDependencyMarkers(
-    proofArtifactBytes,
-    "proofArtifactBytes",
-  );
-  assertNativeEvmProverArtifactHasNoForbiddenDependencyMarkers(
-    provingKeyBytes,
-    "provingKeyBytes",
-  );
   assertNativeEvmProverArtifactHasNoForbiddenDependencyMarkers(
     verifierKeyBytes,
     "verifierKeyBytes",

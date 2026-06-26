@@ -204,6 +204,10 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
 }
 
 extension SwiftTransactionEncoder {
+    private static func retiredOfflineNoteV2PaymentTransaction() throws -> SignedTransactionEnvelope {
+        throw SwiftTransactionEncoderError.retiredOfflineNotePayment
+    }
+
     static func encodeIssueOfflineNoteV2(request: IssueOfflineNoteV2Request,
                                          keypair: Keypair,
                                          creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
@@ -218,20 +222,12 @@ extension SwiftTransactionEncoder {
     static func encodeIssueOfflineNoteV2(request: IssueOfflineNoteV2Request,
                                          signingKey: SigningKey,
                                          creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(
+        _ = try TransactionInputValidator.validate(
             chainId: request.chainId,
             authorityId: request.authority
         )
-        return try OfflineNoteV2SwiftNoritoEncoder.encodeIssue(
-            chainId: ids.chainId,
-            authority: ids.authorityId,
-            creationTimeMs: creationTimeMs,
-            ttlMs: request.ttlMs,
-            nonce: request.nonce,
-            issue: request.issue,
-            metadata: request.metadata,
-            signingKey: signingKey
-        )
+        _ = (signingKey, creationTimeMs)
+        return try retiredOfflineNoteV2PaymentTransaction()
     }
 
     static func encodeRedeemOfflineNoteV2(request: RedeemOfflineNoteV2Request,
@@ -248,20 +244,13 @@ extension SwiftTransactionEncoder {
     static func encodeRedeemOfflineNoteV2(request: RedeemOfflineNoteV2Request,
                                           signingKey: SigningKey,
                                           creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(
+        _ = try TransactionInputValidator.validate(
             chainId: request.chainId,
             authorityId: request.authority
         )
-        return try OfflineNoteV2SwiftNoritoEncoder.encodeRedeem(
-            chainId: ids.chainId,
-            authority: ids.authorityId,
-            creationTimeMs: creationTimeMs,
-            ttlMs: request.ttlMs,
-            nonce: request.nonce,
-            redemption: request.redemption,
-            metadata: request.metadata,
-            signingKey: signingKey
-        )
+        try request.redemption.validateProofBinding()
+        _ = (signingKey, creationTimeMs)
+        return try retiredOfflineNoteV2PaymentTransaction()
     }
 
     static func encodeAuditOfflineNoteV2(request: AuditOfflineNoteV2Request,
@@ -278,20 +267,13 @@ extension SwiftTransactionEncoder {
     static func encodeAuditOfflineNoteV2(request: AuditOfflineNoteV2Request,
                                          signingKey: SigningKey,
                                          creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(
+        _ = try TransactionInputValidator.validate(
             chainId: request.chainId,
             authorityId: request.authority
         )
-        return try OfflineNoteV2SwiftNoritoEncoder.encodeAudit(
-            chainId: ids.chainId,
-            authority: ids.authorityId,
-            creationTimeMs: creationTimeMs,
-            ttlMs: request.ttlMs,
-            nonce: request.nonce,
-            audit: request.audit,
-            metadata: request.metadata,
-            signingKey: signingKey
-        )
+        try request.audit.validateProofBinding()
+        _ = (signingKey, creationTimeMs)
+        return try retiredOfflineNoteV2PaymentTransaction()
     }
 
     static func encodeRegisterOfflineDeviceAttestation(request: RegisterOfflineDeviceAttestationRequest,

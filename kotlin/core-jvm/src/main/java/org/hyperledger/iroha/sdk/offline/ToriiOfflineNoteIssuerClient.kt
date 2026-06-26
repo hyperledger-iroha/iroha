@@ -109,55 +109,9 @@ class ToriiOfflineNoteIssuerClient @JvmOverloads constructor(
     }
 
     override fun issueNote(request: OfflineNoteIssueRequest): CompletableFuture<OfflineNoteIssueResponse> {
-        val pending = synchronized(this) { pendingLoads[request.loadContext.operationId] }
+        synchronized(this) { pendingLoads.remove(request.loadContext.operationId) }
             ?: return failedFuture(OfflineToriiException("Missing Offline Note load context for operation ${request.loadContext.operationId}."))
-        val body = linkedMapOf<String, Any?>(
-            "account_id" to request.accountId,
-            "operation_id" to pending.operationId,
-            "device_id" to pending.deviceBinding.deviceId,
-            "offline_public_key" to pending.deviceBinding.offlinePublicKey,
-            "asset_definition_id" to request.assetDefinitionId,
-            "device_binding" to pending.deviceBinding.deviceBinding(),
-            "lineage_id" to pending.lineageId,
-            "lineage_state" to deepCopyObject(pending.lineageState),
-            "amount" to request.amount,
-            "local_balance" to pending.localBalance,
-            "local_revision" to pending.preIssueRevision,
-            "note_commitment" to request.noteCommitmentHex(),
-        )
-        return executePost(NOTES_ISSUE_PATH, body) { payload ->
-            val response = expectObject(parseJson(payload), "notes issue response")
-            val commitment = hexToBytes(requiredString(response, "issued_note_commitment"), "issued_note_commitment")
-            val lineageState = expectObject(requiredValue(response, "lineage_state"), "lineage_state")
-            val localRevision = requiredLong(response, "local_revision")
-            val keyCertificate = parseKeyCertificate(expectObject(requiredValue(response, "key_certificate"), "key_certificate"))
-            val settlementEntryHash = optionalObject(response["settlement"])
-                ?.let { optionalString(it["entry_hash"]) }
-            val stored = StoredLineageState(
-                lineageId = requiredString(lineageState, "lineage_id"),
-                revision = requiredLong(lineageState, "server_revision"),
-                balance = requiredString(lineageState, "balance"),
-                authorizationExpiresAtMs = optionalObject(lineageState["authorization"])
-                    ?.let { optionalLong(it["expires_at_ms"]) },
-                keyCertificateExpiresAtMs = optionalLong(
-                    expectObject(requiredValue(response, "key_certificate"), "key_certificate")["expires_at_ms"]
-                ),
-                keyCertificate = keyCertificate,
-                lineageState = lineageState,
-            )
-            synchronized(this) {
-                pendingLoads.remove(pending.operationId)
-                lineageStates[pending.lineageKey] = stored
-            }
-            OfflineNoteIssueResponse(
-                noteCommitment = commitment,
-                operationId = requiredString(response, "operation_id"),
-                lineageId = stored.lineageId,
-                localRevision = localRevision,
-                keyCertificate = keyCertificate,
-                settlementEntryHashHex = settlementEntryHash,
-            )
-        }
+        return failedFuture(IllegalStateException(RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE))
     }
 
     private fun refillKeys(
@@ -336,8 +290,9 @@ class ToriiOfflineNoteIssuerClient @JvmOverloads constructor(
     }
 
     companion object {
+        const val RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE: String =
+            "Classic Offline Note issue transactions are retired; use Kagemusha online-to-offline top-up flows."
         private const val KEYS_REFILL_PATH = "/v1/offline/v2/keys/refill"
-        private const val NOTES_ISSUE_PATH = "/v1/offline/v2/notes/issue"
     }
 }
 

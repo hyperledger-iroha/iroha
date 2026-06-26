@@ -8320,6 +8320,14 @@ pub struct SccpRouteManifest {
     pub chain: String,
     /// CAIP-compatible TRON chain id hex.
     pub chain_id_hex: String,
+    /// Canonical counterparty explorer base URL.
+    pub explorer_url: Option<String>,
+    /// Canonical counterparty explorer host.
+    pub explorer_host: Option<String>,
+    /// SCCP counterparty account codec id.
+    pub counterparty_account_codec: Option<u8>,
+    /// Stable logical key for the counterparty account codec.
+    pub counterparty_account_codec_key: Option<String>,
     /// SCCP counterparty domain identifier.
     pub counterparty_domain: u32,
     /// Destination verifier target name.
@@ -8348,6 +8356,8 @@ pub struct SccpRouteManifest {
     pub proving_key_hash: Option<String>,
     /// Optional hex-encoded native EVM prover bundle digest.
     pub native_evm_prover_bundle_hash: Option<String>,
+    /// Optional canonical native EVM prover bundle JSON.
+    pub native_evm_prover_bundle: Option<iroha_primitives::json::Json>,
     /// Optional route-bound TAIRA-to-counterparty browser prover manifest reference.
     pub destination_browser_prover: Option<SccpRouteBrowserProverManifestRef>,
     /// Optional route-bound counterparty-to-TAIRA browser prover manifest reference.
@@ -8669,8 +8679,6 @@ pub struct Offline {
     /// `KagemushaTransfer` enforces this gate before forwarding to the shared
     /// shielded ZK asset accumulator.
     pub kagemusha_enabled: bool,
-    /// Whether nodes force legacy bearer-audit lineage during migration.
-    pub kagemusha_force_legacy: bool,
 }
 
 impl Default for Offline {
@@ -8683,7 +8691,6 @@ impl Default for Offline {
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
             kagemusha_enabled: defaults::settlement::offline::KAGEMUSHA_ENABLED,
-            kagemusha_force_legacy: defaults::settlement::offline::KAGEMUSHA_FORCE_LEGACY,
         }
     }
 }
@@ -9840,10 +9847,6 @@ mod tests {
         assert!(
             offline.kagemusha_enabled,
             "Kagemusha must remain enabled by default"
-        );
-        assert!(
-            !offline.kagemusha_force_legacy,
-            "legacy Kagemusha fallback must remain opt-in"
         );
     }
 

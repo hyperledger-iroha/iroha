@@ -3877,8 +3877,6 @@ pub mod settlement {
         pub const PRUNE_BATCH_SIZE: usize = 128;
         /// Kagemusha shielded offline-offline payments are enabled by default.
         pub const KAGEMUSHA_ENABLED: bool = true;
-        /// Legacy bearer-audit lineage is not forced unless an operator opts into migration fallback.
-        pub const KAGEMUSHA_FORCE_LEGACY: bool = false;
     }
     /// Router defaults (shadow price, guard rails).
     pub mod router {

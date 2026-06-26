@@ -1,6 +1,7 @@
 //! Bridge proof ingestion instructions.
 
 use super::*;
+use iroha_primitives::json::Json;
 
 /// Route-bound browser prover manifest reference used by SCCP route-manifest ISIs.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -44,6 +45,14 @@ pub struct SccpRouteManifest {
     pub chain: String,
     /// Counterparty chain id hex.
     pub chain_id_hex: String,
+    /// Canonical counterparty explorer base URL.
+    pub explorer_url: Option<String>,
+    /// Canonical counterparty explorer host.
+    pub explorer_host: Option<String>,
+    /// SCCP counterparty account codec id.
+    pub counterparty_account_codec: Option<u8>,
+    /// Stable logical key for the counterparty account codec.
+    pub counterparty_account_codec_key: Option<String>,
     /// SCCP counterparty domain identifier.
     pub counterparty_domain: u32,
     /// Destination verifier target name.
@@ -72,6 +81,8 @@ pub struct SccpRouteManifest {
     pub proving_key_hash: Option<String>,
     /// Optional hex-encoded native EVM prover bundle digest.
     pub native_evm_prover_bundle_hash: Option<String>,
+    /// Optional canonical native EVM prover bundle JSON.
+    pub native_evm_prover_bundle: Option<Json>,
     /// Optional route-bound TAIRA-to-counterparty browser prover manifest reference.
     pub destination_browser_prover: Option<SccpRouteBrowserProverManifestRef>,
     /// Optional route-bound counterparty-to-TAIRA browser prover manifest reference.
@@ -428,6 +439,10 @@ mod tests {
             tron_network: "bsc-testnet".to_owned(),
             chain: "bsc-testnet".to_owned(),
             chain_id_hex: "0x61".to_owned(),
+            explorer_url: Some("https://testnet.bscscan.com".to_owned()),
+            explorer_host: Some("testnet.bscscan.com".to_owned()),
+            counterparty_account_codec: Some(2),
+            counterparty_account_codec_key: Some("evm_hex".to_owned()),
             counterparty_domain: 2,
             verifier_target: "EvmContract".to_owned(),
             production_ready: true,
@@ -443,6 +458,11 @@ mod tests {
             proof_artifact_hash: Some(hex(0x47)),
             proving_key_hash: Some(hex(0x48)),
             native_evm_prover_bundle_hash: Some(hex(0x49)),
+            native_evm_prover_bundle: Some(Json::new(norito::json!({
+                "schema": "sccp-bsc-native-evm-prover-bundle/v1",
+                "routeId": "taira_bsc_xor",
+                "assetKey": "xor"
+            }))),
             destination_browser_prover: Some(browser_prover_ref(0x50)),
             source_browser_prover: Some(browser_prover_ref(0x60)),
             deployment_evidence_sha256: Some(hex(0x4a)),

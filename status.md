@@ -1,6 +1,83 @@
 # Status
 
-Last updated: 2026-06-26
+Last updated: 2026-06-27
+
+## 2026-06-27 SCCP .NET TRX content hardening
+
+- Tightened `scripts/check_sccp_production_corridor.sh --phase dotnet-sdk` so
+  the Windows C# handoff validates the direct
+  `csharp/tests/Hyperledger.Iroha.Sdk.Tests/TestResults/sccp-dotnet-sdk.trx`
+  XML before printing release TRX markers.
+- The runner now requires the TRX to name
+  `Hyperledger.Iroha.Sdk.Tests.dll`, contain at least one passed SCCP
+  `UnitTestResult`, and contain no failed, skipped, timed-out, or aborted SCCP
+  test results; placeholder, wrong-assembly, skipped, and failed TRX XML files
+  fail before `SCCP .NET SDK TRX:` or byte-count evidence is emitted.
+- Updated `roadmap.md` and `docs/source/bridge_proofs.md` with the direct-TRX
+  content rule.
+- Validation passed:
+  - `bash -n scripts/check_sccp_production_corridor.sh`
+  - `python3 -m py_compile pytests/scripts/check_sccp_production_corridor_test.py`
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py::test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades pytests/scripts/check_sccp_production_corridor_test.py::test_sccp_production_corridor_dotnet_phase_rejects_nested_trx_path pytests/scripts/check_sccp_production_corridor_test.py::test_sccp_production_corridor_dotnet_phase_rejects_malformed_trx_content`
+    (`7` passed)
+- Remaining SCCP release blockers are unchanged: Windows `.NET 8` SCCP TRX
+  evidence must still be produced on a Windows machine, and governed/live
+  deployment evidence still requires the operator-controlled deployment
+  environment.
+
+## 2026-06-27 SCCP release-note zero-SHA artifact redaction
+
+- Tightened strict release-note attachment invariants so all-zero canonical
+  SHA-256 artifact values are treated as invalid public metadata rather than as
+  literal artifact hashes that must appear in release notes.
+- Extended the builder/verifier release-note artifact-row regression and the
+  release-notes attachment source-inventory marker set with a positive-byte
+  artifact carrying an all-zero SHA-256, which must render as
+  `<invalid artifact.sha256>`.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_release_notes_reject_malformed_artifact_rows pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_notes_attachment_invariants_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_notes_attachment_invariants_gate_inventory`
+    (`3` passed)
+
+## 2026-06-27 BFV bounded bootstrap refresh-round domain hardening
+
+- Domain-separated bounded deterministic bootstrap refresh-round seed derivation
+  from the exact v1 refresh-round seed domain while preserving the existing
+  exact domain.
+- Added a regression proving exact and bounded bootstrap refreshes do not reuse
+  the same per-round seed for the same key id, round count, and public seed,
+  while bounded bootstrap derivation remains deterministic and both transcript
+  validators still accept the generated material.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-sample-switch-domain CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bounded_bootstrap_refresh_round_seed_domain_is_separate_from_exact_mode --lib -- --nocapture`
+    (`1` passed, `805` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-sample-switch-domain CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bootstrap_refresh_keys_reject_overbudget_round_capacity --lib -- --nocapture`
+    (`1` passed, `805` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-sample-switch-domain CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bootstrap_refresh_uses_round_specific_public_material --lib -- --nocapture`
+    (`1` passed, `805` filtered out)
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+  - `git diff --quiet -- Cargo.lock`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs status.md docs/source/engineering_backlog.md roadmap.md`
+    (no matches)
+
+## 2026-06-26 Soracloud BFV Full-Bootstrap Fixture Drift
+
+- Refreshed the Soracloud BFV operation-vector full-bootstrap material fixture
+  digests to match the generated canonical circuit artifacts and statement
+  digest.
+- Updated the audited release-package negative test helper so deliberately
+  inert report/archive fixtures replace only the malformed artifact side,
+  allowing archive-body validation to reach the intended malformed archive
+  checks. Audited role-splice and stale-package assertions now expect the
+  earlier governed artifact-byte archive preflight.
+- Validation passed:
+  - `cargo test -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_native_backend_drift`
+  - `cargo test -p iroha_core --features zk-stark soracloud_bfv_operation_vectors`
+  - `cargo test -p iroha_core --features zk-stark audited_prover_rejects_role_spliced_artifacts`
+  - `cargo test -p iroha_core --features zk-stark audited_prover_rejects_untrusted_or_stale_package`
+  - `cargo fmt --all`
+  - `git diff --check`
 
 ## 2026-06-26 SCCP public artifact SHA-256 zero-sentinel hardening
 
@@ -5563,6 +5640,61 @@ Last updated: 2026-06-26
   - Anchored conflict-marker scan and stale retry-label wording scan across the
     touched Soracloud BFV code/docs/status files found no matches.
   - Cargo manifest and lockfile diff guard found no touched manifests or lockfiles.
+
+## 2026-06-25 Torii Recipient Lookup Config Snapshot
+
+- Refreshed `minimal_config_snapshot` so the expected `iroha_config` minimal
+  fixture includes the default `torii.recipient_lookup` settings: a four-second
+  request timeout and no configured lookup routes.
+- Validation passed:
+  - `UPDATE_EXPECT=1 CARGO_INCREMENTAL=0 cargo test -p iroha_config --test fixtures minimal_config_snapshot -- --nocapture`
+  - `cargo fmt --all`
+  - `git diff --check -- crates/iroha_config/tests/fixtures.rs status.md`
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_config --test fixtures minimal_config_snapshot -- --nocapture`
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_config --test fixtures -- --nocapture`
+
+## 2026-06-25 Kagemusha-only offline payment fee policy
+
+- Offline payment admission now treats Kagemusha as the only active chain
+  implementation: classic Offline Note issue/audit/redeem instructions are no
+  longer registered in the default instruction registry, routed by the queue, or
+  dispatched by the core executor. Their core `Execute` impls are retained only
+  for historical unit fixtures under `cfg(test)`.
+- Nexus fee admission now exempts pure offline-offline `KagemushaTransfer`
+  batches only. Online-to-offline shield top-ups and offline-to-online
+  `RedeemKagemushaRecursive` redemptions stay on the normal fee-budget/receipt
+  path. The removed `settlement.offline.kagemusha_force_legacy` config knob can
+  no longer force a legacy bearer-audit fallback.
+- Torii and the Norito bridge reject legacy Offline Note transaction
+  construction. Torii offline-v2 issue and audit compatibility routes fail
+  closed and the OpenAPI descriptions now point callers to Kagemusha. Swift SDK
+  V1/V2 payment builders and Kotlin/JVM plus Java Android default Offline Note
+  submitters now fail before signing or submitting classic audit/redeem/defund
+  transactions; default mobile Torii issuer clients also reject classic note
+  issue locally before posting to Torii. Kagemusha transaction builders remain
+  the supported SDK payment path.
+- Python and JavaScript Torii readiness clients now parse the Kagemusha-only
+  readiness shape and leave legacy `offline_note` style booleans absent unless
+  an older server explicitly sends them. SDK and portal docs now show
+  `offline_kagemusha_abi7` readiness instead of legacy one-use note readiness.
+- Validation passed:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-only-2 cargo test -p iroha_config kagemusha --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-only-2 cargo test -p iroha_data_model kagemusha_transfer_instruction_is_registered_and_boxable --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-only-2 cargo test -p iroha_core nexus_fee_kagemusha --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-only-2 cargo test -p iroha_core nexus_fee_online_to_offline_shield_requires_fee_budget --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-only-2 cargo test -p connect_norito_bridge offline_note_signed_transaction_ffis_are_retired --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-only-2 cargo test -p iroha_torii --test offline_kagemusha_only_smoke --features app_api -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-only-2 cargo test -p iroha_torii --test offline_v2_kagemusha_redeem_smoke --features app_api -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-only-2 cargo test -p iroha_torii generated_spec_includes_documented_paths --lib --features app_api -- --nocapture`
+  - `python3 -m py_compile python/iroha_torii_client/client.py python/iroha_torii_client/tests/test_client.py`
+  - `pytest python/iroha_torii_client/tests/test_client.py -k get_offline_readiness -q`
+  - `node --check javascript/iroha_js/src/toriiClient.js && node --check javascript/iroha_js/dist/toriiClient.js`
+  - `node --test --test-name-pattern "getOfflineReadiness" javascript/iroha_js/test/toriiClient.test.js`
+  - `swift test --filter 'OfflineNoteTests/testIrohaOfflineNoteTransactionSubmitterIsRetiredBeforeSdkSubmission|OfflineNoteTests/testToriiIssuerClientBodySignsRefillAndRetiresNoteIssue|OfflineNoteTests/testOfflineNoteTransactionBuildersAreRetired|OfflineNoteTests/testOfflineNoteTransactionBuilderCoversOptionalNonceAndInputValidation|OfflineNoteTests/testRedeemBuilderRejectsMismatchedProofBinding|OfflineNoteV2Tests/testOfflineNoteV2PaymentTransactionBuildersAreRetiredAndRegistrationStillSigns|OfflineNoteV2Tests/testOfflineNoteV2TransactionBuilderCoversOptionalNonceAndInputValidation|OfflineNoteV2Tests/testRedeemBuilderRejectsMismatchedProofBinding'`
+  - `./gradlew -Pkotlin.daemon.jvmargs=-Xmx4096m :core-jvm:test --tests 'org.hyperledger.iroha.sdk.offline.OfflineNoteTest.offlineNoteTransactionSubmitterIsRetiredAndKeepsFeeMetadataHelper' --tests 'org.hyperledger.iroha.sdk.offline.OfflineNoteTest.toriiIssuerClientBodySignsRefillAndRetiresNoteIssue' --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
 
 ## 2026-06-25 Kagemusha Zero-Prehash Hash Validation
 

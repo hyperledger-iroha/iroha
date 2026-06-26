@@ -383,7 +383,7 @@ node -e '
   import { ToriiClient } from "@iroha/iroha-js";
   const client = new ToriiClient(process.env.TORII_URL);
   const readiness = await client.getOfflineReadiness();
-  console.log(readiness.offline_note, readiness.offline_recursive_note_proof);
+  console.log(readiness.offline_kagemusha_abi7, readiness.offline_kagemusha_recursive_compact_available);
 '
 ```
 

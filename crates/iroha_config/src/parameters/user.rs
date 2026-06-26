@@ -4505,6 +4505,14 @@ pub struct SccpRouteManifest {
     pub chain: String,
     /// CAIP-compatible TRON chain id hex.
     pub chain_id_hex: String,
+    /// Canonical counterparty explorer base URL.
+    pub explorer_url: Option<String>,
+    /// Canonical counterparty explorer host.
+    pub explorer_host: Option<String>,
+    /// SCCP counterparty account codec id.
+    pub counterparty_account_codec: Option<u8>,
+    /// Stable logical key for the counterparty account codec.
+    pub counterparty_account_codec_key: Option<String>,
     /// SCCP counterparty domain identifier.
     pub counterparty_domain: u32,
     /// Destination verifier target name.
@@ -4554,6 +4562,8 @@ pub struct SccpRouteManifest {
     pub proving_key_hash: Option<String>,
     /// Optional hex-encoded native EVM prover bundle digest.
     pub native_evm_prover_bundle_hash: Option<String>,
+    /// Optional canonical native EVM prover bundle JSON.
+    pub native_evm_prover_bundle: Option<iroha_primitives::json::Json>,
     /// Optional route-bound TAIRA-to-counterparty browser prover manifest reference.
     pub destination_browser_prover: Option<SccpRouteBrowserProverManifestRef>,
     /// Optional route-bound counterparty-to-TAIRA browser prover manifest reference.
@@ -4630,6 +4640,10 @@ impl SccpRouteManifest {
     const BSC_DIAGNOSTIC_VERIFIER_KEY_HASHES: &'static [&'static str] =
         &["0x9ef8067d260532f88e60cfa4b458fe678fc46b9c242de18fc91ba646e0857fc4"];
     const BSC_TESTNET_CHAIN_ID_HEX: &'static str = "0x61";
+    const BSC_TESTNET_EXPLORER_URL: &'static str = "https://testnet.bscscan.com";
+    const BSC_TESTNET_EXPLORER_HOST: &'static str = "testnet.bscscan.com";
+    const BSC_EVM_COUNTERPARTY_ACCOUNT_CODEC: u8 = 2;
+    const BSC_EVM_COUNTERPARTY_ACCOUNT_CODEC_KEY: &'static str = "evm_hex";
 
     fn normalize_bsc_chain_id_hex(value: &str) -> String {
         assert!(
@@ -4820,6 +4834,68 @@ impl SccpRouteManifest {
             "SCCP BSC route manifest {field} must be non-zero"
         );
         value.to_owned()
+    }
+
+    fn normalize_bsc_testnet_explorer_url(field: &str, value: Option<&str>) -> Option<String> {
+        let value = value?;
+        if value.trim().is_empty() {
+            return None;
+        }
+        let parsed = Url::parse(value).unwrap_or_else(|err| {
+            panic!(
+                "SCCP BSC route manifest {field} must be a valid BSC testnet explorer URL: {err}"
+            )
+        });
+        assert!(
+            parsed.scheme() == "https"
+                && parsed.host_str() == Some(Self::BSC_TESTNET_EXPLORER_HOST)
+                && parsed.path() == "/"
+                && parsed.query().is_none()
+                && parsed.fragment().is_none(),
+            "SCCP BSC route manifest {field} must be https://testnet.bscscan.com"
+        );
+        Some(Self::BSC_TESTNET_EXPLORER_URL.to_owned())
+    }
+
+    fn normalize_bsc_testnet_explorer_host(field: &str, value: Option<&str>) -> Option<String> {
+        let value = value?;
+        if value.trim().is_empty() {
+            return None;
+        }
+        assert!(
+            value == Self::BSC_TESTNET_EXPLORER_HOST,
+            "SCCP BSC route manifest {field} must be testnet.bscscan.com"
+        );
+        Some(Self::BSC_TESTNET_EXPLORER_HOST.to_owned())
+    }
+
+    fn normalize_counterparty_account_codec(
+        field: &str,
+        value: Option<u8>,
+        expected: u8,
+    ) -> Option<u8> {
+        let value = value?;
+        assert!(
+            value == expected,
+            "SCCP route manifest {field} must be {expected}"
+        );
+        Some(value)
+    }
+
+    fn normalize_counterparty_account_codec_key(
+        field: &str,
+        value: Option<&str>,
+        expected: &str,
+    ) -> Option<String> {
+        let value = value?;
+        if value.trim().is_empty() {
+            return None;
+        }
+        assert!(
+            value == expected,
+            "SCCP route manifest {field} must be {expected}"
+        );
+        Some(expected.to_owned())
     }
 
     fn normalize_bsc_testnet_explorer_tx_url(
@@ -5247,6 +5323,53 @@ impl SccpRouteManifest {
         } else {
             self.chain_id_hex.trim().to_owned()
         };
+        let explorer_url = if is_bsc_route {
+            Self::normalize_bsc_testnet_explorer_url("explorer_url", self.explorer_url.as_deref())
+                .or_else(|| Some(Self::BSC_TESTNET_EXPLORER_URL.to_owned()))
+        } else {
+            self.explorer_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        };
+        let explorer_host = if is_bsc_route {
+            Self::normalize_bsc_testnet_explorer_host(
+                "explorer_host",
+                self.explorer_host.as_deref(),
+            )
+            .or_else(|| Some(Self::BSC_TESTNET_EXPLORER_HOST.to_owned()))
+        } else {
+            self.explorer_host
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        };
+        let counterparty_account_codec = if is_bsc_route {
+            Self::normalize_counterparty_account_codec(
+                "counterparty_account_codec",
+                self.counterparty_account_codec,
+                Self::BSC_EVM_COUNTERPARTY_ACCOUNT_CODEC,
+            )
+            .or(Some(Self::BSC_EVM_COUNTERPARTY_ACCOUNT_CODEC))
+        } else {
+            self.counterparty_account_codec
+        };
+        let counterparty_account_codec_key = if is_bsc_route {
+            Self::normalize_counterparty_account_codec_key(
+                "counterparty_account_codec_key",
+                self.counterparty_account_codec_key.as_deref(),
+                Self::BSC_EVM_COUNTERPARTY_ACCOUNT_CODEC_KEY,
+            )
+            .or_else(|| Some(Self::BSC_EVM_COUNTERPARTY_ACCOUNT_CODEC_KEY.to_owned()))
+        } else {
+            self.counterparty_account_codec_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        };
         let network_id_hex = if strict_route_hashes {
             Self::normalize_hex32("network_id_hex", &self.network_id_hex)
         } else {
@@ -5489,6 +5612,10 @@ impl SccpRouteManifest {
             "SCCP BSC route manifest production_ready requires native_evm_prover_bundle_hash"
         );
         assert!(
+            !(self.production_ready && is_bsc_route && self.native_evm_prover_bundle.is_none()),
+            "SCCP BSC route manifest production_ready requires native_evm_prover_bundle"
+        );
+        assert!(
             !(self.production_ready
                 && is_bsc_route
                 && (destination_browser_prover.is_none() || source_browser_prover.is_none())),
@@ -5658,6 +5785,10 @@ impl SccpRouteManifest {
             tron_network: self.tron_network,
             chain: self.chain,
             chain_id_hex,
+            explorer_url,
+            explorer_host,
+            counterparty_account_codec,
+            counterparty_account_codec_key,
             counterparty_domain: self.counterparty_domain,
             verifier_target: self.verifier_target,
             production_ready: self.production_ready,
@@ -5672,6 +5803,7 @@ impl SccpRouteManifest {
             proof_artifact_hash,
             proving_key_hash,
             native_evm_prover_bundle_hash,
+            native_evm_prover_bundle: self.native_evm_prover_bundle,
             destination_browser_prover,
             source_browser_prover,
             deployment_evidence_sha256,
@@ -5731,6 +5863,10 @@ mod sccp_route_manifest_user_config_tests {
             tron_network: "bsc-testnet".to_owned(),
             chain: "bsc-testnet".to_owned(),
             chain_id_hex: "0x61".to_owned(),
+            explorer_url: Some("https://testnet.bscscan.com".to_owned()),
+            explorer_host: Some("testnet.bscscan.com".to_owned()),
+            counterparty_account_codec: Some(2),
+            counterparty_account_codec_key: Some("evm_hex".to_owned()),
             counterparty_domain: 2,
             verifier_target: "EvmContract".to_owned(),
             production_ready: false,
@@ -5755,6 +5891,11 @@ mod sccp_route_manifest_user_config_tests {
             circuit_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
             proving_key_hash: Some(format!("0x{}", "4d".repeat(32))),
             native_evm_prover_bundle_hash: Some(format!("0x{}", "50".repeat(32))),
+            native_evm_prover_bundle: Some(iroha_primitives::json::Json::new(norito::json!({
+                "schema": "sccp-bsc-native-evm-prover-bundle/v1",
+                "routeId": "taira_bsc_xor",
+                "assetKey": "xor"
+            }))),
             destination_browser_prover: Some(browser_prover_ref("destination", "60")),
             source_browser_prover: Some(browser_prover_ref("source", "70")),
             deployment_evidence_sha256: Some(format!("0x{}", "4f".repeat(32))),
@@ -5837,6 +5978,10 @@ mod sccp_route_manifest_user_config_tests {
             tron_network: "mainnet".to_owned(),
             chain: "tron-mainnet".to_owned(),
             chain_id_hex: "0x2b6653dc".to_owned(),
+            explorer_url: None,
+            explorer_host: None,
+            counterparty_account_codec: None,
+            counterparty_account_codec_key: None,
             counterparty_domain: 5,
             verifier_target: "TronContract".to_owned(),
             production_ready: true,
@@ -5861,6 +6006,7 @@ mod sccp_route_manifest_user_config_tests {
             circuit_artifact_hash: None,
             proving_key_hash: None,
             native_evm_prover_bundle_hash: None,
+            native_evm_prover_bundle: None,
             destination_browser_prover: None,
             source_browser_prover: None,
             deployment_evidence_sha256: None,
@@ -13119,9 +13265,6 @@ pub struct Offline {
     /// Enable Kagemusha shielded offline-offline payments.
     #[config(default = "defaults::settlement::offline::KAGEMUSHA_ENABLED")]
     pub kagemusha_enabled: bool,
-    /// Force legacy bearer-audit lineage instead of Kagemusha during migration fallback.
-    #[config(default = "defaults::settlement::offline::KAGEMUSHA_FORCE_LEGACY")]
-    pub kagemusha_force_legacy: bool,
 }
 
 impl Default for Offline {
@@ -13134,7 +13277,6 @@ impl Default for Offline {
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
             kagemusha_enabled: defaults::settlement::offline::KAGEMUSHA_ENABLED,
-            kagemusha_force_legacy: defaults::settlement::offline::KAGEMUSHA_FORCE_LEGACY,
         }
     }
 }
@@ -13361,7 +13503,6 @@ impl Offline {
             escrow_required,
             escrow_accounts,
             kagemusha_enabled,
-            kagemusha_force_legacy,
         } = self;
         if hot_retention_blocks == 0 {
             emitter.emit(ParseError::InvalidSettlementConfig.into());
@@ -13416,7 +13557,6 @@ impl Offline {
             escrow_required,
             escrow_accounts: escrow_bindings,
             kagemusha_enabled,
-            kagemusha_force_legacy,
         }
     }
 }
@@ -25475,26 +25615,6 @@ mod settlement_offline_tests {
             actual.kagemusha_enabled,
             "Kagemusha must remain enabled after user-config parsing"
         );
-        assert!(
-            !actual.kagemusha_force_legacy,
-            "legacy Kagemusha fallback must remain opt-in after user-config parsing"
-        );
-    }
-
-    #[test]
-    fn offline_parse_preserves_explicit_kagemusha_legacy_opt_in() {
-        let user = Offline {
-            kagemusha_enabled: false,
-            kagemusha_force_legacy: true,
-            ..Offline::default()
-        };
-
-        let mut emitter = Emitter::new();
-        let actual = user.parse(&mut emitter);
-
-        assert!(emitter.into_result().is_ok());
-        assert!(!actual.kagemusha_enabled);
-        assert!(actual.kagemusha_force_legacy);
     }
 }
 

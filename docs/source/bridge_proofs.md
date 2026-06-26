@@ -2894,7 +2894,13 @@ generation, the mirrored Java Android SDK checks, the native .NET/C# ETH/BSC
 facade tests, the EVM/TRON Groth16 contract smoke, and core bridge-proof
 admission. The `eth,bsc` public release row is blocked unless the `dotnet-sdk`
 phase also passes, so the native C# BSC facade cannot be validated only by
-ad-hoc local output.
+ad-hoc local output. The Windows `.NET` phase also inspects the direct
+`sccp-dotnet-sdk.trx` file before publishing release markers: the TRX must name
+`Hyperledger.Iroha.Sdk.Tests.dll`, include at least one passed SCCP
+`UnitTestResult`, and contain no failed, skipped, timed-out, or aborted SCCP
+test results. Empty placeholder TRX files, wrong-assembly TRX files, and
+failed/skipped result XML remain forged evidence even if the console summary
+looks successful.
 `.github/workflows/sccp_production_corridor.yml` attaches the same
 phase list to pull requests touching SCCP surfaces, a nightly scheduled run,
 and manual `workflow_dispatch` runs for either the full corridor or one named

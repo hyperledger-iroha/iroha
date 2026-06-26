@@ -1217,7 +1217,9 @@ function rustEnumVariants(text, name) {
 function assertRustNoMangleExport(text, name, signaturePattern, label) {
   assert.match(
     text,
-    new RegExp(`#\\[unsafe\\(no_mangle\\)\\]\\s*pub\\s+${signaturePattern}\\s+${name}\\s*\\(`),
+    new RegExp(
+      `#\\[unsafe\\(no_mangle\\)\\]\\s*(?:#\\[[^\\]]+\\]\\s*)*pub\\s+${signaturePattern}\\s+${name}\\s*\\(`,
+    ),
     `${label} must export ${name} with the stable privacy FFI symbol`,
   );
 }
@@ -1766,12 +1768,19 @@ test("native privacy FFI hosts remain Norito-only and JSON-free", () => {
     );
   }
 
-  const javaPrivacyAdapter = sliceBetween(
+  const javaPrivacyHelpers = sliceBetween(
     connectBridge,
     "fn java_privacy_public_archive",
-    "pub unsafe extern \"system\" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCompactPaymentTokenProver",
-    "C bridge Java privacy JNI adapter",
+    "pub unsafe extern \"system\" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativePublicKeyFromPrivate",
+    "C bridge Java privacy JNI helpers",
   );
+  const javaPrivacyExports = sliceBetween(
+    connectBridge,
+    "pub unsafe extern \"system\" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeBridgeAbiVersion",
+    "pub unsafe extern \"system\" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeBridgeAbiVersion",
+    "C bridge Java privacy JNI exports",
+  );
+  const javaPrivacyAdapter = `${javaPrivacyHelpers}\n${javaPrivacyExports}`;
   assert.match(javaPrivacyAdapter, /norito::to_bytes/, "Java privacy JNI must encode Norito archives");
   assert.match(
     javaPrivacyAdapter,

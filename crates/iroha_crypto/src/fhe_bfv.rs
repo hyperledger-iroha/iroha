@@ -68,6 +68,8 @@ const GALOIS_KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.galois_keygen.v1";
 const BOUNDED_NOISE_GALOIS_KEYGEN_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.galois_keygen.bounded_noise.v1";
 const BOOTSTRAP_REFRESH_ROUND_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.bootstrap_refresh_round.v1";
+const BOUNDED_NOISE_BOOTSTRAP_REFRESH_ROUND_DOMAIN: &[u8] =
+    b"iroha.crypto.fhe.bfv.bootstrap_refresh_round.bounded_noise.v1";
 const IDENTIFIER_KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.identifier.keygen.v1";
 const IDENTIFIER_SLOT_ENCRYPT_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.identifier.slot.v1";
 const BFV_PARAMETER_DIGEST_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.parameter_digest.v1";
@@ -7362,8 +7364,13 @@ pub fn bootstrap_key_with_max_refresh_rounds_from_seed(
     validate_public_key(params, public_key)?;
     let round_refreshes = (0..max_refresh_rounds)
         .map(|round_index| {
-            let round_seed =
-                bootstrap_refresh_round_seed(&key_id, max_refresh_rounds, seed, round_index);
+            let round_seed = bootstrap_refresh_round_seed(
+                BOOTSTRAP_REFRESH_ROUND_DOMAIN,
+                &key_id,
+                max_refresh_rounds,
+                seed,
+                round_index,
+            );
             encrypt_from_seed(params, public_key, &[0], &round_seed)
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -7438,8 +7445,13 @@ pub fn bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
     validate_public_key(params, public_key)?;
     let round_refreshes = (0..max_refresh_rounds)
         .map(|round_index| {
-            let round_seed =
-                bootstrap_refresh_round_seed(&key_id, max_refresh_rounds, seed, round_index);
+            let round_seed = bootstrap_refresh_round_seed(
+                BOUNDED_NOISE_BOOTSTRAP_REFRESH_ROUND_DOMAIN,
+                &key_id,
+                max_refresh_rounds,
+                seed,
+                round_index,
+            );
             encrypt_bounded_noise_from_seed(params, public_key, &[0], &round_seed)
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -29453,13 +29465,14 @@ fn is_bootstrap_key_id_byte(byte: u8) -> bool {
 }
 
 fn bootstrap_refresh_round_seed(
+    domain: &'static [u8],
     key_id: &str,
     max_refresh_rounds: u16,
     seed: &[u8],
     round_index: u16,
 ) -> [u8; Hash::LENGTH] {
     Hash::new_from_chunks(&[
-        BOOTSTRAP_REFRESH_ROUND_DOMAIN,
+        domain,
         key_id.as_bytes(),
         &max_refresh_rounds.to_le_bytes(),
         seed,
@@ -33150,6 +33163,144 @@ mod tests {
             &bounded_galois_key,
         )
         .expect("bounded Galois key remains consistent");
+    }
+
+    #[test]
+    fn bounded_bootstrap_refresh_round_seed_domain_is_separate_from_exact_mode() {
+        let params = bounded_noise_packed_params();
+        params.validate().expect("BFV params are valid");
+        validate_bfv_seeded_bootstrap_refresh_round_capacity(
+            &params,
+            2,
+            "exact bootstrap domain-separation test",
+        )
+        .expect("exact bootstrap refresh capacity is valid");
+        validate_bfv_bounded_noise_bootstrap_refresh_round_capacity(
+            &params,
+            2,
+            "bounded bootstrap domain-separation test",
+        )
+        .expect("bounded bootstrap refresh capacity is valid");
+        let key_id = "bfv-bootstrap-round-domain-separation";
+        let seed = b"bfv-bootstrap-round-domain-separation-seed";
+
+        let exact_round_seed =
+            bootstrap_refresh_round_seed(BOOTSTRAP_REFRESH_ROUND_DOMAIN, key_id, 2, seed, 0);
+        let bounded_round_seed = bootstrap_refresh_round_seed(
+            BOUNDED_NOISE_BOOTSTRAP_REFRESH_ROUND_DOMAIN,
+            key_id,
+            2,
+            seed,
+            0,
+        );
+        assert_ne!(
+            exact_round_seed, bounded_round_seed,
+            "exact and bounded bootstrap refreshes must not reuse the same per-round seed",
+        );
+
+        let (_exact_secret_key, exact_public_key, _) =
+            keygen_from_seed(&params, b"bfv-bootstrap-round-domain-exact-keygen")
+                .expect("exact keygen");
+        let (_bounded_secret_key, bounded_public_key) =
+            keygen_bounded_noise_from_seed(&params, b"bfv-bootstrap-round-domain-bounded-keygen")
+                .expect("bounded keygen");
+        let exact_key = bootstrap_key_with_max_refresh_rounds_from_seed(
+            &params,
+            &exact_public_key,
+            key_id,
+            2,
+            seed,
+        )
+        .expect("exact bootstrap key");
+        let bounded_key = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
+            &params,
+            &bounded_public_key,
+            key_id,
+            2,
+            seed,
+        )
+        .expect("bounded bootstrap key");
+        let bounded_key_repeat = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
+            &params,
+            &bounded_public_key,
+            key_id,
+            2,
+            seed,
+        )
+        .expect("repeat bounded bootstrap key");
+
+        assert_eq!(
+            bounded_key_repeat, bounded_key,
+            "bounded bootstrap refresh derivation must remain deterministic for the same seed",
+        );
+        let exact_key_for_bounded_public_key = bootstrap_key_with_max_refresh_rounds_from_seed(
+            &params,
+            &bounded_public_key,
+            key_id,
+            2,
+            seed,
+        )
+        .expect("exact bootstrap key for same public key");
+        assert_eq!(
+            exact_key_for_bounded_public_key.public_key_digest, bounded_key.public_key_digest,
+            "same-public-key exact and bounded bootstrap keys must bind the same public-key digest",
+        );
+        assert_ne!(
+            exact_key.round_refreshes[0], bounded_key.round_refreshes[0],
+            "exact and bounded bootstrap refreshes must not reuse same-seed round material",
+        );
+        for (round_index, (exact_refresh, bounded_refresh)) in exact_key_for_bounded_public_key
+            .round_refreshes
+            .iter()
+            .zip(&bounded_key.round_refreshes)
+            .enumerate()
+        {
+            assert_ne!(
+                exact_refresh, bounded_refresh,
+                "same-public-key exact and bounded bootstrap refreshes must not reuse round_refreshes[{round_index}]",
+            );
+        }
+        validate_bootstrap_key_zero_refresh_transcript(
+            &params,
+            &exact_public_key,
+            &exact_key,
+            seed,
+        )
+        .expect("exact bootstrap transcript remains valid");
+        validate_bootstrap_key_bounded_noise_zero_refresh_transcript(
+            &params,
+            &bounded_public_key,
+            &bounded_key,
+            seed,
+        )
+        .expect("bounded bootstrap transcript remains valid");
+        validate_bootstrap_key_zero_refresh_transcript(
+            &params,
+            &bounded_public_key,
+            &exact_key_for_bounded_public_key,
+            seed,
+        )
+        .expect("same-public-key exact bootstrap transcript remains valid");
+        assert_error_contains(
+            validate_bootstrap_key_zero_refresh_transcript(
+                &params,
+                &bounded_public_key,
+                &bounded_key,
+                seed,
+            ),
+            "deterministic encrypted-zero transcript",
+            "exact transcript admission must reject bounded same-public-key refresh masks",
+        );
+        assert_error_contains(
+            validate_bootstrap_key_bounded_noise_zero_refresh_transcript(
+                &params,
+                &bounded_public_key,
+                &exact_key_for_bounded_public_key,
+                seed,
+            ),
+            "deterministic encrypted-zero transcript",
+            "bounded transcript admission must reject exact same-public-key refresh masks",
+        );
     }
 
     fn exact_all_zero_key_switch_a_candidate(

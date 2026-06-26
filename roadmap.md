@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-26
+Last updated: 2026-06-27
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -11,6 +11,11 @@ and completed history lives in [`status.md`](./status.md).
 
 **Status:** active.
 
+- Kagemusha is now the only active chain implementation for offline payments.
+  Bridge, Swift, Kotlin/JVM, and Java Android payment builders, issuer clients,
+  or submitters for legacy Offline Note issue/audit/redeem paths now fail
+  closed; remaining cleanup is to archive historical model/codec helpers in the
+  mobile SDKs that are still needed only for compatibility fixtures.
 - Snapshot-backed node restarts now target hash-journal validation for
   historical blocks, keeping full Kura block-body loads only for suffix replay
   and the existing latest-tip rollback repair path.
@@ -4808,8 +4813,10 @@ and completed history lives in [`status.md`](./status.md).
 	  verifier-side UTF-8/load/render/drift guards, bundle pre-write drift guards,
 	  redaction tests, adversarial bundle tests, and readiness self-inventory rows.
 	  Release-notes artifact tables now render zero-byte artifact rows as
-	  `<invalid bytes>`, matching the strict manifest/readiness positive-byte
-	  artifact contract before copied metadata can look valid in public notes.
+	  `<invalid bytes>` and all-zero SHA-256 artifact rows as
+	  `<invalid artifact.sha256>`, matching the strict manifest/readiness
+	  positive-byte and non-zero-hash artifact contract before copied metadata can
+	  look valid in public notes.
 	  Readiness Markdown
 	  source-inventory blocker checks must suppress malformed source-inventory gate
   names before emitting secondary missing-cell diagnostics, and copied
@@ -5301,7 +5308,13 @@ and completed history lives in [`status.md`](./status.md).
   markers, so runtime evidence and copied release transcripts enforce the same
   direct-project `TestResults` boundary. Windows backslash-separated or drive-qualified TRX
   marker paths remain forged evidence too; the release transcript must use the
-  canonical project-relative forward-slash marker.
+  canonical project-relative forward-slash marker. The runner must also inspect
+  the direct TRX XML before emitting release markers: the file must name
+  `Hyperledger.Iroha.Sdk.Tests.dll`, contain at least one passed SCCP
+  `UnitTestResult`, and contain no failed, skipped, timed-out, or aborted SCCP
+  test results. Empty placeholders, wrong-assembly TRX files, skipped-only
+  results, and failed-result TRX files remain forged evidence even when the
+  VSTest console summary looks successful.
   All canonical `.NET` SCCP marker lines must use a single literal space after
   the colon; VSTest summary label/value and number/unit separators must be
   present, padding must use ordinary spaces only, and tab/control-whitespace
@@ -15575,11 +15588,15 @@ with a non-zero passed-test count, `Skipped: 0`, an internally consistent total
 spaces used for VSTest padding; the TRX marker must
 full-match the direct C# test project `TestResults/sccp-dotnet-sdk.trx` path,
 named subdirectories before or after `TestResults` remain forged evidence, the
-TRX bytes marker must be a positive integer, all canonical `.NET` SCCP marker
-lines must use a single literal space after the colon, and all test markers must appear after
+TRX XML must name `Hyperledger.Iroha.Sdk.Tests.dll`, contain at least one
+passed SCCP `UnitTestResult`, and contain no failed, skipped, timed-out, or
+aborted SCCP `UnitTestResult`; the TRX bytes marker must be a positive
+integer, all canonical `.NET` SCCP marker lines must use a single literal
+space after the colon, and all test markers must appear after
 the strict `dotnet test` command. A bare
 `Passed!` transcript line, forged count summary, skipped-test summary,
-wrong-assembly summary, malformed duration summary, the old ETH/BSC-mainnet-only
+wrong-assembly summary, placeholder or wrong-assembly TRX, malformed duration
+summary, the old ETH/BSC-mainnet-only
 `.NET` filter, uppercase or mixed-case RID/architecture marker, missing TRX
 marker, zero or malformed TRX byte marker, arbitrary TRX-looking path, host
 markers printed before `dotnet --info`,
@@ -16735,10 +16752,11 @@ or ABI behavior.
   construction. Exact/bounded key generation and key-switch generation resample
   inert all-zero public `a` limbs, and shared key-switch validators reject
   all-zero public `b` or `a` entry components. Bounded keygen, encryption,
-  Galois keygen, and full-bootstrap sample-extraction switch-key derivation now
-  use exact/bounded mode-separated deterministic RNG streams so same-seed
-  artifacts do not reuse public limbs or ephemeral masks across modes. Those SDK
-  lanes now also validate the shared operation fixture's component-level
+  Galois keygen, bootstrap refresh-round seed derivation, and full-bootstrap
+  sample-extraction switch-key derivation now use exact/bounded mode-separated
+  deterministic RNG streams so same-seed artifacts do not reuse public limbs,
+  ephemeral masks, or refresh-round seeds across modes. Those SDK lanes now
+  also validate the shared operation fixture's component-level
   evaluation-key metadata so
   missing, zeroed, duplicate, or count-drifted key-component vectors are caught
   outside Rust, while the Rust executor consumes the same fixture for

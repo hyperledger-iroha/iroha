@@ -283,6 +283,10 @@ MissingBlockHardCapExactness ==
   /\ MissingBlockHardCapNoActionableExact
   /\ MissingBlockHardCapRangePullExact
 
+MissingBlockHardCapCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MissingBlockHardCapExactness
+
 Safety ==
   MissingBlockHardCapExactness
 

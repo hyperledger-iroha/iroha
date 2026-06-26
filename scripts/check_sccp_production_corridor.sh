@@ -224,6 +224,22 @@ dotnet_info_field_value() {
   '
 }
 
+validate_dotnet_trx_content() {
+  local trx_path="$1"
+  if ! grep -aFq "Hyperledger.Iroha.Sdk.Tests.dll" "$trx_path"; then
+    echo "SCCP .NET SDK validation requires TRX result to name Hyperledger.Iroha.Sdk.Tests.dll: $trx_path" >&2
+    return 1
+  fi
+  if grep -aEq '<UnitTestResult[[:space:]][^>]*outcome="(Failed|NotExecuted|Error|Timeout|Aborted)"' "$trx_path"; then
+    echo "SCCP .NET SDK validation requires TRX result to contain no failed, skipped, timed-out, or aborted SCCP test results: $trx_path" >&2
+    return 1
+  fi
+  if ! grep -aEq '<UnitTestResult[[:space:]][^>]*outcome="Passed"' "$trx_path"; then
+    echo "SCCP .NET SDK validation requires TRX result to contain at least one passed SCCP test result: $trx_path" >&2
+    return 1
+  fi
+}
+
 ensure_swift_bridge_artifact() {
   local bridge_dir="$ROOT/dist/NoritoBridge.xcframework"
   local bridge_zip="$ROOT/dist/NoritoBridge.xcframework.zip"
@@ -640,6 +656,7 @@ phase_dotnet_sdk() {
       echo "SCCP .NET SDK validation produced an empty TRX result: $dotnet_trx_path" >&2
       return 1
     fi
+    validate_dotnet_trx_content "$dotnet_trx_path"
     dotnet_trx_bytes="$(wc -c < "$dotnet_trx_path" | tr -d '[:space:]')"
     if ! [[ "$dotnet_trx_bytes" =~ ^[1-9][0-9]*$ ]]; then
       echo "SCCP .NET SDK validation could not compute a non-zero TRX byte size: $dotnet_trx_path" >&2

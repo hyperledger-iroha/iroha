@@ -58,6 +58,10 @@ fn production_bsc_route_manifest() -> SccpRouteManifest {
         tron_network: "bsc-testnet".to_owned(),
         chain: "bsc-testnet".to_owned(),
         chain_id_hex: "0x61".to_owned(),
+        explorer_url: Some("https://testnet.bscscan.com".to_owned()),
+        explorer_host: Some("testnet.bscscan.com".to_owned()),
+        counterparty_account_codec: Some(2),
+        counterparty_account_codec_key: Some("evm_hex".to_owned()),
         counterparty_domain: iroha_sccp::SCCP_DOMAIN_BSC,
         verifier_target: "EvmContract".to_owned(),
         production_ready: true,
@@ -72,6 +76,11 @@ fn production_bsc_route_manifest() -> SccpRouteManifest {
         proof_artifact_hash: Some(proof_artifact_hash.clone()),
         proving_key_hash: Some(hex32(0x55)),
         native_evm_prover_bundle_hash: Some(hex32(0x50)),
+        native_evm_prover_bundle: Some(iroha_primitives::json::Json::new(norito::json!({
+            "schema": "sccp-bsc-native-evm-prover-bundle/v1",
+            "routeId": "taira_bsc_xor",
+            "assetKey": "xor"
+        }))),
         destination_browser_prover: Some(browser_prover_ref(
             0x60,
             &destination_binding_hash,

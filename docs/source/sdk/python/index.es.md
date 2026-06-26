@@ -91,13 +91,13 @@ print(assets, txs, holders)
 ## Offline readiness
 
 Use `GET /v1/offline/readiness` through `get_offline_readiness()` for offline feature discovery.
-Offline note issuance, redemption, and audit payloads are submitted as transaction instructions;
-legacy offline HTTP routes are no longer published by Torii.
+Classic Offline Note issuance, redemption, and audit transaction paths are retired;
+Kagemusha readiness fields advertise the active offline payment implementation.
 
 ```python
 from iroha_python import ToriiClient
 
 client = ToriiClient("https://torii.sora.example")
 readiness = client.get_offline_readiness()
-print("offline notes", readiness.offline_note)
+print("kagemusha", readiness.offline_kagemusha_abi7)
 ```

@@ -6212,7 +6212,7 @@ async fn handler_offline_note_readiness(
     State(app): State<SharedAppState>,
 ) -> Result<impl IntoResponse, Error> {
     let offline = &app.state.settlement.offline;
-    let offline_kagemusha_abi7 = offline.kagemusha_enabled && !offline.kagemusha_force_legacy;
+    let offline_kagemusha_abi7 = offline.kagemusha_enabled;
     json_ok(json_object([
         json_entry("offline_telemetry", true),
         json_entry("offline_kagemusha_abi7", offline_kagemusha_abi7),
@@ -6252,7 +6252,7 @@ async fn handler_offline_v2_note_readiness(
     State(app): State<SharedAppState>,
 ) -> Result<impl IntoResponse, Error> {
     let offline = &app.state.settlement.offline;
-    let offline_kagemusha_abi7 = offline.kagemusha_enabled && !offline.kagemusha_force_legacy;
+    let offline_kagemusha_abi7 = offline.kagemusha_enabled;
     json_ok(json_object([
         json_entry("offline_telemetry", true),
         json_entry("offline_kagemusha_abi7", offline_kagemusha_abi7),
@@ -51637,6 +51637,10 @@ pub(crate) mod tests_runtime_handlers {
             tron_network: "nile".to_owned(),
             chain: "tron-nile".to_owned(),
             chain_id_hex: "0xcd8690dc".to_owned(),
+            explorer_url: None,
+            explorer_host: None,
+            counterparty_account_codec: None,
+            counterparty_account_codec_key: None,
             counterparty_domain: iroha_sccp::SCCP_DOMAIN_TRON,
             verifier_target: "TronContract".to_owned(),
             production_ready: false,
@@ -51652,6 +51656,7 @@ pub(crate) mod tests_runtime_handlers {
             proof_artifact_hash: None,
             proving_key_hash: None,
             native_evm_prover_bundle_hash: None,
+            native_evm_prover_bundle: None,
             destination_browser_prover: None,
             source_browser_prover: None,
             deployment_evidence_sha256: None,

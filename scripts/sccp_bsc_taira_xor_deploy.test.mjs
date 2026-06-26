@@ -22,6 +22,7 @@ import {
   SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
   validateBscTestnetNativeEvmProverBundle,
 } from "../javascript/iroha_js/src/sccp.js";
+import { AccountAddress } from "../javascript/iroha_js/src/address.js";
 import {
   BSC_MAINNET_NETWORK_ID_HEX,
   BSC_TESTNET_NETWORK_ID_HEX,
@@ -29,6 +30,7 @@ import {
   PRODUCTION_REQUIREMENTS_SCHEMA,
   ROUTE_MANIFEST_SCHEMA,
   SOURCE_PARITY_ATTESTATION_SCHEMA,
+  DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT,
   SCCP_BSC_BINARY_ARTIFACT_INPUT_MAX_BYTES,
   SCCP_BSC_JSON_INPUT_MAX_BYTES,
   SCCP_BSC_TEXT_INPUT_MAX_BYTES,
@@ -48,6 +50,7 @@ import {
   buildBscTairaXorRouteConfigToml,
   buildDeploymentEvidence,
   buildMergedBscTairaXorRouteConfigToml,
+  buildUpsertSccpRouteManifestInstruction,
   bscProductionRequirements,
   compiledContractCodeHashesFromArtifacts,
   main,
@@ -73,6 +76,12 @@ const HASH_55 = `0x${"55".repeat(32)}`;
 const HASH_66 = `0x${"66".repeat(32)}`;
 const HASH_77 = `0x${"77".repeat(32)}`;
 const HASH_88 = `0x${"88".repeat(32)}`;
+const TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY = AccountAddress.fromAccount({
+  publicKey: Buffer.from(
+    "CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+    "hex",
+  ),
+}).toI105();
 const EVM_EMPTY_CODE_HASH =
   "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470";
 const hex32 = (byte) => `0x${byte.repeat(32)}`;
@@ -813,6 +822,154 @@ const productionReadyRouteManifest = (overrides = {}) => {
   return attachNativeProverBundle(manifest, bundleOverrides ?? {});
 };
 
+const tairaCapabilitiesResponse = () =>
+  new Response(
+    JSON.stringify({
+      abi_version: 1,
+      data_model_version: 1,
+      crypto: {
+        sm: {
+          enabled: false,
+          default_hash: "sha2_256",
+          allowed_signing: ["ed25519"],
+          sm2_distid_default: "",
+          openssl_preview: false,
+          acceleration: {
+            scalar: true,
+            neon_sm3: false,
+            neon_sm4: false,
+            policy: "scalar-only",
+          },
+        },
+        curves: {
+          registry_version: 1,
+          allowed_curve_ids: [1],
+        },
+      },
+    }),
+    {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    },
+  );
+
+async function withRouteManifestPublishHarness(callback, options = {}) {
+  const previousBinding = globalThis.__IROHA_NATIVE_BINDING__;
+  const previousFetch = globalThis.fetch;
+  const envName = "SCCP_TAIRA_ROUTE_MANIFEST_TEST_PRIVATE_KEY";
+  const previousPrivateKey = process.env[envName];
+  const statusResponses = [...(options.statusResponses ?? [])];
+  const calls = {
+    buildTransaction: [],
+    fetch: [],
+  };
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    buildTransaction: (
+      chainId,
+      authority,
+      instructions,
+      metadataPayload,
+      creationTimeMs,
+      ttlMs,
+      nonce,
+      privateKey,
+      privateKeyAlgorithm,
+    ) => {
+      calls.buildTransaction.push({
+        chainId,
+        authority,
+        instructions,
+        metadata: JSON.parse(metadataPayload),
+        creationTimeMs,
+        ttlMs,
+        nonce,
+        privateKey: Buffer.from(privateKey),
+        privateKeyAlgorithm,
+      });
+      return {
+        signed_transaction: Buffer.from([0xaa, 0xbb, 0xcc]),
+        hash: Buffer.alloc(32, 0x11),
+      };
+    },
+    hashSignedTransaction: (signedTransaction) => {
+      assert.deepEqual(
+        [...Buffer.from(signedTransaction).values()],
+        [0xaa, 0xbb, 0xcc],
+      );
+      return Buffer.alloc(32, 0x22);
+    },
+  };
+  process.env[envName] = `0x${"33".repeat(32)}`;
+  globalThis.fetch = async (url, init = {}) => {
+    calls.fetch.push({
+      url: String(url),
+      method: init.method ?? "GET",
+      headers: init.headers ?? null,
+      body: init.body ? Buffer.from(init.body) : null,
+    });
+    if (String(url) === "https://taira.sora.org/v1/node/capabilities") {
+      return tairaCapabilitiesResponse();
+    }
+    if (String(url) === "https://taira.sora.org/v1/pipeline/transactions") {
+      assert.equal(init.method, "POST");
+      assert.equal(init.headers?.["Content-Type"], "application/x-norito");
+      assert.equal(init.headers?.Accept, "application/x-norito, application/json");
+      assert.deepEqual(
+        [...Buffer.from(init.body).values()],
+        [0x01, 0xaa, 0xbb, 0xcc],
+      );
+      const body = options.pipelineBody ?? { accepted: true };
+      return new Response(
+        typeof body === "string" ? body : JSON.stringify(body),
+        {
+          status: options.pipelineStatus ?? 202,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }
+    if (
+      String(url).startsWith(
+        "https://taira.sora.org/v1/pipeline/transactions/status",
+      )
+    ) {
+      assert.equal(init.method ?? "GET", "GET");
+      const body = statusResponses.shift() ?? {
+        hash: `0x${"11".repeat(32)}`,
+        status: { kind: "Applied" },
+      };
+      const responseBody =
+        body && typeof body === "object" && !Array.isArray(body) && !body.hash
+          ? { hash: `0x${"11".repeat(32)}`, ...body }
+          : body;
+      return new Response(JSON.stringify(responseBody), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  try {
+    return await callback({ calls, privateKeyEnv: envName });
+  } finally {
+    if (previousBinding === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previousBinding;
+    }
+    if (previousFetch === undefined) {
+      delete globalThis.fetch;
+    } else {
+      globalThis.fetch = previousFetch;
+    }
+    if (previousPrivateKey === undefined) {
+      delete process.env[envName];
+    } else {
+      process.env[envName] = previousPrivateKey;
+    }
+  }
+}
+
 const offlineFullTomlEvidence = (overrides = {}) => ({
   schema: "iroha-sccp-bsc-taira-xor-offline-full-toml-evidence/v1",
   routeId: "taira_bsc_xor",
@@ -910,6 +1067,47 @@ const nativeProverSelfTestFixture = ({
   };
 };
 
+const bscNativeProverFixtureBytes = (label, size) => {
+  const seed = Buffer.from(`${label}: route-bound native bsc material\n`);
+  const bytes = Buffer.alloc(size);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] =
+      (seed[index % seed.length] + index * 31 + (index >> 7)) & 0xff;
+  }
+  return bytes;
+};
+
+const bscNativeProverSnarkjsBytes = (
+  magic,
+  sectionIds,
+  bytes = bscNativeProverFixtureBytes(`${magic}-artifact`, 96 * 1024),
+) => {
+  const out = Buffer.from(bytes);
+  const headerBytes = 12;
+  const sectionHeaderBytes = sectionIds.length * 12;
+  const payloadBytes = out.length - headerBytes - sectionHeaderBytes;
+  if (payloadBytes < sectionIds.length) {
+    throw new Error("snarkjs test fixture is too small");
+  }
+  out.set(Buffer.from(magic, "ascii"), 0);
+  out.writeUInt32LE(1, 4);
+  out.writeUInt32LE(sectionIds.length, 8);
+  let offset = headerBytes;
+  for (let index = 0; index < sectionIds.length; index += 1) {
+    const sectionSize =
+      Math.floor(payloadBytes / sectionIds.length) +
+      (index < payloadBytes % sectionIds.length ? 1 : 0);
+    out.writeUInt32LE(sectionIds[index], offset);
+    out.writeUInt32LE(sectionSize, offset + 4);
+    out.writeUInt32LE(0, offset + 8);
+    offset += 12 + sectionSize;
+  }
+  if (offset !== out.length) {
+    throw new Error("snarkjs test fixture sections do not fill the file");
+  }
+  return out;
+};
+
 async function writeNativeProverFixtureFiles({
   routeOverrides = {},
   artifactByteOverrides = {},
@@ -922,48 +1120,21 @@ async function writeNativeProverFixtureFiles({
     await writeFile(pathName, bytes);
     return pathName;
   };
-  const bytesFor = (label, size) => {
-    const seed = Buffer.from(`${label}: route-bound native bsc material\n`);
-    const bytes = Buffer.alloc(size);
-    for (let index = 0; index < bytes.length; index += 1) {
-      bytes[index] =
-        (seed[index % seed.length] + index * 31 + (index >> 7)) & 0xff;
-    }
-    return bytes;
-  };
-  const snarkjsBytes = (magic, sectionCount, bytes) => {
-    const out = Buffer.from(bytes);
-    const headerBytes = 12;
-    const sectionHeaderBytes = sectionCount * 12;
-    const payloadBytes = out.length - headerBytes - sectionHeaderBytes;
-    if (payloadBytes < sectionCount) {
-      throw new Error("snarkjs test fixture is too small");
-    }
-    out.set(Buffer.from(magic, "ascii"), 0);
-    out.writeUInt32LE(1, 4);
-    out.writeUInt32LE(sectionCount, 8);
-    let offset = headerBytes;
-    for (let index = 0; index < sectionCount; index += 1) {
-      const sectionSize =
-        Math.floor(payloadBytes / sectionCount) +
-        (index < payloadBytes % sectionCount ? 1 : 0);
-      out.writeUInt32LE(index + 1, offset);
-      out.writeUInt32LE(sectionSize, offset + 4);
-      out.writeUInt32LE(0, offset + 8);
-      offset += 12 + sectionSize;
-    }
-    if (offset !== out.length) {
-      throw new Error("snarkjs test fixture sections do not fill the file");
-    }
-    return out;
-  };
   const proofBytes =
     artifactByteOverrides.proofArtifact ??
     artifactByteOverrides.proof ??
-    snarkjsBytes("r1cs", 3, bytesFor("proof-artifact", 96 * 1024));
+    bscNativeProverSnarkjsBytes(
+      "r1cs",
+      [1, 2, 3],
+      bscNativeProverFixtureBytes("proof-artifact", 96 * 1024),
+    );
   const provingKeyBytes =
     artifactByteOverrides.provingKey ??
-    snarkjsBytes("zkey", 10, bytesFor("proving-key", 96 * 1024));
+    bscNativeProverSnarkjsBytes(
+      "zkey",
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+      bscNativeProverFixtureBytes("proving-key", 96 * 1024),
+    );
   const verifierKeyMaterial = verifierMaterial(
     artifactByteOverrides.verifierMaterial ?? {},
   );
@@ -1035,7 +1206,7 @@ async function writeNativeProverFixtureFiles({
     const implementationBytes =
       artifactByteOverrides[`${sdk}Implementation`] ??
       artifactByteOverrides[sdk] ??
-      bytesFor(`${sdk}-implementation`, 2048);
+      bscNativeProverFixtureBytes(`${sdk}-implementation`, 2048);
     await writeArtifact(relativePath, implementationBytes);
     sdkImplementationArtifacts[sdk] = {
       sdk,
@@ -1052,7 +1223,7 @@ async function writeNativeProverFixtureFiles({
     "circuit-security-audit.bin",
     "reproducible-build-attestation.bin",
   ]) {
-    await writeArtifact(name, bytesFor(name, 2048));
+    await writeArtifact(name, bscNativeProverFixtureBytes(name, 2048));
   }
   const noWasmNoRemoteScan = {
     schema: "iroha-sccp-bsc-native-evm-no-wasm-no-remote-scan/v1",
@@ -2000,6 +2171,274 @@ test("BSC route-manifest command binds deployment evidence and TAIRA burn-record
   );
 });
 
+test("BSC publish-route-manifest records default gas limit in transaction metadata and evidence", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-publish-route-"));
+  const manifestPath = join(dir, "route.manifest.json");
+  const out = join(dir, "route.upsert-isi.json");
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+  );
+
+  await withRouteManifestPublishHarness(async ({ calls, privateKeyEnv }) => {
+    const result = await main([
+      "publish-route-manifest",
+      "--manifest",
+      manifestPath,
+      "--out",
+      out,
+      "--submit",
+      "true",
+      "--authority",
+      TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY,
+      "--private-key-env",
+      privateKeyEnv,
+      "--wait-for-commit",
+      "false",
+    ]);
+    const artifact = JSON.parse(await readFile(out, "utf8"));
+
+    assert.equal(result.ok, true);
+    assert.equal(result.submitted, true);
+    assert.equal(result.gasLimit, DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT);
+    assert.equal(result.gasAssetId, "6TEAJqbb8oEPmLncoNiMRbLEK6tw");
+    assert.equal(result.hash, `0x${"11".repeat(32)}`);
+    assert.equal(result.submittedHash, `0x${"11".repeat(32)}`);
+    assert.equal(
+      artifact.submission.gasLimit,
+      DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT,
+    );
+    assert.equal(
+      artifact.submission.gasAssetId,
+      "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    );
+    assert.equal(artifact.submission.waitForCommit, false);
+    assert.equal(calls.buildTransaction.length, 1);
+    assert.equal(
+      calls.buildTransaction[0].authority,
+      TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY,
+    );
+    assert.equal(
+      calls.buildTransaction[0].metadata.gas_limit,
+      DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT,
+    );
+    assert.equal(
+      calls.buildTransaction[0].metadata.gas_asset_id,
+      "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    );
+    assert.equal(
+      calls.buildTransaction[0].metadata.action,
+      "publish_sccp_route_manifest",
+    );
+    assert.deepEqual(calls.fetch.map((call) => call.url), [
+      "https://taira.sora.org/v1/pipeline/transactions",
+    ]);
+    assert.doesNotMatch(
+      JSON.stringify(artifact),
+      /private[_-]?key|mnemonic|seed|SCCP_TAIRA_ROUTE_MANIFEST_TEST_PRIVATE_KEY/iu,
+    );
+  });
+});
+
+test("BSC publish-route-manifest waits for raw pipeline Applied status by default", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-publish-route-applied-"));
+  const manifestPath = join(dir, "route.manifest.json");
+  const out = join(dir, "route.upsert-isi.json");
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+  );
+
+  await withRouteManifestPublishHarness(async ({ calls, privateKeyEnv }) => {
+    const result = await main([
+      "publish-route-manifest",
+      "--manifest",
+      manifestPath,
+      "--out",
+      out,
+      "--submit",
+      "true",
+      "--authority",
+      TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY,
+      "--private-key-env",
+      privateKeyEnv,
+      "--commit-timeout-ms",
+      "1000",
+    ]);
+    const artifact = JSON.parse(await readFile(out, "utf8"));
+
+    assert.equal(result.ok, true);
+    assert.equal(result.statusKind, "Applied");
+    assert.equal(artifact.submission.statusKind, "Applied");
+    assert.equal(artifact.submission.submittedHash, `0x${"11".repeat(32)}`);
+    assert.equal(artifact.submission.waitForCommit, true);
+    const statusCall = calls.fetch.find(
+      (call) =>
+        call.method === "GET" &&
+        call.url.startsWith(
+          "https://taira.sora.org/v1/pipeline/transactions/status",
+        ),
+    );
+    assert.ok(statusCall);
+    const statusHash = new URL(statusCall.url).searchParams.get("hash") ?? "";
+    assert.equal(statusHash.replace(/^0x/u, ""), "11".repeat(32));
+  });
+});
+
+test("BSC publish-route-manifest rejects terminal non-Applied raw pipeline status", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-publish-route-rejected-"));
+  const manifestPath = join(dir, "route.manifest.json");
+  const out = join(dir, "route.upsert-isi.json");
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+  );
+
+  await withRouteManifestPublishHarness(
+    async ({ privateKeyEnv }) => {
+      await assert.rejects(
+        () =>
+          main([
+            "publish-route-manifest",
+            "--manifest",
+            manifestPath,
+            "--out",
+            out,
+            "--submit",
+            "true",
+            "--authority",
+            TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY,
+            "--private-key-env",
+            privateKeyEnv,
+            "--commit-timeout-ms",
+            "1000",
+          ]),
+        /TAIRA route manifest publication was not applied: Rejected/u,
+      );
+      const artifact = JSON.parse(await readFile(out, "utf8"));
+      assert.equal(artifact.submission.statusKind, "Rejected");
+      assert.doesNotMatch(
+        JSON.stringify(artifact),
+        /private[_-]?key|mnemonic|seed|SCCP_TAIRA_ROUTE_MANIFEST_TEST_PRIVATE_KEY/iu,
+      );
+    },
+    {
+      statusResponses: [
+        {
+          status: {
+            kind: "Rejected",
+            content: { rejection_reason: "permission denied" },
+          },
+        },
+      ],
+    },
+  );
+});
+
+test("BSC publish-route-manifest reports raw pipeline HTTP rejection preview", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-publish-route-http-"));
+  const manifestPath = join(dir, "route.manifest.json");
+  const out = join(dir, "route.upsert-isi.json");
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+  );
+
+  await withRouteManifestPublishHarness(
+    async ({ privateKeyEnv }) => {
+      await assert.rejects(
+        () =>
+          main([
+            "publish-route-manifest",
+            "--manifest",
+            manifestPath,
+            "--out",
+            out,
+            "--submit",
+            "true",
+            "--authority",
+            TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY,
+            "--private-key-env",
+            privateKeyEnv,
+            "--wait-for-commit",
+            "false",
+          ]),
+        (error) => {
+          assert.match(
+            error.message,
+            /HTTP 500 while submitting raw signed transaction: pipeline unavailable/u,
+          );
+          assert.doesNotMatch(error.message, /33{16,}|private[_-]?key|seed/iu);
+          return true;
+        },
+      );
+    },
+    {
+      pipelineStatus: 500,
+      pipelineBody: "pipeline unavailable",
+    },
+  );
+});
+
+test("BSC publish-route-manifest supports explicit gas limit and rejects invalid values before submit", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-publish-route-gas-"));
+  const manifestPath = join(dir, "route.manifest.json");
+  const out = join(dir, "route.upsert-isi.json");
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+  );
+
+  await withRouteManifestPublishHarness(async ({ calls, privateKeyEnv }) => {
+    const result = await main([
+      "publish-route-manifest",
+      "--manifest",
+      manifestPath,
+      "--out",
+      out,
+      "--submit",
+      "true",
+      "--authority",
+      TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY,
+      "--private-key-env",
+      privateKeyEnv,
+      "--gas-limit",
+      "3000000",
+      "--wait-for-commit",
+      "false",
+    ]);
+
+    assert.equal(result.gasLimit, 3_000_000);
+    assert.equal(calls.buildTransaction[0].metadata.gas_limit, 3_000_000);
+
+    for (const badGasLimit of ["0", "-1", "2.5", "abc"]) {
+      await assert.rejects(
+        () =>
+          main([
+            "publish-route-manifest",
+            "--manifest",
+            manifestPath,
+            "--out",
+            join(dir, `route.bad-${badGasLimit}.json`),
+            "--submit",
+            "true",
+            "--authority",
+            TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY,
+            "--private-key-env",
+            privateKeyEnv,
+            "--gas-limit",
+            badGasLimit,
+            "--wait-for-commit",
+            "false",
+          ]),
+        /--gas-limit must be a positive safe integer/u,
+      );
+    }
+    assert.equal(calls.buildTransaction.length, 1);
+    assert.equal(calls.fetch.length, 1);
+  });
+});
+
 test("BSC route-manifest command builds production-ready manifests only with bound native and post-deploy evidence", async () => {
   const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-manifest-ready-"));
   const evidencePath = join(dir, "deployment.evidence.json");
@@ -2123,6 +2562,17 @@ test("BSC route-manifest command builds production-ready manifests only with bou
   assert.equal(
     manifest.postDeployLiveEvidence.offlineFullTomlSha256,
     hex32("88"),
+  );
+  const publicationInstruction =
+    buildUpsertSccpRouteManifestInstruction(manifest).instruction
+      .UpsertSccpRouteManifest.manifest;
+  assert.equal(publicationInstruction.explorer_url, "https://testnet.bscscan.com");
+  assert.equal(publicationInstruction.explorer_host, "testnet.bscscan.com");
+  assert.equal(publicationInstruction.counterparty_account_codec, 2);
+  assert.equal(publicationInstruction.counterparty_account_codec_key, "evm_hex");
+  assert.deepEqual(
+    publicationInstruction.native_evm_prover_bundle,
+    manifest.nativeEvmProverBundle,
   );
 
   const noReadbackEvidencePath = join(dir, "deployment.no-readback.json");
@@ -7139,6 +7589,93 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
       buildBscNativeEvmProverBundleFromArtifacts(verifierAliasFixture.options),
     /BSC route manifest verifierKeyHash must not use multiple aliases in BSC route manifest/u,
   );
+  const markerOffset = 12 + 10 * 12 + 64;
+  const proofRemoteMarkerBytes = bscNativeProverSnarkjsBytes(
+    "r1cs",
+    [1, 2, 3],
+    bscNativeProverFixtureBytes("proof-artifact-with-remote-marker", 96 * 1024),
+  );
+  proofRemoteMarkerBytes.set(Buffer.from("remote_prover", "ascii"), 12 + 3 * 12 + 64);
+  const proofRemoteMarker = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: { proofArtifact: proofRemoteMarkerBytes },
+  });
+  await assert.doesNotReject(
+    () => buildBscNativeEvmProverBundleFromArtifacts(proofRemoteMarker.options),
+  );
+  const provingWasmMarkerBytes = bscNativeProverSnarkjsBytes(
+    "zkey",
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    bscNativeProverFixtureBytes("proving-key-with-wasm-marker", 96 * 1024),
+  );
+  provingWasmMarkerBytes.set(Buffer.from("wasm", "ascii"), markerOffset);
+  const provingWasmMarker = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: { provingKey: provingWasmMarkerBytes },
+  });
+  await assert.doesNotReject(
+    () => buildBscNativeEvmProverBundleFromArtifacts(provingWasmMarker.options),
+  );
+  const nonCanonicalProofSections = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: {
+      proofArtifact: bscNativeProverSnarkjsBytes(
+        "r1cs",
+        [1, 3, 2],
+        bscNativeProverFixtureBytes("proof-artifact-noncanonical", 96 * 1024),
+      ),
+    },
+  });
+  await assert.doesNotReject(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts(
+        nonCanonicalProofSections.options,
+      ),
+  );
+  const duplicateProofSections = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: {
+      proofArtifact: bscNativeProverSnarkjsBytes(
+        "r1cs",
+        [1, 1, 3],
+        bscNativeProverFixtureBytes("proof-artifact-duplicate-section", 96 * 1024),
+      ),
+    },
+  });
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts(
+        duplicateProofSections.options,
+      ),
+    /proof artifact \.r1cs section ids must be unique/u,
+  );
+  const nonCanonicalProvingKeySections = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: {
+      provingKey: bscNativeProverSnarkjsBytes(
+        "zkey",
+        [1, 2, 3, 4, 5, 7, 6, 8, 9, 10],
+        bscNativeProverFixtureBytes("proving-key-noncanonical", 96 * 1024),
+      ),
+    },
+  });
+  await assert.doesNotReject(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts(
+        nonCanonicalProvingKeySections.options,
+      ),
+  );
+  const duplicateProvingKeySections = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: {
+      provingKey: bscNativeProverSnarkjsBytes(
+        "zkey",
+        [1, 2, 3, 4, 5, 5, 7, 8, 9, 10],
+        bscNativeProverFixtureBytes("proving-key-duplicate-section", 96 * 1024),
+      ),
+    },
+  });
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts(
+        duplicateProvingKeySections.options,
+      ),
+    /proving key \.zkey section ids must be unique/u,
+  );
   await assert.rejects(() => {
     const { "dotnet-implementation": _drop, ...options } = fixture.options;
     return buildBscNativeEvmProverBundleFromArtifacts(options);
@@ -9047,6 +9584,7 @@ test("BSC deployment helper help documents production network confirmations", as
   assert.match(result.help, /--route-manifest .* --artifact-root/u);
   assert.match(result.help, /--audit-no-wasm-no-remote-scan/u);
   assert.match(result.help, /source-parity-attestation/u);
+  assert.match(result.help, /--gas-limit 2000000/u);
   assert.match(result.help, /requirements \[--bsc-network testnet\|mainnet\]/u);
   assert.match(
     result.help,
@@ -9074,6 +9612,9 @@ test("BSC deployment helper subcommand help does not touch operator inputs", asy
   const routeConfig = await main(["help", "route-config"]);
   assert.match(routeConfig.help, /route-config \[--manifest/u);
   assert.match(routeConfig.help, /--allow-unready true/u);
+
+  const publishRouteManifest = await main(["help", "publish-route-manifest"]);
+  assert.match(publishRouteManifest.help, /--gas-limit 2000000/u);
 
   const deploy = await main(["deploy", "--help"]);
   assert.match(deploy.help, /deploy --bsc-network testnet\|mainnet/u);
@@ -9187,6 +9728,10 @@ test("BSC production requirements expose network-specific public handoff inputs"
   assert.match(
     testnet.commands.nativeProverBundle,
     /--groth16-proof-self-test <relative-groth16-proof-self-test\.json>/u,
+  );
+  assert.match(
+    testnet.commands.publishRouteManifest,
+    /--gas-limit 2000000/u,
   );
   for (const required of [
     "--evidence artifacts/sccp-bsc/taira-bsc-xor-deployment.evidence.json",

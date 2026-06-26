@@ -766,6 +766,10 @@ def test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades() -> No
     assert "empty TRX result" in script
     assert "SCCP .NET SDK TRX:" in script
     assert "SCCP .NET SDK TRX bytes:" in script
+    assert "validate_dotnet_trx_content" in script
+    assert "Hyperledger.Iroha.Sdk.Tests.dll" in script
+    assert 'outcome="Passed"' in script
+    assert 'outcome="(Failed|NotExecuted|Error|Timeout|Aborted)"' in script
     assert r"^[1-9][0-9]*$" in script
     direct_trx_path = (
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TestResults/"
@@ -1671,6 +1675,154 @@ esac
     )
     assert "SCCP .NET SDK TRX:" not in completed.stdout
     assert "SCCP .NET SDK TRX bytes:" not in completed.stdout
+
+
+@pytest.mark.parametrize(
+    ("case_name", "trx_payload", "expected_error"),
+    (
+        (
+            "placeholder",
+            "<TestRun />\n",
+            "requires TRX result to name Hyperledger.Iroha.Sdk.Tests.dll",
+        ),
+        (
+            "wrong-assembly",
+            (
+                '<TestRun><Results><UnitTestResult outcome="Passed" />'
+                '</Results><TestDefinitions><UnitTest><TestMethod '
+                'codeBase="Other.Tests.dll" /></UnitTest></TestDefinitions></TestRun>\n'
+            ),
+            "requires TRX result to name Hyperledger.Iroha.Sdk.Tests.dll",
+        ),
+        (
+            "no-passed-result",
+            (
+                '<TestRun><TestDefinitions><UnitTest><TestMethod '
+                'codeBase="Hyperledger.Iroha.Sdk.Tests.dll" /></UnitTest>'
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires TRX result to contain at least one passed SCCP test result",
+        ),
+        (
+            "skipped-result",
+            (
+                '<TestRun><Results><UnitTestResult outcome="NotExecuted" />'
+                '</Results><TestDefinitions><UnitTest><TestMethod '
+                'codeBase="Hyperledger.Iroha.Sdk.Tests.dll" /></UnitTest>'
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires TRX result to contain no failed, skipped, timed-out, or aborted SCCP test results",
+        ),
+        (
+            "failed-result",
+            (
+                '<TestRun><Results><UnitTestResult outcome="Failed" />'
+                '</Results><TestDefinitions><UnitTest><TestMethod '
+                'codeBase="Hyperledger.Iroha.Sdk.Tests.dll" /></UnitTest>'
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires TRX result to contain no failed, skipped, timed-out, or aborted SCCP test results",
+        ),
+    ),
+)
+def test_sccp_production_corridor_dotnet_phase_rejects_malformed_trx_content(
+    tmp_path: Path,
+    case_name: str,
+    trx_payload: str,
+    expected_error: str,
+) -> None:
+    """Windows .NET evidence must inspect direct TRX content before publishing."""
+
+    tool_dir = tmp_path / case_name / "tools"
+    dotnet_root = tmp_path / case_name / "dotnet-root"
+    bridge_target_dir = tmp_path / case_name / "bridge-target"
+    direct_trx_path = (
+        ROOT
+        / "csharp"
+        / "tests"
+        / "Hyperledger.Iroha.Sdk.Tests"
+        / "TestResults"
+        / "sccp-dotnet-sdk.trx"
+    )
+    tool_dir.mkdir(parents=True)
+    dotnet_root.mkdir()
+    fake_cargo = tool_dir / "cargo"
+    fake_cargo.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" != "build -p connect_norito_bridge" ]]; then
+  printf 'unexpected fake cargo invocation: %s\\n' "$*" >&2
+  exit 99
+fi
+mkdir -p "$CARGO_TARGET_DIR/debug"
+printf 'fake bridge dll\\n' > "$CARGO_TARGET_DIR/debug/connect_norito_bridge.dll"
+""",
+        encoding="utf-8",
+    )
+    fake_cargo.chmod(0o755)
+    fake_dotnet = dotnet_root / "dotnet"
+    fake_dotnet.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  --version)
+    printf '8.0.101\\n'
+    ;;
+  --info)
+    cat <<'EOF'
+.NET SDK:
+ Version:           8.0.101
+
+Host:
+  Version:      8.0.1
+  Architecture: x64
+
+Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  OS Architecture: x64
+  RID:         win-x64
+EOF
+    ;;
+  restore)
+    exit 0
+    ;;
+  test)
+    mkdir -p tests/Hyperledger.Iroha.Sdk.Tests/TestResults
+    cat > tests/Hyperledger.Iroha.Sdk.Tests/TestResults/sccp-dotnet-sdk.trx <<'EOF'
+{trx_payload}EOF
+    printf 'Passed!  - Failed: 0, Passed: 1, Skipped: 0, Total: 1, Duration: 1 ms - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)\\n'
+    ;;
+  *)
+    printf 'unexpected fake dotnet invocation: %s\\n' "$*" >&2
+    exit 99
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_dotnet.chmod(0o755)
+    env = os.environ.copy()
+    env["DOTNET_ROOT"] = str(dotnet_root)
+    env["SCCP_DOTNET_BRIDGE_TARGET_DIR"] = str(bridge_target_dir)
+    env["PATH"] = f"{tool_dir}{os.pathsep}{env['PATH']}"
+
+    try:
+        completed = subprocess.run(
+            ["bash", str(SCRIPT), "--phase", "dotnet-sdk"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+    finally:
+        direct_trx_path.unlink(missing_ok=True)
+
+    assert completed.returncode == 1, case_name
+    assert expected_error in completed.stderr, case_name
+    assert str(direct_trx_path) in completed.stderr, case_name
+    assert "SCCP .NET SDK TRX:" not in completed.stdout, case_name
+    assert "SCCP .NET SDK TRX bytes:" not in completed.stdout, case_name
 
 
 def test_sccp_production_corridor_java_home_resolver_handles_homebrew_jdk() -> None:

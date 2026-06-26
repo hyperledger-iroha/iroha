@@ -963,6 +963,9 @@ class HttpClientTransportTest {
                 creationTimeMs = 123,
                 feeSponsor = "fee-sponsor",
                 memo = "QR invoice 42",
+                validationFeePolicyVersion = 7,
+                validationFeePolicyHash = "AB".repeat(32),
+                validationFeeInstructionIndex = 1,
             )
         ).join()
 
@@ -983,6 +986,9 @@ class HttpClientTransportTest {
         assertEquals("fee-sponsor", payload["fee_sponsor"])
         assertEquals("QR invoice 42", payload["memo"])
         assertEquals(123L, (payload["creation_time_ms"] as Number).toLong())
+        assertEquals("7", payload["validation_fee_policy_version"])
+        assertEquals("ab".repeat(32), payload["validation_fee_policy_hash"])
+        assertEquals("1", payload["validation_fee_instruction_index"])
         @Suppress("UNCHECKED_CAST")
         val instructions = payload["instructions"] as List<String>
         assertEquals(listOf(Base64.getEncoder().encodeToString(instructionBytes)), instructions)
@@ -1049,6 +1055,38 @@ class HttpClientTransportTest {
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
                     creationTimeMs = -1,
+                )
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest(
+                    multisigAccountAlias = "cbdc@banka",
+                    signerAccountId = "alice",
+                    instructions = listOf(instruction),
+                    validationFeeInstructionIndex = 1,
+                )
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest(
+                    multisigAccountAlias = "cbdc@banka",
+                    signerAccountId = "alice",
+                    instructions = listOf(instruction),
+                    validationFeePolicyVersion = 7,
+                )
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest(
+                    multisigAccountAlias = "cbdc@banka",
+                    signerAccountId = "alice",
+                    instructions = listOf(instruction),
+                    validationFeePolicyVersion = 7,
+                    validationFeePolicyHash = "ab".repeat(32),
+                    validationFeeInstructionIndex = -1,
                 )
             )
         }

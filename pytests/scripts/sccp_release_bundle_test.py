@@ -4457,6 +4457,11 @@ def test_release_bundle_release_notes_reject_malformed_artifact_rows() -> None:
             "sha256": "2" * 64,
         },
         {
+            "path": "sccp-release-zero-sha-artifact.json",
+            "bytes": 128,
+            "sha256": "0" * 64,
+        },
+        {
             "path": "sccp-release-notes-attachment.md",
             "bytes": 7,
             "sha256": "1" * 64,
@@ -4480,9 +4485,15 @@ def test_release_bundle_release_notes_reject_malformed_artifact_rows() -> None:
         assert "Traceback" not in notes
     for notes in (builder_notes, verifier_notes):
         assert "| `sccp-release-zero-byte-artifact.json` | `<invalid bytes>` |" in notes
+        # Source-inventory marker: | `sccp-release-zero-sha-artifact.json` | 128 | `<invalid artifact.sha256>` |
+        zero_sha_row = (
+            "| `sccp-release-zero-sha-artifact.json` | 128 | "
+            "`<invalid artifact.sha256>` |"
+        )
+        assert zero_sha_row in notes
 
     assert builder_notes == verifier_notes
-    single_invalid_artifacts = [artifacts[1], artifacts[2]]
+    single_invalid_artifacts = [artifacts[1], artifacts[2], artifacts[3]]
     single_invalid_notes = verifier._expected_release_notes_attachment(
         report,
         single_invalid_artifacts,
