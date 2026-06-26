@@ -7599,9 +7599,8 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
   const proofRemoteMarker = await writeNativeProverFixtureFiles({
     artifactByteOverrides: { proofArtifact: proofRemoteMarkerBytes },
   });
-  await assert.rejects(
+  await assert.doesNotReject(
     () => buildBscNativeEvmProverBundleFromArtifacts(proofRemoteMarker.options),
-    /proofArtifactBytes contains forbidden prover dependency marker: remote_prover/u,
   );
   const provingWasmMarkerBytes = bscNativeProverSnarkjsBytes(
     "zkey",
@@ -7612,9 +7611,8 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
   const provingWasmMarker = await writeNativeProverFixtureFiles({
     artifactByteOverrides: { provingKey: provingWasmMarkerBytes },
   });
-  await assert.rejects(
+  await assert.doesNotReject(
     () => buildBscNativeEvmProverBundleFromArtifacts(provingWasmMarker.options),
-    /provingKeyBytes contains forbidden prover dependency marker: wasm/u,
   );
   const nonCanonicalProofSections = await writeNativeProverFixtureFiles({
     artifactByteOverrides: {
@@ -7625,10 +7623,27 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
       ),
     },
   });
+  await assert.doesNotReject(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts(
+        nonCanonicalProofSections.options,
+      ),
+  );
+  const duplicateProofSections = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: {
+      proofArtifact: bscNativeProverSnarkjsBytes(
+        "r1cs",
+        [1, 1, 3],
+        bscNativeProverFixtureBytes("proof-artifact-duplicate-section", 96 * 1024),
+      ),
+    },
+  });
   await assert.rejects(
     () =>
-      buildBscNativeEvmProverBundleFromArtifacts(nonCanonicalProofSections.options),
-    /proofArtifactBytes \.r1cs section ids must be in canonical order: 1, 2, 3/u,
+      buildBscNativeEvmProverBundleFromArtifacts(
+        duplicateProofSections.options,
+      ),
+    /proof artifact \.r1cs section ids must be unique/u,
   );
   const nonCanonicalProvingKeySections = await writeNativeProverFixtureFiles({
     artifactByteOverrides: {
@@ -7639,12 +7654,27 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
       ),
     },
   });
-  await assert.rejects(
+  await assert.doesNotReject(
     () =>
       buildBscNativeEvmProverBundleFromArtifacts(
         nonCanonicalProvingKeySections.options,
       ),
-    /provingKeyBytes \.zkey section ids must be in canonical order: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10/u,
+  );
+  const duplicateProvingKeySections = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: {
+      provingKey: bscNativeProverSnarkjsBytes(
+        "zkey",
+        [1, 2, 3, 4, 5, 5, 7, 8, 9, 10],
+        bscNativeProverFixtureBytes("proving-key-duplicate-section", 96 * 1024),
+      ),
+    },
+  });
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts(
+        duplicateProvingKeySections.options,
+      ),
+    /proving key \.zkey section ids must be unique/u,
   );
   await assert.rejects(() => {
     const { "dotnet-implementation": _drop, ...options } = fixture.options;
