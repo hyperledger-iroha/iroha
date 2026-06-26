@@ -57,8 +57,8 @@ object KagemushaInstructionArchives {
         nonce: Int? = null,
         metadata: Map<String, *> = emptyMap<String, Any>(),
     ): TransactionPayload = TransactionPayload(
-        chainId = chainId,
-        authority = authority,
+        chainId = requireNonBlankUnpadded(chainId, "chainId"),
+        authority = requireNonBlankUnpadded(authority, "authority"),
         creationTimeMs = creationTimeMs,
         executable = Executable.instructions(listOf(instructionBox(instructionType, instructionArchive))),
         timeToLiveMs = timeToLiveMs,
@@ -95,15 +95,19 @@ object KagemushaInstructionArchives {
         timeToLiveMs: Long? = null,
         nonce: Int? = null,
         metadata: Map<String, *> = emptyMap<String, Any>(),
-    ): TransactionPayload = recursiveRedeemTransactionPayload(
-        instructionArchive = KagemushaRecursiveSpendProver.redeemSpend(redeemRequestArchive),
-        chainId = chainId,
-        authority = authority,
-        creationTimeMs = creationTimeMs,
-        timeToLiveMs = timeToLiveMs,
-        nonce = nonce,
-        metadata = metadata,
-    )
+    ): TransactionPayload {
+        val exactChainId = requireNonBlankUnpadded(chainId, "chainId")
+        val exactAuthority = requireNonBlankUnpadded(authority, "authority")
+        return recursiveRedeemTransactionPayload(
+            instructionArchive = KagemushaRecursiveSpendProver.redeemSpend(redeemRequestArchive),
+            chainId = exactChainId,
+            authority = exactAuthority,
+            creationTimeMs = creationTimeMs,
+            timeToLiveMs = timeToLiveMs,
+            nonce = nonce,
+            metadata = metadata,
+        )
+    }
 
     private fun copyAndValidateInstructionArchive(
         instructionType: KagemushaInstructionType,
@@ -152,5 +156,11 @@ object KagemushaInstructionArchives {
         }
         is Number -> JsonValue.raw(value.toString())
         else -> throw IllegalArgumentException("Unsupported metadata value type: $value")
+    }
+
+    private fun requireNonBlankUnpadded(value: String, field: String): String {
+        require(value.isNotBlank()) { "$field must not be blank" }
+        require(value.trim() == value) { "$field must not contain surrounding whitespace" }
+        return value
     }
 }

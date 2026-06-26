@@ -169,9 +169,62 @@ public final class OfflineJsonParserTest {
             "true",
             "\"recursive_compact_v1\"",
             "\"recursive_compact_v1\"",
+            "\"+7\"")),
+        "offline_kagemusha_abi7_bridge_abi_version must be an exact integer string");
+    expectIllegalState(
+        () -> parseOfflineReadiness(aliasReadinessBody(
+            "true",
+            "true",
+            "\"recursive_compact_v1\"",
+            "\"recursive_compact_v1\"",
+            "7",
+            "\"007\"")),
+        "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact integer string");
+    expectIllegalState(
+        () -> parseOfflineReadiness(aliasReadinessBody(
+            "true",
+            "true",
+            "\"recursive_compact_v1\"",
+            "\"recursive_compact_v1\"",
+            "-1",
+            "-1")),
+        "offline_kagemusha_abi7_bridge_abi_version must be a positive integer");
+    expectIllegalState(
+        () -> parseOfflineReadiness(aliasReadinessBody(
+            "true",
+            "true",
+            "\"recursive_compact_v1\"",
+            "\"recursive_compact_v1\"",
+            "\"2147483648\"",
+            "\"2147483648\"")),
+        "offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range");
+    expectIllegalState(
+        () -> parseOfflineReadiness(aliasReadinessBody(
+            "true",
+            "true",
+            "\"recursive_compact_v1\"",
+            "\"recursive_compact_v1\"",
             "7",
             "7.5")),
         "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an integer");
+    expectIllegalState(
+        () -> parseOfflineReadiness(aliasReadinessBody(
+            "true",
+            "true",
+            "\"recursive_compact_v1\"",
+            "\"recursive_compact_v1\"",
+            "7",
+            "0")),
+        "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer");
+    expectIllegalState(
+        () -> parseOfflineReadiness(aliasReadinessBody(
+            "true",
+            "true",
+            "\"recursive_compact_v1\"",
+            "\"recursive_compact_v1\"",
+            "7",
+            "2147483648")),
+        "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range");
     expectIllegalState(
         () -> parseOfflineReadiness(aliasReadinessBody(
             "true",
@@ -314,9 +367,62 @@ public final class OfflineJsonParserTest {
             "true",
             "\"recursive_compact_v1\"",
             "\"recursive_compact_v1\"",
+            "\"+7\"")),
+        "offline_kagemusha_abi7_bridge_abi_version must be an exact integer string");
+    expectIllegalState(
+        () -> parseOfflineV2Readiness(aliasReadinessBody(
+            "true",
+            "true",
+            "\"recursive_compact_v1\"",
+            "\"recursive_compact_v1\"",
+            "7",
+            "\"007\"")),
+        "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact integer string");
+    expectIllegalState(
+        () -> parseOfflineV2Readiness(aliasReadinessBody(
+            "true",
+            "true",
+            "\"recursive_compact_v1\"",
+            "\"recursive_compact_v1\"",
+            "-1",
+            "-1")),
+        "offline_kagemusha_abi7_bridge_abi_version must be a positive integer");
+    expectIllegalState(
+        () -> parseOfflineV2Readiness(aliasReadinessBody(
+            "true",
+            "true",
+            "\"recursive_compact_v1\"",
+            "\"recursive_compact_v1\"",
+            "\"2147483648\"",
+            "\"2147483648\"")),
+        "offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range");
+    expectIllegalState(
+        () -> parseOfflineV2Readiness(aliasReadinessBody(
+            "true",
+            "true",
+            "\"recursive_compact_v1\"",
+            "\"recursive_compact_v1\"",
             "7",
             "7.5")),
         "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an integer");
+    expectIllegalState(
+        () -> parseOfflineV2Readiness(aliasReadinessBody(
+            "true",
+            "true",
+            "\"recursive_compact_v1\"",
+            "\"recursive_compact_v1\"",
+            "7",
+            "0")),
+        "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer");
+    expectIllegalState(
+        () -> parseOfflineV2Readiness(aliasReadinessBody(
+            "true",
+            "true",
+            "\"recursive_compact_v1\"",
+            "\"recursive_compact_v1\"",
+            "7",
+            "2147483648")),
+        "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range");
     expectIllegalState(
         () -> parseOfflineV2Readiness(aliasReadinessBody(
             "true",

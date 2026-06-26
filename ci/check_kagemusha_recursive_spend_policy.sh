@@ -78,9 +78,9 @@ SHARED_FIXTURE_COVERAGE = {
         '"KagemushaRecursiveSpendRedeemRequestV1"',
         '"RedeemKagemushaRecursive"',
         '"sha256_hex": "c5402b3ea6aeb35ce12607344304b858273f8589e2b3887708a86cb19665ce68"',
-        '"sha256_hex": "334c343b2c943e7f1de7c0f7a7753c023e3275ba86a877f55dd08dc2f65bb59b"',
-        '"sha256_hex": "4fbfbe8b05b86c430a3743b0da68b819afca8c666357ef7b2e171b837f97f415"',
-        '"sha256_hex": "31cd92a5a2f8894634c531830621604937d4631f5f08b58cba01a45dc26e9eba"',
+        '"sha256_hex": "60acfd543978123d6bc23904859683ed64d44930a4b74bd1bba635199c60fa57"',
+        '"sha256_hex": "703128068fa36897c952640cb77006af29a8aa802d67da82c97e73c8e0ef1864"',
+        '"sha256_hex": "e05fb3ebb3a3e823f65403e09d1aa6e5deab0145f7aa0827f66a371ad633cc3e"',
     ),
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift": (
         "testSharedRecursiveSpendAbi6FixtureMatchesSdkSurface",
@@ -223,11 +223,11 @@ SHARED_ABI7_FIXTURE_COVERAGE = {
         '"KagemushaRecursiveSpendVerifyResultV1"',
         '"KagemushaRecursiveSpendRedeemRequestV1"',
         '"RedeemKagemushaRecursive"',
-        '"sha256_hex": "b1d6fe2498b66a98df3021be6e6614a75c6305f7d8f9e802799931c0dcfd2b6f"',
-        '"sha256_hex": "fceab0847a6dfd51049a512a3eab0baf9efb0ac21ae17669f85fb01d1dbdfccf"',
+        '"sha256_hex": "4df72bb5469869fa6851985fe5a6d433ee1a08bb3b87a9ae2204273d66923906"',
+        '"sha256_hex": "d3815dd9f6a015c6178e6976167308d0113823ce5877a21ae8f088fb54a56d76"',
         '"sha256_hex": "67eb9b1f7c89bd842dbfb769bb802c60464fba510b4db0ac4c83bcfbd5626d15"',
-        '"sha256_hex": "5a6bbbb16a4559f1bd96aa8c47ddd1203c3b56cf5f763ff19b8ee764e1eb32c8"',
-        '"sha256_hex": "8fc0d6ae8cc2a763e9813bd5a73a0495596577163dd1bf82597c4ed9c44e2589"',
+        '"sha256_hex": "0ea80af6e6260a254fe4931cd4c75b622f998db6434d8762136e65547e303089"',
+        '"sha256_hex": "5e2d34bdda70b524497397ca72e4a3849b02ab58007b15337dd73eb247039f09"',
     ),
     "python/iroha_python/iroha_python_rs/src/lib.rs": (
         "KAGEMUSHA_RECURSIVE_SPEND_PRINT_ABI7_ARCHIVES",
@@ -319,7 +319,7 @@ ADVERSARIAL_COVERAGE = {
         "fn kagemusha_recursive_spend_lineage_witness_helpers_append_record_backed_material",
         "KagemushaRecursiveSpendLineageKeyArtifactsV1",
         "KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1",
-        "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4",
+        "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1",
         "is_supported_kagemusha_recursive_spend_lineage_verifier_opening_len",
         "validate_kagemusha_recursive_spend_lineage_key_artifact_pair",
         "KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_VERSION_V1",
@@ -459,6 +459,14 @@ ADVERSARIAL_COVERAGE = {
                 "zero_profile_resulting_output_commitment_digest.resulting_output_commitment_digest =",
                 "zero_profile_resulting_fold_digest.resulting_fold_digest =",
                 "zero_profile_resulting_public_inputs_hash.resulting_public_inputs_hash =",
+                "fn validate_kagemusha_recursive_spend_transition_profile_resulting_accumulator(",
+                "validate_kagemusha_recursive_spend_transition_profile_resulting_accumulator(self)?;",
+                "kagemusha_recursive_spend_transition_profile_binding_digest_unchecked(profile)?",
+                "forged_resulting_accumulator_digest.validate_context()",
+                "forged_resulting_public_inputs_hash.validate_context()",
+                "ZeroProofHash {",
+                "zero_proof_hash.steps[0].proof_hash = Hash::prehashed([0u8; Hash::LENGTH]);",
+                "zero_proof_hash.proof_hash = Hash::prehashed([0u8; Hash::LENGTH]);",
                 "assert_zero_legacy_compact_hash_rejected(",
                 "zero-prehash legacy compact digest must be rejected",
                 "assert_zero_recursive_compact_hash_rejected(",
@@ -530,6 +538,14 @@ ADVERSARIAL_COVERAGE = {
                 'field: "previous_accumulator_public_inputs_hash"',
                 "Reserved-lineage append request at the witnessless hop cap must reject before proving",
         "fn kagemusha_recursive_spend_rejects_malformed_notes_and_lineage",
+        "pub previous_topup_anchor_nullifiers: Vec<[u8; 32]>",
+        "previous_topup_anchor_nullifiers: previous",
+        ".map(|previous| previous.topup_anchor_nullifiers.clone())",
+        "validate_kagemusha_recursive_spend_topup_anchor_nullifiers_field(",
+        'field: "previous_topup_anchor_nullifiers"',
+        ".any(|commitment| self.previous_topup_anchor_nullifiers.contains(commitment))",
+        "topup_anchor_as_append_output",
+        "topup_anchor_as_current_nullifier",
         'field: "lineage_witness.record_bundle.verifier_records.missing"',
         "empty lineage Pallas opening transcript label",
         "zero lineage Pallas opening verifier-key metadata",
@@ -556,8 +572,8 @@ ADVERSARIAL_COVERAGE = {
         "previous_proof_count_mismatch",
     ),
     "crates/iroha_core/src/zk.rs": (
-        "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS: usize = 64;",
-        "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS: usize = 4;",
+        "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS: usize = 255;",
+        "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS: usize = 1;",
         "pub const KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1: &str =",
         "fn kagemusha_recursive_spend_chain_admission_validates_enabled_lineage_profile",
         "fn kagemusha_recursive_spend_instance_values_expose_proof_chain_digest",
@@ -734,6 +750,11 @@ ADVERSARIAL_COVERAGE = {
         "chain id does not match redeem bundle",
         "asset does not match redeem bundle",
         "initial root does not match redeem bundle",
+        "final root does not match redeem bundle",
+        "fixed_bytes(b\"kagemusha-lineage-context-spliced-final-root\")",
+        "fixed_bytes(b\"kagemusha-lineage-context-spliced-final-note\")",
+        "fixed_bytes(b\"kagemusha-lineage-context-spliced-final-nullifier\")",
+        "witness.current_notes[1].amount = Numeric::new(8, 0);",
         "lineage witness final current note does not match redeem bundle",
         "fn kagemusha_recursive_spend_lineage_witness_preflights_final_bundle_before_archive_decode",
         "lineage witness final-bundle error should come before Pallas archive decoding",
@@ -957,6 +978,10 @@ ADVERSARIAL_COVERAGE = {
         "validate_against_transition_profile",
         "profiles with duplicate current-hop outputs",
         "duplicate_output_profile",
+        "forged_resulting_accumulator_profile",
+        "forged resulting accumulator digest",
+        "forged_resulting_public_inputs_profile",
+        "forged resulting public-input hash",
         "kagemusha_fold_step_proof_hash",
         "can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(",
         "output_append_is_currently_provable",
@@ -1079,6 +1104,11 @@ ADVERSARIAL_COVERAGE = {
         "fn kagemusha_recursive_spend_lineage_append_boundary_rejects_duplicate_current_outputs",
         ".push(profile.current_hop_statement.output_commitments[0])",
         "JS host append-boundary helper must reject duplicate current-hop outputs",
+        "fn kagemusha_recursive_spend_lineage_append_boundary_rejects_forged_result_hashes",
+        "JS host append-boundary helper must reject forged resulting accumulator digest",
+        "JS host append-boundary helper must reject forged resulting public-input hash",
+        'err.reason.contains("resulting_accumulator_digest")',
+        'err.reason.contains("resulting_public_inputs_hash")',
         "fn kagemusha_recursive_spend_append_rejects_forged_previous_proof_opening_metadata",
         '"vk_commitment"',
         '"public_inputs_schema_hash"',
@@ -1205,6 +1235,11 @@ ADVERSARIAL_COVERAGE = {
         ".push(profile.current_hop_statement.output_commitments[0])",
         "Python append-boundary helper must reject duplicate current-hop outputs",
         "repeats an output commitment",
+        "fn kagemusha_recursive_spend_lineage_append_boundary_python_rejects_forged_result_hashes",
+        "Python append-boundary helper must reject forged resulting accumulator digest",
+        "Python append-boundary helper must reject forged resulting public-input hash",
+        'err.contains("resulting_accumulator_digest")',
+        'err.contains("resulting_public_inputs_hash")',
         "fn kagemusha_recursive_spend_append_python_rejects_forged_previous_proof_opening_metadata",
         '"vk_commitment"',
         '"public_inputs_schema_hash"',
@@ -2565,6 +2600,14 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-transition-profile-current-hop-sets",
     ),
     (
+        "data-model transition-profile previous top-up anchors negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-transition-profile-previous-topup-anchors",
+    ),
+    (
+        "data-model transition-profile resulting accumulator negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-transition-profile-resulting-accumulator",
+    ),
+    (
         "data-model recursive spend proof public-input circuit binding negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-proof-public-input-circuit-binding",
     ),
@@ -2647,6 +2690,10 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Reserved-lineage profile split negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-profile-split",
+    ),
+    (
+        "roadmap current verifier-profile staleness negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-roadmap-current-profile-staleness",
     ),
     (
         "core lineage append helper exactness negative control",
@@ -2885,6 +2932,10 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-bridge-previous-proof-opening-output-clear",
     ),
     (
+        "bridge append-boundary forged result hash negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-bridge-append-boundary-forged-result-hashes",
+    ),
+    (
         "JS host recursive compact verifier-key hash negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-host-recursive-compact-vk-hash",
     ),
@@ -2909,6 +2960,10 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-host-append-boundary-current-output-set",
     ),
     (
+        "JS host append-boundary forged result hash negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-host-append-boundary-forged-result-hashes",
+    ),
+    (
         "Python recursive compact verifier-key hash negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-recursive-compact-vk-hash",
     ),
@@ -2931,6 +2986,10 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Python append-boundary current-hop output-set negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-append-boundary-current-output-set",
+    ),
+    (
+        "Python append-boundary forged result hash negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-append-boundary-forged-result-hashes",
     ),
     (
         "fixed-window manifest digest splice negative control",
@@ -3748,6 +3807,25 @@ def check_kagemusha_hash_zero_sentinel_guards():
             "is_zero_prehash_hash(digest)",
         ),
     )
+    step_digest_binding_context = source_window(
+        data_model,
+        "fn validate_kagemusha_step_digest_bindings(",
+        "fn validate_kagemusha_fold_root(",
+        "fold-step proof-hash zero-prehash validation",
+    )
+    require_ordered_needles(
+        step_digest_binding_context,
+        "fold-step proof-hash zero-prehash validation",
+        (
+            "proof_hash: Hash",
+            "if is_zero_prehash_hash(proof_hash)",
+            "KagemushaFoldError::ZeroProofHash { hop_index }",
+        ),
+    )
+    if "hash_bytes_from_hash(proof_hash)" in step_digest_binding_context:
+        fail(
+            "fold-step proof-hash zero-prehash validation must not convert Hash digests to bytes before zero checks"
+        )
     legacy_compact_context = source_window(
         data_model,
         "pub fn validate_supported_context(&self) -> Result<(), KagemushaFoldError> {",
@@ -4812,13 +4890,13 @@ def check_shared_abi7_archive_fixture_manifest():
             "append",
             "KagemushaRecursiveSpendBundleV1",
             13622,
-            "b1d6fe2498b66a98df3021be6e6614a75c6305f7d8f9e802799931c0dcfd2b6f",
+            "4df72bb5469869fa6851985fe5a6d433ee1a08bb3b87a9ae2204273d66923906",
         ),
         "verify_request": (
             "verify",
             "KagemushaRecursiveSpendVerifyRequestV1",
             13628,
-            "fceab0847a6dfd51049a512a3eab0baf9efb0ac21ae17669f85fb01d1dbdfccf",
+            "d3815dd9f6a015c6178e6976167308d0113823ce5877a21ae8f088fb54a56d76",
         ),
         "verify_result": (
             "verify",
@@ -4830,13 +4908,13 @@ def check_shared_abi7_archive_fixture_manifest():
             "redeem",
             "KagemushaRecursiveSpendRedeemRequestV1",
             26266,
-            "5a6bbbb16a4559f1bd96aa8c47ddd1203c3b56cf5f763ff19b8ee764e1eb32c8",
+            "0ea80af6e6260a254fe4931cd4c75b622f998db6434d8762136e65547e303089",
         ),
         "redeem_instruction": (
             "redeem",
             "RedeemKagemushaRecursive",
             26262,
-            "8fc0d6ae8cc2a763e9813bd5a73a0495596577163dd1bf82597c4ed9c44e2589",
+            "5e2d34bdda70b524497397ca72e4a3849b02ab58007b15337dd73eb247039f09",
         ),
     }
     by_name = {
@@ -4922,6 +5000,15 @@ def check_payload_benchmark_source_coverage():
 TODO_MARKER_RE = re.compile(r"\b(?:TODO|FIXME|XXX|TBD)\b")
 KAGEMUSHA_CONTENT_RE = re.compile(r"kagemusha", re.IGNORECASE)
 ALLOWED_ROADMAP_CSHARP_TODO_RE = re.compile(r"TODO\(C# Windows\)|Windows-machine TODOs?")
+CURRENT_ROADMAP_PROFILE_NEEDLES = (
+    "`255x1` profile source",
+    "`255x1` binary through `--iroha-bin`",
+    "regenerated current `255x1` profile hashes",
+)
+STALE_ROADMAP_PROFILE_MARKERS = (
+    "`64x4`",
+    "fixed-window-64x4",
+)
 
 
 def iter_active_noncsharp_kagemusha_todo_discovery_candidates(discovery_roots):
@@ -5025,6 +5112,22 @@ def check_active_noncsharp_kagemusha_todos_closed():
             )
 
 
+def check_current_roadmap_profile_is_fresh():
+    roadmap = read("roadmap.md")
+    for marker in STALE_ROADMAP_PROFILE_MARKERS:
+        if marker in roadmap:
+            fail(
+                "roadmap.md still references stale Kagemusha verifier-witness profile marker: "
+                + marker
+            )
+    for needle in CURRENT_ROADMAP_PROFILE_NEEDLES:
+        if needle not in roadmap:
+            fail(
+                "roadmap.md is missing current Kagemusha verifier-witness profile prose: "
+                + needle
+            )
+
+
 def run_checks():
     check_workflow_paths_cover_policy_sources()
     check_workflow_preserves_in_progress_runs()
@@ -5056,6 +5159,7 @@ def run_checks():
     check_sdk_append_cap_binding_coverage()
     check_native_output_cap_coverage()
     check_reserved_lineage_profile_split_coverage()
+    check_current_roadmap_profile_is_fresh()
     check_verify_result_fail_closed_coverage()
     check_payload_benchmark_source_coverage()
     check_torii_offline_v2_kagemusha_redeem_coverage()
@@ -5601,8 +5705,8 @@ if mode == "--negative-control-shared-abi7-archive-fixture":
     target = SHARED_ABI7_ARCHIVE_FIXTURE_PATH
     source = read(target)
     mutated = source.replace(
-        '"sha256_hex": "b1d6fe2498b66a98df3021be6e6614a75c6305f7d8f9e802799931c0dcfd2b6f"',
-        '"sha256_hex": "00d6fe2498b66a98df3021be6e6614a75c6305f7d8f9e802799931c0dcfd2b6f"',
+        '"sha256_hex": "4df72bb5469869fa6851985fe5a6d433ee1a08bb3b87a9ae2204273d66923906"',
+        '"sha256_hex": "00f72bb5469869fa6851985fe5a6d433ee1a08bb3b87a9ae2204273d66923906"',
         1,
     )
     if mutated == source:
@@ -5614,7 +5718,7 @@ if mode == "--negative-control-shared-abi7-archive-fixture":
         message = str(error)
         expected = (
             f'{target} is missing shared recursive spend ABI-7 fixture coverage: '
-            '"sha256_hex": "b1d6fe2498b66a98df3021be6e6614a75c6305f7d8f9e802799931c0dcfd2b6f"'
+            '"sha256_hex": "4df72bb5469869fa6851985fe5a6d433ee1a08bb3b87a9ae2204273d66923906"'
         )
         if expected not in message:
             raise SystemExit(
@@ -5929,6 +6033,11 @@ if mode == "--negative-control-data-model-zero-prehash-hash-guard":
             "Kagemusha Hash zero-sentinel guard must not compare Hash bytes to all-zero arrays",
         ),
         (
+            "is_zero_prehash_hash(proof_hash)",
+            "hash_bytes_from_hash(proof_hash) == [0u8; Hash::LENGTH]",
+            "Kagemusha Hash zero-sentinel guard must not compare Hash bytes to all-zero arrays",
+        ),
+        (
             "if is_zero_prehash_hash(digest) {\n                return Err(KagemushaFoldError::ZeroFoldedPublicInputDigest { field });",
             "if hash_bytes_from_hash(digest) == [0u8; Hash::LENGTH] {\n                return Err(KagemushaFoldError::ZeroFoldedPublicInputDigest { field });",
             "Kagemusha Hash zero-sentinel guard must not compare Hash bytes to all-zero arrays",
@@ -5989,6 +6098,60 @@ if mode == "--negative-control-data-model-transition-profile-current-hop-sets":
         print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: transition-profile current-hop set drift was not detected")
+
+if mode == "--negative-control-data-model-transition-profile-previous-topup-anchors":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    source = read(target)
+    mutated = source.replace("topup_anchor_as_append_output", "topup_anchor_as_unchecked_output")
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate transition-profile previous top-up anchor coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "topup_anchor_as_append_output"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: transition-profile previous top-up anchor drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected transition-profile previous top-up anchor drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: transition-profile previous top-up anchor drift was not detected")
+
+if mode == "--negative-control-data-model-transition-profile-resulting-accumulator":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    source = read(target)
+    mutated = source.replace(
+        "validate_kagemusha_recursive_spend_transition_profile_resulting_accumulator(self)?;",
+        "validate_kagemusha_recursive_spend_transition_profile_resulting_accumulator_unchecked(self)?;",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate transition-profile resulting accumulator coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "validate_kagemusha_recursive_spend_transition_profile_resulting_accumulator(self)?;"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: transition-profile resulting accumulator drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected transition-profile resulting accumulator drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: transition-profile resulting accumulator drift was not detected")
 
 if mode == "--negative-control-data-model-proof-public-input-circuit-binding":
     target = "crates/iroha_data_model/src/offline/mod.rs"
@@ -6787,6 +6950,28 @@ if mode == "--negative-control-core-lineage-profile-split":
     print("negative control rejected Reserved-lineage profile split drift")
     print(first_message.splitlines()[0])
     raise SystemExit(0)
+
+if mode == "--negative-control-roadmap-current-profile-staleness":
+    target = "roadmap.md"
+    source = read(target)
+    mutated = source.replace("`255x1` profile source", "`64x4` profile source", 1)
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate roadmap current profile prose")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        message = str(error)
+        expected = "roadmap.md still references stale Kagemusha verifier-witness profile marker: `64x4`"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: roadmap current profile staleness was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected roadmap current profile staleness")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: roadmap current profile staleness was not detected")
 
 if mode == "--negative-control-core-lineage-append-helper-exactness":
     target = "crates/iroha_core/src/zk.rs"
@@ -8571,8 +8756,8 @@ if mode == "--negative-control-core-lineage-witness-final-bundle-context":
     target = "crates/iroha_core/src/zk.rs"
     source = read(target)
     mutated = source.replace(
-        "hop count 1 does not match redeem bundle hop count 2",
-        "hop count 1 may mismatch redeem bundle hop count 2",
+        "fixed_bytes(b\"kagemusha-lineage-context-spliced-final-nullifier\")",
+        "fixed_bytes(b\"kagemusha-lineage-context-spliced-final-nullifier-unchecked\")",
         1,
     )
     if mutated == source:
@@ -8584,7 +8769,7 @@ if mode == "--negative-control-core-lineage-witness-final-bundle-context":
         message = str(error)
         expected = (
             f"{target} is missing Reserved-lineage adversarial coverage: "
-            "hop count 1 does not match redeem bundle hop count 2"
+            "fixed_bytes(b\"kagemusha-lineage-context-spliced-final-nullifier\")"
         )
         if expected not in message:
             raise SystemExit(
@@ -9072,6 +9257,64 @@ if mode == "--negative-control-bridge-previous-proof-opening-output-clear":
     print(first_message.splitlines()[0])
     raise SystemExit(0)
 
+if mode == "--negative-control-bridge-append-boundary-forged-result-hashes":
+    target = "crates/connect_norito_bridge/src/lib.rs"
+    source = read(target)
+    cases = (
+        (
+            "forged_resulting_accumulator_profile",
+            "accepted_resulting_accumulator_profile",
+            "forged_resulting_accumulator_profile",
+        ),
+        (
+            "append-boundary FFI must reject profiles with forged resulting accumulator digest",
+            "append-boundary FFI may accept profiles with accepted resulting accumulator digest",
+            "forged resulting accumulator digest",
+        ),
+        (
+            "forged_resulting_public_inputs_profile",
+            "accepted_resulting_public_inputs_profile",
+            "forged_resulting_public_inputs_profile",
+        ),
+        (
+            "append-boundary FFI must reject profiles with forged resulting public-input hash",
+            "append-boundary FFI may accept profiles with accepted resulting public-input hash",
+            "forged resulting public-input hash",
+        ),
+    )
+    first_message = None
+    for before, after, label in cases:
+        mutated = source.replace(before, after)
+        if mutated == source:
+            raise SystemExit(
+                "negative control failed: unable to mutate bridge append-boundary forged result coverage: "
+                + before
+            )
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            if label not in message:
+                raise SystemExit(
+                    "negative control failed: bridge append-boundary forged result drift was not detected for "
+                    + label
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: bridge append-boundary forged result drift was not detected for "
+            + label
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: bridge append-boundary forged result drift was not detected")
+    print("negative control rejected bridge append-boundary forged result drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
+
 if mode == "--negative-control-js-host-recursive-compact-vk-hash":
     target = "crates/iroha_js_host/src/lib.rs"
     source = read(target)
@@ -9283,6 +9526,69 @@ if mode == "--negative-control-js-host-append-boundary-current-output-set":
         print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: JS host append-boundary current-hop output-set drift was not detected")
+
+if mode == "--negative-control-js-host-append-boundary-forged-result-hashes":
+    target = "crates/iroha_js_host/src/lib.rs"
+    source = read(target)
+    cases = (
+        (
+            "fn kagemusha_recursive_spend_lineage_append_boundary_rejects_forged_result_hashes",
+            "fn kagemusha_recursive_spend_lineage_append_boundary_accepts_forged_result_hashes",
+            "fn kagemusha_recursive_spend_lineage_append_boundary_rejects_forged_result_hashes",
+        ),
+        (
+            "JS host append-boundary helper must reject forged resulting accumulator digest",
+            "JS host append-boundary helper may accept forged resulting accumulator digest",
+            "JS host append-boundary helper must reject forged resulting accumulator digest",
+        ),
+        (
+            "JS host append-boundary helper must reject forged resulting public-input hash",
+            "JS host append-boundary helper may accept forged resulting public-input hash",
+            "JS host append-boundary helper must reject forged resulting public-input hash",
+        ),
+        (
+            "err.reason.contains(\"resulting_accumulator_digest\")",
+            "err.reason.contains(\"accepted_resulting_accumulator_digest\")",
+            "resulting_accumulator_digest",
+        ),
+        (
+            "err.reason.contains(\"resulting_public_inputs_hash\")",
+            "err.reason.contains(\"accepted_resulting_public_inputs_hash\")",
+            "resulting_public_inputs_hash",
+        ),
+    )
+    first_message = None
+    for before, after, label in cases:
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
+            raise SystemExit(
+                "negative control failed: unable to mutate JS host append-boundary forged result coverage: "
+                + before
+            )
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            if label not in message:
+                raise SystemExit(
+                    "negative control failed: JS host append-boundary forged result drift was not detected for "
+                    + label
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: JS host append-boundary forged result drift was not detected for "
+            + label
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: JS host append-boundary forged result drift was not detected")
+    print("negative control rejected JS host append-boundary forged result drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
 
 if mode == "--negative-control-python-recursive-compact-vk-hash":
     target = "python/iroha_python/iroha_python_rs/src/lib.rs"
@@ -9517,6 +9823,69 @@ if mode == "--negative-control-python-append-boundary-current-output-set":
     if first_message is None:
         raise SystemExit("negative control failed: Python append-boundary current-hop output-set drift was not detected")
     print("negative control rejected Python append-boundary current-hop output-set drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
+
+if mode == "--negative-control-python-append-boundary-forged-result-hashes":
+    target = "python/iroha_python/iroha_python_rs/src/lib.rs"
+    source = read(target)
+    cases = (
+        (
+            "fn kagemusha_recursive_spend_lineage_append_boundary_python_rejects_forged_result_hashes",
+            "fn kagemusha_recursive_spend_lineage_append_boundary_python_accepts_forged_result_hashes",
+            "fn kagemusha_recursive_spend_lineage_append_boundary_python_rejects_forged_result_hashes",
+        ),
+        (
+            "Python append-boundary helper must reject forged resulting accumulator digest",
+            "Python append-boundary helper may accept forged resulting accumulator digest",
+            "Python append-boundary helper must reject forged resulting accumulator digest",
+        ),
+        (
+            "Python append-boundary helper must reject forged resulting public-input hash",
+            "Python append-boundary helper may accept forged resulting public-input hash",
+            "Python append-boundary helper must reject forged resulting public-input hash",
+        ),
+        (
+            "err.contains(\"resulting_accumulator_digest\")",
+            "err.contains(\"accepted_resulting_accumulator_digest\")",
+            "resulting_accumulator_digest",
+        ),
+        (
+            "err.contains(\"resulting_public_inputs_hash\")",
+            "err.contains(\"accepted_resulting_public_inputs_hash\")",
+            "resulting_public_inputs_hash",
+        ),
+    )
+    first_message = None
+    for before, after, label in cases:
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
+            raise SystemExit(
+                "negative control failed: unable to mutate Python append-boundary forged result coverage: "
+                + before
+            )
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            if label not in message:
+                raise SystemExit(
+                    "negative control failed: Python append-boundary forged result drift was not detected for "
+                    + label
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: Python append-boundary forged result drift was not detected for "
+            + label
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: Python append-boundary forged result drift was not detected")
+    print("negative control rejected Python append-boundary forged result drift")
     print(first_message.splitlines()[0])
     raise SystemExit(0)
 

@@ -17,8 +17,8 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
 CRATE_DIR="$ROOT_DIR/crates/connect_norito_bridge"
 INC_DIR="$CRATE_DIR/include"
-OUT_DIR="$ROOT_DIR/dist"
-BUILD_DIR="$ROOT_DIR/build/norito_bridge"
+OUT_DIR="${NORITO_BRIDGE_OUT_DIR:-$ROOT_DIR/dist}"
+BUILD_DIR="${NORITO_BRIDGE_BUILD_DIR:-$ROOT_DIR/build/norito_bridge}"
 STAGE_DIR="$BUILD_DIR/stage"
 
 LIB_CRATE_NAME="connect_norito_bridge"
@@ -59,7 +59,7 @@ done
 echo "[+] Using iOS deployment target (device): $IPHONEOS_DEPLOYMENT_TARGET" >&2
 echo "[+] Using iOS deployment target (simulator): $IPHONESIMULATOR_DEPLOYMENT_TARGET" >&2
 
-if [[ "${NORITO_BRIDGE_PRESERVE_CARGO_TARGETS:-0}" == "1" ]]; then
+if [[ "${NORITO_BRIDGE_PRESERVE_CARGO_TARGETS:-0}" == "1" || "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" == "1" ]]; then
   rm -rf "$STAGE_DIR" "$OUT_DIR/NoritoBridge.xcframework"
 else
   rm -rf "$CARGO_BUILD_DIR_BASE" "$STAGE_DIR" "$OUT_DIR/NoritoBridge.xcframework"
@@ -75,31 +75,35 @@ CARGO_BUILD_DIR_SIM_ARM="$CARGO_BUILD_DIR_BASE/$SIM_ARM_TRIPLE"
 CARGO_BUILD_DIR_SIM_X64="$CARGO_BUILD_DIR_BASE/$SIM_X64_TRIPLE"
 CARGO_BUILD_DIR_MACOS="$CARGO_BUILD_DIR_BASE/$MACOS_TRIPLE"
 
-echo "[+] Building Rust static libraries (release)" >&2
-echo "    Targets: $DEVICE_TRIPLE, $SIM_ARM_TRIPLE, $SIM_X64_TRIPLE, $MACOS_TRIPLE" >&2
+if [[ "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" == "1" ]]; then
+  echo "[+] Skipping Rust static library builds; using existing target artifacts" >&2
+else
+  echo "[+] Building Rust static libraries (release)" >&2
+  echo "    Targets: $DEVICE_TRIPLE, $SIM_ARM_TRIPLE, $SIM_X64_TRIPLE, $MACOS_TRIPLE" >&2
 
-echo "    (Make sure you have installed targets via: rustup target add $DEVICE_TRIPLE $SIM_ARM_TRIPLE $SIM_X64_TRIPLE $MACOS_TRIPLE)" >&2
+  echo "    (Make sure you have installed targets via: rustup target add $DEVICE_TRIPLE $SIM_ARM_TRIPLE $SIM_X64_TRIPLE $MACOS_TRIPLE)" >&2
 
-# Rust uses IPHONEOS_DEPLOYMENT_TARGET for both iOS device and simulator targets,
-# while cc-based dependencies also honor IPHONESIMULATOR_DEPLOYMENT_TARGET.
-env IPHONEOS_DEPLOYMENT_TARGET="$IPHONEOS_DEPLOYMENT_TARGET" \
-  NORITO_SKIP_BINDINGS_SYNC=1 \
-  CARGO_TARGET_DIR="$CARGO_BUILD_DIR_DEVICE" \
-  cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$DEVICE_TRIPLE"
-env IPHONEOS_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
-  IPHONESIMULATOR_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
-  NORITO_SKIP_BINDINGS_SYNC=1 \
-  CARGO_TARGET_DIR="$CARGO_BUILD_DIR_SIM_ARM" \
-  cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$SIM_ARM_TRIPLE"
-env IPHONEOS_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
-  IPHONESIMULATOR_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
-  NORITO_SKIP_BINDINGS_SYNC=1 \
-  CARGO_TARGET_DIR="$CARGO_BUILD_DIR_SIM_X64" \
-  cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$SIM_X64_TRIPLE"
-env MACOSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
-  NORITO_SKIP_BINDINGS_SYNC=1 \
-  CARGO_TARGET_DIR="$CARGO_BUILD_DIR_MACOS" \
-  cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$MACOS_TRIPLE"
+  # Rust uses IPHONEOS_DEPLOYMENT_TARGET for both iOS device and simulator targets,
+  # while cc-based dependencies also honor IPHONESIMULATOR_DEPLOYMENT_TARGET.
+  env IPHONEOS_DEPLOYMENT_TARGET="$IPHONEOS_DEPLOYMENT_TARGET" \
+    NORITO_SKIP_BINDINGS_SYNC=1 \
+    CARGO_TARGET_DIR="$CARGO_BUILD_DIR_DEVICE" \
+    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$DEVICE_TRIPLE"
+  env IPHONEOS_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
+    IPHONESIMULATOR_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
+    NORITO_SKIP_BINDINGS_SYNC=1 \
+    CARGO_TARGET_DIR="$CARGO_BUILD_DIR_SIM_ARM" \
+    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$SIM_ARM_TRIPLE"
+  env IPHONEOS_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
+    IPHONESIMULATOR_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
+    NORITO_SKIP_BINDINGS_SYNC=1 \
+    CARGO_TARGET_DIR="$CARGO_BUILD_DIR_SIM_X64" \
+    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$SIM_X64_TRIPLE"
+  env MACOSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
+    NORITO_SKIP_BINDINGS_SYNC=1 \
+    CARGO_TARGET_DIR="$CARGO_BUILD_DIR_MACOS" \
+    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$MACOS_TRIPLE"
+fi
 
 LIB_DEV="$CARGO_BUILD_DIR_DEVICE/$DEVICE_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
 LIB_SIM_ARM="$CARGO_BUILD_DIR_SIM_ARM/$SIM_ARM_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
@@ -160,11 +164,49 @@ cp "$INC_DIR/NoritoBridge.h" "$HEADERS_MAC/NoritoBridge.h"
 cp "$CRATE_DIR/module.modulemap.template" "$HEADERS_MAC/module.modulemap"
 
 echo "[+] Creating XCFramework" >&2
-xcodebuild -create-xcframework \
+if ! xcodebuild -create-xcframework \
   -library "$LIB_DEV_STAGED" -headers "$HEADERS_DEV" \
   -library "$LIB_SIM_STAGED" -headers "$HEADERS_SIM" \
   -library "$LIB_MAC_STAGED" -headers "$HEADERS_MAC" \
-  -output "$OUT_DIR/${FRAMEWORK_NAME}.xcframework"
+  -output "$OUT_DIR/${FRAMEWORK_NAME}.xcframework"; then
+  echo "[!] xcodebuild reported a non-zero exit while creating the XCFramework; validating emitted static-library slices" >&2
+  copy_static_xcframework_slice() {
+    local identifier="$1"
+    local source_lib="$2"
+    local source_headers="$3"
+    local slice_dir="$OUT_DIR/${FRAMEWORK_NAME}.xcframework/$identifier"
+
+    mkdir -p "$slice_dir/Headers"
+    cp "$source_lib" "$slice_dir/${STATIC_LIB_NAME}"
+    cp "$source_headers/NoritoBridge.h" "$slice_dir/Headers/NoritoBridge.h"
+    cp "$source_headers/connect_norito_bridge.h" "$slice_dir/Headers/connect_norito_bridge.h"
+    cp "$source_headers/module.modulemap" "$slice_dir/Headers/module.modulemap"
+  }
+
+  rm -rf "$OUT_DIR/${FRAMEWORK_NAME}.xcframework/ios-arm64-simulator"
+  copy_static_xcframework_slice "ios-arm64" "$LIB_DEV_STAGED" "$HEADERS_DEV"
+  copy_static_xcframework_slice "ios-arm64_x86_64-simulator" "$LIB_SIM_STAGED" "$HEADERS_SIM"
+  copy_static_xcframework_slice "macos-arm64" "$LIB_MAC_STAGED" "$HEADERS_MAC"
+
+  REQUIRED_OUTPUTS=(
+    "$OUT_DIR/${FRAMEWORK_NAME}.xcframework/Info.plist"
+    "$OUT_DIR/${FRAMEWORK_NAME}.xcframework/ios-arm64/${STATIC_LIB_NAME}"
+    "$OUT_DIR/${FRAMEWORK_NAME}.xcframework/ios-arm64/Headers/NoritoBridge.h"
+    "$OUT_DIR/${FRAMEWORK_NAME}.xcframework/ios-arm64/Headers/connect_norito_bridge.h"
+    "$OUT_DIR/${FRAMEWORK_NAME}.xcframework/ios-arm64_x86_64-simulator/${STATIC_LIB_NAME}"
+    "$OUT_DIR/${FRAMEWORK_NAME}.xcframework/ios-arm64_x86_64-simulator/Headers/NoritoBridge.h"
+    "$OUT_DIR/${FRAMEWORK_NAME}.xcframework/ios-arm64_x86_64-simulator/Headers/connect_norito_bridge.h"
+    "$OUT_DIR/${FRAMEWORK_NAME}.xcframework/macos-arm64/${STATIC_LIB_NAME}"
+    "$OUT_DIR/${FRAMEWORK_NAME}.xcframework/macos-arm64/Headers/NoritoBridge.h"
+    "$OUT_DIR/${FRAMEWORK_NAME}.xcframework/macos-arm64/Headers/connect_norito_bridge.h"
+  )
+  for output in "${REQUIRED_OUTPUTS[@]}"; do
+    if [[ ! -f "$output" ]]; then
+      echo "[-] Missing XCFramework output after xcodebuild failure: $output" >&2
+      exit 1
+    fi
+  done
+fi
 
 echo "[+] XCFramework created: $OUT_DIR/${FRAMEWORK_NAME}.xcframework" >&2
 

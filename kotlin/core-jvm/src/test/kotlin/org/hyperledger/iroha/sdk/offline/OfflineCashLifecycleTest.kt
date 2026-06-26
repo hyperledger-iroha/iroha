@@ -143,6 +143,22 @@ class OfflineCashLifecycleTest {
         }
         assertEquals("unsupported_native_bridge_abi", staleAbi.code)
 
+        val malformedNativeAbi = assertFailsWith<OfflineCashConfigurationSnapshotException> {
+            OfflineCashConfigurationSnapshot(
+                chainId = "00000042",
+                assetDefinitionId = "pkr#sbp",
+                offlinePaymentsEnabled = true,
+                issuerPublicKeyBase64 = "issuer-key",
+                nativeBridgeAbiVersion = 0,
+            ).requireUsableForOfflineExchange(nowMs = 200, requiredNativeBridgeAbiVersion = 7)
+        }
+        assertEquals("malformed_snapshot", malformedNativeAbi.code)
+
+        val malformedRequiredAbi = assertFailsWith<OfflineCashConfigurationSnapshotException> {
+            snapshot.requireUsableForOfflineExchange(nowMs = 999, requiredNativeBridgeAbiVersion = 0)
+        }
+        assertEquals("malformed_snapshot", malformedRequiredAbi.code)
+
         val expired = assertFailsWith<OfflineCashConfigurationSnapshotException> {
             snapshot.requireUsableForOfflineExchange(nowMs = 1_000, requiredNativeBridgeAbiVersion = 7)
         }

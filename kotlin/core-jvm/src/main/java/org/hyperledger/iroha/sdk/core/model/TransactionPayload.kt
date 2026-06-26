@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.core.model
 
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 
 private const val DEFAULT_CHAIN_ID = "00000000"
 private val DEFAULT_AUTHORITY = AccountAddress
@@ -29,8 +30,9 @@ class TransactionPayload(
     val metadata: Map<String, JsonValue> get() = _metadata
 
     init {
-        require(chainId.isNotBlank()) { "chainId must not be blank" }
-        require(authority.isNotBlank()) { "authority must not be blank" }
+        require(chainId.trim().isNotEmpty()) { "chainId must not be blank" }
+        require(chainId.trim() == chainId) { "chainId must not contain surrounding whitespace" }
+        requireCanonicalI105Address(authority, "authority")
         require(creationTimeMs >= 0) { "creationTimeMs must be non-negative" }
         if (timeToLiveMs != null) {
             require(timeToLiveMs > 0) { "timeToLiveMs must be positive when present" }

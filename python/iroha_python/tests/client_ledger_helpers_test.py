@@ -1701,6 +1701,22 @@ def test_mint_assets_and_wait_batches_records_in_one_transaction() -> None:
     assert captured["kwargs"]["wait"] is False
 
 
+def test_transaction_draft_rejects_padded_chain_and_authority_before_signing() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+
+    with pytest.raises(
+        ValueError,
+        match="chain_id must not contain surrounding whitespace",
+    ):
+        client._transaction_draft(chain_id=" chain", authority="authority@is")
+
+    with pytest.raises(
+        ValueError,
+        match="authority must not contain surrounding whitespace",
+    ):
+        client._transaction_draft(chain_id="chain", authority=" authority@is ")
+
+
 def test_transfer_assets_and_wait_batches_records_in_one_transaction() -> None:
     client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
     captured: dict[str, object] = {}

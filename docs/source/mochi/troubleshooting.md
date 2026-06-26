@@ -29,7 +29,11 @@ roadmap item “Documentation & rollout” by turning the supervisor behaviours 
    - `<workspace>/.mochi/sandbox/<profile>/session.json`
    - `<workspace>/.mochi/sandbox/<profile>/serve.pid`
    A `stale-session` status means `session.json` exists but the recorded Mochi
-   process is gone; inspect `serve.log`, then rerun `up` or `reset`.
+   process is gone; inspect `serve.log`, then rerun `up` or `reset`. A
+   `mismatched-pid` status means `serve.pid` points at a live process whose
+   command line is not the expected `sandbox serve` command for this workspace;
+   the helper will refuse to stop or reuse that PID, so inspect the pidfile and
+   process manually before removing stale state.
 
 ## 2. Collect logs & telemetry evidence
 

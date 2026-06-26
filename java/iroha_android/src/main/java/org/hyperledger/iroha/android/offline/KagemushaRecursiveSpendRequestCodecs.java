@@ -503,6 +503,10 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     require(decoder.remaining() == 0, "Trailing bytes after lineageWitness");
     final NoritoDecoder previousProofs = new NoritoDecoder(previousProofsPayload, payload.flags);
     final int count = checkedInt(previousProofs.readUInt(64), "lineageWitness.previousRecursiveProofs count");
+    require(
+        count <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS,
+        "lineageWitness.previousRecursiveProofs count must not exceed "
+            + KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS);
     boolean hasReserved = false;
     for (int index = 0; index < count; index++) {
       final int itemLength =
@@ -1043,6 +1047,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     public final String chainAdmissionReason;
     public final boolean witnesslessRedeemSupported;
     public final boolean lineageWitnessRequired;
+    public final boolean lineageWitnessRequiredForRedeem;
 
     public VerifySpendResult(
         final boolean valid,
@@ -1061,6 +1066,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       this.chainAdmissionReason = Objects.requireNonNull(chainAdmissionReason, "chainAdmissionReason");
       this.witnesslessRedeemSupported = witnesslessRedeemSupported;
       this.lineageWitnessRequired = lineageWitnessRequired;
+      this.lineageWitnessRequiredForRedeem = lineageWitnessRequired;
     }
   }
 
@@ -1074,6 +1080,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     private final byte[] changeOutput;
     public final VerifierRecordRef lineageVerifierRecord;
     public final Long blockHeight;
+    public final List<VerifierRecordRef> lineageVerifierRecords;
 
     public RedeemSpendRequest(
         final byte[] bundle,
@@ -1091,7 +1098,8 @@ public final class KagemushaRecursiveSpendRequestCodecs {
           lineageWitness,
           null,
           lineageVerifierRecord,
-          blockHeight);
+          blockHeight,
+          Collections.emptyList());
     }
 
     public RedeemSpendRequest(
@@ -1103,6 +1111,28 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         final byte[] changeOutput,
         final VerifierRecordRef lineageVerifierRecord,
         final Long blockHeight) {
+      this(
+          bundle,
+          recipient,
+          publicAmount,
+          redeemProof,
+          lineageWitness,
+          changeOutput,
+          lineageVerifierRecord,
+          blockHeight,
+          Collections.emptyList());
+    }
+
+    public RedeemSpendRequest(
+        final byte[] bundle,
+        final String recipient,
+        final String publicAmount,
+        final byte[] redeemProof,
+        final byte[] lineageWitness,
+        final byte[] changeOutput,
+        final VerifierRecordRef lineageVerifierRecord,
+        final Long blockHeight,
+        final List<VerifierRecordRef> lineageVerifierRecords) {
       this.bundle = copyOf(bundle, "bundle");
       this.recipient = Objects.requireNonNull(recipient, "recipient");
       this.publicAmount = canonicalU128Decimal(publicAmount, "publicAmount");
@@ -1114,6 +1144,9 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       }
       this.lineageVerifierRecord = lineageVerifierRecord;
       this.blockHeight = blockHeight;
+      this.lineageVerifierRecords =
+          Collections.unmodifiableList(
+              new ArrayList<>(Objects.requireNonNull(lineageVerifierRecords, "lineageVerifierRecords")));
       requireNonNegativeHeight(blockHeight);
       requireNonBlankUnpadded(this.recipient, "recipient");
       final SpendBundleSummary bundleSummary = decodeBundle(this.bundle);
@@ -1126,15 +1159,20 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       }
       final boolean finalIsLineage =
           KagemushaRecursiveSpendProver.isLineageProofCircuitId(bundleSummary.proofCircuitId);
+      final boolean hasLineageVerifierRecord =
+          this.lineageVerifierRecord != null || !this.lineageVerifierRecords.isEmpty();
+      require(
+          !finalIsLineage || hasLineageVerifierRecord,
+          "lineageVerifierRecord is required for reserved-lineage bundles");
       final boolean witnessHasReservedPrevious =
           this.lineageWitness != null
               && lineageWitnessHasReservedPreviousProof(this.lineageWitness);
       if (!finalIsLineage) {
         require(
-            !witnessHasReservedPrevious || this.lineageVerifierRecord != null,
+            !witnessHasReservedPrevious || hasLineageVerifierRecord,
             "lineageVerifierRecord is required for lineage witnesses with reserved-lineage previous proofs");
         require(
-            witnessHasReservedPrevious || this.lineageVerifierRecord == null,
+            witnessHasReservedPrevious || !hasLineageVerifierRecord,
             "lineageVerifierRecord is only valid for reserved-lineage bundles or lineage witnesses");
       }
       require(
@@ -1144,7 +1182,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
           "lineageWitness is required for this bundle");
       require(
           !KagemushaRecursiveSpendProver.isLineageProofCircuitId(bundleSummary.proofCircuitId)
-              || this.lineageVerifierRecord != null,
+              || hasLineageVerifierRecord,
           "lineageVerifierRecord is required for reserved-lineage bundles");
       compactPayloadForRequest(this.redeemProof, SCHEMA_PROOF_ATTACHMENT, "redeemProof");
       if (this.lineageWitness != null) {
@@ -1297,13 +1335,13 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         @Override
         public void encode(final NoritoEncoder encoder, final VerifySpendRequest value) {
           writeRawField(encoder, compactPayloadForRequest(value.bundle(), SCHEMA_BUNDLE, "bundle"));
-          writeField(
-              encoder,
-              child ->
-                  writeOptionRaw(
-                      child,
-                      value.lineageVerifierRecord == null
-                          ? null
+	          writeField(
+	              encoder,
+	              child ->
+	                  writeOptionRaw(
+	                      child,
+	                      value.lineageVerifierRecord == null
+	                          ? null
                           : compactPayloadForRequest(
                               value.lineageVerifierRecord.recordBytes(),
                               SCHEMA_VERIFYING_KEY_RECORD,
@@ -1337,18 +1375,25 @@ public final class KagemushaRecursiveSpendRequestCodecs {
                           : compactPayloadForRequest(
                               value.lineageWitness(), SCHEMA_LINEAGE_WITNESS, "lineageWitness")));
           writeField(encoder, child -> writeOptionFixed32(child, value.changeOutput()));
-          writeField(
-              encoder,
-              child ->
-                  writeOptionRaw(
-                      child,
-                      value.lineageVerifierRecord == null
-                          ? null
-                          : compactPayloadForRequest(
-                              value.lineageVerifierRecord.recordBytes(),
+	          writeField(
+	              encoder,
+	              child ->
+	                  writeOptionRaw(
+	                      child,
+	                      value.lineageVerifierRecord == null
+	                          ? null
+	                          : compactPayloadForRequest(
+	                              value.lineageVerifierRecord.recordBytes(),
                               SCHEMA_VERIFYING_KEY_RECORD,
                               "lineageVerifierRecord")));
           writeField(encoder, child -> writeOptionU64(child, value.blockHeight));
+          writeField(
+              encoder,
+              child ->
+                  writeRawVec(
+                      child,
+                      compactVerifierRecordPayloads(
+                          value.lineageVerifierRecords, "lineageVerifierRecords")));
         }
 
         @Override
@@ -1393,12 +1438,22 @@ public final class KagemushaRecursiveSpendRequestCodecs {
             + KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN);
     final String chainId =
         readField(decoder, KagemushaRecursiveSpendRequestCodecs::readAccumulatorChainId);
-    final String asset = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readAssetDefinitionId);
-    final byte[] initialRoot = readField(decoder, child -> readFixedBytes(child, 32, "initial_root"));
-    final byte[] finalRoot = readField(decoder, child -> readFixedBytes(child, 32, "final_root"));
+    final String asset =
+        readField(
+            decoder, child -> readAssetDefinitionId(child, "bundle.accumulator.asset"));
+    final byte[] initialRoot =
+        readField(decoder, child -> readFixedBytes(child, 32, "bundle.accumulator.initial_root"));
+    final byte[] finalRoot =
+        readField(decoder, child -> readFixedBytes(child, 32, "bundle.accumulator.final_root"));
     requireAccumulatorRoots(initialRoot, finalRoot);
     final List<byte[]> topupAnchorNullifiers =
-        readField(decoder, child -> readFixed32Sequence(child, "bundle.accumulator.topup_anchor_nullifiers"));
+        readField(
+            decoder,
+            child ->
+                readFixed32Sequence(
+                    child,
+                    "bundle.accumulator.topup_anchor_nullifiers",
+                    KAGEMUSHA_FOLD_STEP_MAX_INPUTS));
     final int hopCount =
         readField(
             decoder,
@@ -1412,7 +1467,10 @@ public final class KagemushaRecursiveSpendRequestCodecs {
             + KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1);
     requireAccumulatorCorridor(decoder, hopCount);
     final SpendableNoteDescriptor currentNote =
-        readField(decoder, KagemushaRecursiveSpendRequestCodecs::readSpendableNote);
+        readField(
+            decoder,
+            "Trailing bytes after bundle.accumulator.current_note",
+            child -> readSpendableNote(child, "bundle.accumulator.current_note"));
     requireTopupAnchorNullifiers(topupAnchorNullifiers, currentNote);
     require(decoder.remaining() == 0, "Trailing bytes after accumulator");
     return new AccumulatorSummary(
@@ -1919,6 +1977,9 @@ public final class KagemushaRecursiveSpendRequestCodecs {
 
   private static int readVerifiedFoldStepCount(final NoritoDecoder decoder, final String field) {
     final int count = checkedInt(decoder.readUInt(64), field + " count");
+    require(
+        count <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS,
+        field + " fold step count must not exceed " + KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS);
     for (int index = 0; index < count; index++) {
       final int itemLength = checkedInt(decoder.readLength(compact(decoder)), field + " item length");
       final NoritoDecoder item =
@@ -2015,9 +2076,19 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     require(
         n <= KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_N,
         field + ".n exceeds max 2^" + KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_K);
-    final int gCount = readField(decoder, child -> readFixed32SequenceCount(child, field + ".g"));
+    final int gCount =
+        readField(
+            decoder,
+            child ->
+                readFixed32SequenceCount(
+                    child, field + ".g", n, field + ".g length must equal params.n"));
     require(gCount == n, field + ".g length must equal params.n");
-    final int hCount = readField(decoder, child -> readFixed32SequenceCount(child, field + ".h"));
+    final int hCount =
+        readField(
+            decoder,
+            child ->
+                readFixed32SequenceCount(
+                    child, field + ".h", n, field + ".h length must equal params.n"));
     require(hCount == n, field + ".h length must equal params.n");
     readField(decoder, child -> readFixedBytes(child, 32, field + ".u"));
     require(decoder.remaining() == 0, "Trailing bytes after " + field);
@@ -2040,10 +2111,26 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   private static void readPallasIpaProof(final NoritoDecoder decoder, final int n, final String field) {
     final int version = readField(decoder, child -> checkedInt(child.readUInt(16), field + ".version"));
     require(version == 1, field + ".version must be 1");
-    final int lCount = readField(decoder, child -> readFixed32SequenceCount(child, field + ".l"));
-    final int rCount = readField(decoder, child -> readFixed32SequenceCount(child, field + ".r"));
-    require(lCount == rCount, field + " L/R round count mismatch");
     final int expectedRounds = Integer.numberOfTrailingZeros(n);
+    final int lCount =
+        readField(
+            decoder,
+            child ->
+                readFixed32SequenceCount(
+                    child,
+                    field + ".l",
+                    expectedRounds,
+                    field + " round count mismatch: expected " + expectedRounds + ", found count prefix"));
+    final int rCount =
+        readField(
+            decoder,
+            child ->
+                readFixed32SequenceCount(
+                    child,
+                    field + ".r",
+                    expectedRounds,
+                    field + " round count mismatch: expected " + expectedRounds + ", found count prefix"));
+    require(lCount == rCount, field + " L/R round count mismatch");
     require(
         lCount == expectedRounds,
         field + " round count mismatch: expected " + expectedRounds + ", found " + lCount);
@@ -2053,11 +2140,39 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   }
 
   private static int readFixed32SequenceCount(final NoritoDecoder decoder, final String field) {
-    return readFixed32Sequence(decoder, field).size();
+    return readFixed32SequenceCount(decoder, field, -1, field + " count mismatch");
+  }
+
+  private static int readFixed32SequenceCount(
+      final NoritoDecoder decoder,
+      final String field,
+      final int expectedCount,
+      final String mismatchMessage) {
+    final int count = checkedInt(decoder.readUInt(64), field + " count");
+    if (expectedCount >= 0) {
+      require(count == expectedCount, mismatchMessage);
+    }
+    for (int index = 0; index < count; index++) {
+      final int itemLength = checkedInt(decoder.readLength(compact(decoder)), field + " item length");
+      final NoritoDecoder item =
+          new NoritoDecoder(decoder.readBytes(itemLength), decoder.flags(), decoder.flagsHint());
+      readFixedBytes(item, 32, field + "[" + index + "]");
+      require(item.remaining() == 0, "Trailing bytes after " + field + "[" + index + "]");
+    }
+    require(decoder.remaining() == 0, "Trailing bytes after " + field);
+    return count;
   }
 
   private static List<byte[]> readFixed32Sequence(final NoritoDecoder decoder, final String field) {
+    return readFixed32Sequence(decoder, field, -1);
+  }
+
+  private static List<byte[]> readFixed32Sequence(
+      final NoritoDecoder decoder, final String field, final int maxCount) {
     final int count = checkedInt(decoder.readUInt(64), field + " count");
+    if (maxCount >= 0) {
+      require(count >= 1 && count <= maxCount, field + " count is out of range");
+    }
     final ArrayList<byte[]> values = new ArrayList<>();
     for (int index = 0; index < count; index++) {
       final int itemLength = checkedInt(decoder.readLength(compact(decoder)), field + " item length");
@@ -2192,21 +2307,23 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       final SpendableNoteDescriptor currentNote) {
     require(
         !nullifiers.isEmpty() && nullifiers.size() <= KAGEMUSHA_FOLD_STEP_MAX_INPUTS,
-        "bundle.accumulator.topup_anchor_nullifiers");
+        "bundle.accumulator.topup_anchor_nullifiers count is out of range");
     for (int index = 0; index < nullifiers.size(); index++) {
       final byte[] nullifier = nullifiers.get(index);
-      require(!isZero(nullifier), "bundle.accumulator.topup_anchor_nullifiers");
+      require(
+          !isZero(nullifier),
+          "bundle.accumulator.topup_anchor_nullifiers must not contain zero values");
       if (index > 0) {
         require(
             compareUnsigned(nullifiers.get(index - 1), nullifier) < 0,
-            "bundle.accumulator.topup_anchor_nullifiers");
+            "bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique");
       }
     }
     for (final byte[] nullifier : nullifiers) {
       require(
           !Arrays.equals(nullifier, currentNote.noteCommitment())
               && !Arrays.equals(nullifier, currentNote.spendNullifier()),
-          "bundle.accumulator.topup_anchor_nullifiers");
+          "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material");
     }
   }
 
@@ -2255,11 +2372,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         }) {
       requireNonzeroAccumulatorField(decoder, field);
     }
-    final int verifierOpeningLen =
-        readField(
-            decoder,
-            "bundle.accumulator.verifier_opening_len",
-            child -> checkedInt(child.readUInt(32), "verifier_opening_len"));
+    final int verifierOpeningLen = readAccumulatorVerifierOpeningLen(decoder);
     require(
         verifierOpeningLen == 2
             || verifierOpeningLen == 4
@@ -2271,8 +2384,22 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         "bundle.accumulator.verifier_opening_len");
   }
 
+  private static int readAccumulatorVerifierOpeningLen(final NoritoDecoder decoder) {
+    try {
+      return readField(
+          decoder,
+          "bundle.accumulator.verifier_opening_len",
+          child -> checkedInt(child.readUInt(32), "verifier_opening_len"));
+    } catch (final IllegalArgumentException error) {
+      if ("Unexpected end of data".equals(error.getMessage())) {
+        throw new IllegalArgumentException("bundle.accumulator.verifier_opening_len", error);
+      }
+      throw error;
+    }
+  }
+
   private static byte[] readAccumulatorFixed32(final NoritoDecoder decoder, final String field) {
-    return readField(decoder, child -> readFixedBytes(child, 32, field));
+    return readField(decoder, child -> readFixedBytes(child, 32, "bundle.accumulator." + field));
   }
 
   private static byte[] requireNonzeroAccumulatorField(
@@ -2309,6 +2436,13 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   private static void writeBytesVec(final NoritoEncoder encoder, final byte[] value) {
     encoder.writeUInt(value.length, 64);
     encoder.writeBytes(value);
+  }
+
+  private static void writeRawVec(final NoritoEncoder encoder, final List<byte[]> payloads) {
+    encoder.writeUInt(payloads.size(), 64);
+    for (final byte[] payload : payloads) {
+      writeRawField(encoder, payload);
+    }
   }
 
   private static void writeConstVec(final NoritoEncoder encoder, final byte[] value) {
@@ -2558,26 +2692,39 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     return bytes;
   }
 
-  private static SpendableNoteDescriptor readSpendableNote(final NoritoDecoder decoder) {
+  private static SpendableNoteDescriptor readSpendableNote(
+      final NoritoDecoder decoder, final String field) {
     return new SpendableNoteDescriptor(
-        readField(decoder, child -> readFixedBytes(child, 32, "note_commitment")),
-        readField(decoder, child -> readFixedBytes(child, 32, "spend_nullifier")),
-        readField(decoder, KagemushaRecursiveSpendRequestCodecs::readNumeric));
+        readField(decoder, child -> readFixedBytes(child, 32, field + ".note_commitment")),
+        readField(decoder, child -> readFixedBytes(child, 32, field + ".spend_nullifier")),
+        readField(
+            decoder,
+            "Trailing bytes after " + field + ".amount",
+            child -> readNumeric(child, field + ".amount")));
   }
 
   private static String readNumeric(final NoritoDecoder decoder) {
+    return readNumeric(decoder, "amount");
+  }
+
+  private static String readNumeric(final NoritoDecoder decoder, final String field) {
     final byte[] mantissaBytes =
         readField(
             decoder,
+            "Trailing bytes after " + field + ".mantissa",
             payload -> {
               final int length = checkedInt(payload.readUInt(32), "numeric mantissa length");
               return payload.readBytes(length);
             });
-    final int scale = readField(decoder, child -> checkedInt(child.readUInt(32), "numeric scale"));
-    require(scale == 0, "numeric scale must be zero");
+    final int scale =
+        readField(
+            decoder,
+            "Trailing bytes after " + field + ".scale",
+            child -> checkedInt(child.readUInt(32), "numeric scale"));
+    require(scale == 0, field + " numeric scale must be zero");
     final BigInteger value = bigIntegerFromLittleEndianTwosComplement(mantissaBytes);
-    require(value.compareTo(BigInteger.ZERO) > 0, "numeric amount must be greater than zero");
-    require(value.compareTo(MAX_U128) <= 0, "numeric amount must fit in u128");
+    require(value.compareTo(BigInteger.ZERO) > 0, field + " numeric amount must be greater than zero");
+    require(value.compareTo(MAX_U128) <= 0, field + " numeric amount must fit in u128");
     return value.toString();
   }
 
@@ -2607,8 +2754,8 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     }
   }
 
-  private static String readAssetDefinitionId(final NoritoDecoder decoder) {
-    final byte[] bytes = readFixedBytes(decoder, 16, "asset");
+  private static String readAssetDefinitionId(final NoritoDecoder decoder, final String field) {
+    final byte[] bytes = readFixedBytes(decoder, 16, field);
     try {
       return AssetDefinitionIdEncoder.encodeFromBytes(bytes);
     } catch (final IllegalArgumentException ignored) {
@@ -2844,6 +2991,17 @@ public final class KagemushaRecursiveSpendRequestCodecs {
 
   private static byte[] copyNullable(final byte[] value) {
     return value == null ? null : Arrays.copyOf(value, value.length);
+  }
+
+  private static List<byte[]> compactVerifierRecordPayloads(
+      final List<VerifierRecordRef> records, final String field) {
+    final List<byte[]> payloads = new ArrayList<>();
+    for (final VerifierRecordRef record : records) {
+      payloads.add(
+          compactPayloadForRequest(
+              Objects.requireNonNull(record, field).recordBytes(), SCHEMA_VERIFYING_KEY_RECORD, field));
+    }
+    return payloads;
   }
 
   private static String toHex(final byte[] bytes) {

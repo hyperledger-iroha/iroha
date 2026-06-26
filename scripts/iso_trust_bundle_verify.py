@@ -76,6 +76,17 @@ PLACEHOLDER_TRUST_SOURCE_HOSTS = {
     "operator-canary.bank",
     "example.org",
 }
+CLI_CANONICAL_POSITIVE_INT_RE = re.compile(r"(?:0|[1-9][0-9]*)")
+JSON_CANONICAL_INT_RE = re.compile(r"(?:0|-?[1-9][0-9]*)")
+CLI_CANONICAL_NUMBER_RE = re.compile(
+    r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?"
+)
+CANONICAL_TIMESTAMP_RE = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+    r"[0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\.[0-9]{1,6})?"
+    r"(?:Z|[+-][0-9]{2}:[0-9]{2})"
+)
 SECRET_VALUE_PATTERNS = [
     re.compile(r"\bauthorization\s*:", re.IGNORECASE),
     re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
@@ -276,10 +287,40 @@ def sha256_hex(data: bytes) -> str:
 def _canonical_json_bytes(value: Any) -> bytes:
     return json.dumps(
         value,
+        allow_nan=False,
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
+
+
+def _safe_os_error_detail(error: OSError) -> str:
+    detail = getattr(error, "strerror", None)
+    if not isinstance(detail, str) or not detail.strip():
+        return "I/O error"
+    if len(detail) > 128 or not detail.isascii() or _has_unsafe_control(detail):
+        return "I/O error"
+    lowered = detail.casefold()
+    secret_markers = (
+        "authorization",
+        "bearer",
+        "token",
+        "secret",
+        "private",
+        "password",
+        "passphrase",
+        "api key",
+        "access key",
+        "session key",
+        "client secret",
+        "cookie",
+        "x-iroha-signature",
+    )
+    if "\\" in detail or "/" in detail or "file:" in lowered:
+        return "I/O error"
+    if any(marker in lowered for marker in secret_markers):
+        return "I/O error"
+    return detail
 
 
 def _read_regular_file(
@@ -326,7 +367,8 @@ def _read_regular_file(
     except OSError as error:
         if error.errno == errno.ELOOP:
             raise TrustBundleError(f"{label} must not be a symlink") from error
-        raise TrustBundleError(f"cannot open {label} for reading: {error.strerror}") from error
+        detail = _safe_os_error_detail(error)
+        raise TrustBundleError(f"cannot open {label} for reading: {detail}") from error
     finally:
         if fd >= 0:
             os.close(fd)
@@ -444,6 +486,8 @@ def _reject_raw_positive_int_cli_value(raw: str, flag: str) -> None:
         raise TrustBundleError(f"{flag} must be a positive integer")
     if any(ord(ch) > 0x7E for ch in raw):
         raise TrustBundleError(f"{flag} must use printable ASCII")
+    if CLI_CANONICAL_POSITIVE_INT_RE.fullmatch(raw) is None:
+        raise TrustBundleError(f"{flag} must be a positive integer")
     try:
         value = int(raw, 10)
     except ValueError as error:
@@ -640,8 +684,9 @@ def _write_text_output(path: Path, text: str, *, display_label: str | None = Non
         except OSError as error:
             if error.errno == errno.ELOOP:
                 raise TrustBundleError(f"{label} temp file must not be a symlink") from error
+            detail = _safe_os_error_detail(error)
             raise TrustBundleError(
-                f"cannot open temporary output for {label}: {error.strerror}"
+                f"cannot open temporary output for {label}: {detail}"
             ) from error
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
@@ -705,10 +750,12 @@ def _load_json(path: Path, *, display_label: str | None = None) -> Any:
         value = json.loads(
             text,
             object_pairs_hook=_reject_duplicate_json_keys,
+            parse_int=_parse_canonical_json_int,
+            parse_float=_parse_canonical_json_float,
             parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
-        raise TrustBundleError(f"{label} is not valid JSON: {error}") from error
+        raise TrustBundleError(f"{label} is not valid JSON") from error
     except RecursionError as error:
         raise TrustBundleError(
             f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
@@ -734,6 +781,23 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def _reject_json_constant(value: str) -> None:
     raise TrustBundleError("JSON contains non-finite numeric constant")
+
+
+def _parse_canonical_json_int(value: str) -> int:
+    if JSON_CANONICAL_INT_RE.fullmatch(value) is None:
+        raise TrustBundleError("JSON contains non-canonical numeric value")
+    return int(value, 10)
+
+
+def _parse_canonical_json_float(value: str) -> float:
+    if CLI_CANONICAL_NUMBER_RE.fullmatch(value) is None:
+        raise TrustBundleError("JSON contains non-canonical numeric value")
+    parsed = float(value)
+    if parsed == float("inf") or parsed == float("-inf"):
+        raise TrustBundleError("JSON contains non-finite numeric constant")
+    if parsed == 0.0 and value.startswith("-"):
+        raise TrustBundleError("JSON contains non-canonical numeric value")
+    return parsed
 
 
 def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
@@ -1498,6 +1562,8 @@ def _parse_timestamp(value: str, label: str) -> dt.datetime:
         raise TrustBundleError(f"{label} must be an ISO 8601 timestamp with timezone") from error
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise TrustBundleError(f"{label} must include a timezone")
+    if CANONICAL_TIMESTAMP_RE.fullmatch(value) is None or value.endswith("-00:00"):
+        raise TrustBundleError(f"{label} must use a canonical ISO 8601 timestamp")
     parsed_utc = parsed.astimezone(dt.UTC)
     now = dt.datetime.now(dt.UTC)
     if parsed_utc > now + dt.timedelta(minutes=5):
@@ -2189,7 +2255,9 @@ def run(args: argparse.Namespace) -> int:
         profile_config = [
             summary["profile_overrides"] for summary in canonical_summaries
         ]
-        profile_text = json.dumps(profile_config, indent=2, sort_keys=True) + "\n"
+        profile_text = (
+            json.dumps(profile_config, allow_nan=False, indent=2, sort_keys=True) + "\n"
+        )
         profile_json_sha256 = sha256_hex(profile_text.encode("utf-8"))
     output: dict[str, Any] = {
         "version": TRUST_SUMMARY_VERSION,
@@ -2205,7 +2273,7 @@ def run(args: argparse.Namespace) -> int:
         "bundles": public_summaries,
     }
     output[SUMMARY_DIGEST_FIELD] = sha256_hex(_canonical_json_bytes(output))
-    text = json.dumps(output, indent=2, sort_keys=True) + "\n"
+    text = json.dumps(output, allow_nan=False, indent=2, sort_keys=True) + "\n"
     if profile_text is not None:
         _write_text_output(
             args.emit_profile_json,

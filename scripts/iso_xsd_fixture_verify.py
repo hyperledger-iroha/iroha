@@ -66,6 +66,29 @@ ISO_SUBMITTING_ORGANISATION_PART_RE = re.compile(
 )
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}$")
+CLI_CANONICAL_INT_RE = re.compile(r"(?:0|-?[1-9][0-9]*)")
+JSON_CANONICAL_INT_RE = re.compile(r"(?:0|-?[1-9][0-9]*)")
+CLI_CANONICAL_NUMBER_RE = re.compile(
+    r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?"
+)
+CLI_NONFINITE_NUMBER_TEXTS = {
+    "inf",
+    "+inf",
+    "-inf",
+    "infinity",
+    "+infinity",
+    "-infinity",
+    "nan",
+    "+nan",
+    "-nan",
+}
+
+
+def _is_negative_zero_number_text(value: str) -> bool:
+    if not value.startswith("-"):
+        return False
+    mantissa = re.split(r"[eE]", value[1:], maxsplit=1)[0]
+    return all(ch in {"0", "."} for ch in mantissa)
 PROFILE_CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
 SOURCE_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 SOURCE_REPOSITORY_RE = re.compile(
@@ -442,10 +465,40 @@ def sha256_hex(data: bytes) -> str:
 def _canonical_json_bytes(value: Any) -> bytes:
     return json.dumps(
         value,
+        allow_nan=False,
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
+
+
+def _safe_os_error_detail(error: OSError) -> str:
+    detail = getattr(error, "strerror", None)
+    if not isinstance(detail, str) or not detail.strip():
+        return "I/O error"
+    if len(detail) > 128 or not detail.isascii() or _contains_control_character(detail):
+        return "I/O error"
+    lowered = detail.casefold()
+    secret_markers = (
+        "authorization",
+        "bearer",
+        "token",
+        "secret",
+        "private",
+        "password",
+        "passphrase",
+        "api key",
+        "access key",
+        "session key",
+        "client secret",
+        "cookie",
+        "x-iroha-signature",
+    )
+    if "\\" in detail or "/" in detail or "file:" in lowered:
+        return "I/O error"
+    if any(marker in lowered for marker in secret_markers):
+        return "I/O error"
+    return detail
 
 
 def _required_cli_bool(value: Any, label: str) -> bool:
@@ -522,7 +575,8 @@ def _read_regular_file(
     except OSError as error:
         if error.errno == errno.ELOOP:
             raise FixtureManifestError(f"{label} must not be a symlink") from error
-        raise FixtureManifestError(f"cannot open {label} for reading: {error.strerror}") from error
+        detail = _safe_os_error_detail(error)
+        raise FixtureManifestError(f"cannot open {label} for reading: {detail}") from error
     finally:
         if fd >= 0:
             os.close(fd)
@@ -707,10 +761,25 @@ def _reject_raw_numeric_cli_value(raw: str, flag: str, *, integer: bool) -> None
         raise FixtureManifestError(f"{flag} must be a numeric value")
     if any(ord(ch) > 0x7E for ch in raw):
         raise FixtureManifestError(f"{flag} must use printable ASCII")
+    if integer:
+        canonical = CLI_CANONICAL_INT_RE.fullmatch(raw) is not None
+    else:
+        canonical = (
+            raw.lower() in CLI_NONFINITE_NUMBER_TEXTS
+            or CLI_CANONICAL_NUMBER_RE.fullmatch(raw) is not None
+        )
+    if not canonical or _is_negative_zero_number_text(raw):
+        raise FixtureManifestError(f"{flag} must be a numeric value")
     try:
-        int(raw, 10) if integer else float(raw)
+        parsed = int(raw, 10) if integer else float(raw)
     except ValueError as error:
         raise FixtureManifestError(f"{flag} must be a numeric value") from error
+    if (
+        not integer
+        and raw.lower() not in CLI_NONFINITE_NUMBER_TEXTS
+        and not math.isfinite(parsed)
+    ):
+        raise FixtureManifestError(f"{flag} must be a numeric value")
 
 
 def _preflight_numeric_cli_values(
@@ -890,8 +959,9 @@ def _write_text_output(path: Path, text: str, *, display_label: str | None = Non
                 raise FixtureManifestError(
                     f"{label} temp file must not be a symlink"
                 ) from error
+            detail = _safe_os_error_detail(error)
             raise FixtureManifestError(
-                f"cannot open temporary output for {label}: {error.strerror}"
+                f"cannot open temporary output for {label}: {detail}"
             ) from error
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
@@ -968,10 +1038,12 @@ def _load_json_bytes(
         value = json.loads(
             text,
             object_pairs_hook=_reject_duplicate_json_keys,
+            parse_int=_parse_canonical_json_int,
+            parse_float=_parse_canonical_json_float,
             parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
-        raise FixtureManifestError(f"{label} is not valid JSON: {error}") from error
+        raise FixtureManifestError(f"{label} is not valid JSON") from error
     except RecursionError as error:
         raise FixtureManifestError(
             f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
@@ -980,12 +1052,25 @@ def _load_json_bytes(
     return value
 
 
+def _pipe_chunk_bytes(chunk: Any) -> bytes:
+    if isinstance(chunk, bytes):
+        return chunk
+    if isinstance(chunk, bytearray):
+        return bytes(chunk)
+    if isinstance(chunk, memoryview):
+        try:
+            return chunk.cast("B").tobytes()
+        except (TypeError, ValueError):
+            raise OSError("xmllint output stream returned invalid bytes") from None
+    raise OSError("xmllint output stream returned non-byte data")
+
+
 def _read_limited_pipe(pipe: Any, limit_bytes: int) -> tuple[bytes, bool]:
     chunks: list[bytes] = []
     remaining = limit_bytes
     truncated = False
     while True:
-        chunk = pipe.read(8192)
+        chunk = _pipe_chunk_bytes(pipe.read(8192))
         if not chunk:
             break
         if remaining > 0:
@@ -1108,6 +1193,23 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def _reject_json_constant(value: str) -> None:
     raise FixtureManifestError("JSON contains non-finite numeric constant")
+
+
+def _parse_canonical_json_int(value: str) -> int:
+    if JSON_CANONICAL_INT_RE.fullmatch(value) is None:
+        raise FixtureManifestError("JSON contains non-canonical numeric value")
+    return int(value, 10)
+
+
+def _parse_canonical_json_float(value: str) -> float:
+    if CLI_CANONICAL_NUMBER_RE.fullmatch(value) is None:
+        raise FixtureManifestError("JSON contains non-canonical numeric value")
+    parsed = float(value)
+    if parsed == float("inf") or parsed == float("-inf"):
+        raise FixtureManifestError("JSON contains non-finite numeric constant")
+    if parsed == 0.0 and value.startswith("-"):
+        raise FixtureManifestError("JSON contains non-canonical numeric value")
+    return parsed
 
 
 def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
@@ -1247,11 +1349,13 @@ def _load_profile_catalog(
         catalog = json.loads(
             catalog_json,
             object_pairs_hook=_reject_duplicate_json_keys,
+            parse_int=_parse_canonical_json_int,
+            parse_float=_parse_canonical_json_float,
             parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
         raise FixtureManifestError(
-            f"{label} DEFAULT_PROFILES_JSON is not valid JSON: {error}"
+            f"{label} DEFAULT_PROFILES_JSON is not valid JSON"
         ) from error
     except RecursionError as error:
         raise FixtureManifestError(
@@ -1302,7 +1406,7 @@ def _parse_xml_bytes(
     try:
         return ET.fromstring(raw)
     except ET.ParseError as error:
-        raise FixtureManifestError(f"{label} is not well-formed XML: {error}") from error
+        raise FixtureManifestError(f"{label} is not well-formed XML") from error
 
 
 def _reject_restricted_schema_terms(
@@ -2914,7 +3018,11 @@ def _xmllint_output_detail(
         return "[xmllint output redacted: control characters]"
     if _contains_non_ascii_material(detail):
         return "[xmllint output redacted: non-ASCII material]"
-    return detail[:4096]
+    return _single_line_diagnostic_detail(detail)[:4096]
+
+
+def _single_line_diagnostic_detail(value: str) -> str:
+    return " ".join(value.split())
 
 
 def _contains_unsafe_diagnostic_control(value: str) -> bool:
@@ -3733,7 +3841,7 @@ def run(args: argparse.Namespace) -> int:
         args.summary_out,
         _summary_material_input_paths(args.manifest, summary),
     )
-    text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
+    text = json.dumps(summary, allow_nan=False, indent=2, sort_keys=True) + "\n"
     if args.summary_out is not None:
         _write_text_output(args.summary_out, text, display_label="summary_out")
     print(text, end="")

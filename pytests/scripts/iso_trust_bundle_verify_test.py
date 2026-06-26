@@ -167,6 +167,37 @@ def run_verify(argv):
 
 
 class IsoTrustBundleVerifyTest(unittest.TestCase):
+    def test_os_error_detail_redacts_unsafe_strerror_without_echo(self):
+        self.assertEqual(
+            VERIFIER._safe_os_error_detail(OSError(5, "Permission denied")),
+            "Permission denied",
+        )
+        unsafe_values = (
+            "token=/tmp/trust-hidden-secret",
+            "open /tmp/trust-hidden-path",
+            "bad\ncontrol",
+            "nonascii-\u2603",
+            "x" * 129,
+        )
+        for value in unsafe_values:
+            with self.subTest(value=value):
+                detail = VERIFIER._safe_os_error_detail(OSError(5, value))
+                self.assertEqual(detail, "I/O error")
+                self.assertNotIn("trust-hidden", detail)
+
+    def test_canonical_json_bytes_rejects_non_finite_numbers(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    VERIFIER._canonical_json_bytes({"value": value})
+
+    def test_json_float_parser_rejects_overflow_and_negative_zero(self):
+        for value in ("1e9999", "-1e9999", "-0.0", "-0e0"):
+            with self.subTest(value=value):
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    VERIFIER._parse_canonical_json_float(value)
+                self.assertNotIn(value, str(caught.exception))
+
     def test_direct_run_policy_flags_must_be_booleans_before_bundle_loading(self):
         cases = (
             ("allow_record_only", "--allow-record-only", "true"),
@@ -1207,6 +1238,8 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertEqual(stdout, "")
                     self.assertIn(expected, stderr)
                     self.assertIn("bundle[0]", stderr)
+                    self.assertNotIn("line 1 column", stderr)
+                    self.assertNotIn("(char ", stderr)
                     self.assertNotIn(str(path), stderr)
                     self.assertNotIn(hidden_dir.name, stderr)
 
@@ -1844,6 +1877,20 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("non-finite numeric constant", stderr)
             self.assertNotIn("NaN", stderr)
+
+    def test_noncanonical_bundle_json_numbers_are_rejected(self):
+        for value in ("1e01", "-0", "-0.0", "-0e0"):
+            with self.subTest(value=value):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    path = Path(raw_root) / "trust-bundle.json"
+                    path.write_text(f'{{"version":{value}}}\n', encoding="utf-8")
+
+                    rc, stdout, stderr = run_verify(["--bundle", str(path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("non-canonical numeric value", stderr)
+                    self.assertNotIn(value, stderr)
 
     def test_bundle_json_surrogate_strings_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -2901,6 +2948,16 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertIn("--max-source-age-days must use printable ASCII", stderr)
             self.assertNotIn(hidden, stderr)
 
+    def test_source_freshness_budget_rejects_noncanonical_decimal_spellings(self):
+        cases = ("0007", "+7", "07", "7.0", "-0")
+        for value in cases:
+            with self.subTest(value=value):
+                rc, stdout, stderr = run_verify(["--max-source-age-days", value])
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn("--max-source-age-days must be a positive integer", stderr)
+
     def test_stale_source_prevents_profile_override_emission(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -3209,6 +3266,11 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
         cases = [
             ("not-a-date", "ISO 8601"),
             ("2026-06-04T00:00:00", "timezone"),
+            ("2026-06-04 00:00:00Z", "canonical ISO 8601 timestamp"),
+            ("2026-06-04t00:00:00+00:00", "canonical ISO 8601 timestamp"),
+            ("2026-06-04T00:00:00+0000", "canonical ISO 8601 timestamp"),
+            ("2026-06-04T00:00:00,000+00:00", "canonical ISO 8601 timestamp"),
+            ("2026-06-04T00:00:00-00:00", "canonical ISO 8601 timestamp"),
             (future, "future"),
             ("2026-06-04T00:00:00Z\nbad", "control characters"),
             ("2026-06-04T00:00:00Z\u202ebad", "control characters"),
@@ -3239,6 +3301,23 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
         self.assertIn("control characters", message)
         self.assertNotIn(hidden, message)
         self.assertNotIn("trust-timestamp-leak", message)
+
+    def test_timestamp_helper_rejects_noncanonical_spellings_without_echo(self):
+        cases = (
+            "2026-06-04 00:00:00Z",
+            "2026-06-04t00:00:00+00:00",
+            "2026-06-04T00:00:00+0000",
+            "2026-06-04T00:00:00,000+00:00",
+            "2026-06-04T00:00:00-00:00",
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    VERIFIER._parse_timestamp(value, "source.retrieved_at")
+
+                message = str(caught.exception)
+                self.assertIn("canonical ISO 8601 timestamp", message)
+                self.assertNotIn(value, message)
 
     def test_overlong_source_retrieved_at_is_rejected_without_echo(self):
         hidden = "2" * (VERIFIER.MAX_TIMESTAMP_CHARS + 1)

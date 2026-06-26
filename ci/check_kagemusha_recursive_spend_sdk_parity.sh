@@ -409,6 +409,7 @@ SOURCE_PATHS = (
     "scripts/kagemusha_android_device_lab_slot.py",
     "scripts/tests/check_android_device_lab_slot_test.py",
     "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+    "IrohaSwift/Sources/IrohaSwift/AccountAddress.swift",
     "IrohaSwift/Sources/IrohaSwift/AssetDefinitionAddress.swift",
     "IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift",
     "IrohaSwift/Sources/IrohaSwift/Crypto.swift",
@@ -495,6 +496,7 @@ SOURCE_PATHS = (
     "IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionEventStreamTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/ConnectTestUtilities.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift",
@@ -965,6 +967,7 @@ SOURCE_PATHS = (
     "javascript/iroha_js/test/connectRetryPolicy.test.js",
     "javascript/iroha_js/test/connectSession.test.js",
     "javascript/iroha_js/test/connectWebSocket.test.js",
+    "javascript/iroha_js/test/crypto.test.js",
     "javascript/iroha_js/test/crypto.browser.test.js",
     "javascript/iroha_js/test/instructionBuilders.test.js",
     "javascript/iroha_js/test/transactionBuilder.test.js",
@@ -1052,6 +1055,12 @@ NON_CSHARP_NATIVE_MATERIAL_README_NEEDLES = (
     "recursive verifier scalar-projection",
     "previous/resulting accumulator aliases are native-owned material",
 )
+NON_CSHARP_REDEEM_LINEAGE_RECORD_README_NEEDLES = (
+    "lineage_verifier_records",
+    "additional Reserved-lineage verifier records",
+    "multi-profile record-backed lineage witnesses",
+    "vector-only callers",
+)
 
 WORKFLOW_PATH = ".github/workflows/pr_kagemusha_payload_bench.yml"
 JS_PARITY_TEST_PATH = "javascript/iroha_js/test/kagemushaFfiContractParity.test.js"
@@ -1110,6 +1119,7 @@ NATIVE_BRIDGE_EMPTY_NESTED_PALLAS_TEST_COMMAND = "cargo test -p connect_norito_b
 NATIVE_BRIDGE_LINEAGE_WITNESS_TEST_COMMAND = "cargo test -p connect_norito_bridge kagemusha_recursive_spend_lineage_witness_ffi_rejects_invalid_inputs_without_output --lib -- --test-threads=1"
 NATIVE_BRIDGE_APPEND_BOUNDARY_TEST_COMMAND = "cargo test -p connect_norito_bridge kagemusha_recursive_spend_lineage_append_boundary_ffi_rejects_semantic_profile_archives --lib -- --test-threads=1"
 JS_HOST_APPEND_BOUNDARY_TEST_COMMAND = "cargo test -p iroha_js_host kagemusha_recursive_spend_lineage_append_boundary_rejects_duplicate_current_outputs --lib -- --test-threads=1"
+JS_HOST_APPEND_BOUNDARY_FORGED_RESULT_TEST_COMMAND = "cargo test -p iroha_js_host kagemusha_recursive_spend_lineage_append_boundary_rejects_forged_result_hashes --lib -- --test-threads=1"
 NATIVE_BRIDGE_OVERSIZED_LENGTH_TEST_COMMAND = "cargo test -p connect_norito_bridge kagemusha_compact_ffi_rejects_oversized_lengths_without_output --lib -- --test-threads=1"
 NATIVE_BRIDGE_UNANCHORED_COMPACT_TEST_COMMAND = "cargo test -p connect_norito_bridge kagemusha_verified_compact_token_ffi_rejects --lib -- --test-threads=1"
 NATIVE_BRIDGE_UNANCHORED_VALID_COMPACT_TEST_COMMAND = "cargo test -p connect_norito_bridge kagemusha_unanchored_compact_token_ffi_rejects_valid_bundle_without_records --lib -- --test-threads=1"
@@ -1119,6 +1129,7 @@ NATIVE_BRIDGE_RECURSIVE_COMPACT_TEST_COMMAND = "RUST_MIN_STACK=67108864 CARGO_PR
 NATIVE_BRIDGE_RECURSIVE_COMPACT_WINDOWED_RECORD_TEST_COMMAND = "cargo test -p connect_norito_bridge kagemusha_recursive_compact_ffi_rejects_windowed_records_before_unavailable --lib -- --test-threads=1"
 PYTHON_SDK_TEST_COMMAND = "ci/check_kagemusha_recursive_spend_python_sdk.sh"
 PYTHON_HOST_APPEND_BOUNDARY_TEST_COMMAND = "cargo test -p iroha_python_rs kagemusha_recursive_spend_lineage_append_boundary_python_rejects_duplicate_current_outputs --lib -- --test-threads=1"
+PYTHON_HOST_APPEND_BOUNDARY_FORGED_RESULT_TEST_COMMAND = "cargo test -p iroha_python_rs kagemusha_recursive_spend_lineage_append_boundary_python_rejects_forged_result_hashes --lib -- --test-threads=1"
 PYTHON_ABI7_FIXTURE_NATIVE_GUARD_COMMAND = "cargo test -p iroha_python_rs kagemusha_recursive_spend_abi7_archive_fixture_matches_python_native_bridge -- --nocapture"
 ABI7_SDK_MANIFEST_COVERAGE = {
     "python/iroha_python/tests/kagemusha_test.py": (
@@ -1215,6 +1226,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-kagemusha-instruction-transaction-builder",
     ),
     (
+        "JVM/Android Kagemusha instruction transaction builder negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-kagemusha-instruction-transaction-builder",
+    ),
+    (
         "JavaScript typed recursive spend note amount vector negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-note-amount-vectors",
     ),
@@ -1245,6 +1260,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "JavaScript/Python native output header negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-python-native-output-headers",
+    ),
+    (
+        "JavaScript confidential v2 derivation exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-confidential-v2-derivation-exactness",
     ),
     (
         "Python Kagemusha instruction transaction builder negative control",
@@ -1367,6 +1386,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-metadata-option-shape",
     ),
     (
+        "non-C# Pallas sequence-count precheck negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-sequence-count-prechecks",
+    ),
+    (
         "JVM/Android Pallas transcript-label byte-limit negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-android-pallas-transcript-label-byte-limit",
     ),
@@ -1419,6 +1442,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-instruction-transaction-surface",
     ),
     (
+        "offline Kagemusha doc redeem lineage-record selection negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-redeem-lineage-selection",
+    ),
+    (
         "SDK proof-chain accumulator public-input negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-proof-chain-accumulator-input",
     ),
@@ -1463,12 +1490,24 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-verify-result-trailing-field-vectors",
     ),
     (
+        "non-C# SDK verify-result redeem alias negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-verify-result-redeem-aliases",
+    ),
+    (
         "SDK verify lineage-record preflight negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-verify-lineage-record-preflight",
     ),
     (
         "SDK lineage-witness trailing-field vector negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-lineage-witness-trailing-field-vectors",
+    ),
+    (
+        "non-C# lineage-witness previous-proof count-prefix negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-lineage-witness-count-prefix-prechecks",
+    ),
+    (
+        "non-C# record-bundle fold-step count-prefix negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-record-bundle-fold-step-count-prechecks",
     ),
     (
         "SDK current-note amount trailing-field vector negative control",
@@ -1859,6 +1898,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-test-workflow",
     ),
     (
+        "native bridge JS host ordering workflow negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-js-host-order-workflow",
+    ),
+    (
         "native bridge windowed-record ordering workflow negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-windowed-record-order-workflow",
     ),
@@ -2049,6 +2092,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Python host test workflow negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-host-test-workflow",
+    ),
+    (
+        "Python host test ordering workflow negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-host-test-order-workflow",
     ),
     (
         "Python SDK dependency workflow negative control",
@@ -2640,7 +2687,13 @@ def first_lines_for_labels(message, labels):
         if label in seen:
             continue
         seen.add(label)
-        detected.append(next(line for line in lines if label in line))
+        line = next((line for line in lines if label in line), None)
+        if line is None and "\n" in label:
+            marker = label.splitlines()[0]
+            line = next((line for line in lines if marker in line), marker)
+        if line is None:
+            line = label
+        detected.append(line)
     return detected
 
 
@@ -2862,6 +2915,12 @@ def check_workflow_runs_native_bridge_tests(errors):
     )
     if job_block is None:
         return
+    js_host_append_boundary_match = workflow_command_match(
+        job_block, JS_HOST_APPEND_BOUNDARY_TEST_COMMAND
+    )
+    js_host_append_boundary_forged_match = workflow_command_match(
+        job_block, JS_HOST_APPEND_BOUNDARY_FORGED_RESULT_TEST_COMMAND
+    )
     require(
         re.search(r"(?m)^\s+runs-on:\s+ubuntu-latest\s*$", job_block) is not None,
         "Kagemusha payload workflow must run native bridge tests on Ubuntu",
@@ -2894,10 +2953,24 @@ def check_workflow_runs_native_bridge_tests(errors):
         errors,
     )
     require(
-        workflow_command_match(job_block, JS_HOST_APPEND_BOUNDARY_TEST_COMMAND) is not None,
+        js_host_append_boundary_match is not None,
         "Kagemusha payload workflow must run the JS host append-boundary duplicate-output test",
         errors,
     )
+    require(
+        js_host_append_boundary_forged_match is not None,
+        "Kagemusha payload workflow must run the JS host append-boundary forged-result test",
+        errors,
+    )
+    if (
+        js_host_append_boundary_match is not None
+        and js_host_append_boundary_forged_match is not None
+    ):
+        require(
+            js_host_append_boundary_match.start() < js_host_append_boundary_forged_match.start(),
+            "Kagemusha payload workflow must run duplicate-output JS host tests before forged-result JS host tests",
+            errors,
+        )
     require(
         workflow_command_match(job_block, NATIVE_BRIDGE_OVERSIZED_LENGTH_TEST_COMMAND) is not None,
         "Kagemusha payload workflow must run the native Kagemusha oversized-length FFI test",
@@ -2969,6 +3042,9 @@ def check_workflow_runs_python_sdk_tests(errors):
     setup_match = re.search(r"(?m)^\s+- uses:\s+actions/setup-python@v5\s*$", job_block)
     version_match = re.search(r'(?m)^\s+python-version:\s+"3\.11"\s*$', job_block)
     host_command_match = workflow_command_match(job_block, PYTHON_HOST_APPEND_BOUNDARY_TEST_COMMAND)
+    host_forged_command_match = workflow_command_match(
+        job_block, PYTHON_HOST_APPEND_BOUNDARY_FORGED_RESULT_TEST_COMMAND
+    )
     command_match = workflow_command_match(job_block, PYTHON_SDK_TEST_COMMAND)
     require(
         re.search(r"(?m)^\s+runs-on:\s+ubuntu-latest\s*$", job_block) is not None,
@@ -3001,6 +3077,11 @@ def check_workflow_runs_python_sdk_tests(errors):
         errors,
     )
     require(
+        host_forged_command_match is not None,
+        "Kagemusha payload workflow must run the Python PyO3 append-boundary forged-result host test",
+        errors,
+    )
+    require(
         command_match is not None,
         "Kagemusha payload workflow must run the Python recursive spend SDK tests",
         errors,
@@ -3011,9 +3092,27 @@ def check_workflow_runs_python_sdk_tests(errors):
             "Kagemusha payload workflow must set up Python before running PyO3 host tests",
             errors,
         )
+    if setup_match is not None and host_forged_command_match is not None:
+        require(
+            setup_match.start() < host_forged_command_match.start(),
+            "Kagemusha payload workflow must set up Python before running PyO3 host tests",
+            errors,
+        )
+    if host_command_match is not None and host_forged_command_match is not None:
+        require(
+            host_command_match.start() < host_forged_command_match.start(),
+            "Kagemusha payload workflow must run duplicate-output PyO3 host tests before forged-result PyO3 host tests",
+            errors,
+        )
     if host_command_match is not None and command_match is not None:
         require(
             host_command_match.start() < command_match.start(),
+            "Kagemusha payload workflow must run PyO3 host tests before package-level Python SDK tests",
+            errors,
+        )
+    if host_forged_command_match is not None and command_match is not None:
+        require(
+            host_forged_command_match.start() < command_match.start(),
             "Kagemusha payload workflow must run PyO3 host tests before package-level Python SDK tests",
             errors,
         )
@@ -5244,6 +5343,19 @@ def check_recursive_compact_surface(texts, errors):
         "Kotlin typed recursive spend note amount test vectors",
         errors,
     )
+    kotlin_amount_tests = texts[
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt"
+    ]
+    require(
+        "assertEquals(amountMessage, invalidAmount.message)" in kotlin_amount_tests,
+        "Kotlin typed recursive spend note amount test vectors missing invalidAmount.message exact assertion",
+        errors,
+    )
+    require(
+        "assertEquals(publicAmountMessage, invalidPublicAmount.message)" in kotlin_amount_tests,
+        "Kotlin typed recursive spend public amount test vectors missing invalidPublicAmount.message exact assertion",
+        errors,
+    )
     require_block_contains(
         texts,
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
@@ -5312,6 +5424,8 @@ def check_recursive_compact_surface(texts, errors):
             "val missingLineageVerifierRecord = assertFailsWith<IllegalArgumentException>",
             "lineageVerifierRecord is required for reserved-lineage bundles",
             "sharedRecursiveSpendArchive(FixtureAbi.ABI6, \"init_bundle\")",
+            "val reservedMissingRecordMasksMalformedWitness = byteArrayOf(0)",
+            "val missingLineageVerifierRecordBeforeWitness = assertFailsWith<IllegalArgumentException>",
             "val semanticLineageRecordWithoutWitness = assertFailsWith<IllegalArgumentException>",
             "lineageVerifierRecord is only valid for reserved-lineage bundles or lineage witnesses",
             "lineageVerifierRecord = sampleVerifierRecord()",
@@ -5320,7 +5434,8 @@ def check_recursive_compact_surface(texts, errors):
             'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result")',
             "val semanticInitWitnessWithRecord = assertFailsWith<IllegalArgumentException>",
             'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_from_init_result")',
-            "reserved lineage witness malformed",
+            "val reservedMalformedLineageWitness = assertFailsWith<IllegalArgumentException>",
+            'assertEquals("Unexpected end of data", reservedMalformedLineageWitness.message)',
             "SCHEMA_LINEAGE_WITNESS",
         ),
         "Kotlin typed recursive spend redeem lineage preflight tests",
@@ -5481,6 +5596,39 @@ def check_recursive_compact_surface(texts, errors):
         "Android Java typed recursive spend note amount test vectors",
         errors,
     )
+    java_amount_tests = texts[
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java"
+    ]
+    require(
+        "(String) invalidAmount[1]" in java_amount_tests,
+        "Android Java typed recursive spend note amount test vectors missing exact invalidAmount[1] diagnostic",
+        errors,
+    )
+    require(
+        "(String) invalidAmount[2]" in java_amount_tests,
+        "Android Java typed recursive spend public amount test vectors missing exact invalidAmount[2] diagnostic",
+        errors,
+    )
+    require(
+        (
+            '          {"340282366920938463463374607431768211456",\n'
+            '              "amount must fit in u128",\n'
+            '              "publicAmount must fit in u128"},\n'
+        )
+        in java_amount_tests,
+        'Android Java typed recursive spend note amount test vectors missing {"340282366920938463463374607431768211456", "amount must fit in u128", "publicAmount must fit in u128"}',
+        errors,
+    )
+    require(
+        (
+            '          {"9999999999999999999999999999999999999999",\n'
+            '              "amount must fit in u128",\n'
+            '              "publicAmount must fit in u128"}\n'
+        )
+        in java_amount_tests,
+        'Android Java typed recursive spend note amount test vectors missing {"9999999999999999999999999999999999999999", "amount must fit in u128", "publicAmount must fit in u128"}',
+        errors,
+    )
     require_block_contains(
         texts,
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
@@ -5505,6 +5653,26 @@ def check_recursive_compact_surface(texts, errors):
             "(String) invalidAmount[2]",
         ),
         "Android Java typed recursive spend public amount test vectors",
+        errors,
+    )
+    require(
+        (
+            '          {"340282366920938463463374607431768211456",\n'
+            '              "amount must fit in u128",\n'
+            '              "publicAmount must fit in u128"},\n'
+        )
+        in java_amount_tests,
+        'Android Java typed recursive spend public amount test vectors missing {"340282366920938463463374607431768211456", "amount must fit in u128", "publicAmount must fit in u128"}',
+        errors,
+    )
+    require(
+        (
+            '          {"9999999999999999999999999999999999999999",\n'
+            '              "amount must fit in u128",\n'
+            '              "publicAmount must fit in u128"}\n'
+        )
+        in java_amount_tests,
+        'Android Java typed recursive spend public amount test vectors missing {"9999999999999999999999999999999999999999", "amount must fit in u128", "publicAmount must fit in u128"}',
         errors,
     )
     require_block_contains(
@@ -5547,11 +5715,13 @@ def check_recursive_compact_surface(texts, errors):
             "sharedRecursiveSpendArchive(FixtureAbi.ABI7, \"append_bundle\")",
             "lineageVerifierRecord is required for reserved-lineage bundles",
             "sharedRecursiveSpendArchive(FixtureAbi.ABI6, \"init_bundle\")",
+            "final byte[] reservedMissingRecordMasksMalformedWitness = new byte[] {0};",
             "lineageVerifierRecord is only valid for reserved-lineage bundles or lineage witnesses",
             "lineageVerifierRecord is required for lineage witnesses with reserved-lineage previous proofs",
             "sharedRecursiveSpendArchive(FixtureAbi.ABI6, \"lineage_witness_append_result\")",
             "sharedRecursiveSpendArchive(FixtureAbi.ABI6, \"lineage_witness_from_init_result\")",
             "syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS),\n                sampleVerifierRecord(),",
+            '"Unexpected end of data"',
             "sampleVerifierRecord()",
         ),
         "Android Java typed recursive spend redeem lineage preflight tests",
@@ -5572,7 +5742,7 @@ def check_recursive_compact_surface(texts, errors):
     require_block_contains(
         texts,
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
-        '    assertThrows(\n        "lineageVerifierRecord is required for reserved-lineage bundles",',
+        "    final SampleLineageArtifacts initLineageArtifacts = sampleInitLineageArtifacts((byte) 0x6a);",
         "    final byte[] corruptedPallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive();",
         (
             "new KagemushaRecursiveSpendRequestCodecs.VerifySpendRequest(",
@@ -5580,22 +5750,6 @@ def check_recursive_compact_surface(texts, errors):
             "lineageVerifierRecord is only valid for reserved-lineage bundles",
             "sharedRecursiveSpendArchive(FixtureAbi.ABI6, \"init_bundle\")",
             "sharedRecursiveSpendArchive(FixtureAbi.ABI7, \"append_bundle\")",
-        ),
-        "Android Java typed recursive spend verify lineage-record preflight tests",
-        errors,
-    )
-    require_contains(
-        texts,
-        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
-        (
-            "assertThrows(\n"
-            "        \"lineageVerifierRecord is required for reserved-lineage bundles\",\n"
-            "        () ->\n"
-            "            new KagemushaRecursiveSpendRequestCodecs.VerifySpendRequest(",
-            "assertThrows(\n"
-            "        \"lineageVerifierRecord is only valid for reserved-lineage bundles\",\n"
-            "        () ->\n"
-            "            new KagemushaRecursiveSpendRequestCodecs.VerifySpendRequest(",
         ),
         "Android Java typed recursive spend verify lineage-record preflight tests",
         errors,
@@ -6839,6 +6993,7 @@ def check_mobile_confidential_note_coverage(texts, errors):
         "vkRef must be halo2-ipa-pasta:confidential_transfer_v2",
         "vkRef must be halo2-ipa-pasta:confidential_unshield_v3",
         "proof must not be empty",
+        "proof must not exceed 33554432 bytes",
         "confidential transfer witness must include one or two transferOutputs",
         "confidential unshield witness must not include transferOutputs",
         "inputs[1].leafIndex duplicates inputs[0]",
@@ -7041,14 +7196,17 @@ def check_mobile_confidential_note_coverage(texts, errors):
                 "CONFIDENTIAL_TREE_CAPACITY_V2",
                 "CONFIDENTIAL_MAX_TRANSFER_OUTPUTS_V2",
                 "CONFIDENTIAL_MAX_UNSHIELD_CHANGE_OUTPUTS_V3",
+                "CONFIDENTIAL_PROOF_MAX_BYTES",
                 "TRANSFER_PUBLIC_INPUTS_SCHEMA",
                 "UNSHIELD_PUBLIC_INPUTS_SCHEMA",
                 "buildConfidentialTransferProofRequestV1",
                 "buildConfidentialUnshieldProofRequestV1",
+                "copyNonEmptyProof(proof)",
                 "encodeTransferWitness",
                 "encodeUnshieldWitness",
                 "treeCommitments must not be empty",
                 "treeCommitments must not exceed",
+                "proof must not exceed",
                 "publicAmount",
                 "unshieldChange",
                 "leafIndex must reference treeCommitments",
@@ -7059,6 +7217,46 @@ def check_mobile_confidential_note_coverage(texts, errors):
             label,
             errors,
         )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
+        (
+            "fun privacyProofRequestV1(",
+            "privacyRequestTextBytes(algorithmId, \"algorithmId\")",
+            "privacyRequestTextBytes(entrypoint, \"entrypoint\")",
+            "privacyRequestTextBytes(vkRef, \"vkRef\")",
+            "privacyRequestComponentBytes(",
+            "\"publicInputs\"",
+            "PRIVACY_REQUEST_PUBLIC_INPUTS_MAX_BYTES",
+            "allowEmpty = false",
+            "\"witness\"",
+            "PRIVACY_REQUEST_WITNESS_MAX_BYTES",
+            "allowEmpty = true",
+            "require(value != null) { \"$name must not be null\" }",
+            "require(allowEmpty || value.isNotEmpty()) { \"$name must not be empty\" }",
+            "require(value.size <= maxBytes) { \"$name must not exceed $maxBytes bytes\" }",
+        ),
+        "Kotlin privacy proof request component validation",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
+        (
+            "public static byte[] privacyProofRequestV1(",
+            "privacyRequestTextBytes(algorithmId, \"algorithmId\")",
+            "privacyRequestTextBytes(entrypoint, \"entrypoint\")",
+            "privacyRequestTextBytes(vkRef, \"vkRef\")",
+            "privacyRequestComponentBytes(",
+            "publicInputs, \"publicInputs\", PRIVACY_REQUEST_PUBLIC_INPUTS_MAX_BYTES, false",
+            "privacyRequestComponentBytes(witness, \"witness\", PRIVACY_REQUEST_WITNESS_MAX_BYTES, true)",
+            "name + \" must not be null\"",
+            "name + \" must not be empty\"",
+            "name + \" must not exceed \" + maxBytes + \" bytes\"",
+        ),
+        "Android Java privacy proof request component validation",
+        errors,
+    )
     for relative, label in (
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
@@ -7105,7 +7303,12 @@ def check_mobile_offline_readiness_coverage(texts, errors):
         "offline_kagemusha_abi7_mode must be a string",
         "offline_kagemusha_recursive_compact_mode must be an exact non-empty string",
         "offline_kagemusha_abi7_bridge_abi_version must be an exact integer string",
+        "offline_kagemusha_abi7_bridge_abi_version must be a positive integer",
+        "offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range",
+        "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact integer string",
         "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an integer",
+        "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer",
+        "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range",
         "offline_kagemusha_recursive_compact_circuit_id must be an exact non-empty string",
         "offline_kagemusha_abi7_circuit_id must be a string",
         "offline_kagemusha_abi7_artifacts must be a boolean",
@@ -7194,6 +7397,8 @@ def check_mobile_offline_readiness_coverage(texts, errors):
                 "readinessAcceptsMatchingAbi7AliasesAndVerboseValues",
                 "offline_kagemusha_abi7_bridge_abi_version",
                 "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+                "+7",
+                "007",
                 "offline_kagemusha_abi7_circuit_id",
                 "offline_kagemusha_recursive_compact_circuit_id",
                 "offline_kagemusha_abi7_artifacts",
@@ -7247,6 +7452,8 @@ def check_mobile_offline_readiness_coverage(texts, errors):
             "rejectsOfflineV2ReadinessMalformedAbi7Aliases",
             "offline_kagemusha_abi7_bridge_abi_version",
             "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+            "+7",
+            "007",
             "offline_kagemusha_abi7_circuit_id",
             "offline_kagemusha_recursive_compact_circuit_id",
             "offline_kagemusha_abi7_artifacts",
@@ -7345,12 +7552,66 @@ def check_kotlin_offline_cash_settlement_coverage(texts, errors):
 def check_offline_cash_issuer_key_exactness(texts, errors):
     common_vectors = (
         "missing_issuer_public_key",
+        "malformed_snapshot",
         '" issuer-key"',
         '"issuer-key "',
         '"issuer key"',
         '"issuer-key\\n"',
         '"issuer-key\\u2603"',
     )
+    for relative, label, required_markers in (
+        (
+            "python/iroha_python/src/iroha_python/offline_cash.py",
+            "Python offline cash ABI exactness guard",
+            (
+                "_positive_native_bridge_abi_version",
+                "required_native_bridge_abi_version",
+            ),
+        ),
+        (
+            "javascript/iroha_js/src/offlineCashLifecycle.js",
+            "JavaScript offline cash ABI exactness guard",
+            (
+                "positiveIntegerOfflineCashSnapshotNumber",
+                "requiredNativeBridgeAbiVersion",
+            ),
+        ),
+        (
+            "javascript/iroha_js/dist/offlineCashLifecycle.js",
+            "JavaScript package offline cash ABI exactness guard",
+            (
+                "positiveIntegerOfflineCashSnapshotNumber",
+                "requiredNativeBridgeAbiVersion",
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycle.kt",
+            "Kotlin offline cash ABI exactness guard",
+            (
+                "positiveNativeBridgeAbiVersion",
+                "requiredNativeBridgeAbiVersion",
+            ),
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycle.java",
+            "Android Java offline cash ABI exactness guard",
+            (
+                "positiveNativeBridgeAbiVersion",
+                "requiredNativeBridgeAbiVersion",
+            ),
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "must be a positive integer",
+                "malformed_snapshot",
+                *required_markers,
+            ),
+            label,
+            errors,
+        )
     for relative, label, extra_vectors in (
         (
             "python/iroha_python/tests/offline_cash_test.py",
@@ -7359,6 +7620,8 @@ def check_offline_cash_issuer_key_exactness(texts, errors):
                 "test_offline_cash_snapshot_requires_cached_issuer_key",
                 'issuer_public_key_base64=" "',
                 "required_native_bridge_abi_version=7",
+                "for native_bridge_abi_version in (0, -1, 7.5, True)",
+                "for required_native_bridge_abi_version in (0, -1, 7.5, True)",
             ),
         ),
         (
@@ -7368,6 +7631,19 @@ def check_offline_cash_issuer_key_exactness(texts, errors):
                 "offline cash configuration snapshot requires cached issuer key and ABI",
                 'issuerPublicKeyBase64: " "',
                 "requiredNativeBridgeAbiVersion: 7",
+                "for (const nativeBridgeAbiVersion of [0, -1, 7.5])",
+                "for (const requiredNativeBridgeAbiVersion of [0, -1, 7.5])",
+            ),
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "JavaScript package offline cash ABI exactness vectors",
+            (
+                "package dist offline cash lifecycle rejects malformed ABI gates",
+                "OfflineCashConfigurationSnapshotError",
+                "assertOfflineCashConfigurationSnapshotUsable",
+                "for (const nativeBridgeAbiVersion of [0, -1, 7.5])",
+                "for (const requiredNativeBridgeAbiVersion of [0, -1, 7.5])",
             ),
         ),
         (
@@ -7377,6 +7653,8 @@ def check_offline_cash_issuer_key_exactness(texts, errors):
                 "configuration snapshot requires cached issuer key",
                 'issuerPublicKeyBase64 = " "',
                 "requiredNativeBridgeAbiVersion = 7",
+                "nativeBridgeAbiVersion = 0",
+                "requiredNativeBridgeAbiVersion = 0",
             ),
         ),
         (
@@ -7384,6 +7662,7 @@ def check_offline_cash_issuer_key_exactness(texts, errors):
             "Android Java offline cash issuer-key exactness vectors",
             (
                 "configurationSnapshotRequiresCanonicalIssuerKey",
+                "configurationSnapshotRejectsMalformedNativeBridgeAbi",
                 "rejectedIssuerKeys",
                 '" "',
             ),
@@ -7396,6 +7675,33 @@ def check_offline_cash_issuer_key_exactness(texts, errors):
             label,
             errors,
         )
+    require_contains(
+        texts,
+        "IrohaSwift/Sources/IrohaSwift/OfflineIssuerPublicKey.swift",
+        (
+            'guard !value.contains("=") else {',
+            "OfflineIssuerPublicKeyError.invalidBase64",
+            "decodeBase64OrBase64URL",
+            'replacingOccurrences(of: "-", with: "+")',
+            'replacingOccurrences(of: "_", with: "/")',
+        ),
+        "Swift offline issuer-key parser exactness guard",
+        errors,
+    )
+    require_contains(
+        texts,
+        "IrohaSwift/Tests/IrohaSwiftTests/OfflineIssuerPublicKeyTests.swift",
+        (
+            "testAcceptsRawEd25519PublicKeysInBase64AndBase64URL",
+            "testRejectsPaddedBase64BeforeDecoding",
+            "paddedBase64URL",
+            "XCTAssertThrowsError(try OfflineIssuerPublicKey(paddedBase64))",
+            "XCTAssertThrowsError(try OfflineIssuerPublicKey(paddedBase64URL))",
+            "XCTAssertFalse(OfflineIssuerPublicKey.isValid(paddedBase64URL))",
+        ),
+        "Swift offline issuer-key parser exactness vectors",
+        errors,
+    )
 
 
 def check_android_offline_transfer_persistence_coverage(texts, errors):
@@ -7613,8 +7919,9 @@ def check_mobile_transaction_norito_runner_coverage(texts, errors):
         texts,
         "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/TransactionPayload.kt",
         (
-            "require(chainId.isNotBlank())",
-            "require(authority.isNotBlank())",
+            "require(chainId.trim().isNotEmpty())",
+            'require(chainId.trim() == chainId) { "chainId must not contain surrounding whitespace" }',
+            'requireCanonicalI105Address(authority, "authority")',
             "require(creationTimeMs >= 0)",
             "require(timeToLiveMs > 0)",
             "require(nonce > 0)",
@@ -7622,6 +7929,20 @@ def check_mobile_transaction_norito_runner_coverage(texts, errors):
             "metadata key must not be blank",
         ),
         "Kotlin transaction payload validation",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/TransactionPayload.java",
+        (
+            "public Builder setChainId(final String chainId)",
+            'this.chainId = normalizeExact(chainId, "chainId")',
+            "private static String normalizeExact(final String value, final String field)",
+            'field + " must not contain surrounding whitespace"',
+            "public Builder setAuthority(final String authority)",
+            'AccountIdLiteral.requireCanonicalI105Address(authority, "authority")',
+        ),
+        "Android Java transaction payload validation",
         errors,
     )
     require_contains(
@@ -7685,6 +8006,11 @@ def check_mobile_transaction_norito_runner_coverage(texts, errors):
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/TransactionPayloadTest.kt",
         (
             "blank chainId throws",
+            "padded chainId throws before payload can be signed",
+            "authority must be exact canonical I105 before payload can be signed",
+            "chainId must not contain surrounding whitespace",
+            "authority must not contain surrounding whitespace",
+            "authority must use canonical I105 encoded account without @domain",
             "negative creationTimeMs throws",
             "zero timeToLiveMs throws",
             "defensive copy on metadata input",
@@ -7692,6 +8018,20 @@ def check_mobile_transaction_norito_runner_coverage(texts, errors):
             "copy validates new values",
         ),
         "Kotlin transaction payload tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderTests.java",
+        (
+            "transactionPayloadRejectsPaddedIdsBeforeSigning",
+            'TransactionPayload.builder().setChainId(" 00000042")',
+            'TransactionPayload.builder().setChainId("00000042 ")',
+            'TransactionPayload.builder().setAuthority(" " + authority)',
+            "chainId must not contain surrounding whitespace",
+            "authority must not contain surrounding whitespace",
+        ),
+        "Android Java transaction payload exact identifier tests",
         errors,
     )
     require_contains(
@@ -8139,6 +8479,101 @@ def check_mobile_account_address_canonical_coverage(texts, errors):
             "gost3410-2012-256-paramset-a",
         ),
         "Android AccountAddress compliance tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/src/iroha_python/address.py",
+        (
+            'def from_algorithm(cls, algorithm: str) -> "CurveId":',
+            "if not isinstance(algorithm, str):",
+            "if not algorithm.strip():",
+            "if algorithm.strip() != algorithm:",
+            "any(ord(ch) < 0x20 or ord(ch) > 0x7E for ch in normalized)",
+            '"ed25519": cls.ED25519',
+            '"ml-dsa": cls.MLDSA',
+            '"gost256a": cls.GOST_256_A',
+        ),
+        "Python AccountAddress signing algorithm selector",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/test_address_format.py",
+        (
+            "test_account_address_rejects_blank_or_padded_signing_algorithm_aliases",
+            "test_account_address_rejects_non_string_signing_algorithm_aliases",
+            "test_account_address_rejects_confusable_signing_algorithm_aliases",
+            '"ed\\t25519"',
+            '"ed\\u200b25519"',
+            '"ml\\uff0ddsa"',
+            '"gost256\\u0430"',
+        ),
+        "Python AccountAddress signing algorithm tests",
+        errors,
+    )
+    for relative, label in (
+        (
+            "javascript/iroha_js/src/curveRegistry.js",
+            "JavaScript source curve registry signing algorithm selector",
+        ),
+        (
+            "javascript/iroha_js/dist/curveRegistry.js",
+            "JavaScript package-dist curve registry signing algorithm selector",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "export function getCurveEntryByAlgorithm(algorithm)",
+                'if (typeof algorithm !== "string") {',
+                'if (algorithm.trim() === "" || algorithm.trim() !== algorithm) {',
+                "if (!/^[\\x20-\\x7e]+$/.test(normalized)) {",
+                "return CURVE_NAME_TO_ENTRY.get(normalized) ?? null;",
+            ),
+            label,
+            errors,
+        )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/address.test.js",
+        (
+            "fromAccount rejects control and Unicode-confusable curve algorithm aliases in src and dist",
+            "DistAccountAddress",
+            '"ed\\t25519"',
+            '"ed\\u200B25519"',
+            '"ml\\uFF0Ddsa"',
+            '"gost256\\u0430"',
+        ),
+        "JavaScript AccountAddress signing algorithm tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "IrohaSwift/Sources/IrohaSwift/AccountAddress.swift",
+        (
+            "static func from(algorithm: String) throws -> CurveId",
+            "let trimmed = algorithm.trimmingCharacters(in: .whitespacesAndNewlines)",
+            "guard !trimmed.isEmpty, trimmed == algorithm else {",
+            "guard normalized.allSatisfy({ scalar in",
+            "guard let ascii = scalar.asciiValue else { return false }",
+            "return ascii >= 0x20 && ascii <= 0x7E",
+        ),
+        "Swift AccountAddress signing algorithm selector",
+        errors,
+    )
+    require_contains(
+        texts,
+        "IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift",
+        (
+            "func testConfusableAlgorithmAliasesRejected()",
+            '"ed\\t25519"',
+            '"ed\\u{200B}25519"',
+            '"ml\\u{FF0D}dsa"',
+            '"gost256\\u{0430}"',
+        ),
+        "Swift AccountAddress signing algorithm tests",
         errors,
     )
     require_contains(
@@ -9756,6 +10191,9 @@ def check_javascript(texts, errors):
                 "function kagemushaAccountIdPayload(",
                 "AccountAddress.parseEncoded(recipient)",
                 "kagemushaCanonicalU128Decimal",
+                "function kagemushaDecodedNumericU128Decimal(value, field)",
+                "numeric amount must be greater than zero",
+                "numeric amount must fit in u128",
                 "kagemushaNormalizeBlockHeight",
                 "Object.is(value, -0)",
                 "must be a canonical unsigned decimal u64",
@@ -9779,6 +10217,11 @@ def check_javascript(texts, errors):
                 "requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend",
                 "requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend",
                 "bundle.accumulator.domain",
+                "bundle.accumulator.asset",
+                "bundle.accumulator.initial_root",
+                "bundle.accumulator.final_root",
+                "bundle.accumulator.topup_anchor_nullifiers",
+                "bundle.accumulator.current_note",
                 "function kagemushaAssetDefinitionFromBytes(bytes)",
                 "function kagemushaIsUuidV4Bytes(bytes)",
                 "function kagemushaEncodeBase58(bytes)",
@@ -9808,12 +10251,22 @@ def check_javascript(texts, errors):
                 "bundle.proof_backend",
                 "bundle.proof_bytes",
                 "bundle.proof_public_inputs",
-                "bundle.proof_public_inputs_hash",
-                "decodeKagemushaRecursiveSpendVerifyResult(",
-                "decodeKagemushaRecursiveSpendBundle(",
-            ),
-            f"{relative} typed recursive spend request codecs",
+            "bundle.proof_public_inputs_hash",
+            "decodeKagemushaRecursiveSpendVerifyResult(",
+            "lineageWitnessRequiredForRedeem: lineageWitnessRequired",
+            "lineage_witness_required_for_redeem: lineageWitnessRequired",
+            "decodeKagemushaRecursiveSpendBundle(",
+        ),
+        f"{relative} typed recursive spend request codecs",
             errors,
+        )
+        require_regex(
+            texts,
+            relative,
+            r"const lineageVerifierRecords = kagemushaNormalizeVerifierRecordRefs\([\s\S]*?lineageVerifierRecords\.length > 0[\s\S]*?const finalIsLineage = isKagemushaRecursiveSpendLineageProofCircuitId\([\s\S]*?let lineageVerifierRecord = null;[\s\S]*?if \(finalIsLineage\) \{[\s\S]*?!redeemLineageVerifierRecordSupplied[\s\S]*?lineageVerifierRecord is required for reserved-lineage bundles[\s\S]*?lineageVerifierRecord = kagemushaNormalizeVerifierRecordRef\([\s\S]*?const lineageWitness =[\s\S]*?let witnessHasReservedPrevious = false[\s\S]*?if \(!finalIsLineage\) \{[\s\S]*?witnessHasReservedPrevious && !redeemLineageVerifierRecordSupplied[\s\S]*?!witnessHasReservedPrevious && redeemLineageVerifierRecordSupplied[\s\S]*?lineageVerifierRecords,",
+            f"{relative} typed recursive spend redeem lineage-record selection before witness parse",
+            errors,
+            flags=re.S,
         )
         require_regex(
             texts,
@@ -10085,6 +10538,8 @@ def check_javascript(texts, errors):
             "readonly previousProofOpenEnvelopes?: BinaryLike | null",
             "readonly lineageKeyArtifacts?: KagemushaRecursiveSpendLineageKeyArtifacts | null;",
             "readonly witnesslessRedeemSupported: boolean",
+            "readonly lineageWitnessRequiredForRedeem: boolean",
+            "readonly lineage_witness_required_for_redeem: boolean",
             "readonly currentNote: KagemushaRecursiveSpendableNoteDescriptor",
             "request: KagemushaRecursiveSpendInitRequestInput",
             "request: KagemushaRecursiveSpendAppendRequestInput",
@@ -10133,6 +10588,8 @@ def check_javascript(texts, errors):
             "/required for lineage witnesses with reserved-lineage previous proofs/",
             'verifierKeyId: "danglingVerifyLineageRecord"',
             'verifierKeyId: "danglingRedeemLineageRecord"',
+            "const reservedMissingRecordMasksMalformedWitness = Buffer.from([0]);",
+            'verifierKeyId: "forgedRedeemLineageRecordBeforeWitness"',
             "recordBytes: Buffer.from([0])",
             'kagemushaRequestCodecError(\n      "archive",\n      "previousLineageVerifierRecord",\n      /valid Norito archive/,\n    )',
             'sharedRecursiveSpendArchive("lineage_witness_append_result")',
@@ -10154,6 +10611,10 @@ def check_javascript(texts, errors):
             'kagemushaRequestCodecError("archive", "bundle.proof_bytes", null)',
             "recursiveSpendBundleWithEmptyProofPublicInputs",
             'kagemushaRequestCodecError("archive", "bundle.proof_public_inputs", null)',
+            "recursiveSpendBundleWithProofPublicInputsHash(replacement)",
+            "kagemushaFixedArrayPayload(0x44, 31)",
+            "kagemushaCountPrefixedFixedArrayPayload(0x44, 32)",
+            "kagemushaFixedArrayPayload(0x44, 33)",
             "recursiveSpendBundleWithZeroProofPublicInputsHash",
             "recursiveSpendBundleWithMismatchedProofPublicInputsHash",
             'kagemushaRequestCodecError("archive", "bundle.proof_public_inputs_hash", null)',
@@ -10219,18 +10680,18 @@ def check_javascript(texts, errors):
         "  const malformedAccumulatorFields = [",
         "  for (const [\n    fieldIndex,",
         (
-            '[2, kagemushaFixedArrayPayload(0x01, 15), "asset", null]',
-            '[2, kagemushaFixedArrayPayload(0x01, 17), "asset", null]',
-            '[2, kagemushaCountPrefixedFixedArrayPayload(0x01, 16), "asset", null]',
+            '[2, kagemushaFixedArrayPayload(0x01, 15), "bundle.accumulator.asset", null]',
+            '[2, kagemushaFixedArrayPayload(0x01, 17), "bundle.accumulator.asset", null]',
+            '[2, kagemushaCountPrefixedFixedArrayPayload(0x01, 16), "bundle.accumulator.asset", null]',
             '[3, Buffer.alloc(32), "bundle.accumulator.initial_root", null]',
             '[4, Buffer.alloc(32), "bundle.accumulator.final_root", null]',
             '[4, initBundle.initialRoot, "bundle.accumulator.final_root", null]',
-            '[3, kagemushaFixedArrayPayload(0x02, 31), "initialRoot", null]',
-            '[3, kagemushaFixedArrayPayload(0x02, 33), "initialRoot", null]',
-            '[3, kagemushaCountPrefixedFixedArrayPayload(0x02, 32), "initialRoot", null]',
-            '[4, kagemushaFixedArrayPayload(0x03, 31), "finalRoot", null]',
-            '[4, kagemushaFixedArrayPayload(0x03, 33), "finalRoot", null]',
-            '[4, kagemushaCountPrefixedFixedArrayPayload(0x03, 32), "finalRoot", null]',
+            '[3, kagemushaFixedArrayPayload(0x02, 31), "bundle.accumulator.initial_root", null]',
+            '[3, kagemushaFixedArrayPayload(0x02, 33), "bundle.accumulator.initial_root", null]',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x02, 32),\n      "bundle.accumulator.initial_root",',
+            '[4, kagemushaFixedArrayPayload(0x03, 31), "bundle.accumulator.final_root", null]',
+            '[4, kagemushaFixedArrayPayload(0x03, 33), "bundle.accumulator.final_root", null]',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x03, 32),\n      "bundle.accumulator.final_root",',
             '[7, Buffer.alloc(32), "bundle.accumulator.lineage_digest", null]',
             '[7, kagemushaFixedArrayPayload(0x07, 31), "bundle.accumulator.lineage_digest", null]',
             '[7, kagemushaFixedArrayPayload(0x07, 33), "bundle.accumulator.lineage_digest", null]',
@@ -10238,26 +10699,71 @@ def check_javascript(texts, errors):
             'Buffer.alloc(32, 0x7d)',
             '"bundle.accumulator.aggregation_transcript_digest"',
             '      Buffer.alloc(32),\n      "bundle.accumulator.aggregation_transcript_digest",',
+            '      kagemushaFixedArrayPayload(0x08, 31),\n      "bundle.accumulator.aggregation_transcript_digest",',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x08, 32),\n      "bundle.accumulator.aggregation_transcript_digest",',
+            '      kagemushaFixedArrayPayload(0x08, 33),\n      "bundle.accumulator.aggregation_transcript_digest",',
             '[9, Buffer.alloc(32), "bundle.accumulator.nullifier_digest", null]',
+            '[9, kagemushaFixedArrayPayload(0x09, 31), "bundle.accumulator.nullifier_digest", null]',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x09, 32),\n      "bundle.accumulator.nullifier_digest",',
+            '[9, kagemushaFixedArrayPayload(0x09, 33), "bundle.accumulator.nullifier_digest", null]',
             '[10, Buffer.alloc(32), "bundle.accumulator.output_commitment_digest", null]',
+            '[10, kagemushaFixedArrayPayload(0x0a, 31), "bundle.accumulator.output_commitment_digest", null]',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x0a, 32),\n      "bundle.accumulator.output_commitment_digest",',
+            '[10, kagemushaFixedArrayPayload(0x0a, 33), "bundle.accumulator.output_commitment_digest", null]',
             '[11, Buffer.alloc(32), "bundle.accumulator.fold_digest", null]',
+            '[11, kagemushaFixedArrayPayload(0x0b, 31), "bundle.accumulator.fold_digest", null]',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x0b, 32),\n      "bundle.accumulator.fold_digest",',
+            '[11, kagemushaFixedArrayPayload(0x0b, 33), "bundle.accumulator.fold_digest", null]',
             '[12, Buffer.alloc(32), "bundle.accumulator.recursive_proof_chain_digest", null]',
+            '      kagemushaFixedArrayPayload(0x0c, 31),\n      "bundle.accumulator.recursive_proof_chain_digest",',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x0c, 32),\n      "bundle.accumulator.recursive_proof_chain_digest",',
+            '      kagemushaFixedArrayPayload(0x0c, 33),\n      "bundle.accumulator.recursive_proof_chain_digest",',
             '[13, Buffer.alloc(32), "bundle.accumulator.transition_profile_binding_digest", null]',
+            '      kagemushaFixedArrayPayload(0x0d, 31),\n      "bundle.accumulator.transition_profile_binding_digest",',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x0d, 32),\n      "bundle.accumulator.transition_profile_binding_digest",',
+            '      kagemushaFixedArrayPayload(0x0d, 33),\n      "bundle.accumulator.transition_profile_binding_digest",',
             '"bundle.accumulator.append_opening_preflight_digest"',
             '      kagemushaFixedArrayPayload(0x0e, 31),\n      "bundle.accumulator.append_opening_preflight_digest",',
             '      kagemushaFixedArrayPayload(0x0e, 33),\n      "bundle.accumulator.append_opening_preflight_digest",',
             '      kagemushaCountPrefixedFixedArrayPayload(0x0e, 32),\n      "bundle.accumulator.append_opening_preflight_digest",',
             '"bundle.accumulator.append_boundary_digest"',
+            '[15, kagemushaFixedArrayPayload(0x0f, 31), "bundle.accumulator.append_boundary_digest", null]',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x0f, 32),\n      "bundle.accumulator.append_boundary_digest",',
+            '[15, kagemushaFixedArrayPayload(0x0f, 33), "bundle.accumulator.append_boundary_digest", null]',
             '[16, Buffer.alloc(32), "bundle.accumulator.verifier_params_fingerprint", null]',
+            '[16, kagemushaFixedArrayPayload(0x10, 31), "bundle.accumulator.verifier_params_fingerprint", null]',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x10, 32),\n      "bundle.accumulator.verifier_params_fingerprint",',
+            '[16, kagemushaFixedArrayPayload(0x10, 33), "bundle.accumulator.verifier_params_fingerprint", null]',
             '      Buffer.alloc(32),\n      "bundle.accumulator.fixed_window_table_schedule_digest",',
+            '      kagemushaFixedArrayPayload(0x11, 31),\n      "bundle.accumulator.fixed_window_table_schedule_digest",',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x11, 32),\n      "bundle.accumulator.fixed_window_table_schedule_digest",',
+            '      kagemushaFixedArrayPayload(0x11, 33),\n      "bundle.accumulator.fixed_window_table_schedule_digest",',
             '      Buffer.alloc(32),\n      "bundle.accumulator.fixed_window_shared_table_manifest_digest",',
+            '      kagemushaFixedArrayPayload(0x12, 31),\n      "bundle.accumulator.fixed_window_shared_table_manifest_digest",',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x12, 32),\n      "bundle.accumulator.fixed_window_shared_table_manifest_digest",',
+            '      kagemushaFixedArrayPayload(0x12, 33),\n      "bundle.accumulator.fixed_window_shared_table_manifest_digest",',
             '[19, Buffer.alloc(32), "bundle.accumulator.fixed_window_table_base_digest", null]',
+            '[19, kagemushaFixedArrayPayload(0x13, 31), "bundle.accumulator.fixed_window_table_base_digest", null]',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x13, 32),\n      "bundle.accumulator.fixed_window_table_base_digest",',
+            '[19, kagemushaFixedArrayPayload(0x13, 33), "bundle.accumulator.fixed_window_table_base_digest", null]',
             '[20, Buffer.alloc(32), "bundle.accumulator.verifier_witness_batch_digest", null]',
             '      kagemushaFixedArrayPayload(0x14, 31),\n      "bundle.accumulator.verifier_witness_batch_digest",',
             '      kagemushaFixedArrayPayload(0x14, 33),\n      "bundle.accumulator.verifier_witness_batch_digest",',
             '      kagemushaCountPrefixedFixedArrayPayload(0x14, 32),\n      "bundle.accumulator.verifier_witness_batch_digest",',
             '[21, kagemushaU32Payload(3), "bundle.accumulator.verifier_opening_len", null]',
             "kagemushaCountPrefixedFixedArrayPayload(0x15, 4)",
+            '[21, Buffer.from([2, 0, 0]), "bundle.accumulator.verifier_opening_len", null]',
+            '[21, Buffer.from([2, 0, 0, 0, 0]), "bundle.accumulator.verifier_opening_len", null]',
+            "const truncatedAccumulatorFieldLabels = [",
+            '[0, "bundle.accumulator.domain"],',
+            '[1, "bundle.accumulator.chain_id"],',
+            '[2, "bundle.accumulator.asset"],',
+            '[3, "bundle.accumulator.initial_root"],',
+            '[4, "bundle.accumulator.final_root"],',
+            "kagemushaNoritoLength(1, TEST_NORITO_COMPACT_LEN_FLAG)",
+            "const expectedMessage =",
+            "payload length mismatch",
+            "payload is truncated",
         ),
         "JavaScript recursive spend bundle accumulator field-length guard tests",
         errors,
@@ -10292,7 +10798,7 @@ def check_javascript(texts, errors):
         (
             'recursiveSpendBundleWithTrailingBundleField()),\n    kagemushaRequestCodecError("archive", "bundle", /bundle has trailing bytes/)',
             'recursiveSpendBundleWithTrailingAccumulatorField()),\n    kagemushaRequestCodecError("archive", "bundle", /accumulator has trailing bytes/)',
-            'recursiveSpendBundleWithTrailingCurrentNoteField()),\n    kagemushaRequestCodecError("archive", "bundle", /currentNote has trailing bytes/)',
+            'recursiveSpendBundleWithTrailingCurrentNoteField()),\n    kagemushaRequestCodecError(\n      "archive",\n      "bundle.accumulator.current_note",\n      /currentNote has trailing bytes/,\n    )',
         ),
         "JavaScript recursive spend bundle summary trailing-field guard tests",
         errors,
@@ -10305,6 +10811,8 @@ def check_javascript(texts, errors):
             "decodeKagemushaRecursiveSpendVerifyResult(\n"
             "        recursiveSpendVerifyResultWithTrailingField(),",
             "/verifyResult has trailing bytes/u",
+            "lineageWitnessRequiredForRedeem",
+            "lineage_witness_required_for_redeem",
         ),
         "JavaScript recursive spend verify-result trailing-field guard tests",
         errors,
@@ -10328,6 +10836,9 @@ def check_javascript(texts, errors):
             "recursiveSpendLineageWitnessWithPreviousProofField(1, Buffer.alloc(0))",
             "recursiveSpendLineageWitnessWithPreviousProofField(2, Buffer.alloc(32))",
             "recursiveSpendLineageWitnessWithPreviousProofField(2, Buffer.alloc(32, 0x44))",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, kagemushaFixedArrayPayload(0x44, 31)),",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, kagemushaCountPrefixedFixedArrayPayload(0x44, 32)),",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, kagemushaFixedArrayPayload(0x44, 33)),",
             'recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg")',
             'recursiveSpendLineageWitnessWithPreviousProofBoxBackendAndEmptyProofBytes("halo2/kzg")',
             "recursiveSpendLineageWitnessWithEmptyPreviousProofBytes()",
@@ -10412,6 +10923,11 @@ def check_javascript(texts, errors):
         (
             "decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithEmptyProofPublicInputs()),\n"
             '    kagemushaRequestCodecError("archive", "bundle.proof_public_inputs", null),',
+            "decodeKagemushaRecursiveSpendBundle(\n"
+            "          recursiveSpendBundleWithProofPublicInputsHash(replacement),",
+            "kagemushaFixedArrayPayload(0x44, 31)",
+            "kagemushaCountPrefixedFixedArrayPayload(0x44, 32)",
+            "kagemushaFixedArrayPayload(0x44, 33)",
             "decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithZeroProofPublicInputsHash()),\n"
             '    kagemushaRequestCodecError("archive", "bundle.proof_public_inputs_hash", null),',
             "decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithMismatchedProofPublicInputsHash()),\n",
@@ -10431,21 +10947,26 @@ def check_javascript(texts, errors):
             "recursiveSpendBundleWithEqualCurrentNoteNullifier()",
             "recursiveSpendBundleWithEqualCurrentNoteNullifier(),",
             "recursiveSpendBundleWithCurrentNoteField(2, kagemushaZeroNumericPayload())",
-            'kagemushaRequestCodecError("field", "amount", null)',
-            '[0, kagemushaFixedArrayPayload(0x04, 31), "archive", "noteCommitment", null]',
-            '[0, kagemushaFixedArrayPayload(0x04, 33), "archive", "noteCommitment", null]',
+            "/numeric amount must be greater than zero/",
+            '[0, kagemushaFixedArrayPayload(0x04, 31), "archive", "bundle.accumulator.current_note.note_commitment", null]',
+            '[0, kagemushaFixedArrayPayload(0x04, 33), "archive", "bundle.accumulator.current_note.note_commitment", null]',
             "kagemushaCountPrefixedFixedArrayPayload(0x04, 32)",
-            '[1, kagemushaFixedArrayPayload(0x05, 31), "archive", "spendNullifier", null]',
-            '[1, kagemushaFixedArrayPayload(0x05, 33), "archive", "spendNullifier", null]',
+            '[1, kagemushaFixedArrayPayload(0x05, 31), "archive", "bundle.accumulator.current_note.spend_nullifier", null]',
+            '[1, kagemushaFixedArrayPayload(0x05, 33), "archive", "bundle.accumulator.current_note.spend_nullifier", null]',
             "kagemushaCountPrefixedFixedArrayPayload(0x05, 32)",
-            '[2, kagemushaNumericPayload(Buffer.from([1]), 1), "field", "amount", /numeric scale/]',
+            "kagemushaNumericPayload(Buffer.from([1]), 1)",
             "kagemushaNumericPayloadWithScalePayload(",
             "kagemushaCountPrefixedFixedArrayPayload(0x16, 4)",
             "kagemushaNumericPayloadWithMantissaPayload(Buffer.from([2, 0, 0, 0, 1]))",
             "kagemushaNumericPayload(Buffer.from([0xff]))",
             "kagemushaNumericPayload(Buffer.concat([Buffer.alloc(16), Buffer.from([1])])),",
-            '"field",\n      "amount",\n      /fit in u128/',
-            '[2, kagemushaNumericPayloadWithTrailingField(), "archive", "amount", null]',
+            '"bundle.accumulator.current_note.amount"',
+            '"field",\n      "bundle.accumulator.current_note.amount",\n      /numeric amount must be greater than zero/',
+            '"field",\n      "bundle.accumulator.current_note.amount",\n      /fit in u128/',
+            "      kagemushaNumericPayloadWithTrailingField(),\n"
+            "      \"archive\",\n"
+            "      \"bundle.accumulator.current_note.amount\",\n"
+            "      null,",
             'kagemushaRequestCodecError(expectedKind, expectedField, expectedMessage)',
         ),
         "JavaScript recursive spend bundle current-note guard tests",
@@ -10455,14 +10976,19 @@ def check_javascript(texts, errors):
         texts,
         "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
         (
-            '[2, kagemushaNumericPayload(Buffer.from([1]), 1), "field", "amount", /numeric scale/]',
+            "kagemushaNumericPayload(Buffer.from([1]), 1)",
             "kagemushaNumericPayloadWithScalePayload(",
             "kagemushaCountPrefixedFixedArrayPayload(0x16, 4)",
             "kagemushaNumericPayloadWithMantissaPayload(Buffer.from([2, 0, 0, 0, 1]))",
             "kagemushaNumericPayload(Buffer.from([0xff]))",
             "kagemushaNumericPayload(Buffer.concat([Buffer.alloc(16), Buffer.from([1])]))",
-            '"field",\n      "amount",\n      /fit in u128/',
-            '[2, kagemushaNumericPayloadWithTrailingField(), "archive", "amount", null]',
+            '"bundle.accumulator.current_note.amount"',
+            '"field",\n      "bundle.accumulator.current_note.amount",\n      /numeric amount must be greater than zero/',
+            '"field",\n      "bundle.accumulator.current_note.amount",\n      /fit in u128/',
+            "      kagemushaNumericPayloadWithTrailingField(),\n"
+            "      \"archive\",\n"
+            "      \"bundle.accumulator.current_note.amount\",\n"
+            "      null,",
         ),
         "JavaScript recursive spend bundle current-note amount encoding guard tests",
         errors,
@@ -10579,6 +11105,8 @@ def check_javascript(texts, errors):
             'kagemushaRequestCodecError("archive", "lineageWitness", /truncated/)',
             'kagemushaRequestCodecError(\n      "field",\n      "lineageVerifierRecord",\n      /required for reserved-lineage bundles/,\n    )',
             'verifierKeyId: "danglingRedeemLineageRecord"',
+            "const reservedMissingRecordMasksMalformedWitness = Buffer.from([0]);",
+            'verifierKeyId: "forgedRedeemLineageRecordBeforeWitness"',
             "recordBytes: Buffer.from([0])",
             'bundle: sharedRecursiveSpendArchive("init_bundle")',
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME",
@@ -11021,11 +11549,20 @@ def check_javascript(texts, errors):
             "Buffer.alloc(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f)",
             "[Buffer.from([0x01]), /returned invalid Norito archive/]",
             "[privacyNoritoFrame(0x36), /returned empty Norito payload/]",
+            "() => kagemushaRecursiveSpendInit(request)",
+            "() => kagemushaRecursiveSpendAppend(request)",
             '"kagemushaRecursiveSpendTransitionProfileInit"',
+            "() => kagemushaRecursiveSpendTransitionProfileInit(request)",
             '"kagemushaRecursiveSpendTransitionProfileAppend"',
+            "() => kagemushaRecursiveSpendTransitionProfileAppend(request)",
             '"kagemushaRecursiveSpendLineageAppendBoundary"',
+            "() => kagemushaRecursiveSpendLineageAppendBoundary(request)",
             '"kagemushaRecursiveSpendLineageWitnessFromInitResult"',
+            "() => kagemushaRecursiveSpendLineageWitnessFromInitResult(request, request)",
             '"kagemushaRecursiveSpendLineageWitnessAppendResult"',
+            "() => kagemushaRecursiveSpendLineageWitnessAppendResult(request, request, request)",
+            "() => kagemushaRecursiveSpendVerify(request)",
+            "() => kagemushaRecursiveSpendRedeem(request)",
             "completeBinding(methodName, output)",
         ),
         "JavaScript package dist recursive spend unsafe native output coverage",
@@ -11044,8 +11581,19 @@ def check_javascript(texts, errors):
             "[Buffer.from([0x01]), \"must be a valid Norito archive\"]",
             "[privacyNoritoFrame(0x35), \"must contain a non-empty Norito payload\"]",
             "[undefined, \"must be a Buffer, string, or ArrayBuffer view\"]",
+            "(args) => kagemushaRecursiveSpendInit(args[0])",
+            "(args) => kagemushaRecursiveSpendAppend(args[0])",
+            "(args) => kagemushaRecursiveSpendTransitionProfileInit(args[0])",
+            "(args) => kagemushaRecursiveSpendTransitionProfileAppend(args[0])",
+            "(args) => kagemushaRecursiveSpendLineageAppendBoundary(args[0])",
+            "[\"requestArchive\", \"bundleArchive\"]",
+            "[\"previousWitnessArchive\", \"requestArchive\", \"bundleArchive\"]",
+            "for (let fieldIndex = 0; fieldIndex < archiveNames.length; fieldIndex += 1)",
+            "args[fieldIndex] = invalidArchive",
             '"previousWitnessArchive"',
             '"profileArchive"',
+            "(args) => kagemushaRecursiveSpendVerify(args[0])",
+            "(args) => kagemushaRecursiveSpendRedeem(args[0])",
             "assert.equal(nativeDispatches, 0)",
         ),
         "JavaScript package dist recursive spend invalid request archive coverage",
@@ -11122,18 +11670,18 @@ def check_javascript(texts, errors):
         "javascript/iroha_js/test/package_dist.test.js",
         (
             "package dist Kagemusha recursive spend bundle rejects invalid accumulator field lengths before native dispatch",
-            '[2, kagemushaFixedArrayPayload(0x01, 15), "asset", null]',
-            '[2, kagemushaFixedArrayPayload(0x01, 17), "asset", null]',
-            '[2, kagemushaCountPrefixedFixedArrayPayload(0x01, 16), "asset", null]',
+            '[2, kagemushaFixedArrayPayload(0x01, 15), "bundle.accumulator.asset", null]',
+            '[2, kagemushaFixedArrayPayload(0x01, 17), "bundle.accumulator.asset", null]',
+            '[2, kagemushaCountPrefixedFixedArrayPayload(0x01, 16), "bundle.accumulator.asset", null]',
             '[3, Buffer.alloc(32), "bundle.accumulator.initial_root", null]',
             '[4, Buffer.alloc(32), "bundle.accumulator.final_root", null]',
             '[4, initBundle.initialRoot, "bundle.accumulator.final_root", null]',
-            '[3, kagemushaFixedArrayPayload(0x02, 31), "initialRoot", null]',
-            '[3, kagemushaFixedArrayPayload(0x02, 33), "initialRoot", null]',
-            '[3, kagemushaCountPrefixedFixedArrayPayload(0x02, 32), "initialRoot", null]',
-            '[4, kagemushaFixedArrayPayload(0x03, 31), "finalRoot", null]',
-            '[4, kagemushaFixedArrayPayload(0x03, 33), "finalRoot", null]',
-            '[4, kagemushaCountPrefixedFixedArrayPayload(0x03, 32), "finalRoot", null]',
+            '[3, kagemushaFixedArrayPayload(0x02, 31), "bundle.accumulator.initial_root", null]',
+            '[3, kagemushaFixedArrayPayload(0x02, 33), "bundle.accumulator.initial_root", null]',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x02, 32),\n      "bundle.accumulator.initial_root",',
+            '[4, kagemushaFixedArrayPayload(0x03, 31), "bundle.accumulator.final_root", null]',
+            '[4, kagemushaFixedArrayPayload(0x03, 33), "bundle.accumulator.final_root", null]',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x03, 32),\n      "bundle.accumulator.final_root",',
             '[7, Buffer.alloc(32), "bundle.accumulator.lineage_digest", null]',
             '[7, kagemushaFixedArrayPayload(0x07, 31), "bundle.accumulator.lineage_digest", null]',
             '[7, kagemushaFixedArrayPayload(0x07, 33), "bundle.accumulator.lineage_digest", null]',
@@ -11141,26 +11689,71 @@ def check_javascript(texts, errors):
             'Buffer.alloc(32, 0x7d)',
             '"bundle.accumulator.aggregation_transcript_digest"',
             '      Buffer.alloc(32),\n      "bundle.accumulator.aggregation_transcript_digest",',
+            '      kagemushaFixedArrayPayload(0x08, 31),\n      "bundle.accumulator.aggregation_transcript_digest",',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x08, 32),\n      "bundle.accumulator.aggregation_transcript_digest",',
+            '      kagemushaFixedArrayPayload(0x08, 33),\n      "bundle.accumulator.aggregation_transcript_digest",',
             '[9, Buffer.alloc(32), "bundle.accumulator.nullifier_digest", null]',
+            '[9, kagemushaFixedArrayPayload(0x09, 31), "bundle.accumulator.nullifier_digest", null]',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x09, 32),\n      "bundle.accumulator.nullifier_digest",',
+            '[9, kagemushaFixedArrayPayload(0x09, 33), "bundle.accumulator.nullifier_digest", null]',
             '[10, Buffer.alloc(32), "bundle.accumulator.output_commitment_digest", null]',
+            '[10, kagemushaFixedArrayPayload(0x0a, 31), "bundle.accumulator.output_commitment_digest", null]',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x0a, 32),\n      "bundle.accumulator.output_commitment_digest",',
+            '[10, kagemushaFixedArrayPayload(0x0a, 33), "bundle.accumulator.output_commitment_digest", null]',
             '[11, Buffer.alloc(32), "bundle.accumulator.fold_digest", null]',
+            '[11, kagemushaFixedArrayPayload(0x0b, 31), "bundle.accumulator.fold_digest", null]',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x0b, 32),\n      "bundle.accumulator.fold_digest",',
+            '[11, kagemushaFixedArrayPayload(0x0b, 33), "bundle.accumulator.fold_digest", null]',
             '[12, Buffer.alloc(32), "bundle.accumulator.recursive_proof_chain_digest", null]',
+            '      kagemushaFixedArrayPayload(0x0c, 31),\n      "bundle.accumulator.recursive_proof_chain_digest",',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x0c, 32),\n      "bundle.accumulator.recursive_proof_chain_digest",',
+            '      kagemushaFixedArrayPayload(0x0c, 33),\n      "bundle.accumulator.recursive_proof_chain_digest",',
             '[13, Buffer.alloc(32), "bundle.accumulator.transition_profile_binding_digest", null]',
+            '      kagemushaFixedArrayPayload(0x0d, 31),\n      "bundle.accumulator.transition_profile_binding_digest",',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x0d, 32),\n      "bundle.accumulator.transition_profile_binding_digest",',
+            '      kagemushaFixedArrayPayload(0x0d, 33),\n      "bundle.accumulator.transition_profile_binding_digest",',
             '"bundle.accumulator.append_opening_preflight_digest"',
             '      kagemushaFixedArrayPayload(0x0e, 31),\n      "bundle.accumulator.append_opening_preflight_digest",',
             '      kagemushaFixedArrayPayload(0x0e, 33),\n      "bundle.accumulator.append_opening_preflight_digest",',
             '      kagemushaCountPrefixedFixedArrayPayload(0x0e, 32),\n      "bundle.accumulator.append_opening_preflight_digest",',
             '"bundle.accumulator.append_boundary_digest"',
+            '[15, kagemushaFixedArrayPayload(0x0f, 31), "bundle.accumulator.append_boundary_digest", null]',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x0f, 32),\n      "bundle.accumulator.append_boundary_digest",',
+            '[15, kagemushaFixedArrayPayload(0x0f, 33), "bundle.accumulator.append_boundary_digest", null]',
             '[16, Buffer.alloc(32), "bundle.accumulator.verifier_params_fingerprint", null]',
+            '[16, kagemushaFixedArrayPayload(0x10, 31), "bundle.accumulator.verifier_params_fingerprint", null]',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x10, 32),\n      "bundle.accumulator.verifier_params_fingerprint",',
+            '[16, kagemushaFixedArrayPayload(0x10, 33), "bundle.accumulator.verifier_params_fingerprint", null]',
             '      Buffer.alloc(32),\n      "bundle.accumulator.fixed_window_table_schedule_digest",',
+            '      kagemushaFixedArrayPayload(0x11, 31),\n      "bundle.accumulator.fixed_window_table_schedule_digest",',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x11, 32),\n      "bundle.accumulator.fixed_window_table_schedule_digest",',
+            '      kagemushaFixedArrayPayload(0x11, 33),\n      "bundle.accumulator.fixed_window_table_schedule_digest",',
             '      Buffer.alloc(32),\n      "bundle.accumulator.fixed_window_shared_table_manifest_digest",',
+            '      kagemushaFixedArrayPayload(0x12, 31),\n      "bundle.accumulator.fixed_window_shared_table_manifest_digest",',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x12, 32),\n      "bundle.accumulator.fixed_window_shared_table_manifest_digest",',
+            '      kagemushaFixedArrayPayload(0x12, 33),\n      "bundle.accumulator.fixed_window_shared_table_manifest_digest",',
             '[19, Buffer.alloc(32), "bundle.accumulator.fixed_window_table_base_digest", null]',
+            '[19, kagemushaFixedArrayPayload(0x13, 31), "bundle.accumulator.fixed_window_table_base_digest", null]',
+            '      kagemushaCountPrefixedFixedArrayPayload(0x13, 32),\n      "bundle.accumulator.fixed_window_table_base_digest",',
+            '[19, kagemushaFixedArrayPayload(0x13, 33), "bundle.accumulator.fixed_window_table_base_digest", null]',
             '[20, Buffer.alloc(32), "bundle.accumulator.verifier_witness_batch_digest", null]',
             '      kagemushaFixedArrayPayload(0x14, 31),\n      "bundle.accumulator.verifier_witness_batch_digest",',
             '      kagemushaFixedArrayPayload(0x14, 33),\n      "bundle.accumulator.verifier_witness_batch_digest",',
             '      kagemushaCountPrefixedFixedArrayPayload(0x14, 32),\n      "bundle.accumulator.verifier_witness_batch_digest",',
             '[21, kagemushaU32Payload(3), "bundle.accumulator.verifier_opening_len", null]',
             "kagemushaCountPrefixedFixedArrayPayload(0x15, 4)",
+            '[21, Buffer.from([2, 0, 0]), "bundle.accumulator.verifier_opening_len", null]',
+            '[21, Buffer.from([2, 0, 0, 0, 0]), "bundle.accumulator.verifier_opening_len", null]',
+            "const truncatedAccumulatorFieldLabels = [",
+            '[0, "bundle.accumulator.domain"],',
+            '[1, "bundle.accumulator.chain_id"],',
+            '[2, "bundle.accumulator.asset"],',
+            '[3, "bundle.accumulator.initial_root"],',
+            '[4, "bundle.accumulator.final_root"],',
+            "kagemushaNoritoLength(1, TEST_NORITO_COMPACT_LEN_FLAG)",
+            "const expectedMessage =",
+            "payload length mismatch",
+            "payload is truncated",
             'kagemushaRequestCodecError("archive", expectedField, expectedMessage)',
         ),
         "JavaScript package dist recursive spend bundle accumulator field-length coverage",
@@ -11186,7 +11779,7 @@ def check_javascript(texts, errors):
         (
             'recursiveSpendBundleWithTrailingBundleField()),\n    kagemushaRequestCodecError("archive", "bundle", /bundle has trailing bytes/)',
             'recursiveSpendBundleWithTrailingAccumulatorField()),\n    kagemushaRequestCodecError("archive", "bundle", /accumulator has trailing bytes/)',
-            'recursiveSpendBundleWithTrailingCurrentNoteField()),\n    kagemushaRequestCodecError("archive", "bundle", /currentNote has trailing bytes/)',
+            'recursiveSpendBundleWithTrailingCurrentNoteField()),\n    kagemushaRequestCodecError(\n      "archive",\n      "bundle.accumulator.current_note",\n      /currentNote has trailing bytes/,\n    )',
         ),
         "JavaScript package dist recursive spend bundle summary trailing-field coverage",
         errors,
@@ -11200,6 +11793,8 @@ def check_javascript(texts, errors):
             "decodeKagemushaRecursiveSpendVerifyResult(\n"
             "        recursiveSpendVerifyResultWithTrailingField(),",
             "/verifyResult has trailing bytes/u",
+            "lineageWitnessRequiredForRedeem",
+            "lineage_witness_required_for_redeem",
         ),
         "JavaScript package dist recursive spend verify-result trailing-field coverage",
         errors,
@@ -11223,6 +11818,9 @@ def check_javascript(texts, errors):
             "recursiveSpendLineageWitnessWithPreviousProofField(1, Buffer.alloc(0))",
             "recursiveSpendLineageWitnessWithPreviousProofField(2, Buffer.alloc(32))",
             "recursiveSpendLineageWitnessWithPreviousProofField(2, Buffer.alloc(32, 0x44))",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, kagemushaFixedArrayPayload(0x44, 31)),",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, kagemushaCountPrefixedFixedArrayPayload(0x44, 32)),",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, kagemushaFixedArrayPayload(0x44, 33)),",
             'recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg")',
             'recursiveSpendLineageWitnessWithPreviousProofBoxBackendAndEmptyProofBytes("halo2/kzg")',
             "recursiveSpendLineageWitnessWithEmptyPreviousProofBytes()",
@@ -11331,21 +11929,26 @@ def check_javascript(texts, errors):
             "recursiveSpendBundleWithEqualCurrentNoteNullifier()",
             "recursiveSpendBundleWithEqualCurrentNoteNullifier(),",
             "recursiveSpendBundleWithCurrentNoteField(2, kagemushaZeroNumericPayload())",
-            'kagemushaRequestCodecError("field", "amount", null)',
-            '[0, kagemushaFixedArrayPayload(0x04, 31), "archive", "noteCommitment", null]',
-            '[0, kagemushaFixedArrayPayload(0x04, 33), "archive", "noteCommitment", null]',
+            "/numeric amount must be greater than zero/",
+            '[0, kagemushaFixedArrayPayload(0x04, 31), "archive", "bundle.accumulator.current_note.note_commitment", null]',
+            '[0, kagemushaFixedArrayPayload(0x04, 33), "archive", "bundle.accumulator.current_note.note_commitment", null]',
             "kagemushaCountPrefixedFixedArrayPayload(0x04, 32)",
-            '[1, kagemushaFixedArrayPayload(0x05, 31), "archive", "spendNullifier", null]',
-            '[1, kagemushaFixedArrayPayload(0x05, 33), "archive", "spendNullifier", null]',
+            '[1, kagemushaFixedArrayPayload(0x05, 31), "archive", "bundle.accumulator.current_note.spend_nullifier", null]',
+            '[1, kagemushaFixedArrayPayload(0x05, 33), "archive", "bundle.accumulator.current_note.spend_nullifier", null]',
             "kagemushaCountPrefixedFixedArrayPayload(0x05, 32)",
-            '[2, kagemushaNumericPayload(Buffer.from([1]), 1), "field", "amount", /numeric scale/]',
+            "kagemushaNumericPayload(Buffer.from([1]), 1)",
             "kagemushaNumericPayloadWithScalePayload(",
             "kagemushaCountPrefixedFixedArrayPayload(0x16, 4)",
             "kagemushaNumericPayloadWithMantissaPayload(Buffer.from([2, 0, 0, 0, 1]))",
             "kagemushaNumericPayload(Buffer.from([0xff]))",
             "kagemushaNumericPayload(Buffer.concat([Buffer.alloc(16), Buffer.from([1])])),",
-            '"field",\n      "amount",\n      /fit in u128/',
-            '[2, kagemushaNumericPayloadWithTrailingField(), "archive", "amount", null]',
+            '"bundle.accumulator.current_note.amount"',
+            '"field",\n      "bundle.accumulator.current_note.amount",\n      /numeric amount must be greater than zero/',
+            '"field",\n      "bundle.accumulator.current_note.amount",\n      /fit in u128/',
+            "      kagemushaNumericPayloadWithTrailingField(),\n"
+            "      \"archive\",\n"
+            "      \"bundle.accumulator.current_note.amount\",\n"
+            "      null,",
             'kagemushaRequestCodecError(expectedKind, expectedField, expectedMessage)',
         ),
         "JavaScript package dist recursive spend bundle current-note coverage",
@@ -11355,14 +11958,19 @@ def check_javascript(texts, errors):
         texts,
         "javascript/iroha_js/test/package_dist.test.js",
         (
-            '[2, kagemushaNumericPayload(Buffer.from([1]), 1), "field", "amount", /numeric scale/]',
+            "kagemushaNumericPayload(Buffer.from([1]), 1)",
             "kagemushaNumericPayloadWithScalePayload(",
             "kagemushaCountPrefixedFixedArrayPayload(0x16, 4)",
             "kagemushaNumericPayloadWithMantissaPayload(Buffer.from([2, 0, 0, 0, 1]))",
             "kagemushaNumericPayload(Buffer.from([0xff]))",
             "kagemushaNumericPayload(Buffer.concat([Buffer.alloc(16), Buffer.from([1])]))",
-            '"field",\n      "amount",\n      /fit in u128/',
-            '[2, kagemushaNumericPayloadWithTrailingField(), "archive", "amount", null]',
+            '"bundle.accumulator.current_note.amount"',
+            '"field",\n      "bundle.accumulator.current_note.amount",\n      /numeric amount must be greater than zero/',
+            '"field",\n      "bundle.accumulator.current_note.amount",\n      /fit in u128/',
+            "      kagemushaNumericPayloadWithTrailingField(),\n"
+            "      \"archive\",\n"
+            "      \"bundle.accumulator.current_note.amount\",\n"
+            "      null,",
         ),
         "JavaScript package dist recursive spend bundle current-note amount encoding coverage",
         errors,
@@ -11402,6 +12010,8 @@ def check_javascript(texts, errors):
             "sharedRecursiveSpendAbi6Archive(\"init_bundle\")",
             'kagemushaRequestCodecError(\n      "field",\n      "lineageVerifierRecord",\n      /required for reserved-lineage bundles/,\n    )',
             'verifierKeyId: "danglingRedeemLineageRecord"',
+            "const reservedMissingRecordMasksMalformedWitnessPackageDist = Buffer.from([0]);",
+            'verifierKeyId: "forgedRedeemLineageRecordBeforeWitnessPackageDist"',
             "recordBytes: Buffer.from([0])",
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME",
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,\n          0x9a,",
@@ -11550,6 +12160,8 @@ def check_javascript(texts, errors):
             "lineageVerifierRecord",
             'verifierKeyId: "danglingVerifyLineageRecord"',
             'verifierKeyId: "danglingRedeemLineageRecord"',
+            "const reservedMissingRecordMasksMalformedWitnessPackageDist = Buffer.from([0]);",
+            'verifierKeyId: "forgedRedeemLineageRecordBeforeWitnessPackageDist"',
             "recordBytes: Buffer.from([0])",
             'sharedRecursiveSpendAbi6Archive("init_bundle")',
             'sharedRecursiveSpendAbi7Archive("append_bundle")',
@@ -12078,12 +12690,17 @@ def check_javascript(texts, errors):
                 "KagemushaTransfer",
                 "RedeemKagemushaRecursive",
                 'typeof type !== "string"',
+                "normalizeTransactionAssetDefinitionId",
+                "authority must not contain surrounding whitespace",
+                "assetDefinition.assetDefinitionId",
                 "normalizeExactMetadataString",
                 "verifyingKey.id.backend",
                 "verifyingKey.record.circuit_id",
                 "must not contain surrounding whitespace",
                 "kagemushaRecursiveSpendRedeem",
                 "kagemushaRecursiveRedeem.redeemRequestArchive",
+                "Buffer.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength))",
+                "Buffer.from(new Uint8Array(value))",
             ),
             f"{relative} Kagemusha instruction transaction builder",
             errors,
@@ -12093,6 +12710,21 @@ def check_javascript(texts, errors):
             relative,
             r"buildKagemushaRecursiveRedeemTransaction[\s\S]*?kagemushaRecursiveSpendRedeem[\s\S]*?buildKagemushaInstructionTransaction",
             f"{relative} Kagemusha recursive redeem transaction flow",
+            errors,
+        )
+        require_block_contains(
+            texts,
+            relative,
+            "export function buildPrivateCreateKaigiTransaction({",
+            "export function buildRecordKaigiUsageTransaction({",
+            (
+                'normalizeExactMetadataString(chainId, "privateCreateKaigi.chainId")',
+                'normalizeExactMetadataString(chainId, "privateJoinKaigi.chainId")',
+                'normalizeExactMetadataString(callId, "privateJoinKaigi.callId")',
+                'normalizeExactMetadataString(chainId, "privateEndKaigi.chainId")',
+                'normalizeExactMetadataString(callId, "privateEndKaigi.callId")',
+            ),
+            f"{relative} private Kaigi transaction exactness",
             errors,
         )
     require_contains(
@@ -12128,14 +12760,56 @@ def check_javascript(texts, errors):
             "bytesBase64 must be canonical standard base64",
             "buildKagemushaInstructionTransaction wraps one archive instruction",
             "buildKagemushaRecursiveRedeemTransaction derives instruction before signing",
+            "transaction builders reject padded authority and asset definition IDs before native dispatch",
+            "authority must not contain surrounding whitespace",
+            r"assetDefinition\.assetDefinitionId must not contain surrounding whitespace",
             "proof builders reject padded inline verifier-key metadata",
             "buildPrivateKaigiFeeSpend",
             r"privateKaigiFeeSpend\.verifyingKey\.id\.backend must not contain surrounding whitespace",
             r"privateKaigiFeeSpend\.verifyingKey\.record\.circuit_id must not contain surrounding whitespace",
+            "private Kaigi transaction builders reject padded identifiers before native dispatch",
+            r"privateCreateKaigi\.chainId must not contain surrounding whitespace",
+            r"privateJoinKaigi\.chainId must not contain surrounding whitespace",
+            r"privateJoinKaigi\.callId must not contain surrounding whitespace",
+            r"privateEndKaigi\.chainId must not contain surrounding whitespace",
+            r"privateEndKaigi\.callId must not contain surrounding whitespace",
             "redeemRequestArchive must be a Buffer or ArrayBuffer view",
             "redeem native rejected",
+            "buildKagemusha transaction helpers copy mutable buffers before native calls",
+            "mutableTransferArchive",
+            "mutableRedeemInstructionArchive",
+            "mutableRedeemRequestArchive",
+            "mutablePrivateKey",
+            "fill(0xa5)",
         ),
         "JavaScript Kagemusha instruction transaction builder tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "package dist Kagemusha transaction helpers copy mutable buffers before native calls",
+            "package dist Kagemusha transaction helpers reject padded authority before native dispatch",
+            "package dist private Kaigi transaction builders reject padded identifiers before native dispatch",
+            r"privateCreateKaigi\.chainId must not contain surrounding whitespace",
+            r"privateJoinKaigi\.chainId must not contain surrounding whitespace",
+            r"privateJoinKaigi\.callId must not contain surrounding whitespace",
+            r"privateEndKaigi\.chainId must not contain surrounding whitespace",
+            r"privateEndKaigi\.callId must not contain surrounding whitespace",
+            "authority must not contain surrounding whitespace",
+            "PACKAGE_DIST_KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES",
+            "packageDistKagemushaInstructionArchive",
+            "buildKagemushaInstructionArchiveInstruction",
+            "buildKagemushaInstructionTransaction",
+            "buildKagemushaRecursiveRedeemTransaction",
+            "mutableTransferArchive",
+            "mutableRedeemInstructionArchive",
+            "mutableRedeemRequestArchive",
+            "mutablePrivateKey",
+            "fill(0xa5)",
+        ),
+        "JavaScript package dist Kagemusha instruction transaction builder tests",
         errors,
     )
     require_contains(
@@ -12178,6 +12852,90 @@ def check_javascript(texts, errors):
             f"{relative} native output Norito guard",
             errors,
         )
+        require_block_contains(
+            texts,
+            relative,
+            "function normalizeConfidentialV2ExactString(",
+            "function fixed32Buffer",
+            (
+                "throw new Error(`${name} is required`)",
+                "if (value.trim() !== value) {",
+                "throw new Error(`${name} must not contain surrounding whitespace`)",
+            ),
+            f"{relative} confidential v2 derivation exactness",
+            errors,
+        )
+        require_block_contains(
+            texts,
+            relative,
+            "function normalizeFixed32HexInput(value, name) {",
+            "function normalizeWholeNumberLiteral",
+            (
+                "if (value.trim() !== value) {",
+                "throw new Error(`${name} must not contain surrounding whitespace`)",
+                'value.replace(/^0x/i, "").toLowerCase()',
+            ),
+            f"{relative} confidential v2 derivation fixed32 exactness",
+            errors,
+        )
+    for relative in ("javascript/iroha_js/src/transaction.js", "javascript/iroha_js/dist/transaction.js"):
+        require_block_contains(
+            texts,
+            relative,
+            "function normalizeWholeNumberLiteral(value, context) {",
+            "function normalizeFixed32HexInput",
+            (
+                'const normalized = String(value ?? "")',
+                "if (normalized.trim() !== normalized) {",
+                "throw new TypeError(`${context} must not contain surrounding whitespace`)",
+            ),
+            f"{relative} confidential proof amount exactness",
+            errors,
+        )
+        require_block_contains(
+            texts,
+            relative,
+            "function normalizeFixed32HexInput(value, context) {",
+            "function toNamedBuffer",
+            (
+                "if (value.trim() !== value) {",
+                "throw new TypeError(`${context} must not contain surrounding whitespace`)",
+                'value.replace(/^0x/i, "").toLowerCase()',
+            ),
+            f"{relative} confidential proof fixed32 exactness",
+            errors,
+        )
+        require_block_contains(
+            texts,
+            relative,
+            "export function buildPrivateKaigiFeeSpend({",
+            "export function buildPrivateCreateKaigiTransaction({",
+            (
+                'normalizeExactMetadataString(chainId, "privateKaigiFeeSpend.chainId")',
+                "privateKaigiFeeSpend.assetDefinitionId",
+                'normalizeFixed32HexInput(anchorRootHex, "privateKaigiFeeSpend.anchorRootHex")',
+                'normalizeExactMetadataString(chainId, "confidentialTransferProofV2.chainId")',
+                "confidentialTransferProofV2.assetDefinitionId",
+                'normalizeExactMetadataString(chainId, "confidentialAssetHiddenTransferProofV1.chainId")',
+                'normalizeExactMetadataString(poolId, "confidentialAssetHiddenTransferProofV1.poolId")',
+                'normalizeExactMetadataString(chainId, "confidentialUnshieldProofV2.chainId")',
+                "confidentialUnshieldProofV2.assetDefinitionId",
+                'normalizeExactMetadataString(chainId, "confidentialUnshieldProofV3.chainId")',
+                "confidentialUnshieldProofV3.assetDefinitionId",
+            ),
+            f"{relative} confidential proof metadata exactness",
+            errors,
+        )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/crypto.test.js",
+        (
+            "deriveConfidentialKeyset validates input",
+            "spendKeyHex must not contain surrounding whitespace",
+        ),
+        "JavaScript crypto fixed32 exactness tests",
+        errors,
+    )
     require_contains(
         texts,
         "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
@@ -12217,6 +12975,77 @@ def check_javascript(texts, errors):
                 "kagemushaNoritoFrameWithPayload",
             ),
         "JavaScript native output Norito guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        (
+            "confidential v2 derivation helpers reject padded chain and asset IDs before native dispatch",
+            "deriveConfidentialNoteV2",
+            "deriveConfidentialNullifierV2",
+            "deriveConfidentialOwnerTagV2",
+            "assetDefinitionId must not contain surrounding whitespace",
+            "chainId must not contain surrounding whitespace",
+            "rho must not contain surrounding whitespace",
+            "ownerTag must not contain surrounding whitespace",
+            "diversifier must not contain surrounding whitespace",
+        ),
+        "JavaScript confidential v2 derivation exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "package dist confidential v2 derivation helpers reject padded chain and asset IDs before native dispatch",
+            "deriveConfidentialNoteV2",
+            "deriveConfidentialNullifierV2",
+            "deriveConfidentialOwnerTagV2",
+            "assetDefinitionId must not contain surrounding whitespace",
+            "chainId must not contain surrounding whitespace",
+            "rho must not contain surrounding whitespace",
+            "ownerTag must not contain surrounding whitespace",
+            "diversifier must not contain surrounding whitespace",
+        ),
+        "JavaScript package dist confidential v2 derivation exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/transactionBuilder.test.js",
+        (
+            "proof builders reject padded inline verifier-key metadata",
+            "privateKaigiFeeSpend\\.chainId must not contain surrounding whitespace",
+            "privateKaigiFeeSpend\\.assetDefinitionId must not contain surrounding whitespace",
+            "privateKaigiFeeSpend\\.anchorRootHex must not contain surrounding whitespace",
+            "privateKaigiFeeSpend\\.feeAmount must not contain surrounding whitespace",
+            "confidential proof builders reject padded chain IDs and hex fields before native dispatch",
+            "confidentialTransferProofV2\\.chainId must not contain surrounding whitespace",
+            "confidentialTransferProofV2\\.assetDefinitionId must not contain surrounding whitespace",
+            "inputs\\[0\\]\\.amount must not contain surrounding whitespace",
+            "inputs\\[0\\]\\.rho must not contain surrounding whitespace",
+            "inputs\\[0\\]\\.diversifier must not contain surrounding whitespace",
+            "outputs\\[0\\]\\.amount must not contain surrounding whitespace",
+            "outputs\\[0\\]\\.ownerTag must not contain surrounding whitespace",
+            "treeCommitments\\[0\\] must not contain surrounding whitespace",
+            "publicAmount must not contain surrounding whitespace",
+            "rootHintHex must not contain surrounding whitespace",
+        ),
+        "JavaScript confidential proof builder exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "package dist confidential proof builders reject padded amount literals before native dispatch",
+            "privateKaigiFeeSpend\\.feeAmount must not contain surrounding whitespace",
+            "inputs\\[0\\]\\.amount must not contain surrounding whitespace",
+            "outputs\\[0\\]\\.amount must not contain surrounding whitespace",
+            "publicAmount must not contain surrounding whitespace",
+        ),
+        "JavaScript package dist confidential proof amount exactness tests",
         errors,
     )
     require_block_contains(
@@ -12742,34 +13571,38 @@ def check_python(texts, errors):
     torii_client = texts["python/iroha_torii_client/client.py"]
     torii_init = texts["python/iroha_torii_client/__init__.py"]
     torii_tests = texts["python/iroha_torii_client/tests/test_client.py"]
-    require(
-        "def encode_identifier_resolution_receipt_payload(" in torii_client
-        and "def encode_identifier_resolution_receipt_attestation(" in torii_client
-        and "def verify_identifier_resolution_receipt(" in torii_client
-        and "_identifier_account_id_payload" in torii_client
-        and "_identifier_iroha_prehash" in torii_client
-        and 'value = _require_exact_non_empty_string(raw, "payload.policy_id")' in torii_client
-        and 'payload.policy_id.kind must not contain surrounding whitespace' in torii_client
-        and 'policy_id = _require_exact_non_empty_string(policy.get("policy_id"), "policy.policy_id")' in torii_client
-        and "_identifier_policy_id_payload(policy_id)" in torii_client
-        and 'literal = _require_exact_non_empty_string(value, context)' in torii_client
-        and '_identifier_policy_id_payload(payload.get("policy_id"))' in torii_client
-        and 'def _identifier_hash_bytes(raw: Any, context: str) -> bytes:\n    value = _require_exact_non_empty_string(raw, context)' in torii_client
-        and 'def _identifier_prefixed_hash_payload(raw: Any, prefix: str, context: str) -> bytes:\n    value = _require_exact_non_empty_string(raw, context)' in torii_client
-        and 'elif isinstance(value, str) and value.isdigit():' in torii_client
-        and '_require_exact_non_empty_string(account_id, "payload.account_id")' in torii_client
-        and '_identifier_account_id_payload(record.get("account_id"))' in torii_client
-        and 'def _identifier_exact_string(' in torii_client
-        and '_identifier_sized_field(_identifier_exact_string(raw, context))' in torii_client
-        and '_identifier_program_id_payload(record.get("program_id"), "payload.execution.program_id")' in torii_client
-        and '_identifier_program_id_payload(record.get("program_id"), "payload.opening.payload.program_id")' in torii_client
-        and "_identifier_verify_ed25519" in torii_client
-        and '_require_exact_non_empty_string(record.get("kind"), "identifier receipt attestation.kind")' in torii_client
-        and '_identifier_exact_hex_bytes(record.get("signature"), "payload.opening.signature")' in torii_client
-        and '_identifier_exact_hex_bytes(record.get("signature"), "identifier receipt attestation.signature")' in torii_client
-        and '_require_exact_non_empty_string(record.get("proof_b64"), "identifier receipt attestation.proof_b64")' in torii_client
-        and '_require_exact_non_empty_string(attestation.get("proof_b64"), "attestation.proof_b64")' in torii_client
-        and "proof attestations require an external verifier" in torii_client,
+    require_contains(
+        texts,
+        "python/iroha_torii_client/client.py",
+        (
+            "def encode_identifier_resolution_receipt_payload(",
+            "def encode_identifier_resolution_receipt_attestation(",
+            "def verify_identifier_resolution_receipt(",
+            "_identifier_account_id_payload",
+            "_identifier_iroha_prehash",
+            'value = _require_exact_non_empty_string(raw, "payload.policy_id")',
+            'payload.policy_id.kind must not contain surrounding whitespace',
+            'policy_id = _require_exact_non_empty_string(policy.get("policy_id"), "policy.policy_id")',
+            "_identifier_policy_id_payload(policy_id)",
+            'literal = _require_exact_non_empty_string(value, context)',
+            '_identifier_policy_id_payload(payload.get("policy_id"))',
+            'def _identifier_hash_bytes(raw: Any, context: str) -> bytes:\n    value = _require_exact_non_empty_string(raw, context)',
+            'def _identifier_prefixed_hash_payload(raw: Any, prefix: str, context: str) -> bytes:\n    value = _require_exact_non_empty_string(raw, context)',
+            'elif isinstance(value, str) and value.isdigit():',
+            '_require_exact_non_empty_string(account_id, "payload.account_id")',
+            '_identifier_account_id_payload(record.get("account_id"))',
+            'def _identifier_exact_string(',
+            '_identifier_sized_field(_identifier_exact_string(raw, context))',
+            '_identifier_program_id_payload(record.get("program_id"), "payload.execution.program_id")',
+            '_identifier_program_id_payload(record.get("program_id"), "payload.opening.payload.program_id")',
+            "_identifier_verify_ed25519",
+            '_require_exact_non_empty_string(record.get("kind"), "identifier receipt attestation.kind")',
+            '_identifier_exact_hex_bytes(record.get("signature"), "payload.opening.signature")',
+            '_identifier_exact_hex_bytes(record.get("signature"), "identifier receipt attestation.signature")',
+            '_require_exact_non_empty_string(record.get("proof_b64"), "identifier receipt attestation.proof_b64")',
+            '_require_exact_non_empty_string(attestation.get("proof_b64"), "attestation.proof_b64")',
+            "proof attestations require an external verifier",
+        ),
         "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
         errors,
     )
@@ -12785,11 +13618,15 @@ def check_python(texts, errors):
         "Python identifier receipt resolver-key parser exactness",
         errors,
     )
-    require(
-        "def _require_exact_i105_account_id(" in torii_client
-        and '_require_exact_non_empty_string(value, context)' in torii_client
-        and 'if any(ch.isspace() for ch in literal) or "@" in literal:' in torii_client
-        and "resolved_multisig_account_id=ToriiClient._require_exact_i105_account_id(" in torii_client,
+    require_contains(
+        texts,
+        "python/iroha_torii_client/client.py",
+        (
+            "def _require_exact_i105_account_id(",
+            '_require_exact_non_empty_string(value, context)',
+            'if any(ch.isspace() for ch in literal) or "@" in literal:',
+            "resolved_multisig_account_id=ToriiClient._require_exact_i105_account_id(",
+        ),
         "Python multisig resolved account exactness",
         errors,
     )
@@ -12800,46 +13637,54 @@ def check_python(texts, errors):
         "Python Torii client package must re-export identifier receipt helpers",
         errors,
     )
-    require(
-        "test_identifier_resolution_receipt_matches_shared_vectors" in torii_tests
-        and "identifier_receipt_vectors_v1.json" in torii_tests
-        and "canonical_payload_sha256" in torii_tests
-        and "attestation_vectors" in torii_tests
-        and "negative_cases" in torii_tests
-        and "payload.execution.backend must not contain surrounding whitespace" in torii_tests
-        and "payload.execution.verification_mode must not contain surrounding whitespace" in torii_tests
-        and "non_exact_kind" in torii_tests
-        and "identifier receipt attestation.kind" in torii_tests
-        and "identifier receipt attestation.signature must not contain surrounding whitespace" in torii_tests
-        and "payload.opening.signature must not contain surrounding whitespace" in torii_tests
-        and "payload.policy_id" in torii_tests
-        and "payload.execution.program_id" in torii_tests
-        and "payload.opening.payload.program_id" in torii_tests
-        and "payload.account_id" in torii_tests
-        and "payload.opaque_id" in torii_tests
-        and "payload.receipt_hash" in torii_tests
-        and "payload.uaid" in torii_tests
-        and "payload.execution.program_digest" in torii_tests
-        and "payload.opening.payload.input_ciphertext_hash" in torii_tests
-        and "timestamp_exactness_cases" in torii_tests
-        and "payload.execution.executed_at_ms" in torii_tests
-        and "payload.execution.expires_at_ms" in torii_tests
-        and "payload.opening.payload.opened_at_ms" in torii_tests
-        and "payload.opening.payload.expires_at_ms" in torii_tests
-        and "phone #retail" in torii_tests
-        and "identifier receipt attestation.proof_backend must not contain surrounding whitespace" in torii_tests
-        and "identifier receipt attestation.proof_b64 must not contain surrounding whitespace" in torii_tests
-        and "attestation.proof_b64 must be valid base64" in torii_tests
-        and "proof attestations require an external verifier" in torii_tests,
+    require_contains(
+        texts,
+        "python/iroha_torii_client/tests/test_client.py",
+        (
+            "test_identifier_resolution_receipt_matches_shared_vectors",
+            "identifier_receipt_vectors_v1.json",
+            "canonical_payload_sha256",
+            "attestation_vectors",
+            "negative_cases",
+            "payload.execution.backend must not contain surrounding whitespace",
+            "payload.execution.verification_mode must not contain surrounding whitespace",
+            "non_exact_kind",
+            "identifier receipt attestation.kind",
+            "identifier receipt attestation.signature must not contain surrounding whitespace",
+            "payload.opening.signature must not contain surrounding whitespace",
+            "payload.policy_id",
+            "payload.execution.program_id",
+            "payload.opening.payload.program_id",
+            "payload.account_id",
+            "payload.opaque_id",
+            "payload.receipt_hash",
+            "payload.uaid",
+            "payload.execution.program_digest",
+            "payload.opening.payload.input_ciphertext_hash",
+            "timestamp_exactness_cases",
+            "payload.execution.executed_at_ms",
+            "payload.execution.expires_at_ms",
+            "payload.opening.payload.opened_at_ms",
+            "payload.opening.payload.expires_at_ms",
+            "phone #retail",
+            "identifier receipt attestation.proof_backend must not contain surrounding whitespace",
+            "identifier receipt attestation.proof_b64 must not contain surrounding whitespace",
+            "attestation.proof_b64 must be valid base64",
+            "proof attestations require an external verifier",
+        ),
         "Python Torii client tests must cover identifier receipt shared vectors and adversarial cases",
         errors,
     )
-    require(
-        "test_propose_multisig_rejects_malformed_response_fields" in torii_tests
-        and 'f"{CANONICAL_OWNER} "' in torii_tests
-        and '"multisig@banka"' in torii_tests
-        and '"multisig"' in torii_tests
-        and "resolved_multisig_account_id" in torii_tests,
+    require_contains(
+        texts,
+        "python/iroha_torii_client/tests/test_client.py",
+        (
+            "test_propose_multisig_rejects_malformed_response_fields",
+            'f"{CANONICAL_OWNER} "',
+            '"multisig@banka"',
+            '"multisig"',
+            "resolved_multisig_account_id",
+        ),
         "Python multisig resolved account exactness tests",
         errors,
     )
@@ -12918,10 +13763,14 @@ def check_python(texts, errors):
             "previous_proof_open_envelopes are only valid for lineage append output",
             "previous_proof_open_envelopes is required for lineage append output",
             "_kagemusha_lineage_key_artifacts_for_init_request",
+            "lineage_key_artifacts must be init artifacts",
             "_kagemusha_lineage_key_artifacts_for_append_request",
+            "lineage_key_artifacts must be append artifacts",
             "lineage_key_artifacts are only valid for lineage append output",
+            "lineage_key_artifacts must not be combined with raw key fields",
             "lineage_verifier_key is required for recursive spend lineage proving",
             "decode_kagemusha_recursive_spend_verify_result(",
+            "def lineage_witness_required_for_redeem(self) -> bool:",
             "decode_kagemusha_recursive_spend_bundle(",
             "lineage_verifier_record is required for reserved-lineage bundles",
             "lineage_verifier_record is only valid for reserved-lineage bundles",
@@ -13039,7 +13888,7 @@ def check_python(texts, errors):
     require_regex(
         texts,
         "python/iroha_python/src/iroha_python/kagemusha.py",
-        r"if not final_is_lineage:[\s\S]*?not witness_has_reserved_previous\s*and self\.lineage_verifier_record is not None[\s\S]*?lineage_verifier_record is only valid for reserved-lineage bundles or lineage witnesses[\s\S]*?is_kagemusha_recursive_spend_lineage_proof_circuit_id\([\s\S]*?self\.lineage_verifier_record is None[\s\S]*?lineage_verifier_record is required for reserved-lineage bundles[\s\S]*?self\.lineage_verifier_record is not None[\s\S]*?KagemushaRecursiveSpendVerifierRecordRef[\s\S]*?redeem_proof = _kagemusha_archive_bytes_named",
+        r"bundle_summary = decode_kagemusha_recursive_spend_bundle\(bundle\)[\s\S]*?final_is_lineage = is_kagemusha_recursive_spend_lineage_proof_circuit_id\([\s\S]*?lineage_verifier_records = tuple\(self\.lineage_verifier_records or \(\)\)[\s\S]*?lineage_verifier_record_supplied = \([\s\S]*?self\.lineage_verifier_record is not None or bool\(lineage_verifier_records\)[\s\S]*?def validate_lineage_verifier_records\(\) -> None:[\s\S]*?KagemushaRecursiveSpendVerifierRecordRef[\s\S]*?for lineage_verifier_record in lineage_verifier_records:[\s\S]*?if final_is_lineage:[\s\S]*?if not lineage_verifier_record_supplied:[\s\S]*?lineage_verifier_record is required for reserved-lineage bundles[\s\S]*?validate_lineage_verifier_records\(\)[\s\S]*?lineage_witness = None[\s\S]*?if self\.lineage_witness is not None:[\s\S]*?if not final_is_lineage:[\s\S]*?witness_has_reserved_previous and not lineage_verifier_record_supplied[\s\S]*?not witness_has_reserved_previous[\s\S]*?and lineage_verifier_record_supplied[\s\S]*?lineage_verifier_record is only valid for reserved-lineage bundles or lineage witnesses[\s\S]*?if lineage_verifier_record_supplied:[\s\S]*?validate_lineage_verifier_records\(\)[\s\S]*?redeem_proof = _kagemusha_archive_bytes_named",
         "Python typed recursive spend redeem lineage-record selection before parse",
         errors,
         flags=re.S,
@@ -13064,12 +13913,20 @@ def check_python(texts, errors):
             "KagemushaRecursiveSpendVerifyRequest",
             "KagemushaRecursiveSpendRedeemRequest",
             "previous_lineage_verifier_record",
+            "previous_lineage_verifier_record is required for lineage previous bundles",
             "previous_openings_without_lineage_record = _synthetic_pallas_open_envelopes_archive()",
             "output_proof_circuit_id is not valid for the previous bundle",
             "previous_lineage_verifier_record is only valid for lineage previous bundles",
             "malformedPreviousLineageRecordBeforeOpenings",
             "previous_proof_open_envelopes",
             "previous_proof_open_envelopes are only valid for lineage append output",
+            "previous_proof_open_envelopes requires exactly 1 envelope\\(s\\)",
+            "lineage_key_artifacts must be init artifacts",
+            "lineage_key_artifacts must be append artifacts",
+            "lineage_key_artifacts must not be combined with raw key fields",
+            "lineage_key_artifacts are only valid for lineage append output",
+            "lineage_verifier_key is required for recursive spend lineage proving",
+            "bundle must be a valid iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV1 Norito archive",
             "_recursive_spend_bundle_with_accumulator_field",
             "_recursive_spend_bundle_with_proof_circuit_id",
             "_recursive_spend_bundle_with_proof_backend",
@@ -13104,6 +13961,7 @@ def check_python(texts, errors):
             '"18446744073709551616"',
             "1 << 64",
             "alice@wonderland",
+            "recipient must use canonical I105 account form",
             "str(1 << 128)",
             "native.calls[-1]",
             "lineage_verifier_record is required for reserved-lineage bundles",
@@ -13124,7 +13982,7 @@ def check_python(texts, errors):
     require_block_contains(
         texts,
         "python/iroha_python/tests/kagemusha_test.py",
-        "    malformed_accumulator_fields = (",
+        "    truncated_accumulator_field_labels = (",
         "    for field_index, replacement, expected in malformed_accumulator_fields:",
         (
             '"iroha:kagemusha:v1:recursive-spend-accumulator-digest"',
@@ -13154,7 +14012,7 @@ def check_python(texts, errors):
     require_block_contains(
         texts,
         "python/iroha_python/tests/kagemusha_test.py",
-        "    malformed_accumulator_fields = (",
+        "    truncated_accumulator_field_labels = (",
         "    for field_index, replacement, expected in malformed_accumulator_fields:",
         (
             '(2, _fixed_array_payload(0x01, 15), r"bundle\\.accumulator\\.asset")',
@@ -13176,26 +14034,68 @@ def check_python(texts, errors):
             'bytes([0x7D]) * 32',
             r"bundle\.accumulator\.aggregation_transcript_digest",
             '(8, bytes(32), r"bundle\\.accumulator\\.aggregation_transcript_digest")',
+            "_fixed_array_payload(0x08, 31)",
+            "_count_prefixed_fixed_array_payload(0x08, 32)",
+            "_fixed_array_payload(0x08, 33)",
             '(9, bytes(32), r"bundle\\.accumulator\\.nullifier_digest")',
+            "_fixed_array_payload(0x09, 31)",
+            "_count_prefixed_fixed_array_payload(0x09, 32)",
+            "_fixed_array_payload(0x09, 33)",
             '(10, bytes(32), r"bundle\\.accumulator\\.output_commitment_digest")',
+            "_fixed_array_payload(0x0A, 31)",
+            "_count_prefixed_fixed_array_payload(0x0A, 32)",
+            "_fixed_array_payload(0x0A, 33)",
             '(11, bytes(32), r"bundle\\.accumulator\\.fold_digest")',
+            "_fixed_array_payload(0x0B, 31)",
+            "_count_prefixed_fixed_array_payload(0x0B, 32)",
+            "_fixed_array_payload(0x0B, 33)",
             '(12, bytes(32), r"bundle\\.accumulator\\.recursive_proof_chain_digest")',
+            "_fixed_array_payload(0x0C, 31)",
+            "_count_prefixed_fixed_array_payload(0x0C, 32)",
+            "_fixed_array_payload(0x0C, 33)",
             '(13, bytes(32), r"bundle\\.accumulator\\.transition_profile_binding_digest")',
+            "_fixed_array_payload(0x0D, 31)",
+            "_count_prefixed_fixed_array_payload(0x0D, 32)",
+            "_fixed_array_payload(0x0D, 33)",
             r"bundle\.accumulator\.append_opening_preflight_digest",
             "_fixed_array_payload(0x0E, 31)",
             "_count_prefixed_fixed_array_payload(0x0E, 32)",
             "_fixed_array_payload(0x0E, 33)",
             r"bundle\.accumulator\.append_boundary_digest",
+            "_fixed_array_payload(0x0F, 31)",
+            "_count_prefixed_fixed_array_payload(0x0F, 32)",
+            "_fixed_array_payload(0x0F, 33)",
             '(16, bytes(32), r"bundle\\.accumulator\\.verifier_params_fingerprint")',
+            "_fixed_array_payload(0x10, 31)",
+            "_count_prefixed_fixed_array_payload(0x10, 32)",
+            "_fixed_array_payload(0x10, 33)",
             '(17, bytes(32), r"bundle\\.accumulator\\.fixed_window_table_schedule_digest")',
+            "_fixed_array_payload(0x11, 31)",
+            "_count_prefixed_fixed_array_payload(0x11, 32)",
+            "_fixed_array_payload(0x11, 33)",
             r"bundle\.accumulator\.fixed_window_shared_table_manifest_digest",
+            "_fixed_array_payload(0x12, 31)",
+            "_count_prefixed_fixed_array_payload(0x12, 32)",
+            "_fixed_array_payload(0x12, 33)",
             '(19, bytes(32), r"bundle\\.accumulator\\.fixed_window_table_base_digest")',
+            "_fixed_array_payload(0x13, 31)",
+            "_count_prefixed_fixed_array_payload(0x13, 32)",
+            "_fixed_array_payload(0x13, 33)",
             '(20, bytes(32), r"bundle\\.accumulator\\.verifier_witness_batch_digest")',
             "_fixed_array_payload(0x14, 31)",
             "_count_prefixed_fixed_array_payload(0x14, 32)",
             "_fixed_array_payload(0x14, 33)",
             '(21, (3).to_bytes(4, "little"), r"bundle\\.accumulator\\.verifier_opening_len")',
             "_count_prefixed_fixed_array_payload(0x15, 4)",
+            "bytes([2, 0, 0])",
+            "bytes([2, 0, 0, 0, 0])",
+            "truncated_accumulator_field_labels = (",
+            '(0, r"bundle\\.accumulator\\.domain")',
+            '(1, r"bundle\\.accumulator\\.chain_id")',
+            '(2, r"bundle\\.accumulator\\.asset")',
+            '(3, r"bundle\\.accumulator\\.initial_root")',
+            '(4, r"bundle\\.accumulator\\.final_root")',
+            "_kagemusha_norito_length(1)",
         ),
         "Python recursive spend bundle accumulator field-length guard tests",
         errors,
@@ -13247,7 +14147,7 @@ def check_python(texts, errors):
             "            _recursive_spend_bundle_with_trailing_current_note_field()\n        )",
             "Trailing bytes after bundle",
             "Trailing bytes after accumulator",
-            "Trailing bytes after current_note",
+            r"Trailing bytes after bundle\.accumulator\.current_note",
         ),
         "Python recursive spend bundle summary trailing-field guard tests",
         errors,
@@ -13259,6 +14159,7 @@ def check_python(texts, errors):
             "def _recursive_spend_verify_result_with_trailing_field(",
             "_recursive_spend_verify_result_with_trailing_field()\n        )",
             "Trailing bytes after verify_result",
+            "lineage_witness_required_for_redeem is True",
         ),
         "Python recursive spend verify-result trailing-field guard tests",
         errors,
@@ -13282,6 +14183,18 @@ def check_python(texts, errors):
             "_recursive_spend_lineage_witness_with_trailing_previous_verifier_key_id_field(),",
             "_recursive_spend_lineage_witness_with_previous_proof_field(1, b\"\")",
             "_recursive_spend_lineage_witness_with_previous_proof_field(2, bytes(32))",
+            "_recursive_spend_lineage_witness_with_previous_proof_field(\n"
+            "                2,\n"
+            "                _fixed_array_payload(0x44, 31),\n"
+            "            )",
+            "_recursive_spend_lineage_witness_with_previous_proof_field(\n"
+            "                2,\n"
+            "                _count_prefixed_fixed_array_payload(0x44, 32),\n"
+            "            )",
+            "_recursive_spend_lineage_witness_with_previous_proof_field(\n"
+            "                2,\n"
+            "                _fixed_array_payload(0x44, 33),\n"
+            "            )",
             "_recursive_spend_lineage_witness_with_previous_proof_box_backend(\"halo2/kzg\")",
             "_recursive_spend_lineage_witness_with_previous_proof_box_backend_and_empty_proof_bytes(\n                \"halo2/kzg\"",
             "_recursive_spend_lineage_witness_with_empty_previous_proof_bytes()",
@@ -13380,6 +14293,12 @@ def check_python(texts, errors):
             "        kagemusha.decode_kagemusha_recursive_spend_bundle(\n"
             "            _recursive_spend_bundle_with_empty_proof_public_inputs()\n"
             "        )",
+            "kagemusha.decode_kagemusha_recursive_spend_bundle(\n"
+            "                _recursive_spend_bundle_with_proof_public_inputs_hash(replacement)\n"
+            "            )",
+            "_fixed_array_payload(0x44, 31)",
+            "_count_prefixed_fixed_array_payload(0x44, 32)",
+            "_fixed_array_payload(0x44, 33)",
             'with pytest.raises(ValueError, match=r"bundle\\.proof_public_inputs_hash"):\n'
             "        kagemusha.decode_kagemusha_recursive_spend_bundle(\n"
             "            _recursive_spend_bundle_with_zero_proof_public_inputs_hash()\n"
@@ -13446,6 +14365,8 @@ def check_python(texts, errors):
             "                _fixed_array_payload(0x05, 31),",
             "                _fixed_array_payload(0x05, 33),",
             "                _count_prefixed_fixed_array_payload(0x05, 32),",
+            r"bundle\.accumulator\.current_note\.note_commitment",
+            r"bundle\.accumulator\.current_note\.spend_nullifier",
             "per_element_note_commitment.current_note.note_commitment == bytes([0x24]) * 32",
             "per_element_spend_nullifier.current_note.spend_nullifier == bytes([0x25]) * 32",
             "_numeric_payload_with_scale_payload(",
@@ -13453,10 +14374,11 @@ def check_python(texts, errors):
             "_numeric_payload_with_mantissa_payload(",
             "(2).to_bytes(4, \"little\") + b\"\\x01\"",
             '                _numeric_payload(b"\\xff"),',
-            '"numeric scale"',
-            '"numeric mantissa length"',
-            '"numeric amount"',
-            '"amount"',
+            r"bundle\.accumulator\.current_note\.amount numeric scale",
+            r"bundle\.accumulator\.current_note\.amount numeric mantissa length",
+            r"bundle\.accumulator\.current_note\.amount numeric amount must be greater than zero",
+            r"bundle\.accumulator\.current_note\.amount numeric amount must fit in u128",
+            r"bundle\.accumulator\.current_note\.amount",
         ),
         "Python recursive spend bundle current-note guard tests",
         errors,
@@ -13485,9 +14407,10 @@ def check_python(texts, errors):
             "                _numeric_payload_with_trailing_field(),\n"
             "            )",
             "                _numeric_payload_with_trailing_field(),",
-            '"numeric scale"',
-            '"numeric amount"',
-            '"amount"',
+            r"bundle\.accumulator\.current_note\.amount numeric scale",
+            r"bundle\.accumulator\.current_note\.amount numeric amount must be greater than zero",
+            r"bundle\.accumulator\.current_note\.amount numeric amount must fit in u128",
+            r"bundle\.accumulator\.current_note\.amount",
         ),
         "Python recursive spend bundle current-note amount encoding guard tests",
         errors,
@@ -13497,22 +14420,32 @@ def check_python(texts, errors):
         "python/iroha_python/tests/kagemusha_test.py",
         "invalid_block_heights",
         (
-            "True",
-            "False",
-            "1.5",
-            '"1"',
-            '"00"',
-            '"01"',
-            '"0007"',
-            '"-0"',
-            '"+7"',
-            '"7 "',
-            '" 7"',
-            '"18446744073709551616"',
-            "-1",
-            "1 << 64",
+            '(True, TypeError, "block_height must be an integer")',
+            '(False, TypeError, "block_height must be an integer")',
+            '(1.5, TypeError, "block_height must be an integer")',
+            '("1", TypeError, "block_height must be an integer")',
+            '("00", TypeError, "block_height must be an integer")',
+            '("01", TypeError, "block_height must be an integer")',
+            '("0007", TypeError, "block_height must be an integer")',
+            '("-0", TypeError, "block_height must be an integer")',
+            '("+7", TypeError, "block_height must be an integer")',
+            '("7 ", TypeError, "block_height must be an integer")',
+            '(" 7", TypeError, "block_height must be an integer")',
+            '("18446744073709551616", TypeError, "block_height must be an integer")',
+            '(-1, ValueError, "block_height must be non-negative")',
+            '(1 << 64, ValueError, "block_height must fit in u64")',
         ),
         "Python typed recursive spend blockHeight test vectors",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            "for block_height, error_type, expected_error in invalid_block_heights:",
+            "with pytest.raises(error_type, match=expected_error):\n                build_request(block_height)",
+        ),
+        "Python typed recursive spend blockHeight exact diagnostics",
         errors,
     )
     require_tuple_contains(
@@ -13520,23 +14453,48 @@ def check_python(texts, errors):
         "python/iroha_python/tests/kagemusha_test.py",
         "invalid_amounts",
         (
-            '""',
-            '"0"',
-            '"00"',
-            '"01"',
-            '"0007"',
-            '"-1"',
-            '"+1"',
-            '"1.0"',
-            '"1e3"',
-            '"7 "',
-            '" 7"',
-            '"\\t7"',
-            '"7\\n"',
-            "str(1 << 128)",
-            '"9" * 40',
+            '("", "amount must be a decimal integer")',
+            '("0", "amount must be greater than zero")',
+            '("00", "amount must be canonical")',
+            '("01", "amount must be canonical")',
+            '("0007", "amount must be canonical")',
+            '("-1", "amount must be a decimal integer")',
+            '("+1", "amount must be a decimal integer")',
+            '("1.0", "amount must be a decimal integer")',
+            '("1e3", "amount must be a decimal integer")',
+            '("7 ", "amount must be a decimal integer")',
+            '(" 7", "amount must be a decimal integer")',
+            '("\\t7", "amount must be a decimal integer")',
+            '("7\\n", "amount must be a decimal integer")',
+            '(str(1 << 128), "amount must fit in u128")',
+            '("9" * 40, "amount must fit in u128")',
         ),
         "Python typed recursive spend note amount test vectors",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            "for amount, expected_error in invalid_amounts:",
+            "with pytest.raises(ValueError, match=expected_error):\n            _recursive_spend_note(amount=amount)",
+        ),
+        "Python typed recursive spend note amount exact diagnostics",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            'match="note_commitment must be exactly 32 bytes"',
+            'match="spend_nullifier must be exactly 32 bytes"',
+            'match="note_commitment must be non-zero"',
+            'match="spend_nullifier must be non-zero"',
+            'match="spend_nullifier must differ from note_commitment"',
+            "commitment_seed=0x22, nullifier_seed=0",
+            "commitment_seed=0x22, nullifier_seed=0x22",
+        ),
+        "Python typed recursive spend note digest diagnostics",
         errors,
     )
     require_tuple_contains(
@@ -13544,23 +14502,37 @@ def check_python(texts, errors):
         "python/iroha_python/tests/kagemusha_test.py",
         "invalid_public_amounts",
         (
-            '""',
-            '"0"',
-            '"00"',
-            '"01"',
-            '"0007"',
-            '"-1"',
-            '"+1"',
-            '"1.0"',
-            '"1e3"',
-            '"7 "',
-            '" 7"',
-            '"\\t7"',
-            '"7\\n"',
-            "str(1 << 128)",
-            '"9" * 40',
+            '("", "public_amount must be a decimal integer")',
+            '("0", "public_amount must be greater than zero")',
+            '("00", "public_amount must be canonical")',
+            '("01", "public_amount must be canonical")',
+            '("0007", "public_amount must be canonical")',
+            '("-1", "public_amount must be a decimal integer")',
+            '("+1", "public_amount must be a decimal integer")',
+            '("1.0", "public_amount must be a decimal integer")',
+            '("1e3", "public_amount must be a decimal integer")',
+            '("7 ", "public_amount must be a decimal integer")',
+            '(" 7", "public_amount must be a decimal integer")',
+            '("\\t7", "public_amount must be a decimal integer")',
+            '("7\\n", "public_amount must be a decimal integer")',
+            '(str(1 << 128), "public_amount must fit in u128")',
+            '("9" * 40, "public_amount must fit in u128")',
         ),
         "Python typed recursive spend public amount test vectors",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            "for public_amount, expected_error in invalid_public_amounts:",
+            "with pytest.raises(ValueError, match=expected_error):\n"
+            "            kagemusha.KagemushaRecursiveSpendRedeemRequest(\n"
+            '                bundle=_shared_recursive_spend_archive("init_bundle"),\n'
+            "                recipient=_recursive_spend_recipient(),\n"
+            "                public_amount=public_amount,",
+        ),
+        "Python typed recursive spend public amount exact diagnostics",
         errors,
     )
     require_block_contains(
@@ -13594,15 +14566,17 @@ def check_python(texts, errors):
     require_block_contains(
         texts,
         "python/iroha_python/tests/kagemusha_test.py",
-        '    with pytest.raises(ValueError, match="lineage_witness is required"):',
-        '    with pytest.raises(ValueError, match="lineage_verifier_key"):',
+        "change_output=bytes([0x42]) * 32",
+        'match="lineage_verifier_key is required for recursive spend lineage proving"',
         (
-            'match="lineage_witness is required"',
+            'match="lineage_witness is required for this bundle"',
             '_shared_recursive_spend_abi7_archive("append_bundle")',
-            'match="lineage_verifier_record is required"',
+            'match="lineage_verifier_record is required for reserved-lineage bundles"',
             '_shared_recursive_spend_archive("init_bundle")',
             'semantic_missing_witness_redeem_proof = b""',
             'reserved_missing_record_redeem_proof = b""',
+            'reserved_missing_record_masks_malformed_witness = b"\\x00"',
+            "forgedRedeemLineageRecordBeforeWitness",
             'match="lineage_witness"',
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME",
         ),
@@ -13614,17 +14588,62 @@ def check_python(texts, errors):
         "python/iroha_python/tests/kagemusha_test.py",
         (
             "KagemushaRecursiveSpendVerifyRequest(",
-            'match="lineage_verifier_record is required"',
             'match="lineage_verifier_record is required for reserved-lineage bundles",',
             'match="lineage_verifier_record is only valid"',
             "bundle=_shared_recursive_spend_abi7_archive(\"append_bundle\"),\n"
             "            lineage_verifier_record=verifier_record,",
+            "forgedVerifyLineageRecord",
             "danglingVerifyLineageRecord",
-            "danglingRedeemLineageRecord",
             '_shared_recursive_spend_archive("init_bundle")',
             '_shared_recursive_spend_abi7_archive("append_bundle")',
         ),
         "Python typed recursive spend verify lineage-record preflight tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        "    wrong_bundle_schema = _synthetic_kagemusha_archive(",
+        "    with pytest.raises(\n        ValueError,\n        match=\"lineage_verifier_record is only valid for reserved-lineage bundles or lineage witnesses\",\n    ):",
+        (
+            'match="lineage_verifier_record is required for reserved-lineage bundles",',
+            'match="lineage_verifier_record is only valid"',
+            "bundle=_shared_recursive_spend_abi7_archive(\"append_bundle\"),\n"
+            "            lineage_verifier_record=verifier_record,",
+            "forgedVerifyLineageRecord",
+            "danglingVerifyLineageRecord",
+            '_shared_recursive_spend_archive("init_bundle")',
+            '_shared_recursive_spend_abi7_archive("append_bundle")',
+        ),
+        "Python typed recursive spend verify lineage-record preflight tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        "    wrong_bundle_schema = _synthetic_kagemusha_archive(",
+        "    with pytest.raises(\n        ValueError,\n        match=\"lineage_verifier_record is only valid for reserved-lineage bundles or lineage witnesses\",\n    ):",
+        (
+            "bundle must be a valid iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV1 Norito archive",
+        ),
+        "Python typed recursive spend request codec tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            "KagemushaRecursiveSpendRedeemRequest(",
+            "forgedRedeemLineageRecord",
+            "forgedRedeemLineageRecordBeforeWitness",
+            "danglingRedeemLineageRecord",
+            "danglingRedeemLineageRecords",
+            'match="lineage_verifier_record"',
+            'match="lineage_verifier_record is only valid"',
+            '_shared_recursive_spend_archive("init_bundle")',
+            '_shared_recursive_spend_abi7_archive("append_bundle")',
+        ),
+        "Python typed recursive spend redeem lineage-record preflight tests",
         errors,
     )
     require_contains(
@@ -13648,6 +14667,59 @@ def check_python(texts, errors):
         "Python Kagemusha instruction transaction builder",
         errors,
     )
+    require_block_contains(
+        texts,
+        wrapper,
+        "def build_kagemusha_instruction_transaction(",
+        "def build_kagemusha_recursive_redeem_transaction(",
+        (
+            '_kagemusha_require_non_blank_unpadded(chain_id, "chain_id")',
+            '_kagemusha_require_non_blank_unpadded(authority, "authority")',
+        ),
+        "Python Kagemusha instruction archive transaction builder exact identifiers",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        wrapper,
+        "def build_kagemusha_recursive_redeem_transaction(",
+        "def kagemusha_recursive_spend_init(",
+        (
+            '_kagemusha_require_non_blank_unpadded(chain_id, "chain_id")',
+            '_kagemusha_require_non_blank_unpadded(authority, "authority")',
+        ),
+        "Python Kagemusha recursive redeem transaction builder exact identifiers",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/iroha_python_rs/src/lib.rs",
+        (
+            "fn require_non_blank_unpadded(value: &str, field: &str) -> PyResult<()>",
+            'return Err(PyValueError::new_err(format!("{field} must not be blank")))',
+            "{field} must not contain surrounding whitespace",
+            'require_non_blank_unpadded(chain_id, "chain_id")?',
+            'require_non_blank_unpadded(authority, "authority")?',
+            "fn transaction_builder_rejects_padded_chain_id_and_authority()",
+            "ValueError: chain_id must not contain surrounding whitespace",
+            "ValueError: authority must not contain surrounding whitespace",
+        ),
+        "Python PyO3 TransactionBuilder exact identifiers",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "python/iroha_python/src/iroha_python/client.py",
+        "def _transaction_draft(",
+        "def _submit_transaction_draft_result(",
+        (
+            'effective_chain_id = _require_exact_non_empty_string(chain_id, "chain_id")',
+            '_require_exact_non_empty_string(authority, "authority")',
+            "effective_authority = self._native_transaction_account_id(",
+        ),
+        "Python Torii transaction draft exact identifiers",
+        errors,
+    )
     require_contains(
         texts,
         tx_wrapper,
@@ -13659,6 +14731,29 @@ def check_python(texts, errors):
             "self.add_instruction(",
         ),
         "Python TransactionDraft Kagemusha instruction helpers",
+        errors,
+    )
+    require_contains(
+        texts,
+        tx_wrapper,
+        (
+            "def _require_exact_non_empty_string(value: Any, context: str) -> str:",
+            'chain_id=_require_exact_non_empty_string(config.chain_id, "chain_id")',
+            'authority=_require_exact_non_empty_string(config.authority, "authority")',
+        ),
+        "Python TransactionDraft config exact identifiers",
+        errors,
+    )
+    require_contains(
+        texts,
+        tx_wrapper,
+        (
+            "_require_exact_non_empty_string(chain_id, \"chain_id\")",
+            "if chain_id is not None",
+            "_require_exact_non_empty_string(authority, \"authority\")",
+            "if authority is not None",
+        ),
+        "Python TransactionDraft signing override exact identifiers",
         errors,
     )
     require_contains(
@@ -13684,7 +14779,29 @@ def check_python(texts, errors):
         (
             "test_kagemusha_instruction_archive_transaction_helpers_wrap_redeem_archive",
             "test_kagemusha_recursive_redeem_transaction_helper_derives_instruction_before_signing",
+            "test_kagemusha_instruction_transaction_helpers_copy_mutable_archives_before_building",
+            "test_kagemusha_instruction_transaction_helpers_reject_padded_chain_and_authority_before_signing",
+            "test_python_transaction_builder_rejects_padded_chain_and_authority_before_signing",
+            "test_python_transaction_draft_rejects_padded_config_and_sign_overrides_before_signing",
             "test_kagemusha_instruction_archive_transaction_helpers_reject_adversarial_inputs",
+            'iroha_python.TransactionBuilder(" chain", authority)',
+            "iroha_python.TransactionDraft(",
+            'iroha_python.TransactionConfig(chain_id=" chain", authority=authority)',
+            'iroha_python.TransactionConfig(chain_id="", authority=authority)',
+            'iroha_python.TransactionConfig(chain_id="chain", authority="")',
+            'draft.sign(keypair.private_key, chain_id=" chain")',
+            'draft.sign(keypair.private_key, chain_id="")',
+            'draft.sign(keypair.private_key, authority=f"{authority} ")',
+            'draft.sign(keypair.private_key, authority="")',
+            "chain_id must be non-empty",
+            "authority must be non-empty",
+            "iroha_python.build_signed_transaction(",
+            "redeem_instruction_archive = bytearray(",
+            "redeem_request_archive = bytearray(",
+            "private_key = bytearray(keypair.private_key)",
+            "memoryview(redeem_instruction_archive)",
+            "memoryview(redeem_request_archive)",
+            "memoryview(private_key)",
             "_shared_recursive_spend_abi7_archive(\"redeem_instruction\")",
             "_shared_recursive_spend_abi7_archive(\"redeem_request\")",
             "_instruction_archive_bytes(instruction)",
@@ -13699,11 +14816,26 @@ def check_python(texts, errors):
             "invalid_field_bitset[39] = 0x20",
             "non_zero_padding.insert(40, 0x7F)",
             'excessive_padding[40:40] = b"\\x00" * 65',
+            "chain_id must not contain surrounding whitespace",
+            "authority must not contain surrounding whitespace",
             "bad_request_flags[39] = 0x20",
             "redeem_request_archive must be a valid Norito archive",
             "draft.kagemusha_recursive_redeem(request_archive)",
         ),
         "Python Kagemusha instruction transaction tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/client_ledger_helpers_test.py",
+        (
+            "test_transaction_draft_rejects_padded_chain_and_authority_before_signing",
+            'client._transaction_draft(chain_id=" chain", authority="authority@is")',
+            'client._transaction_draft(chain_id="chain", authority=" authority@is ")',
+            "chain_id must not contain surrounding whitespace",
+            "authority must not contain surrounding whitespace",
+        ),
+        "Python Torii transaction draft exact identifier tests",
         errors,
     )
     require_contains(
@@ -14157,8 +15289,8 @@ def check_swift(texts, errors):
             "canonicalU128Decimal",
             "requiresPreviousLineageVerifierRecordForAppend",
             "requiresPreviousProofOpenEnvelopesForAppend",
-            "readFixedBytesFlexible(expectedCount: 16)",
-            "readFixed32Flexible()",
+            'readFixedBytesFlexible(expectedCount: 16, field: "bundle.accumulator.asset")',
+            'readFixed32Flexible(field: "bundle.accumulator.initial_root")',
             "KagemushaRecursiveSpendProver.nativeArchiveMaxBytes",
             "KagemushaRecursiveSpendProver.recursiveSpendAccumulatorDomain",
             "bundle.accumulator.domain",
@@ -14183,8 +15315,11 @@ def check_swift(texts, errors):
             "bundle.proof_bytes",
             "bundle.proof_public_inputs",
             "bundle.proof_public_inputs_hash",
+            "field: context.proofPublicInputsHashField",
+            "readFixed32Flexible(field: context.proofPublicInputsHashField)",
             "KagemushaRecursiveSpendProver.isLineageProofCircuitId(bundleSummary.proofCircuitId)",
             "KagemushaRecursiveSpendRequestCodecError.invalidField(\"lineageVerifierRecord\")",
+            "public var lineageWitnessRequiredForRedeem: Bool",
         ),
         "Swift typed recursive spend request codecs",
         errors,
@@ -14192,7 +15327,7 @@ def check_swift(texts, errors):
     require_regex(
         texts,
         request_codecs,
-        r"mutating func readFixedBytesFlexible\(expectedCount: Int\) throws -> Data \{\s*if remaining == expectedCount \{\s*return try readFixedBytes\(expectedCount\)\s*\}\s*return try readFixedArrayBytes\(expectedCount: expectedCount\)\s*\}",
+        r"mutating func readFixedBytesFlexible\(expectedCount: Int, field: String = \"fixedArray\"\) throws -> Data \{\s*if remaining == expectedCount \{\s*return try readFixedBytes\(expectedCount\)\s*\}\s*return try readFixedArrayBytes\(expectedCount: expectedCount, field: field\)\s*\}",
         "Swift recursive spend fixed-array decoder rejects count header",
         errors,
         flags=re.S,
@@ -14200,7 +15335,7 @@ def check_swift(texts, errors):
     require_not_regex(
         texts,
         request_codecs,
-        r"mutating func readFixedBytesFlexible\(expectedCount: Int\) throws -> Data \{[\s\S]*?(?:readUInt64LE|UInt64|remaining >= 8)[\s\S]*?mutating func readFixedArrayBytes",
+        r"mutating func readFixedBytesFlexible\(expectedCount: Int, field: String = \"fixedArray\"\) throws -> Data \{[\s\S]*?(?:readUInt64LE|UInt64|remaining >= 8)[\s\S]*?mutating func readFixedArrayBytes",
         "Swift recursive spend fixed-array decoder rejects count header",
         errors,
         flags=re.S,
@@ -14229,7 +15364,8 @@ def check_swift(texts, errors):
         (
             "KagemushaRecursiveSpendProver.isLineageProofCircuitId(bundleSummary.proofCircuitId)",
             "lineageVerifierRecord != nil",
-            "lineageVerifierRecord == nil",
+            "lineageVerifierRecords",
+            "hasLineageVerifierRecord",
             "lineageWitnessHasReservedPreviousProof",
             "let witnessHasReservedPrevious: Bool\n        if let lineageWitness {\n            witnessHasReservedPrevious",
             "witnessHasReservedPrevious",
@@ -14237,6 +15373,14 @@ def check_swift(texts, errors):
         ),
         "Swift redeem request constructor lineage-witness record preflight",
         errors,
+    )
+    require_regex(
+        texts,
+        request_codecs,
+        r"let finalIsLineage = KagemushaRecursiveSpendProver\.isLineageProofCircuitId\([\s\S]*?let hasLineageVerifierRecord = lineageVerifierRecord != nil \|\| !lineageVerifierRecords\.isEmpty[\s\S]*?if finalIsLineage, !hasLineageVerifierRecord \{[\s\S]*?KagemushaRecursiveSpendRequestCodecError\.invalidField\(\"lineageVerifierRecord\"\)[\s\S]*?if let lineageWitness \{[\s\S]*?requireNestedArchive\(lineageWitness, field: \"lineageWitness\"\)[\s\S]*?let witnessHasReservedPrevious: Bool[\s\S]*?lineageWitnessHasReservedPreviousProof[\s\S]*?witnessHasReservedPrevious && !hasLineageVerifierRecord[\s\S]*?!witnessHasReservedPrevious && hasLineageVerifierRecord",
+        "Swift redeem request constructor reserved-lineage record preflight before witness parse",
+        errors,
+        flags=re.S,
     )
     require_contains(
         texts,
@@ -14420,6 +15564,14 @@ def check_swift(texts, errors):
         errors,
         flags=re.S,
     )
+    require_regex(
+        texts,
+        request_codecs_test,
+        r'lineageVerifierKey: nil,[\s\S]*?lineageProvingKeyArchive: nil[\s\S]*?\.invalidField\("lineageVerifierKey"\)',
+        "Swift typed recursive spend init lineage-key exact diagnostics",
+        errors,
+        flags=re.S,
+    )
     require_contains(
         texts,
         request_codecs_test,
@@ -14478,44 +15630,79 @@ def check_swift(texts, errors):
         "        let malformedAccumulatorFields: [(Int, Data, KagemushaRecursiveSpendRequestCodecError)] = [",
         "        for (fieldIndex, replacement, expectedError) in malformedAccumulatorFields {",
         (
-            "(2, Self.encodeFields(Array(repeating: Data([0x01]), count: 15), flags: NoritoHeader.compactLen), .invalidArchive(\"fixedArray\"))",
-            "(2, Self.countPrefixedFixedArrayPayload(0x01, count: 16), .invalidArchive(\"fixedArray\"))",
-            "(2, Self.encodeFields(Array(repeating: Data([0x01]), count: 17), flags: NoritoHeader.compactLen), .invalidArchive(\"fixedArray\"))",
+            "(2, Self.encodeFields(Array(repeating: Data([0x01]), count: 15), flags: NoritoHeader.compactLen), .invalidArchive(\"bundle.accumulator.asset\"))",
+            "(2, Self.countPrefixedFixedArrayPayload(0x01, count: 16), .invalidArchive(\"bundle.accumulator.asset\"))",
+            "(2, Self.encodeFields(Array(repeating: Data([0x01]), count: 17), flags: NoritoHeader.compactLen), .invalidArchive(\"bundle.accumulator.asset\"))",
             '(3, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.initial_root"))',
             '(4, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.final_root"))',
             '(4, initBundle.initialRoot, .invalidArchive("bundle.accumulator.final_root"))',
-            "(3, Self.encodeFields(Array(repeating: Data([0x02]), count: 31), flags: NoritoHeader.compactLen), .invalidArchive(\"fixedArray\"))",
-            "(3, Self.countPrefixedFixedArrayPayload(0x02, count: 32), .invalidArchive(\"fixedArray\"))",
-            "(3, Self.encodeFields(Array(repeating: Data([0x02]), count: 33), flags: NoritoHeader.compactLen), .invalidArchive(\"fixedArray\"))",
-            "(4, Self.encodeFields(Array(repeating: Data([0x03]), count: 31), flags: NoritoHeader.compactLen), .invalidArchive(\"fixedArray\"))",
-            "(4, Self.countPrefixedFixedArrayPayload(0x03, count: 32), .invalidArchive(\"fixedArray\"))",
-            "(4, Self.encodeFields(Array(repeating: Data([0x03]), count: 33), flags: NoritoHeader.compactLen), .invalidArchive(\"fixedArray\"))",
+            "(3, Self.encodeFields(Array(repeating: Data([0x02]), count: 31), flags: NoritoHeader.compactLen), .invalidArchive(\"bundle.accumulator.initial_root\"))",
+            "(3, Self.countPrefixedFixedArrayPayload(0x02, count: 32), .invalidArchive(\"bundle.accumulator.initial_root\"))",
+            "(3, Self.encodeFields(Array(repeating: Data([0x02]), count: 33), flags: NoritoHeader.compactLen), .invalidArchive(\"bundle.accumulator.initial_root\"))",
+            "(4, Self.encodeFields(Array(repeating: Data([0x03]), count: 31), flags: NoritoHeader.compactLen), .invalidArchive(\"bundle.accumulator.final_root\"))",
+            "(4, Self.countPrefixedFixedArrayPayload(0x03, count: 32), .invalidArchive(\"bundle.accumulator.final_root\"))",
+            "(4, Self.encodeFields(Array(repeating: Data([0x03]), count: 33), flags: NoritoHeader.compactLen), .invalidArchive(\"bundle.accumulator.final_root\"))",
             '(7, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.lineage_digest"))',
-            '(7, Self.fixedArrayPayload(0x07, count: 31), .invalidArchive("fixedArray"))',
-            '(7, Self.countPrefixedFixedArrayPayload(0x07, count: 32), .invalidArchive("fixedArray"))',
-            '(7, Self.fixedArrayPayload(0x07, count: 33), .invalidArchive("fixedArray"))',
+            '(7, Self.fixedArrayPayload(0x07, count: 31), .invalidArchive("bundle.accumulator.lineage_digest"))',
+            '(7, Self.countPrefixedFixedArrayPayload(0x07, count: 32), .invalidArchive("bundle.accumulator.lineage_digest"))',
+            '(7, Self.fixedArrayPayload(0x07, count: 33), .invalidArchive("bundle.accumulator.lineage_digest"))',
             '(8, Data(repeating: 0x7d, count: 32), .invalidArchive("bundle.accumulator.aggregation_transcript_digest"))',
             '(8, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.aggregation_transcript_digest"))',
+            '(8, Self.fixedArrayPayload(0x08, count: 31), .invalidArchive("bundle.accumulator.aggregation_transcript_digest"))',
+            '(8, Self.countPrefixedFixedArrayPayload(0x08, count: 32), .invalidArchive("bundle.accumulator.aggregation_transcript_digest"))',
+            '(8, Self.fixedArrayPayload(0x08, count: 33), .invalidArchive("bundle.accumulator.aggregation_transcript_digest"))',
             '(9, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.nullifier_digest"))',
+            '(9, Self.fixedArrayPayload(0x09, count: 31), .invalidArchive("bundle.accumulator.nullifier_digest"))',
+            '(9, Self.countPrefixedFixedArrayPayload(0x09, count: 32), .invalidArchive("bundle.accumulator.nullifier_digest"))',
+            '(9, Self.fixedArrayPayload(0x09, count: 33), .invalidArchive("bundle.accumulator.nullifier_digest"))',
             '(10, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.output_commitment_digest"))',
+            '(10, Self.fixedArrayPayload(0x0a, count: 31), .invalidArchive("bundle.accumulator.output_commitment_digest"))',
+            '(10, Self.countPrefixedFixedArrayPayload(0x0a, count: 32), .invalidArchive("bundle.accumulator.output_commitment_digest"))',
+            '(10, Self.fixedArrayPayload(0x0a, count: 33), .invalidArchive("bundle.accumulator.output_commitment_digest"))',
             '(11, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.fold_digest"))',
+            '(11, Self.fixedArrayPayload(0x0b, count: 31), .invalidArchive("bundle.accumulator.fold_digest"))',
+            '(11, Self.countPrefixedFixedArrayPayload(0x0b, count: 32), .invalidArchive("bundle.accumulator.fold_digest"))',
+            '(11, Self.fixedArrayPayload(0x0b, count: 33), .invalidArchive("bundle.accumulator.fold_digest"))',
             '(12, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.recursive_proof_chain_digest"))',
+            '(12, Self.fixedArrayPayload(0x0c, count: 31), .invalidArchive("bundle.accumulator.recursive_proof_chain_digest"))',
+            '(12, Self.countPrefixedFixedArrayPayload(0x0c, count: 32), .invalidArchive("bundle.accumulator.recursive_proof_chain_digest"))',
+            '(12, Self.fixedArrayPayload(0x0c, count: 33), .invalidArchive("bundle.accumulator.recursive_proof_chain_digest"))',
             '(13, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.transition_profile_binding_digest"))',
+            '(13, Self.fixedArrayPayload(0x0d, count: 31), .invalidArchive("bundle.accumulator.transition_profile_binding_digest"))',
+            '(13, Self.countPrefixedFixedArrayPayload(0x0d, count: 32), .invalidArchive("bundle.accumulator.transition_profile_binding_digest"))',
+            '(13, Self.fixedArrayPayload(0x0d, count: 33), .invalidArchive("bundle.accumulator.transition_profile_binding_digest"))',
             '(14, Data(repeating: 0x7e, count: 32), .invalidArchive("bundle.accumulator.append_opening_preflight_digest"))',
-            '(14, Self.fixedArrayPayload(0x0e, count: 31), .invalidArchive("fixedArray"))',
-            '(14, Self.countPrefixedFixedArrayPayload(0x0e, count: 32), .invalidArchive("fixedArray"))',
-            '(14, Self.fixedArrayPayload(0x0e, count: 33), .invalidArchive("fixedArray"))',
+            '(14, Self.fixedArrayPayload(0x0e, count: 31), .invalidArchive("bundle.accumulator.append_opening_preflight_digest"))',
+            '(14, Self.countPrefixedFixedArrayPayload(0x0e, count: 32), .invalidArchive("bundle.accumulator.append_opening_preflight_digest"))',
+            '(14, Self.fixedArrayPayload(0x0e, count: 33), .invalidArchive("bundle.accumulator.append_opening_preflight_digest"))',
             '(15, Data(repeating: 0x7f, count: 32), .invalidArchive("bundle.accumulator.append_boundary_digest"))',
+            '(15, Self.fixedArrayPayload(0x0f, count: 31), .invalidArchive("bundle.accumulator.append_boundary_digest"))',
+            '(15, Self.countPrefixedFixedArrayPayload(0x0f, count: 32), .invalidArchive("bundle.accumulator.append_boundary_digest"))',
+            '(15, Self.fixedArrayPayload(0x0f, count: 33), .invalidArchive("bundle.accumulator.append_boundary_digest"))',
             '(16, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.verifier_params_fingerprint"))',
+            '(16, Self.fixedArrayPayload(0x10, count: 31), .invalidArchive("bundle.accumulator.verifier_params_fingerprint"))',
+            '(16, Self.countPrefixedFixedArrayPayload(0x10, count: 32), .invalidArchive("bundle.accumulator.verifier_params_fingerprint"))',
+            '(16, Self.fixedArrayPayload(0x10, count: 33), .invalidArchive("bundle.accumulator.verifier_params_fingerprint"))',
             '(17, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.fixed_window_table_schedule_digest"))',
+            '(17, Self.fixedArrayPayload(0x11, count: 31), .invalidArchive("bundle.accumulator.fixed_window_table_schedule_digest"))',
+            '(17, Self.countPrefixedFixedArrayPayload(0x11, count: 32), .invalidArchive("bundle.accumulator.fixed_window_table_schedule_digest"))',
+            '(17, Self.fixedArrayPayload(0x11, count: 33), .invalidArchive("bundle.accumulator.fixed_window_table_schedule_digest"))',
             '(18, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.fixed_window_shared_table_manifest_digest"))',
+            '(18, Self.fixedArrayPayload(0x12, count: 31), .invalidArchive("bundle.accumulator.fixed_window_shared_table_manifest_digest"))',
+            '(18, Self.countPrefixedFixedArrayPayload(0x12, count: 32), .invalidArchive("bundle.accumulator.fixed_window_shared_table_manifest_digest"))',
+            '(18, Self.fixedArrayPayload(0x12, count: 33), .invalidArchive("bundle.accumulator.fixed_window_shared_table_manifest_digest"))',
             '(19, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.fixed_window_table_base_digest"))',
+            '(19, Self.fixedArrayPayload(0x13, count: 31), .invalidArchive("bundle.accumulator.fixed_window_table_base_digest"))',
+            '(19, Self.countPrefixedFixedArrayPayload(0x13, count: 32), .invalidArchive("bundle.accumulator.fixed_window_table_base_digest"))',
+            '(19, Self.fixedArrayPayload(0x13, count: 33), .invalidArchive("bundle.accumulator.fixed_window_table_base_digest"))',
             '(20, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.verifier_witness_batch_digest"))',
-            '(20, Self.fixedArrayPayload(0x14, count: 31), .invalidArchive("fixedArray"))',
-            '(20, Self.countPrefixedFixedArrayPayload(0x14, count: 32), .invalidArchive("fixedArray"))',
-            '(20, Self.fixedArrayPayload(0x14, count: 33), .invalidArchive("fixedArray"))',
+            '(20, Self.fixedArrayPayload(0x14, count: 31), .invalidArchive("bundle.accumulator.verifier_witness_batch_digest"))',
+            '(20, Self.countPrefixedFixedArrayPayload(0x14, count: 32), .invalidArchive("bundle.accumulator.verifier_witness_batch_digest"))',
+            '(20, Self.fixedArrayPayload(0x14, count: 33), .invalidArchive("bundle.accumulator.verifier_witness_batch_digest"))',
             '(21, Data([3, 0, 0, 0]), .invalidArchive("bundle.accumulator.verifier_opening_len"))',
             'Self.countPrefixedFixedArrayPayload(0x15, count: 4)',
+            '(21, Data([2, 0, 0]), .invalidArchive("bundle.accumulator.verifier_opening_len"))',
+            '(21, Data([2, 0, 0, 0, 0]), .invalidArchive("bundle.accumulator.verifier_opening_len"))',
         ),
         "Swift recursive spend bundle accumulator field-length guard tests",
         errors,
@@ -14554,7 +15741,7 @@ def check_swift(texts, errors):
             "recursiveSpendBundleWithTrailingCurrentNoteField",
             "Self.recursiveSpendBundleWithTrailingCurrentNoteField()",
             '.invalidArchive("bundle")',
-            '.invalidArchive("field")',
+            '.invalidArchive("bundle.accumulator.current_note")',
         ),
         "Swift recursive spend bundle summary trailing-field guard tests",
         errors,
@@ -14566,6 +15753,7 @@ def check_swift(texts, errors):
             "recursiveSpendVerifyResultWithTrailingField",
             "Self.recursiveSpendVerifyResultWithTrailingField()",
             '.invalidArchive("verifyResult")',
+            "lineageWitnessRequiredForRedeem",
         ),
         "Swift recursive spend verify-result trailing-field guard tests",
         errors,
@@ -14590,6 +15778,9 @@ def check_swift(texts, errors):
             "try Self.recursiveSpendLineageWitnessWithPreviousProofField(",
             "fieldIndex: 1,",
             "replacement: Data()",
+            "replacement: Self.fixedArrayPayload(0x44, count: 31)",
+            "replacement: Self.countPrefixedFixedArrayPayload(0x44, count: 32)",
+            "replacement: Self.fixedArrayPayload(0x44, count: 33)",
             'try Self.recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg"),',
             'try Self.recursiveSpendLineageWitnessWithPreviousProofBoxBackendAndEmptyProofBytes(',
             "try Self.recursiveSpendLineageWitnessWithEmptyPreviousProofBytes(),",
@@ -14668,6 +15859,10 @@ def check_swift(texts, errors):
         (
             "Self.recursiveSpendBundleWithEmptyProofPublicInputs()",
             '.invalidArchive("bundle.proof_public_inputs")',
+            "Self.recursiveSpendBundleWithProofPublicInputsHash(replacement)",
+            "Self.fixedArrayPayload(0x44, count: 31)",
+            "Self.countPrefixedFixedArrayPayload(0x44, count: 32)",
+            "Self.fixedArrayPayload(0x44, count: 33)",
             "Self.recursiveSpendBundleWithZeroProofPublicInputsHash()",
             '.invalidArchive("bundle.proof_public_inputs_hash")',
             "Self.recursiveSpendBundleWithMismatchedProofPublicInputsHash()",
@@ -14704,9 +15899,9 @@ def check_swift(texts, errors):
             "replacement: Self.fixedArrayPayload(0x05, count: 31)",
             "replacement: Self.fixedArrayPayload(0x05, count: 33)",
             "replacement: Self.countPrefixedFixedArrayPayload(0x05, count: 32)",
-            '.invalidField("numeric")',
-            '.invalidField("amount")',
-            '.invalidArchive("fixedArray")',
+            '.invalidField("bundle.accumulator.current_note.amount")',
+            '.invalidArchive("bundle.accumulator.current_note.note_commitment")',
+            '.invalidArchive("bundle.accumulator.current_note.spend_nullifier")',
         ),
         "Swift recursive spend bundle current-note guard tests",
         errors,
@@ -14722,9 +15917,9 @@ def check_swift(texts, errors):
             "replacement: Self.numericPayload(Data([0xff]))",
             "replacement: Self.numericPayload(Data(repeating: 0, count: 16) + Data([1]))",
             "replacement: Self.numericPayloadWithTrailingField()",
-            '.invalidField("numeric")',
-            '.invalidField("amount")',
-            '.invalidArchive("field")',
+            '.invalidField("bundle.accumulator.current_note.amount")',
+            '.invalidArchive("bundle.accumulator.current_note.amount.scale")',
+            '.invalidArchive("bundle.accumulator.current_note.amount")',
         ),
         "Swift recursive spend bundle current-note amount encoding guard tests",
         errors,
@@ -14733,10 +15928,13 @@ def check_swift(texts, errors):
         texts,
         request_codecs_test,
         "        for amount in [",
-        "        XCTAssertThrowsError(\n            try KagemushaRecursiveSpendableNoteDescriptor(\n                noteCommitment: Data(repeating: 1, count: 31),",
+        '        assertTypedRequestInvalidField("noteCommitment") {\n'
+        "            _ = try KagemushaRecursiveSpendableNoteDescriptor(\n"
+        "                noteCommitment: Data(repeating: 1, count: 31),",
         (
             "KagemushaRecursiveSpendableNoteDescriptor(",
             "amount: amount",
+            'assertTypedRequestInvalidField("amount")',
             '""',
             '"0"',
             '"00"',
@@ -14760,7 +15958,38 @@ def check_swift(texts, errors):
         texts,
         request_codecs_test,
         (
-            "testTypedRequestsRejectMalformedInputsBeforeNativeDispatch",
+            "func assertTypedRequestInvalidField(",
+            "KagemushaRecursiveSpendRequestCodecError.invalidField(field)",
+            'assertTypedRequestInvalidField("amount")',
+            'assertTypedRequestInvalidField("publicAmount")',
+        ),
+        "Swift typed recursive spend amount exact diagnostics",
+        errors,
+    )
+    require_contains(
+        texts,
+        request_codecs_test,
+        (
+            'assertTypedRequestInvalidField("noteCommitment")',
+            'assertTypedRequestInvalidField("spendNullifier")',
+            "noteCommitment: Data(repeating: 1, count: 31)",
+            "noteCommitment: Data(repeating: 0, count: 32)",
+            "spendNullifier: Data(repeating: 0, count: 32)",
+            "spendNullifier: Data(repeating: 3, count: 32)",
+        ),
+        "Swift typed recursive spend note digest exact diagnostics",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        request_codecs_test,
+        "        for amount in [",
+        '        assertTypedRequestInvalidField("noteCommitment") {\n'
+        "            _ = try KagemushaRecursiveSpendableNoteDescriptor(\n"
+        "                noteCommitment: Data(repeating: 1, count: 31),",
+        (
+            '""',
+            '"0"',
             '"00"',
             '"01"',
             '"0007"',
@@ -14775,6 +16004,7 @@ def check_swift(texts, errors):
             "Self.u128MaxPlusOne",
             "Self.u128TooManyDigits",
             "publicAmount: amount",
+            'assertTypedRequestInvalidField("publicAmount")',
         ),
         "Swift typed recursive spend public amount test vectors",
         errors,
@@ -14822,12 +16052,20 @@ def check_swift(texts, errors):
             'Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle")',
             'assertRedeemRequestInvalidField("lineageVerifierRecord")',
             'Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle")',
+            "let reservedMissingRecordMasksMalformedWitness = Data([0])",
             "KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)",
             "lineageWitness: Self.syntheticArchive(\n                    schema: KagemushaRecursiveSpendRequestCodecs.lineageWitnessWireName",
             'name: "lineage_witness_append_result"',
             'name: "lineage_witness_from_init_result"',
             'lineageVerifierRecord: try Self.sampleVerifierRecord()',
         ),
+        "Swift typed recursive spend redeem lineage preflight tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        request_codecs_test,
+        ("let reservedMissingRecordMasksMalformedWitness = Data([0])",),
         "Swift typed recursive spend redeem lineage preflight tests",
         errors,
     )
@@ -15616,11 +16854,51 @@ def check_swift(texts, errors):
     )
     require_contains(
         texts,
+        bridge,
+        (
+            "func validatedAuthorityChainDiscriminant(authority: String) throws -> UInt16",
+            "authority.trimmingCharacters(in: .whitespacesAndNewlines) == authority",
+            "authority.rangeOfCharacter(from: .whitespacesAndNewlines) == nil",
+            "!authority.contains(\"@\")",
+            "!authority.contains(\"#\")",
+            "!authority.contains(\"$\")",
+            "AccountAddress.inspectI105NetworkPrefix(authority, expectedPrefix: nil).chainDiscriminant",
+            "AccountAddress.parseEncodedSwiftOnly(authority, expectedPrefix: prefix)",
+            "address.toI105(networkPrefix: prefix) == authority",
+            "try withChainDiscriminant(validatedAuthorityChainDiscriminant(authority: authority), body)",
+        ),
+        "Swift native bridge exact authority discriminant",
+        errors,
+    )
+    require(
+        "inferredAccountAddressDiscriminant" not in texts[bridge]
+        and "inferredAuthorityDiscriminant" not in texts[bridge],
+        "Swift native bridge exact authority discriminant must not use trim-based inference helpers",
+        errors,
+    )
+    require_contains(
+        texts,
         instruction_encoder_test,
         (
             "testBuildRecursiveRedeemInstructionTransactionWrapsNativeInstructionArchive",
             "testBuildKagemushaTransferInstructionTransactionUsesTransferWireName",
             "testBuildKagemushaRecursiveRedeemTransactionDerivesInstructionBeforeSigning",
+            "testKagemushaInstructionRequestsPreserveDataAfterCallerMutation",
+            "testKagemushaInstructionRequestsRejectPaddedIdsBeforeArchiveOrRedeem",
+            "let expectedInstructionArchive = instructionArchive",
+            "instructionArchive[0] = 0",
+            "let expectedRedeemRequestArchive = redeemRequestArchive",
+            "redeemRequestArchive[0] = 0",
+            "nativeInstructionArchive[0] = 0",
+            "XCTAssertEqual(redeemedRequests, [expectedRedeemRequestArchive])",
+            'XCTAssertEqual(error as? TransactionInputError, .invalidChainId(" chain"))',
+            '.malformedAccountId(field: "authority", value: " \\(authority) ")',
+            "XCTAssertEqual(redeemedRequests, [])",
+            "testNativeBridgeRejectsPaddedAuthorityBeforeChainDiscriminantInference",
+            "validatedAuthorityChainDiscriminant(authority: authority)",
+            "AccountId.defaultNetworkPrefix",
+            "\"\\(authority)@banka.dataspace\"",
+            "XCTAssertEqual(error as? NativeBridgeError, .authority)",
             "testKagemushaInstructionTransactionRejectsAdversarialArchives",
             "testKagemushaRecursiveRedeemTransactionRejectsMalformedRequestBeforeNativeRedeem",
             "testKagemushaRecursiveRedeemTransactionRejectsAdversarialNativeInstructionArchives",
@@ -16087,6 +17365,7 @@ def check_java_kotlin(texts, errors):
             "bundle.proof_bytes",
             "bundle.proof_public_inputs",
             "bundle.proof_public_inputs_hash",
+            "val lineageWitnessRequiredForRedeem: Boolean",
             "lineageWitnessHasReservedPreviousProof",
             "if (lineageWitnessArchive != null) {",
             "readPreviousRecursiveProofCircuitId",
@@ -16095,6 +17374,14 @@ def check_java_kotlin(texts, errors):
         ),
         "Kotlin recursive spend bundle accumulator domain guard",
         errors,
+    )
+    require_regex(
+        texts,
+        kotlin_request_codecs,
+        r"val finalIsLineage =[\s\S]*?KagemushaRecursiveSpendProver\.isLineageProofCircuitId\(bundleSummary\.proofCircuitId\)[\s\S]*?val hasLineageVerifierRecord = lineageVerifierRecord != null \|\| this\.lineageVerifierRecords\.isNotEmpty\(\)[\s\S]*?require\(!finalIsLineage \|\| hasLineageVerifierRecord\) \{[\s\S]*?lineageVerifierRecord is required for reserved-lineage bundles[\s\S]*?val witnessHasReservedPrevious =[\s\S]*?if \(lineageWitnessArchive != null\) \{[\s\S]*?lineageWitnessHasReservedPreviousProof[\s\S]*?!witnessHasReservedPrevious \|\| hasLineageVerifierRecord[\s\S]*?witnessHasReservedPrevious \|\| !hasLineageVerifierRecord",
+        "Kotlin redeem request constructor reserved-lineage record preflight before witness parse",
+        errors,
+        flags=re.S,
     )
     require_regex(
         texts,
@@ -16234,6 +17521,7 @@ def check_java_kotlin(texts, errors):
             "val appendNeedsPreviousProofOpenEnvelopes =",
             "previousProofOpenEnvelopesArchive == null || appendNeedsPreviousProofOpenEnvelopes",
             "previousProofOpenEnvelopes are only valid for lineage append output",
+            "previousProofOpenEnvelopes is required for lineage append output",
         ),
         "Kotlin typed recursive spend append previous-lineage record and proof-opening selection",
         errors,
@@ -16351,6 +17639,7 @@ def check_java_kotlin(texts, errors):
             '"lineageVerifierKey is required for recursive spend init"',
             "val initWrongRecordBundle = assertFailsWith<IllegalArgumentException>",
             '"recordBundle must be a valid ${KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE} Norito archive"',
+            "val appendWrongRecordBundle = assertFailsWith<IllegalArgumentException>",
             "val verifierRecordWrongArchive = assertFailsWith<IllegalArgumentException>",
             '"recordBytes must be a valid ${KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD} Norito archive"',
         ),
@@ -16362,11 +17651,15 @@ def check_java_kotlin(texts, errors):
         kotlin_request_codecs_test,
         (
             'assertEquals("hops must not be empty", pallasError.message)',
-            "val rejectedProofResult = assertFailsWith<IllegalArgumentException>",
+            "initError.message",
+            "appendError.message",
+            '"recursive spend requests require explicit VerifiedFoldHopEvidence and a bridge-generated or explicit "',
+            '"Pallas open-envelopes archive; privacy proof outputs alone do not carry "',
+            "rejectedProofResult.message",
             '"unshieldProofOutputArchive must be a successful privacy proof result: status=1 error_code=5"',
-            "val inactiveUnshieldVerifierRecord = assertFailsWith<IllegalArgumentException>",
+            "inactiveUnshieldVerifierRecord.message",
             '"unshieldVerifierRecord status must be Active"',
-            "val unshieldProofAsFoldHop = assertFailsWith<IllegalArgumentException>",
+            "unshieldProofAsFoldHop.message",
             '"hop 0 proofOutputArchive algorithm_id must be confidential-transfer-v2"',
         ),
         "Kotlin typed recursive spend proof-output evidence diagnostics",
@@ -16424,8 +17717,7 @@ def check_java_kotlin(texts, errors):
         texts,
         kotlin_request_codecs_test,
         "        val malformedPreviousOpenArchives = listOf(",
-        "        assertFailsWith<IllegalArgumentException> {\n"
-        "            AppendSpendRequest(",
+        "        val appendWrongRecordBundle = assertFailsWith<IllegalArgumentException> {",
         (
             'syntheticArchive("test.WrongPreviousProofOpenEnvelopes") to',
             '"previousProofOpenEnvelopes must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive"',
@@ -16542,6 +17834,7 @@ def check_java_kotlin(texts, errors):
             "bundle.proof_bytes",
             "bundle.proof_public_inputs",
             "bundle.proof_public_inputs_hash",
+            "public final boolean lineageWitnessRequiredForRedeem;",
             "lineageWitnessHasReservedPreviousProof",
             "final boolean witnessHasReservedPrevious =\n          this.lineageWitness != null\n              && lineageWitnessHasReservedPreviousProof(this.lineageWitness);",
             "readPreviousRecursiveProofCircuitId",
@@ -16550,6 +17843,14 @@ def check_java_kotlin(texts, errors):
         ),
         "Android Java recursive spend bundle accumulator domain guard",
         errors,
+    )
+    require_regex(
+        texts,
+        java_request_codecs,
+        r"final boolean finalIsLineage =[\s\S]*?KagemushaRecursiveSpendProver\.isLineageProofCircuitId\(bundleSummary\.proofCircuitId\);[\s\S]*?final boolean hasLineageVerifierRecord =[\s\S]*?this\.lineageVerifierRecord != null \|\| !this\.lineageVerifierRecords\.isEmpty\(\);[\s\S]*?require\([\s\S]*?!finalIsLineage \|\| hasLineageVerifierRecord,[\s\S]*?lineageVerifierRecord is required for reserved-lineage bundles[\s\S]*?final boolean witnessHasReservedPrevious =[\s\S]*?this\.lineageWitness != null[\s\S]*?lineageWitnessHasReservedPreviousProof\(this\.lineageWitness\)[\s\S]*?!witnessHasReservedPrevious \|\| hasLineageVerifierRecord[\s\S]*?witnessHasReservedPrevious \|\| !hasLineageVerifierRecord",
+        "Android Java redeem request constructor reserved-lineage record preflight before witness parse",
+        errors,
+        flags=re.S,
     )
     require_regex(
         texts,
@@ -16689,6 +17990,7 @@ def check_java_kotlin(texts, errors):
             "final boolean appendNeedsPreviousProofOpenEnvelopes =",
             "this.previousProofOpenEnvelopes == null || appendNeedsPreviousProofOpenEnvelopes",
             "previousProofOpenEnvelopes are only valid for lineage append output",
+            "previousProofOpenEnvelopes is required for lineage append output",
         ),
         "Android Java typed recursive spend append previous-lineage record and proof-opening selection",
         errors,
@@ -16822,17 +18124,28 @@ def check_java_kotlin(texts, errors):
         "Android Java typed recursive spend init/verifier archive preflight tests",
         errors,
     )
+    require_regex(
+        texts,
+        java_test,
+        r'"recordBundle must be a valid "\s*\+\s*KagemushaRecursiveSpendRequestCodecs\.SCHEMA_RECORD_BUNDLE\s*\+\s*" Norito archive"[\s\S]*?new KagemushaRecursiveSpendRequestCodecs\.AppendSpendRequest\([\s\S]*?syntheticArchive\(KagemushaRecursiveSpendRequestCodecs\.SCHEMA_VERIFY_RESULT\)',
+        "Android Java typed recursive spend append wrong record-bundle exact diagnostics",
+        errors,
+        flags=re.S,
+    )
     require_contains(
         texts,
         java_test,
         (
             '"hops must not be empty".equals(pallasError.getMessage())',
             "final String proofOnlyRequestMessage =",
-            "final IllegalArgumentException rejectedProofResult =",
+            "proofOnlyRequestMessage.equals(initError.getMessage())",
+            "proofOnlyRequestMessage.equals(appendError.getMessage())",
+            '"Pallas open-envelopes archive; privacy proof outputs alone do not carry "',
+            "rejectedProofResult.getMessage()",
             '"unshieldProofOutputArchive must be a successful privacy proof result: status=1 error_code=5"',
-            "final IllegalArgumentException inactiveUnshieldVerifierRecord =",
+            "inactiveUnshieldVerifierRecord.getMessage()",
             '"unshieldVerifierRecord status must be Active"',
-            "final IllegalArgumentException unshieldProofAsFoldHop =",
+            "unshieldProofAsFoldHop.getMessage()",
             '"hop 0 proofOutputArchive algorithm_id must be confidential-transfer-v2"',
         ),
         "Android Java typed recursive spend proof-output evidence diagnostics",
@@ -16889,8 +18202,7 @@ def check_java_kotlin(texts, errors):
         java_test,
         "    final Object[][] malformedPreviousOpenArchives = {",
         "    assertThrows(\n"
-        "        () ->\n"
-        "            new KagemushaRecursiveSpendRequestCodecs.AppendSpendRequest(",
+        "        \"recordBundle must be a valid \"",
         (
             '{syntheticArchive("test.WrongPreviousProofOpenEnvelopes"),',
             '"previousProofOpenEnvelopes must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive"',
@@ -17014,49 +18326,103 @@ def check_java_kotlin(texts, errors):
         "        val malformedAccumulatorFields = listOf(",
         "        val trailingAccumulatorField = assertFailsWith<IllegalArgumentException> {",
         (
-            'Triple(2, fixedArrayPayload(0x01, 15), "asset must be exactly 16 bytes")',
-            'Triple(2, fixedArrayPayload(0x01, 17), "asset must be exactly 16 bytes")',
+            'Triple(2, fixedArrayPayload(0x01, 15), "bundle.accumulator.asset must be exactly 16 bytes")',
+            'Triple(2, fixedArrayPayload(0x01, 17), "bundle.accumulator.asset must be exactly 16 bytes")',
             'Triple(3, ByteArray(32), "bundle.accumulator.initial_root")',
             'Triple(4, ByteArray(32), "bundle.accumulator.final_root")',
             'Triple(4, init.initialRoot, "bundle.accumulator.final_root")',
-            'Triple(3, fixedArrayPayload(0x02, 31), "initial_root must be exactly 32 bytes")',
-            'Triple(2, countPrefixedFixedArrayPayload(0x01, 16), "asset byte field length must be 1")',
+            'Triple(3, fixedArrayPayload(0x02, 31), "bundle.accumulator.initial_root must be exactly 32 bytes")',
+            'Triple(2, countPrefixedFixedArrayPayload(0x01, 16), "bundle.accumulator.asset byte field length must be 1")',
             'countPrefixedFixedArrayPayload(0x02, 32)',
-            '"initial_root byte field length must be 1"',
-            'Triple(4, countPrefixedFixedArrayPayload(0x03, 32), "final_root byte field length must be 1")',
-            'Triple(3, fixedArrayPayload(0x02, 33), "initial_root must be exactly 32 bytes")',
-            'Triple(4, fixedArrayPayload(0x03, 31), "final_root must be exactly 32 bytes")',
-            'Triple(4, fixedArrayPayload(0x03, 33), "final_root must be exactly 32 bytes")',
+            '"bundle.accumulator.initial_root byte field length must be 1"',
+            'Triple(4, countPrefixedFixedArrayPayload(0x03, 32), "bundle.accumulator.final_root byte field length must be 1")',
+            'Triple(3, fixedArrayPayload(0x02, 33), "bundle.accumulator.initial_root must be exactly 32 bytes")',
+            'Triple(4, fixedArrayPayload(0x03, 31), "bundle.accumulator.final_root must be exactly 32 bytes")',
+            'Triple(4, fixedArrayPayload(0x03, 33), "bundle.accumulator.final_root must be exactly 32 bytes")',
             'Triple(7, ByteArray(32), "bundle.accumulator.lineage_digest")',
             'Triple(8, ByteArray(32) { 0x7d.toByte() }, "bundle.accumulator.aggregation_transcript_digest")',
             'Triple(8, ByteArray(32), "bundle.accumulator.aggregation_transcript_digest")',
-            'Triple(7, fixedArrayPayload(0x07, 31), "lineage_digest must be exactly 32 bytes")',
-            'Triple(7, countPrefixedFixedArrayPayload(0x07, 32), "lineage_digest byte field length must be 1")',
-            'Triple(7, fixedArrayPayload(0x07, 33), "lineage_digest must be exactly 32 bytes")',
+            'Triple(7, fixedArrayPayload(0x07, 31), "bundle.accumulator.lineage_digest must be exactly 32 bytes")',
+            'Triple(7, countPrefixedFixedArrayPayload(0x07, 32), "bundle.accumulator.lineage_digest byte field length must be 1")',
+            'Triple(7, fixedArrayPayload(0x07, 33), "bundle.accumulator.lineage_digest must be exactly 32 bytes")',
             'Triple(9, ByteArray(32), "bundle.accumulator.nullifier_digest")',
+            'fixedArrayPayload(0x08, 31)',
+            '"bundle.accumulator.aggregation_transcript_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload(0x08, 32)',
+            '"bundle.accumulator.aggregation_transcript_digest byte field length must be 1"',
+            'fixedArrayPayload(0x08, 33)',
+            'fixedArrayPayload(0x09, 31)',
+            '"bundle.accumulator.nullifier_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload(0x09, 32)',
+            '"bundle.accumulator.nullifier_digest byte field length must be 1"',
+            'fixedArrayPayload(0x09, 33)',
             'Triple(10, ByteArray(32), "bundle.accumulator.output_commitment_digest")',
+            'fixedArrayPayload(0x0a, 31)',
+            '"bundle.accumulator.output_commitment_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload(0x0a, 32)',
+            '"bundle.accumulator.output_commitment_digest byte field length must be 1"',
+            'fixedArrayPayload(0x0a, 33)',
             'Triple(11, ByteArray(32), "bundle.accumulator.fold_digest")',
+            'fixedArrayPayload(0x0b, 31)',
+            '"bundle.accumulator.fold_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload(0x0b, 32)',
+            '"bundle.accumulator.fold_digest byte field length must be 1"',
+            'fixedArrayPayload(0x0b, 33)',
             'Triple(12, ByteArray(32), "bundle.accumulator.recursive_proof_chain_digest")',
+            'fixedArrayPayload(0x0c, 31)',
+            '"bundle.accumulator.recursive_proof_chain_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload(0x0c, 32)',
+            '"bundle.accumulator.recursive_proof_chain_digest byte field length must be 1"',
+            'fixedArrayPayload(0x0c, 33)',
             'Triple(13, ByteArray(32), "bundle.accumulator.transition_profile_binding_digest")',
+            'fixedArrayPayload(0x0d, 31)',
+            '"bundle.accumulator.transition_profile_binding_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload(0x0d, 32)',
+            '"bundle.accumulator.transition_profile_binding_digest byte field length must be 1"',
+            'fixedArrayPayload(0x0d, 33)',
             'Triple(14, ByteArray(32) { 0x7e.toByte() }, "bundle.accumulator.append_opening_preflight_digest")',
             'fixedArrayPayload(0x0e, 31)',
-            '"append_opening_preflight_digest must be exactly 32 bytes"',
+            '"bundle.accumulator.append_opening_preflight_digest must be exactly 32 bytes"',
             'countPrefixedFixedArrayPayload(0x0e, 32)',
-            '"append_opening_preflight_digest byte field length must be 1"',
+            '"bundle.accumulator.append_opening_preflight_digest byte field length must be 1"',
             'fixedArrayPayload(0x0e, 33)',
             'Triple(15, ByteArray(32) { 0x7f.toByte() }, "bundle.accumulator.append_boundary_digest")',
+            'Triple(15, fixedArrayPayload(0x0f, 31), "bundle.accumulator.append_boundary_digest must be exactly 32 bytes")',
+            'countPrefixedFixedArrayPayload(0x0f, 32)',
+            '"bundle.accumulator.append_boundary_digest byte field length must be 1"',
+            'Triple(15, fixedArrayPayload(0x0f, 33), "bundle.accumulator.append_boundary_digest must be exactly 32 bytes")',
             'Triple(16, ByteArray(32), "bundle.accumulator.verifier_params_fingerprint")',
+            'Triple(16, fixedArrayPayload(0x10, 31), "bundle.accumulator.verifier_params_fingerprint must be exactly 32 bytes")',
+            'countPrefixedFixedArrayPayload(0x10, 32)',
+            '"bundle.accumulator.verifier_params_fingerprint byte field length must be 1"',
+            'Triple(16, fixedArrayPayload(0x10, 33), "bundle.accumulator.verifier_params_fingerprint must be exactly 32 bytes")',
             'Triple(17, ByteArray(32), "bundle.accumulator.fixed_window_table_schedule_digest")',
+            'fixedArrayPayload(0x11, 31)',
+            '"bundle.accumulator.fixed_window_table_schedule_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload(0x11, 32)',
+            '"bundle.accumulator.fixed_window_table_schedule_digest byte field length must be 1"',
+            'fixedArrayPayload(0x11, 33)',
             'Triple(18, ByteArray(32), "bundle.accumulator.fixed_window_shared_table_manifest_digest")',
+            'fixedArrayPayload(0x12, 31)',
+            '"bundle.accumulator.fixed_window_shared_table_manifest_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload(0x12, 32)',
+            '"bundle.accumulator.fixed_window_shared_table_manifest_digest byte field length must be 1"',
+            'fixedArrayPayload(0x12, 33)',
             'Triple(19, ByteArray(32), "bundle.accumulator.fixed_window_table_base_digest")',
+            'fixedArrayPayload(0x13, 31)',
+            'countPrefixedFixedArrayPayload(0x13, 32)',
+            '"bundle.accumulator.fixed_window_table_base_digest byte field length must be 1"',
+            'fixedArrayPayload(0x13, 33)',
             'Triple(20, ByteArray(32), "bundle.accumulator.verifier_witness_batch_digest")',
             'fixedArrayPayload(0x14, 31)',
-            '"verifier_witness_batch_digest must be exactly 32 bytes"',
+            '"bundle.accumulator.verifier_witness_batch_digest must be exactly 32 bytes"',
             'countPrefixedFixedArrayPayload(0x14, 32)',
-            '"verifier_witness_batch_digest byte field length must be 1"',
+            '"bundle.accumulator.verifier_witness_batch_digest byte field length must be 1"',
             'fixedArrayPayload(0x14, 33)',
             'Triple(21, byteArrayOf(3, 0, 0, 0), "bundle.accumulator.verifier_opening_len")',
             "countPrefixedFixedArrayPayload(0x15, 4)",
+            'Triple(21, byteArrayOf(2, 0, 0), "bundle.accumulator.verifier_opening_len")',
+            'Triple(21, byteArrayOf(2, 0, 0, 0, 0), "bundle.accumulator.verifier_opening_len")',
             "assertEquals(expectedMessage, malformedField.message)",
         ),
         "Kotlin recursive spend bundle accumulator field-length guard tests",
@@ -17169,6 +18535,11 @@ def check_java_kotlin(texts, errors):
         (
             "recursiveSpendBundleWithEmptyProofPublicInputs(),",
             'assertEquals("bundle.proof_public_inputs empty recursive proof inputs", malformedProofPublicInputs.message)',
+            "recursiveSpendBundleWithProofPublicInputsHash(replacement),",
+            'fixedArrayPayload(0x44, 31) to "bundle.proof_public_inputs_hash must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload(0x44, 32) to',
+            '"bundle.proof_public_inputs_hash byte field length must be 1"',
+            'fixedArrayPayload(0x44, 33) to "bundle.proof_public_inputs_hash must be exactly 32 bytes"',
             "recursiveSpendBundleWithZeroProofPublicInputsHash(),",
             'assertEquals("bundle.proof_public_inputs_hash must be non-zero", malformedProofPublicInputsHash.message)',
             "recursiveSpendBundleWithMismatchedProofPublicInputsHash(),",
@@ -17189,7 +18560,7 @@ def check_java_kotlin(texts, errors):
             'assertEquals("Trailing bytes after accumulator", trailingAccumulatorField.message)',
             "recursiveSpendBundleWithTrailingCurrentNoteField",
             "recursiveSpendBundleWithTrailingCurrentNoteField(),",
-            'assertEquals("Trailing bytes after field decode", trailingCurrentNoteField.message)',
+            'assertEquals("Trailing bytes after bundle.accumulator.current_note", trailingCurrentNoteField.message)',
         ),
         "Kotlin recursive spend bundle summary trailing-field guard tests",
         errors,
@@ -17201,6 +18572,7 @@ def check_java_kotlin(texts, errors):
             "recursiveSpendVerifyResultWithTrailingField",
             "recursiveSpendVerifyResultWithTrailingField(),",
             'assertEquals("Trailing bytes after verify result", trailingVerifyResultField.message)',
+            "lineageWitnessRequiredForRedeem",
         ),
         "Kotlin recursive spend verify-result trailing-field guard tests",
         errors,
@@ -17225,6 +18597,9 @@ def check_java_kotlin(texts, errors):
             "recursiveSpendLineageWitnessWithPreviousProofField(1, ByteArray(0)) to",
             "recursiveSpendLineageWitnessWithPreviousProofField(2, ByteArray(32)) to",
             "recursiveSpendLineageWitnessWithPreviousProofField(2, ByteArray(32) { 0x44 }) to",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, fixedArrayPayload(0x44, 31)) to",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, countPrefixedFixedArrayPayload(0x44, 32)) to",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, fixedArrayPayload(0x44, 33)) to",
             'recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg") to',
             'recursiveSpendLineageWitnessWithPreviousProofBoxBackendAndEmptyProofBytes("halo2/kzg") to',
             "recursiveSpendLineageWitnessWithEmptyPreviousProofBytes() to",
@@ -17234,6 +18609,8 @@ def check_java_kotlin(texts, errors):
             '"lineageWitness.previousRecursiveProofs.proof_public_inputs empty recursive proof inputs"',
             '"lineageWitness.previousRecursiveProofs.proof_public_inputs_hash must be non-zero"',
             '"lineageWitness.previousRecursiveProofs.proof_public_inputs_hash mismatch"',
+            '"lineageWitness.previousRecursiveProofs.proof_public_inputs_hash must be exactly 32 bytes"',
+            '"lineageWitness.previousRecursiveProofs.proof_public_inputs_hash byte field length must be 1"',
             '"lineageWitness.previousRecursiveProofs.proof_backend unsupported recursive proof backend"',
             '"lineageWitness.previousRecursiveProofs.proof_bytes empty recursive proof"',
             "assertEquals(expected, error.message)",
@@ -17253,7 +18630,7 @@ def check_java_kotlin(texts, errors):
             "recursiveSpendBundleWithEqualCurrentNoteNullifier(),",
             '"spendNullifier must differ from noteCommitment"',
             "recursiveSpendBundleWithCurrentNoteField(2, zeroNumericPayload())",
-            '"numeric amount must be greater than zero"',
+            '"bundle.accumulator.current_note.amount numeric amount must be greater than zero"',
             "numericPayload(byteArrayOf(1), scale = 1)",
             "numericPayloadWithScalePayload(countPrefixedFixedArrayPayload(0x16, 4))",
             "numericPayloadWithMantissaPayload(littleEndianU32(2) + byteArrayOf(1))",
@@ -17266,13 +18643,13 @@ def check_java_kotlin(texts, errors):
             "recursiveSpendBundleWithCurrentNoteField(0, fixedArrayPayload(0x04, 31))",
             "recursiveSpendBundleWithCurrentNoteField(0, fixedArrayPayload(0x04, 33))",
             "recursiveSpendBundleWithCurrentNoteField(0, countPrefixedFixedArrayPayload(0x04, 32))",
-            '"note_commitment must be exactly 32 bytes"',
-            '"note_commitment byte field length must be 1"',
+            '"bundle.accumulator.current_note.note_commitment must be exactly 32 bytes"',
+            '"bundle.accumulator.current_note.note_commitment byte field length must be 1"',
             "recursiveSpendBundleWithCurrentNoteField(1, fixedArrayPayload(0x05, 31))",
             "recursiveSpendBundleWithCurrentNoteField(1, fixedArrayPayload(0x05, 33))",
             "recursiveSpendBundleWithCurrentNoteField(1, countPrefixedFixedArrayPayload(0x05, 32))",
-            '"spend_nullifier must be exactly 32 bytes"',
-            '"spend_nullifier byte field length must be 1"',
+            '"bundle.accumulator.current_note.spend_nullifier must be exactly 32 bytes"',
+            '"bundle.accumulator.current_note.spend_nullifier byte field length must be 1"',
             "assertEquals(expectedMessage, malformedCurrentNote.message)",
         ),
         "Kotlin recursive spend bundle current-note guard tests",
@@ -17294,12 +18671,13 @@ def check_java_kotlin(texts, errors):
             "                    numericPayloadWithTrailingField(),",
             '"noteCommitment must be non-zero"',
             '"spendNullifier must differ from noteCommitment"',
-            '"numeric scale must be zero"',
-            '"numeric amount must fit in u128"',
-            '"Trailing bytes after field decode"',
+            '"bundle.accumulator.current_note.amount numeric scale must be zero"',
+            '"bundle.accumulator.current_note.amount numeric amount must fit in u128"',
+            '"Trailing bytes after bundle.accumulator.current_note.amount"',
+            '"Trailing bytes after bundle.accumulator.current_note.amount.scale"',
             "assertEquals(expectedMessage, malformedCurrentNote.message)",
             'assertEquals("Trailing bytes after bundle", trailingBundleField.message)',
-            'assertEquals("Trailing bytes after field decode", trailingCurrentNoteField.message)',
+            'assertEquals("Trailing bytes after bundle.accumulator.current_note", trailingCurrentNoteField.message)',
             '"bundle.accumulator.domain must be "',
             "malformedDomain.message",
             'assertEquals("Trailing bytes after accumulator", trailingAccumulatorField.message)',
@@ -17327,52 +18705,109 @@ def check_java_kotlin(texts, errors):
         "    final Object[][] malformedAccumulatorFields = {",
         "    final IllegalArgumentException trailingAccumulatorField =",
         (
-            '{2, fixedArrayPayload((byte) 0x01, 15), "asset must be exactly 16 bytes"}',
-            '{2, fixedArrayPayload((byte) 0x01, 17), "asset must be exactly 16 bytes"}',
+            '{2, fixedArrayPayload((byte) 0x01, 15), "bundle.accumulator.asset must be exactly 16 bytes"}',
+            '{2, fixedArrayPayload((byte) 0x01, 17), "bundle.accumulator.asset must be exactly 16 bytes"}',
             '{3, new byte[32], "bundle.accumulator.initial_root"}',
             '{4, new byte[32], "bundle.accumulator.final_root"}',
             '{4, init.initialRoot(), "bundle.accumulator.final_root"}',
-            '{3, fixedArrayPayload((byte) 0x02, 31), "initial_root must be exactly 32 bytes"}',
+            '{3, fixedArrayPayload((byte) 0x02, 31), "bundle.accumulator.initial_root must be exactly 32 bytes"}',
             'countPrefixedFixedArrayPayload((byte) 0x01, 16)',
-            '"asset byte field length must be 1"',
+            '"bundle.accumulator.asset byte field length must be 1"',
             'countPrefixedFixedArrayPayload((byte) 0x02, 32)',
-            '"initial_root byte field length must be 1"',
+            '"bundle.accumulator.initial_root byte field length must be 1"',
             'countPrefixedFixedArrayPayload((byte) 0x03, 32)',
-            '"final_root byte field length must be 1"',
-            '{3, fixedArrayPayload((byte) 0x02, 33), "initial_root must be exactly 32 bytes"}',
-            '{4, fixedArrayPayload((byte) 0x03, 31), "final_root must be exactly 32 bytes"}',
-            '{4, fixedArrayPayload((byte) 0x03, 33), "final_root must be exactly 32 bytes"}',
+            '"bundle.accumulator.final_root byte field length must be 1"',
+            '{3, fixedArrayPayload((byte) 0x02, 33), "bundle.accumulator.initial_root must be exactly 32 bytes"}',
+            '{4, fixedArrayPayload((byte) 0x03, 31), "bundle.accumulator.final_root must be exactly 32 bytes"}',
+            '{4, fixedArrayPayload((byte) 0x03, 33), "bundle.accumulator.final_root must be exactly 32 bytes"}',
             '{7, new byte[32], "bundle.accumulator.lineage_digest"}',
             '{8, repeat((byte) 0x7d, 32), "bundle.accumulator.aggregation_transcript_digest"}',
             '{8, new byte[32], "bundle.accumulator.aggregation_transcript_digest"}',
-            '{7, fixedArrayPayload((byte) 0x07, 31), "lineage_digest must be exactly 32 bytes"}',
+            '{7, fixedArrayPayload((byte) 0x07, 31), "bundle.accumulator.lineage_digest must be exactly 32 bytes"}',
             'countPrefixedFixedArrayPayload((byte) 0x07, 32)',
-            '"lineage_digest byte field length must be 1"',
-            '{7, fixedArrayPayload((byte) 0x07, 33), "lineage_digest must be exactly 32 bytes"}',
+            '"bundle.accumulator.lineage_digest byte field length must be 1"',
+            '{7, fixedArrayPayload((byte) 0x07, 33), "bundle.accumulator.lineage_digest must be exactly 32 bytes"}',
             '{9, new byte[32], "bundle.accumulator.nullifier_digest"}',
+            'fixedArrayPayload((byte) 0x08, 31)',
+            '"bundle.accumulator.aggregation_transcript_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload((byte) 0x08, 32)',
+            '"bundle.accumulator.aggregation_transcript_digest byte field length must be 1"',
+            'fixedArrayPayload((byte) 0x08, 33)',
+            'fixedArrayPayload((byte) 0x09, 31)',
+            '"bundle.accumulator.nullifier_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload((byte) 0x09, 32)',
+            '"bundle.accumulator.nullifier_digest byte field length must be 1"',
+            'fixedArrayPayload((byte) 0x09, 33)',
             '{10, new byte[32], "bundle.accumulator.output_commitment_digest"}',
+            'fixedArrayPayload((byte) 0x0a, 31)',
+            '"bundle.accumulator.output_commitment_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload((byte) 0x0a, 32)',
+            '"bundle.accumulator.output_commitment_digest byte field length must be 1"',
+            'fixedArrayPayload((byte) 0x0a, 33)',
             '{11, new byte[32], "bundle.accumulator.fold_digest"}',
+            'fixedArrayPayload((byte) 0x0b, 31)',
+            '"bundle.accumulator.fold_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload((byte) 0x0b, 32)',
+            '"bundle.accumulator.fold_digest byte field length must be 1"',
+            'fixedArrayPayload((byte) 0x0b, 33)',
             '{12, new byte[32], "bundle.accumulator.recursive_proof_chain_digest"}',
+            'fixedArrayPayload((byte) 0x0c, 31)',
+            '"bundle.accumulator.recursive_proof_chain_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload((byte) 0x0c, 32)',
+            '"bundle.accumulator.recursive_proof_chain_digest byte field length must be 1"',
+            'fixedArrayPayload((byte) 0x0c, 33)',
             '{13, new byte[32], "bundle.accumulator.transition_profile_binding_digest"}',
+            'fixedArrayPayload((byte) 0x0d, 31)',
+            '"bundle.accumulator.transition_profile_binding_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload((byte) 0x0d, 32)',
+            '"bundle.accumulator.transition_profile_binding_digest byte field length must be 1"',
+            'fixedArrayPayload((byte) 0x0d, 33)',
             '{14, repeat((byte) 0x7e, 32), "bundle.accumulator.append_opening_preflight_digest"}',
             'fixedArrayPayload((byte) 0x0e, 31)',
-            '"append_opening_preflight_digest must be exactly 32 bytes"',
+            '"bundle.accumulator.append_opening_preflight_digest must be exactly 32 bytes"',
             'countPrefixedFixedArrayPayload((byte) 0x0e, 32)',
-            '"append_opening_preflight_digest byte field length must be 1"',
+            '"bundle.accumulator.append_opening_preflight_digest byte field length must be 1"',
             'fixedArrayPayload((byte) 0x0e, 33)',
             '{15, repeat((byte) 0x7f, 32), "bundle.accumulator.append_boundary_digest"}',
+            'fixedArrayPayload((byte) 0x0f, 31)',
+            '"bundle.accumulator.append_boundary_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload((byte) 0x0f, 32)',
+            '"bundle.accumulator.append_boundary_digest byte field length must be 1"',
+            'fixedArrayPayload((byte) 0x0f, 33)',
             '{16, new byte[32], "bundle.accumulator.verifier_params_fingerprint"}',
+            'fixedArrayPayload((byte) 0x10, 31)',
+            '"bundle.accumulator.verifier_params_fingerprint must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload((byte) 0x10, 32)',
+            '"bundle.accumulator.verifier_params_fingerprint byte field length must be 1"',
+            'fixedArrayPayload((byte) 0x10, 33)',
             '{17, new byte[32], "bundle.accumulator.fixed_window_table_schedule_digest"}',
+            'fixedArrayPayload((byte) 0x11, 31)',
+            '"bundle.accumulator.fixed_window_table_schedule_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload((byte) 0x11, 32)',
+            '"bundle.accumulator.fixed_window_table_schedule_digest byte field length must be 1"',
+            'fixedArrayPayload((byte) 0x11, 33)',
             '{18, new byte[32], "bundle.accumulator.fixed_window_shared_table_manifest_digest"}',
+            'fixedArrayPayload((byte) 0x12, 31)',
+            '"bundle.accumulator.fixed_window_shared_table_manifest_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload((byte) 0x12, 32)',
+            '"bundle.accumulator.fixed_window_shared_table_manifest_digest byte field length must be 1"',
+            'fixedArrayPayload((byte) 0x12, 33)',
             '{19, new byte[32], "bundle.accumulator.fixed_window_table_base_digest"}',
+            'fixedArrayPayload((byte) 0x13, 31)',
+            '"bundle.accumulator.fixed_window_table_base_digest must be exactly 32 bytes"',
+            'countPrefixedFixedArrayPayload((byte) 0x13, 32)',
+            '"bundle.accumulator.fixed_window_table_base_digest byte field length must be 1"',
+            'fixedArrayPayload((byte) 0x13, 33)',
             '{20, new byte[32], "bundle.accumulator.verifier_witness_batch_digest"}',
             'fixedArrayPayload((byte) 0x14, 31)',
-            '"verifier_witness_batch_digest must be exactly 32 bytes"',
+            '"bundle.accumulator.verifier_witness_batch_digest must be exactly 32 bytes"',
             'countPrefixedFixedArrayPayload((byte) 0x14, 32)',
-            '"verifier_witness_batch_digest byte field length must be 1"',
+            '"bundle.accumulator.verifier_witness_batch_digest byte field length must be 1"',
             'fixedArrayPayload((byte) 0x14, 33)',
             '{21, new byte[] {3, 0, 0, 0}, "bundle.accumulator.verifier_opening_len"}',
             "countPrefixedFixedArrayPayload((byte) 0x15, 4)",
+            '{21, new byte[] {2, 0, 0}, "bundle.accumulator.verifier_opening_len"}',
+            '{21, new byte[] {2, 0, 0, 0, 0}, "bundle.accumulator.verifier_opening_len"}',
             "assert expectedField.equals(malformedField.getMessage());",
         ),
         "Android Java recursive spend bundle accumulator field-length guard tests",
@@ -17486,6 +18921,11 @@ def check_java_kotlin(texts, errors):
             "recursiveSpendBundleWithEmptyProofPublicInputs()));",
             '"bundle.proof_public_inputs empty recursive proof inputs"\n'
             "        .equals(malformedProofPublicInputs.getMessage())",
+            "recursiveSpendBundleWithProofPublicInputsHash((byte[]) invalidHashPayload[0])",
+            'fixedArrayPayload((byte) 0x44, 31)',
+            'countPrefixedFixedArrayPayload((byte) 0x44, 32)',
+            'fixedArrayPayload((byte) 0x44, 33)',
+            '"bundle.proof_public_inputs_hash byte field length must be 1"',
             "recursiveSpendBundleWithZeroProofPublicInputsHash()));",
             '"bundle.proof_public_inputs_hash must be non-zero"\n'
             "        .equals(malformedProofPublicInputsHash.getMessage())",
@@ -17508,7 +18948,7 @@ def check_java_kotlin(texts, errors):
             '"Trailing bytes after accumulator".equals(trailingAccumulatorField.getMessage())',
             "recursiveSpendBundleWithTrailingCurrentNoteField",
             "recursiveSpendBundleWithTrailingCurrentNoteField()));",
-            '"Trailing bytes after field decode".equals(trailingCurrentNoteField.getMessage())',
+            '"Trailing bytes after bundle.accumulator.current_note"\n        .equals(trailingCurrentNoteField.getMessage())',
         ),
         "Android Java recursive spend bundle summary trailing-field guard tests",
         errors,
@@ -17521,6 +18961,7 @@ def check_java_kotlin(texts, errors):
             "recursiveSpendVerifyResultWithTrailingField()));",
             'sharedRecursiveSpendArchive(FixtureAbi.ABI7, "verify_result")',
             '"Trailing bytes after verify result".equals(trailingVerifyResultField.getMessage())',
+            "lineageWitnessRequiredForRedeem",
         ),
         "Android Java recursive spend verify-result ABI-7/trailing-field guard tests",
         errors,
@@ -17537,6 +18978,10 @@ def check_java_kotlin(texts, errors):
             "recursiveSpendLineageWitnessWithPreviousProofField(1, new byte[0])",
             "recursiveSpendLineageWitnessWithPreviousProofField(2, new byte[32])",
             "recursiveSpendLineageWitnessWithPreviousProofField(2, repeat((byte) 0x44, 32))",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, fixedArrayPayload((byte) 0x44, 31))",
+            "recursiveSpendLineageWitnessWithPreviousProofField(\n"
+            "            2, countPrefixedFixedArrayPayload((byte) 0x44, 32))",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, fixedArrayPayload((byte) 0x44, 33))",
             'recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg")',
             'recursiveSpendLineageWitnessWithPreviousProofBoxBackendAndEmptyProofBytes("halo2/kzg")',
             "recursiveSpendLineageWitnessWithEmptyPreviousProofBytes()",
@@ -17554,11 +18999,288 @@ def check_java_kotlin(texts, errors):
             '"lineageWitness.previousRecursiveProofs.proof_public_inputs empty recursive proof inputs"',
             '"lineageWitness.previousRecursiveProofs.proof_public_inputs_hash must be non-zero"',
             '"lineageWitness.previousRecursiveProofs.proof_public_inputs_hash mismatch"',
+            '"lineageWitness.previousRecursiveProofs.proof_public_inputs_hash must be exactly 32 bytes"',
+            '"lineageWitness.previousRecursiveProofs.proof_public_inputs_hash byte field length must be 1"',
             '"lineageWitness.previousRecursiveProofs.proof_backend unsupported recursive proof backend"',
             '"lineageWitness.previousRecursiveProofs.proof_bytes empty recursive proof"',
             "assert expected.equals(error.getMessage()) : error.getMessage();",
         ),
         "Android Java recursive spend lineage-witness trailing-field guard tests",
+        errors,
+    )
+    for relative, label in (
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "JavaScript lineage-witness previous-proof count precheck decoder",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "JavaScript dist lineage-witness previous-proof count precheck decoder",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "count > BigInt(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS)",
+                "lineageWitness.previousRecursiveProofs count exceeds ${KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS}",
+            ),
+            label,
+            errors,
+        )
+    require_block_contains(
+        texts,
+        "python/iroha_python/src/iroha_python/kagemusha.py",
+        "def _kagemusha_lineage_witness_has_reserved_previous_proof(archive: bytes) -> bool:",
+        "def _kagemusha_read_previous_recursive_proof_circuit_id(payload: bytes, flags: int) -> str:",
+        (
+            "if count > KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS:",
+            '"lineage_witness.previous_recursive_proofs count exceeds "',
+        ),
+        "Python lineage-witness previous-proof count precheck decoder",
+        errors,
+    )
+    require_contains(
+        texts,
+        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+        (
+            "guard count <= UInt64(KagemushaRecursiveSpendProver.compactTokenMaxHops) else",
+            '"lineageWitness.previousRecursiveProofs"',
+        ),
+        "Swift lineage-witness previous-proof count precheck decoder",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        kotlin_request_codecs,
+        "internal fun lineageWitnessHasReservedPreviousProof(archive: ByteArray): Boolean",
+        "internal fun requirePayloadArchive(",
+        (
+            "count <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS",
+            '"lineageWitness.previousRecursiveProofs count must not exceed ${KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS}"',
+        ),
+        "Kotlin lineage-witness previous-proof count precheck decoder",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        java_request_codecs,
+        "static boolean lineageWitnessHasReservedPreviousProof(final byte[] archive)",
+        "static ArchivePayload requirePayloadArchive(",
+        (
+            "count <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS",
+            '"lineageWitness.previousRecursiveProofs count must not exceed "',
+        ),
+        "Android Java lineage-witness previous-proof count precheck decoder",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        (
+            "recursiveSpendLineageWitnessWithPreviousProofCountPrefixOnly(\n"
+            "        KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1,\n"
+            "      )",
+            "/lineageWitness\\.previousRecursiveProofs count exceeds 64/",
+        ),
+        "JavaScript lineage-witness previous-proof count-prefix vectors",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "recursiveSpendLineageWitnessWithPreviousProofCountPrefixOnly(\n"
+            "        KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1,\n"
+            "      )",
+            "/lineageWitness\\.previousRecursiveProofs count exceeds 64/",
+        ),
+        "JavaScript package dist lineage-witness previous-proof count-prefix vectors",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            "_recursive_spend_lineage_witness_with_previous_proof_count_prefix_only(\n"
+            "                kagemusha.KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1\n"
+            "            )",
+            r"lineage_witness\.previous_recursive_proofs count exceeds 64",
+        ),
+        "Python lineage-witness previous-proof count-prefix vectors",
+        errors,
+    )
+    require_contains(
+        texts,
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+        (
+            "try Self.recursiveSpendLineageWitnessWithPreviousProofCountPrefixOnly(\n"
+            "                    UInt64(KagemushaRecursiveSpendProver.compactTokenMaxHops) + 1\n"
+            "                )",
+            '.invalidArchive("lineageWitness.previousRecursiveProofs")',
+        ),
+        "Swift lineage-witness previous-proof count-prefix vectors",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_request_codecs_test,
+        (
+            "recursiveSpendLineageWitnessWithPreviousProofCountPrefixOnly(\n"
+            "                KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS + 1,\n"
+            "            ) to",
+            '"lineageWitness.previousRecursiveProofs count must not exceed 64"',
+        ),
+        "Kotlin lineage-witness previous-proof count-prefix vectors",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_test,
+        (
+            "recursiveSpendLineageWitnessWithPreviousProofCountPrefixOnly(\n"
+            "            KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS + 1),",
+            '"lineageWitness.previousRecursiveProofs count must not exceed 64"',
+        ),
+        "Android Java lineage-witness previous-proof count-prefix vectors",
+        errors,
+    )
+    for relative, label in (
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "JavaScript record-bundle fold-step count precheck decoder",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "JavaScript dist record-bundle fold-step count precheck decoder",
+        ),
+    ):
+        require_block_contains(
+            texts,
+            relative,
+            "function kagemushaReadVerifiedFoldStepCount(payload, flags, field)",
+            "function kagemushaRequirePallasOpenEnvelopesArchive(",
+            (
+                "countBig > BigInt(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS)",
+                "`${field} fold step count is out of range`",
+            ),
+            label,
+            errors,
+        )
+    require_block_contains(
+        texts,
+        "python/iroha_python/src/iroha_python/kagemusha.py",
+        "def _kagemusha_read_verified_fold_step_count(",
+        "def _kagemusha_require_pallas_open_envelopes_archive(",
+        (
+            "if count > KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS:",
+            'f"{field} fold step count is out of range"',
+        ),
+        "Python record-bundle fold-step count precheck decoder",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+        "private static func readVerifiedFoldStepCount(",
+        "static func requirePallasOpenEnvelopesArchive(",
+        (
+            "guard count64 <= UInt64(KagemushaRecursiveSpendProver.compactTokenMaxHops) else",
+            "throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)",
+        ),
+        "Swift record-bundle fold-step count precheck decoder",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        kotlin_request_codecs,
+        "private fun readVerifiedFoldStepCount(decoder: NoritoDecoder, field: String): Int",
+        "private fun requirePallasOpenEnvelopesArchive(",
+        (
+            "count <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS",
+            '"$field fold step count must not exceed ${KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS}"',
+        ),
+        "Kotlin record-bundle fold-step count precheck decoder",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        java_request_codecs,
+        "private static int readVerifiedFoldStepCount(final NoritoDecoder decoder, final String field)",
+        "private static void requirePallasOpenEnvelopesArchive(",
+        (
+            "count <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS",
+            'field + " fold step count must not exceed "',
+        ),
+        "Android Java record-bundle fold-step count precheck decoder",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        (
+            "recordBundleWithOverLimitStepCount",
+            "stepsPayload: u64LE(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1)",
+            'kagemushaRequestCodecError("archive", "recordBundle.steps", /fold step count is out of range/)',
+        ),
+        "JavaScript record-bundle fold-step count-prefix vectors",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "recordBundleWithOverLimitStepCount",
+            "stepsPayload: u64LE(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1)",
+            'kagemushaRequestCodecError("archive", "recordBundle.steps", /fold step count is out of range/)',
+            "package dist accepted raw count-prefix-only record-bundle fold steps",
+        ),
+        "JavaScript package dist record-bundle fold-step count-prefix vectors",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            "record_bundle_with_over_limit_step_count",
+            "steps_payload=_u64_le(kagemusha.KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1)",
+            r"record_bundle\.steps fold step count is out of range",
+        ),
+        "Python record-bundle fold-step count-prefix vectors",
+        errors,
+    )
+    require_contains(
+        texts,
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+        (
+            "recordBundleWithOverLimitStepCount",
+            "Self.uint64Payload(UInt64(KagemushaRecursiveSpendProver.compactTokenMaxHops) + 1)",
+            '.invalidArchive("recordBundle.steps")',
+        ),
+        "Swift record-bundle fold-step count-prefix vectors",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_request_codecs_test,
+        (
+            "initOverLimitRecordBundleStepCount",
+            "sampleRecordBundleWithStepsPayload(",
+            '"recordBundle.steps fold step count must not exceed ${KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS}"',
+        ),
+        "Kotlin record-bundle fold-step count-prefix vectors",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_test,
+        (
+            "sampleRecordBundleWithStepsPayload(",
+            "KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS + 1L",
+            '"recordBundle.steps fold step count must not exceed "\n'
+            "            + KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS",
+        ),
+        "Android Java record-bundle fold-step count-prefix vectors",
         errors,
     )
     require_contains(
@@ -17573,7 +19295,7 @@ def check_java_kotlin(texts, errors):
             "recursiveSpendBundleWithEqualCurrentNoteNullifier(),",
             '"spendNullifier must differ from noteCommitment"',
             "recursiveSpendBundleWithCurrentNoteField(2, zeroNumericPayload())",
-            '"numeric amount must be greater than zero"',
+            '"bundle.accumulator.current_note.amount numeric amount must be greater than zero"',
             "recursiveSpendBundleWithCurrentNoteField(2, numericPayload(new byte[] {1}, 1))",
             "numericPayloadWithScalePayload(countPrefixedFixedArrayPayload((byte) 0x16, 4))",
             "numericPayloadWithMantissaPayload(concat(littleEndianU32(2), new byte[] {1}))",
@@ -17583,13 +19305,13 @@ def check_java_kotlin(texts, errors):
             "recursiveSpendBundleWithCurrentNoteField(0, fixedArrayPayload((byte) 0x04, 31))",
             "recursiveSpendBundleWithCurrentNoteField(0, fixedArrayPayload((byte) 0x04, 33))",
             "countPrefixedFixedArrayPayload((byte) 0x04, 32)",
-            '"note_commitment must be exactly 32 bytes"',
-            '"note_commitment byte field length must be 1"',
+            '"bundle.accumulator.current_note.note_commitment must be exactly 32 bytes"',
+            '"bundle.accumulator.current_note.note_commitment byte field length must be 1"',
             "recursiveSpendBundleWithCurrentNoteField(1, fixedArrayPayload((byte) 0x05, 31))",
             "recursiveSpendBundleWithCurrentNoteField(1, fixedArrayPayload((byte) 0x05, 33))",
             "countPrefixedFixedArrayPayload((byte) 0x05, 32)",
-            '"spend_nullifier must be exactly 32 bytes"',
-            '"spend_nullifier byte field length must be 1"',
+            '"bundle.accumulator.current_note.spend_nullifier must be exactly 32 bytes"',
+            '"bundle.accumulator.current_note.spend_nullifier byte field length must be 1"',
             "assert expectedField.equals(malformedNote.getMessage());",
         ),
         "Android Java recursive spend bundle current-note guard tests",
@@ -17605,9 +19327,10 @@ def check_java_kotlin(texts, errors):
             "numericPayload(new byte[] {(byte) 0xff})",
             "numericPayload(concat(new byte[16], new byte[] {1}))",
             "recursiveSpendBundleWithCurrentNoteField(2, numericPayloadWithTrailingField())",
-            '"numeric scale must be zero"',
-            '"numeric amount must fit in u128"',
-            '"Trailing bytes after field decode"',
+            '"bundle.accumulator.current_note.amount numeric scale must be zero"',
+            '"bundle.accumulator.current_note.amount numeric amount must fit in u128"',
+            '"Trailing bytes after bundle.accumulator.current_note.amount"',
+            '"Trailing bytes after bundle.accumulator.current_note.amount.scale"',
             "assert expectedField.equals(malformedNote.getMessage());",
         ),
         "Android Java recursive spend bundle current-note amount encoding guard tests",
@@ -18989,6 +20712,12 @@ def check_java_kotlin(texts, errors):
             "decoded.header.compression == NoritoHeader.COMPRESSION_NONE",
             "decoded.header.payloadLength > 0",
             "decoded.header.validateChecksum(decoded.payload)",
+            'chainId = requireNonBlankUnpadded(chainId, "chainId")',
+            'authority = requireNonBlankUnpadded(authority, "authority")',
+            'val exactChainId = requireNonBlankUnpadded(chainId, "chainId")',
+            'val exactAuthority = requireNonBlankUnpadded(authority, "authority")',
+            'require(value.trim() == value) { "$field must not contain surrounding whitespace" }',
+            "val archive = instructionArchive.copyOf()",
             "InstructionBox.fromWirePayload(instructionType.wireName, archive)",
             "Executable.instructions(listOf(instructionBox(instructionType, instructionArchive)))",
         ),
@@ -19018,6 +20747,12 @@ def check_java_kotlin(texts, errors):
             "decoded.header().compression() != NoritoHeader.COMPRESSION_NONE",
             "decoded.header().payloadLength() == 0",
             "decoded.header().validateChecksum(decoded.payload())",
+            'setChainId(requireNonBlankUnpadded(chainId, "chainId"))',
+            'setAuthority(requireNonBlankUnpadded(authority, "authority"))',
+            'final String exactChainId = requireNonBlankUnpadded(chainId, "chainId")',
+            'final String exactAuthority = requireNonBlankUnpadded(authority, "authority")',
+            'field + " must not contain surrounding whitespace"',
+            "final byte[] archive = instructionArchive.clone();",
             "InstructionBox.fromWirePayload(instructionType.wireName(), archive)",
             "Executable.instructions(List.of(instructionBox(instructionType, instructionArchive)))",
         ),
@@ -19030,10 +20765,21 @@ def check_java_kotlin(texts, errors):
         (
             "instructionBox preserves redeem archive bytes and wire name",
             "transactionPayload wraps a single transfer archive instruction",
+            "recursiveRedeemTransactionPayload preserves redeem archive bytes after caller mutation",
+            "transactionPayload rejects padded ids before archive validation or native redeem",
             "instructionBox rejects malformed wrong schema empty and tampered archives",
             "KagemushaInstructionType.REDEEM_RECURSIVE",
             "KagemushaInstructionType.TRANSFER",
-            "assertContentEquals(archive, wire.payloadBytes)",
+            "assertContentEquals(kagemushaArchive(KagemushaInstructionType.REDEEM_RECURSIVE), payload.payloadBytes)",
+            "val expectedArchive = archive.copyOf()",
+            "archive[0] = 0x7f.toByte()",
+            "assertContentEquals(expectedArchive, wire.payloadBytes)",
+            "val expectedRedeemArchive = archive.copyOf()",
+            "KagemushaInstructionArchives.recursiveRedeemTransactionPayload(",
+            "archive[0] = 0x7e.toByte()",
+            "assertContentEquals(expectedRedeemArchive, wire.payloadBytes)",
+            "chainId must not contain surrounding whitespace",
+            "authority must not contain surrounding whitespace",
             "recursiveRedeemInstructionBoxFromRequest(byteArrayOf())",
             "recursiveRedeemTransactionPayloadFromRequest(",
             '"KagemushaRecursiveSpendRedeemRequestV1"',
@@ -19051,14 +20797,25 @@ def check_java_kotlin(texts, errors):
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderTests.java",
         (
             "kagemushaInstructionArchivesBuildPayloads",
+            "kagemushaInstructionArchivesRejectPaddedIdsBeforeArchiveOrNativeRedeem",
             "kagemushaInstructionArchivesRejectAdversarialInputs",
             "KagemushaInstructionArchives.InstructionType.REDEEM_RECURSIVE",
             "KagemushaInstructionArchives.InstructionType.TRANSFER",
             "KagemushaInstructionArchives.recursiveRedeemInstructionBox(archive)",
             "KagemushaInstructionArchives.transactionPayload(",
+            "KagemushaInstructionArchives.recursiveRedeemTransactionPayload(",
             "KagemushaInstructionArchives.recursiveRedeemInstructionBoxFromRequest(new byte[0])",
             "KagemushaInstructionArchives.recursiveRedeemTransactionPayloadFromRequest(",
             "Arrays.equals(transferArchive, transferWire.payloadBytes())",
+            "final byte[] expectedTransferArchive",
+            "transferArchive[0] = (byte) 0x7F",
+            "Arrays.equals(expectedTransferArchive, transferWire.payloadBytes())",
+            "final byte[] expectedRedeemArchive",
+            "redeemArchive[0] = (byte) 0x7E",
+            "Recursive redeem transaction archive bytes must be defensively copied",
+            "assertIllegalArgumentMessage",
+            "chainId must not contain surrounding whitespace",
+            "authority must not contain surrounding whitespace",
             '"KagemushaRecursiveSpendRedeemRequestV1"',
             "tampered[tampered.length - 1] ^= 0x01",
             "compressed[22] = 1",
@@ -19251,6 +21008,7 @@ def check_java_kotlin(texts, errors):
                 "transcriptLabel.utf8.count <= pallasOpenEnvelopeMaxTranscriptLabelBytes",
                 "recursivePreviousProofOpenEnvelopesRequiredCountV1",
                 "previousProofOpenEnvelopes",
+                "if appendNeedsPreviousProofOpenEnvelopes, previousProofOpenEnvelopes == nil",
             ),
             "Swift typed recursive spend Pallas preflight",
         ),
@@ -19263,6 +21021,8 @@ def check_java_kotlin(texts, errors):
                 'Buffer.byteLength(transcriptLabel, "utf8")',
                 "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1",
                 "previousProofOpenEnvelopes",
+                "appendNeedsPreviousProofOpenEnvelopes &&",
+                "previousProofOpenEnvelopes === null",
             ),
             "JavaScript typed recursive spend Pallas preflight",
         ),
@@ -19275,6 +21035,8 @@ def check_java_kotlin(texts, errors):
                 'Buffer.byteLength(transcriptLabel, "utf8")',
                 "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1",
                 "previousProofOpenEnvelopes",
+                "appendNeedsPreviousProofOpenEnvelopes &&",
+                "previousProofOpenEnvelopes === null",
             ),
             "JavaScript dist typed recursive spend Pallas preflight",
         ),
@@ -19302,7 +21064,14 @@ def check_java_kotlin(texts, errors):
                 "includeDomainTag: false",
                 'String(repeating: "\\u{00e9}", count: 65)',
                 'transcriptLabel: transcriptLabel',
+                "var corrupted = Self.syntheticPallasOpenEnvelopesArchive()",
+                "corrupted[corrupted.count - 1] ^= 0x01",
+                "tamperedBundle[tamperedBundle.count - 1] ^= 0x01",
+                "previousProofOpenEnvelopes: nil",
+                '.invalidArchive("bundle")',
+                '.invalidField("previousProofOpenEnvelopes")',
                 '.invalidArchive("pallasOpenEnvelopes")',
+                '.invalidArchive("pallasOpenEnvelopes.domain_tag")',
                 '.invalidArchive("previousProofOpenEnvelopes")',
                 "previousProofOpenEnvelopes: Self.syntheticPallasOpenEnvelopesArchive(count: 2)",
             ),
@@ -19347,10 +21116,14 @@ def check_java_kotlin(texts, errors):
                 "_synthetic_kagemusha_record_bundle_archive",
                 "_synthetic_pallas_open_envelopes_archive",
                 '"test::PallasOpenEnvelopes"',
+                "pallas_open_envelopes must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive",
+                "pallas_open_envelopes requires exactly 1 envelope\\(s\\)",
                 "include_domain_tag=False",
+                "pallas_open_envelopes\\[0\\]\\.domain_tag is required",
                 'for malformed_transcript_label in ("", "\\u00e9" * 65):',
                 'match=r"pallas_open_envelopes\\[0\\]\\.transcript_label is invalid"',
                 'match=r"previous_proof_open_envelopes\\[0\\]\\.transcript_label is invalid"',
+                'match="previous_proof_open_envelopes is required for lineage append output"',
                 "previous_proof_open_envelopes=_synthetic_pallas_open_envelopes_archive(2)",
             ),
             "Python typed recursive spend Pallas preflight tests",
@@ -19662,6 +21435,158 @@ def check_java_kotlin(texts, errors):
         "Android Java Pallas metadata option declared-length vectors",
         errors,
     )
+    for relative, label in (
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "JavaScript Pallas sequence count precheck decoder",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "JavaScript dist Pallas sequence count precheck decoder",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "function kagemushaReadFixed32SequenceCount(",
+                "expectedCount,",
+                "mismatchField = field",
+                "`${field} generator count mismatch`",
+                "`${field} round count mismatch`",
+            ),
+            label,
+            errors,
+        )
+    require_contains(
+        texts,
+        "python/iroha_python/src/iroha_python/kagemusha.py",
+        (
+            "expected_count: int | None = None",
+            "mismatch_field: str | None = None",
+            "mismatch_message: str | None = None",
+            'mismatch_message=f"{field} generator count mismatch"',
+            'mismatch_message=f"{field} round count mismatch"',
+        ),
+        "Python Pallas sequence count precheck decoder",
+        errors,
+    )
+    require_contains(
+        texts,
+        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+        (
+            "expectedCount: Int? = nil",
+            "mismatchField: String? = nil",
+            'try readFixed32SequenceCount(&child, field: "\\(field).g", expectedCount: intN, mismatchField: field)',
+            "expectedCount: expectedRounds",
+            "mismatchField: field",
+        ),
+        "Swift Pallas sequence count precheck decoder",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_request_codecs,
+        (
+            "expectedCount: Int? = null",
+            "mismatchMessage: String = \"$field count mismatch\"",
+            "\"$field.g length must equal params.n\"",
+            "\"$field round count mismatch: expected $expectedRounds, found count prefix\"",
+        ),
+        "Kotlin Pallas sequence count precheck decoder",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_request_codecs,
+        (
+            "final int expectedCount,",
+            "final String mismatchMessage",
+            'field + ".g", n, field + ".g length must equal params.n"',
+            'field + " round count mismatch: expected " + expectedRounds + ", found count prefix',
+        ),
+        "Android Java Pallas sequence count precheck decoder",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        (
+            "paramsGSequencePayload: u64LE(5)",
+            "proofLSequencePayload: u64LE(3)",
+            "accepted raw count-prefix-only Pallas sequence payload",
+            "accepted raw count-prefix-only previous-proof Pallas sequence payload",
+            "previousProofOpenEnvelopes[0].proof",
+        ),
+        "JavaScript Pallas sequence count-prefix vectors",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "paramsGSequencePayload: u64LE(5)",
+            "proofLSequencePayload: u64LE(3)",
+            "pallasOpenEnvelopes[0].params",
+            "previousProofOpenEnvelopes[0].proof",
+            "/round count mismatch/",
+        ),
+        "JavaScript package dist Pallas sequence count-prefix vectors",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            "params_g_sequence_payload: bytes | None = None",
+            "proof_l_sequence_payload: bytes | None = None",
+            '"params_g_sequence_payload": _u64_le(5)',
+            '"proof_l_sequence_payload": _u64_le(3)',
+            r"pallas_open_envelopes\[0\]\.params generator count mismatch",
+            r"previous_proof_open_envelopes\[0\]\.proof round count mismatch",
+        ),
+        "Python Pallas sequence count-prefix vectors",
+        errors,
+    )
+    require_contains(
+        texts,
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+        (
+            "paramsGSequencePayload: Self.uint64Payload(5)",
+            "proofLSequencePayload: Self.uint64Payload(3)",
+            '.invalidArchive("pallasOpenEnvelopes.\\(sequenceField)")',
+            '.invalidArchive("previousProofOpenEnvelopes.\\(sequenceField)")',
+            "private static func uint64Payload(_ value: UInt64) -> Data",
+        ),
+        "Swift Pallas sequence count-prefix vectors",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_request_codecs_test,
+        (
+            "var paramsGSequencePayload: ByteArray? = null",
+            "var proofLSequencePayload: ByteArray? = null",
+            "it.paramsGSequencePayload = testPayload { writeUInt(5, 64) }",
+            '"pallasOpenEnvelopes[0].params.g length must equal params.n"',
+            '"previousProofOpenEnvelopes[0].proof round count mismatch: expected 2, found count prefix"',
+        ),
+        "Kotlin Pallas sequence count-prefix vectors",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_test,
+        (
+            "byte[] paramsGSequencePayload = null;",
+            "byte[] proofLSequencePayload = null;",
+            "spec.paramsGSequencePayload = testPayload(child -> child.writeUInt(5, 64))",
+            '"pallasOpenEnvelopes[0].params.g length must equal params.n"',
+            '"previousProofOpenEnvelopes[0].proof round count mismatch: expected 2, found count prefix"',
+        ),
+        "Android Java Pallas sequence count-prefix vectors",
+        errors,
+    )
     require_block_contains(
         texts,
         "javascript/iroha_js/test/package_dist.test.js",
@@ -19674,6 +21599,8 @@ def check_java_kotlin(texts, errors):
             "syntheticPallasOpenEnvelopesArchive(1, { includeDomainTag: false })",
             'syntheticPallasOpenEnvelopesArchive(1, { transcriptLabel: "" })',
             'syntheticPallasOpenEnvelopesArchive(1, { transcriptLabel: "\\u00e9".repeat(65) })',
+            "syntheticPallasOpenEnvelopesArchive(1, { paramsGSequencePayload: u64LE(5) })",
+            "syntheticPallasOpenEnvelopesArchive(1, { proofLSequencePayload: u64LE(3) })",
         ),
         "JavaScript dist typed recursive spend Pallas preflight tests",
         errors,
@@ -19713,6 +21640,72 @@ def check_java_kotlin(texts, errors):
         "JavaScript dist typed recursive spend raw lineage key request tests",
         errors,
     )
+    raw_lineage_block_start = (
+        'test("package dist Kagemusha recursive spend typed requests reject malformed raw lineage key fields before native dispatch", () => {'
+    )
+    raw_lineage_block_end = (
+        'test("package dist Kagemusha recursive spend typed requests parse previous lineage records before opening validation", () => {'
+    )
+    for pattern, label in (
+        (
+            r"lineageProvingKeyArchive: initProvingKey,\s*\}\),\s*"
+            r'kagemushaRequestCodecError\("field", "lineageVerifierKey", null\),\s*'
+            r'"package dist accepted init raw lineage proving key without verifier key"',
+            "JavaScript dist typed recursive spend raw lineage init proving-without-verifier input vector",
+        ),
+        (
+            r"lineageVerifierKey: initVerifierKey,\s*\}\),\s*"
+            r'kagemushaRequestCodecError\("archive", "lineageProvingKeyArchive", null\),\s*'
+            r'"package dist accepted init raw lineage verifier key without proving key"',
+            "JavaScript dist typed recursive spend raw lineage init verifier-without-proving input vector",
+        ),
+        (
+            r"lineageVerifierKey: initVerifierKey,\s*"
+            r"lineageProvingKeyArchive: appendProvingKey,\s*\}\),\s*"
+            r'kagemushaRequestCodecError\("field", "lineageKeyArtifacts", /lineageKeyArtifacts:/\),\s*'
+            r'"package dist accepted init raw lineage key profile mismatch"',
+            "JavaScript dist typed recursive spend raw lineage init wrong-circuit proving-key input vector",
+        ),
+        (
+            r"previousLineageVerifierRecord,\s*"
+            r"lineageVerifierKey: appendVerifierKey,\s*"
+            r"lineageProvingKeyArchive: appendProvingKey,\s*\}\),\s*"
+            r'kagemushaRequestCodecError\("field", "previousProofOpenEnvelopes", null\),\s*'
+            r'"package dist accepted append raw lineage keys without previous proof openings"',
+            "JavaScript dist typed recursive spend raw lineage append missing-previous-openings input vector",
+        ),
+        (
+            r"previousProofOpenEnvelopes,\s*"
+            r"lineageProvingKeyArchive: appendProvingKey,\s*\}\),\s*"
+            r'kagemushaRequestCodecError\("field", "lineageVerifierKey", null\),\s*'
+            r'"package dist accepted append raw lineage proving key without verifier key"',
+            "JavaScript dist typed recursive spend raw lineage append proving-without-verifier input vector",
+        ),
+        (
+            r"previousProofOpenEnvelopes,\s*"
+            r"lineageVerifierKey: appendVerifierKey,\s*\}\),\s*"
+            r'kagemushaRequestCodecError\("archive", "lineageProvingKeyArchive", null\),\s*'
+            r'"package dist accepted append raw lineage verifier key without proving key"',
+            "JavaScript dist typed recursive spend raw lineage append verifier-without-proving input vector",
+        ),
+        (
+            r"previousProofOpenEnvelopes,\s*"
+            r"lineageVerifierKey: appendVerifierKey,\s*"
+            r"lineageProvingKeyArchive: initProvingKey,\s*\}\),\s*"
+            r'kagemushaRequestCodecError\("field", "lineageKeyArtifacts", /lineageKeyArtifacts:/\),\s*'
+            r'"package dist accepted append raw lineage key profile mismatch"',
+            "JavaScript dist typed recursive spend raw lineage append wrong-circuit proving-key input vector",
+        ),
+    ):
+        require_block_regex(
+            texts,
+            "javascript/iroha_js/test/package_dist.test.js",
+            raw_lineage_block_start,
+            raw_lineage_block_end,
+            pattern,
+            label,
+            errors,
+        )
     require_contains(
         texts,
         "javascript/iroha_js/test/package_dist.test.js",
@@ -21227,6 +23220,12 @@ def check_sdk_readme_previous_proof_boundary(texts, errors):
                     f"{relative} missing native material alias README boundary: {needle}",
                     errors,
                 )
+            for needle in NON_CSHARP_REDEEM_LINEAGE_RECORD_README_NEEDLES:
+                require(
+                    needle in text,
+                    f"{relative} missing redeem lineage verifier-record README boundary: {needle}",
+                    errors,
+                )
             request_field_needle = NON_CSHARP_NATIVE_MATERIAL_README_REQUEST_FIELD_NEEDLES[relative]
             require(
                 request_field_needle in text,
@@ -21726,6 +23725,26 @@ def check_offline_doc_native_output_sdk_surface(texts, errors):
         )
 
 
+def check_offline_doc_redeem_lineage_record_selection(texts, errors):
+    text = re.sub(r"\s+", " ", texts["docs/source/offline_kagemusha.md"])
+    required = (
+        "Typed verify request encoders and C# metadata-bound verify preflight",
+        "missing records are invalid for Reserved-lineage bundles",
+        "extra records are invalid for semantic bundles",
+        "Non-C# typed redeem request encoders use a different semantic-bundle rule",
+        "decode the lineage-witness previous-proof summary",
+        "require lineage verifier records when semantic witnesses contain prior Reserved-lineage proofs",
+        "reject dangling records for init-only or absent lineage witnesses",
+        "Full record-backed lineage-witness validation remains enforced by native/core",
+    )
+    for needle in required:
+        require(
+            needle in text,
+            f"offline Kagemusha docs missing redeem lineage-record selection boundary: {needle}",
+            errors,
+        )
+
+
 def check_offline_doc_native_owned_accumulator_boundary(texts, errors):
     text = re.sub(r"\s+", " ", texts["docs/source/offline_kagemusha.md"])
     required = (
@@ -22015,7 +24034,7 @@ def check_sdk_redeem_change_output_reserved_collisions(texts, errors):
                 "bundleSummary.currentNote.spendNullifier",
                 "...bundleSummary.topupAnchorNullifiers",
                 "changeOutput must not reuse the current note commitment, redeem nullifier, or top-up anchor nullifier",
-                "const topupAnchorNullifiers = kagemushaReadFixed32Sequence(",
+                "const topupAnchorNullifiers = kagemushaReadTopupAnchorNullifiers(",
                 "bundle.accumulator.topup_anchor_nullifiers",
                 "get topupAnchorNullifiers()",
                 "get topup_anchor_nullifiers()",
@@ -22123,7 +24142,7 @@ def check_sdk_redeem_change_output_reserved_collisions(texts, errors):
             "topupAnchorNullifiers: List<ByteArray>",
             "private val topupAnchorNullifierBytes = topupAnchorNullifiers.map",
             "val topupAnchorNullifiers: List<ByteArray> get() = topupAnchorNullifierBytes.map { it.copyOf() }",
-            'readFixed32Sequence(it, "bundle.accumulator.topup_anchor_nullifiers")',
+            "maxCount = KAGEMUSHA_FOLD_STEP_MAX_INPUTS",
             "private fun requireRedeemChangeOutputNotReserved(",
             "bundleSummary.currentNote.noteCommitment",
             "bundleSummary.currentNote.spendNullifier",
@@ -22152,7 +24171,7 @@ def check_sdk_redeem_change_output_reserved_collisions(texts, errors):
         (
             "private final List<byte[]> topupAnchorNullifiers",
             "public List<byte[]> topupAnchorNullifiers()",
-            'readFixed32Sequence(child, "bundle.accumulator.topup_anchor_nullifiers")',
+            "KAGEMUSHA_FOLD_STEP_MAX_INPUTS));",
             "private static void requireRedeemChangeOutputNotReserved(",
             "bundleSummary.currentNote.noteCommitment()",
             "bundleSummary.currentNote.spendNullifier()",
@@ -22178,11 +24197,34 @@ def check_sdk_redeem_change_output_reserved_collisions(texts, errors):
 
 
 def check_sdk_topup_anchor_nullifier_invariants(texts, errors):
+    topup_anchor_case_labels = (
+        "topup anchor empty list",
+        "topup anchor zero nullifier",
+        "topup anchor count over limit",
+        "topup anchor over-limit count prefix",
+        "topup anchor duplicate nullifier",
+        "topup anchor descending order",
+        "topup anchor current note commitment reuse",
+        "topup anchor current note spend nullifier reuse",
+    )
+    topup_anchor_diagnostics = (
+        "bundle.accumulator.topup_anchor_nullifiers count is out of range",
+        "bundle.accumulator.topup_anchor_nullifiers must not contain zero values",
+        "bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique",
+        "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material",
+    )
+    topup_anchor_precedence_labels = (
+        "malformed proof cannot mask invalid top-up anchor nullifiers",
+        "trailing accumulator cannot mask invalid top-up anchor nullifiers",
+    )
     for relative in ("javascript/iroha_js/src/crypto.js", "javascript/iroha_js/dist/crypto.js"):
         require_contains(
             texts,
             relative,
             (
+                "function kagemushaReadTopupAnchorNullifiers(",
+                "countBig > BigInt(KAGEMUSHA_FOLD_STEP_MAX_INPUTS)",
+                "kagemushaReadTopupAnchorNullifiers(",
                 "kagemushaRequireRecursiveSpendTopupAnchorNullifiers(topupAnchorNullifiers, currentNote);",
                 "function kagemushaRequireRecursiveSpendTopupAnchorNullifiers(",
                 "topupAnchorNullifiers.length === 0",
@@ -22190,7 +24232,7 @@ def check_sdk_topup_anchor_nullifier_invariants(texts, errors):
                 "Buffer.compare(topupAnchorNullifiers[index - 1], nullifier) >= 0",
                 "nullifier.equals(currentNote.noteCommitment)",
                 "nullifier.equals(currentNote.spendNullifier)",
-            ),
+            ) + topup_anchor_diagnostics,
             f"{relative} recursive spend top-up anchor nullifier invariant guard",
             errors,
         )
@@ -22199,14 +24241,17 @@ def check_sdk_topup_anchor_nullifier_invariants(texts, errors):
         "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
         (
             "recursiveSpendBundleWithTopupAnchorNullifiers",
+            "recursiveSpendBundleWithTopupAnchorNullifiersAndEmptyProofBytes",
+            "recursiveSpendBundleWithTopupAnchorNullifiersAndTrailingAccumulatorField",
             "assert.ok(initBundle.topupAnchorNullifiers.length >= 2);",
             "Buffer.alloc(32)",
             "Buffer.alloc(32, 0x34)",
             "initBundle.topupAnchorNullifiers[1], initBundle.topupAnchorNullifiers[0]",
             "initBundle.currentNote.noteCommitment",
             "initBundle.currentNote.spendNullifier",
-            'kagemushaRequestCodecError("archive", "bundle.accumulator.topup_anchor_nullifiers", null)',
-        ),
+            "recursiveSpendBundleWithAccumulatorField(5, u64LE(3))",
+            'kagemushaRequestCodecError("archive", "bundle.accumulator.topup_anchor_nullifiers", expectedMessage)',
+        ) + topup_anchor_case_labels + topup_anchor_diagnostics + topup_anchor_precedence_labels,
         "JavaScript typed recursive spend top-up anchor nullifier invariant tests",
         errors,
     )
@@ -22215,14 +24260,17 @@ def check_sdk_topup_anchor_nullifier_invariants(texts, errors):
         "javascript/iroha_js/test/package_dist.test.js",
         (
             "recursiveSpendBundleWithTopupAnchorNullifiers",
+            "recursiveSpendBundleWithTopupAnchorNullifiersAndEmptyProofBytes",
+            "recursiveSpendBundleWithTopupAnchorNullifiersAndTrailingAccumulatorField",
             "assert.ok(initBundle.topupAnchorNullifiers.length >= 2);",
             "Buffer.alloc(32)",
             "Buffer.alloc(32, 0x34)",
             "initBundle.topupAnchorNullifiers[1], initBundle.topupAnchorNullifiers[0]",
             "initBundle.currentNote.noteCommitment",
             "initBundle.currentNote.spendNullifier",
-            'kagemushaRequestCodecError("archive", "bundle.accumulator.topup_anchor_nullifiers", null)',
-        ),
+            "recursiveSpendBundleWithAccumulatorField(5, u64LE(3))",
+            'kagemushaRequestCodecError("archive", "bundle.accumulator.topup_anchor_nullifiers", expectedMessage)',
+        ) + topup_anchor_case_labels + topup_anchor_diagnostics + topup_anchor_precedence_labels,
         "JavaScript package dist recursive spend top-up anchor nullifier invariant coverage",
         errors,
     )
@@ -22230,14 +24278,39 @@ def check_sdk_topup_anchor_nullifier_invariants(texts, errors):
         texts,
         "python/iroha_python/src/iroha_python/kagemusha.py",
         (
+            "def _kagemusha_read_topup_anchor_nullifiers(",
+            "_kagemusha_read_topup_anchor_nullifiers(",
+            "count > KAGEMUSHA_FOLD_STEP_MAX_INPUTS",
             "def _kagemusha_require_recursive_spend_topup_anchor_nullifiers(",
             "_kagemusha_require_recursive_spend_topup_anchor_nullifiers(",
             "len(topup_anchor_nullifiers) > KAGEMUSHA_FOLD_STEP_MAX_INPUTS",
             "previous is not None and previous >= nullifier",
             "current_note.note_commitment in topup_anchor_nullifiers",
             "or current_note.spend_nullifier in topup_anchor_nullifiers",
+        ) + topup_anchor_diagnostics,
+        "Python typed recursive spend top-up anchor nullifier invariant guard",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "python/iroha_python/src/iroha_python/kagemusha.py",
+        "def _kagemusha_read_accumulator_summary(",
+        "def _kagemusha_read_recursive_proof_circuit_id(",
+        (
+            "topup_anchor_nullifiers = _kagemusha_read_topup_anchor_nullifiers(\n        topup_payload,\n        flags,\n    )",
+            "_kagemusha_require_recursive_spend_topup_anchor_nullifiers(\n        topup_anchor_nullifiers,\n        current_note,\n    )",
+            "return (\n        chain_id,\n        asset,\n        initial_root,\n        final_root,\n        topup_anchor_nullifiers,",
         ),
         "Python typed recursive spend top-up anchor nullifier invariant guard",
+        errors,
+    )
+    require_block_regex(
+        texts,
+        "python/iroha_python/src/iroha_python/kagemusha.py",
+        "def _kagemusha_read_accumulator_summary(",
+        "def _kagemusha_read_recursive_proof_circuit_id(",
+        r"_kagemusha_require_recursive_spend_topup_anchor_nullifiers\(\n        topup_anchor_nullifiers,\n        current_note,\n    \)[\s\S]*?if cursor != len\(payload\):",
+        "Python typed recursive spend top-up anchor nullifier precedence guard",
         errors,
     )
     require_contains(
@@ -22245,14 +24318,17 @@ def check_sdk_topup_anchor_nullifier_invariants(texts, errors):
         "python/iroha_python/tests/kagemusha_test.py",
         (
             "_recursive_spend_bundle_with_topup_anchor_nullifiers",
+            "_recursive_spend_bundle_with_topup_anchor_nullifiers_and_empty_proof_bytes",
+            "_recursive_spend_bundle_with_topup_anchor_nullifiers_and_trailing_accumulator_field",
             "len(init_summary.topup_anchor_nullifiers) >= 2",
             "bytes(32)",
             "bytes([0x34]) * 32",
             "init_summary.topup_anchor_nullifiers[1], init_summary.topup_anchor_nullifiers[0]",
             "init_summary.current_note.note_commitment",
             "init_summary.current_note.spend_nullifier",
-            "bundle\\.accumulator\\.topup_anchor_nullifiers",
-        ),
+            "_recursive_spend_bundle_with_accumulator_field(5, _u64_le(3))",
+            "assert str(error) == expected_message",
+        ) + topup_anchor_case_labels + topup_anchor_diagnostics + topup_anchor_precedence_labels,
         "Python typed recursive spend top-up anchor nullifier invariant tests",
         errors,
     )
@@ -22260,13 +24336,15 @@ def check_sdk_topup_anchor_nullifier_invariants(texts, errors):
         texts,
         "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
         (
+            "maxCount: foldStepMaxInputs",
+            "guard count > 0, count <= maxCount else",
             "try requireTopupAnchorNullifiers(topupAnchorNullifiers, currentNote: currentNote)",
             "private static func requireTopupAnchorNullifiers(",
             "nullifiers.count <= foldStepMaxInputs",
             "lexicographicallyPrecedes(nullifier)",
             "!nullifiers.contains(currentNote.noteCommitment)",
             "!nullifiers.contains(currentNote.spendNullifier)",
-        ),
+        ) + topup_anchor_diagnostics,
         "Swift typed recursive spend top-up anchor nullifier invariant guard",
         errors,
     )
@@ -22275,14 +24353,17 @@ def check_sdk_topup_anchor_nullifier_invariants(texts, errors):
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
         (
             "recursiveSpendBundleWithTopupAnchorNullifiers",
+            "recursiveSpendBundleWithTopupAnchorNullifiersAndEmptyProofBytes",
+            "recursiveSpendBundleWithTopupAnchorNullifiersAndTrailingAccumulatorField",
             "XCTAssertGreaterThanOrEqual(initBundle.topupAnchorNullifiers.count, 2)",
             "Data(repeating: 0, count: 32)",
             "Data(repeating: 0x34, count: 32)",
             "initBundle.topupAnchorNullifiers[1], initBundle.topupAnchorNullifiers[0]",
             "initBundle.currentNote.noteCommitment",
             "initBundle.currentNote.spendNullifier",
-            '.invalidArchive("bundle.accumulator.topup_anchor_nullifiers")',
-        ),
+            "Self.appendUInt64LE(3, to: &overLimitTopupAnchorCountPrefix)",
+            "expectedError",
+        ) + topup_anchor_case_labels + topup_anchor_diagnostics + topup_anchor_precedence_labels,
         "Swift typed recursive spend top-up anchor nullifier invariant tests",
         errors,
     )
@@ -22290,12 +24371,14 @@ def check_sdk_topup_anchor_nullifier_invariants(texts, errors):
         texts,
         "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
         (
+            "maxCount = KAGEMUSHA_FOLD_STEP_MAX_INPUTS",
+            "count in 1..maxCount",
             "requireTopupAnchorNullifiers(topupAnchorNullifiers, currentNote)",
             "private fun requireTopupAnchorNullifiers(",
             "nullifiers.size <= KAGEMUSHA_FOLD_STEP_MAX_INPUTS",
             "compareUnsigned(nullifiers[index - 1], nullifiers[index]) < 0",
             "it.contentEquals(currentNote.noteCommitment) || it.contentEquals(currentNote.spendNullifier)",
-        ),
+        ) + topup_anchor_diagnostics,
         "Kotlin typed recursive spend top-up anchor nullifier invariant guard",
         errors,
     )
@@ -22304,14 +24387,19 @@ def check_sdk_topup_anchor_nullifier_invariants(texts, errors):
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
         (
             "recursiveSpendBundleWithTopupAnchorNullifiers",
+            "recursiveSpendBundleWithTopupAnchorNullifiersAndEmptyProofBytes",
+            "recursiveSpendBundleWithTopupAnchorNullifiersAndTrailingAccumulatorField",
             "assertTrue(init.topupAnchorNullifiers.size >= 2)",
             "ByteArray(32)",
             "ByteArray(32) { 0x34 }",
-            "init.topupAnchorNullifiers[1], init.topupAnchorNullifiers[0]",
+            "init.topupAnchorNullifiers[1],",
+            "init.topupAnchorNullifiers[0],",
             "init.currentNote.noteCommitment",
             "init.currentNote.spendNullifier",
-            "bundle.accumulator.topup_anchor_nullifiers",
-        ),
+            "testPayload { writeUInt(3, 64) }",
+            "assertEquals(",
+            "expectedMessage",
+        ) + topup_anchor_case_labels + topup_anchor_diagnostics + topup_anchor_precedence_labels,
         "Kotlin typed recursive spend top-up anchor nullifier invariant tests",
         errors,
     )
@@ -22319,13 +24407,15 @@ def check_sdk_topup_anchor_nullifier_invariants(texts, errors):
         texts,
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
         (
+            "KAGEMUSHA_FOLD_STEP_MAX_INPUTS));",
+            "count >= 1 && count <= maxCount",
             "requireTopupAnchorNullifiers(topupAnchorNullifiers, currentNote);",
             "private static void requireTopupAnchorNullifiers(",
             "nullifiers.size() <= KAGEMUSHA_FOLD_STEP_MAX_INPUTS",
             "compareUnsigned(nullifiers.get(index - 1), nullifier) < 0",
             "Arrays.equals(nullifier, currentNote.noteCommitment())",
             "Arrays.equals(nullifier, currentNote.spendNullifier())",
-        ),
+        ) + topup_anchor_diagnostics,
         "Android Java typed recursive spend top-up anchor nullifier invariant guard",
         errors,
     )
@@ -22334,14 +24424,17 @@ def check_sdk_topup_anchor_nullifier_invariants(texts, errors):
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
         (
             "recursiveSpendBundleWithTopupAnchorNullifiers",
+            "recursiveSpendBundleWithTopupAnchorNullifiersAndEmptyProofBytes",
+            "recursiveSpendBundleWithTopupAnchorNullifiersAndTrailingAccumulatorField",
             "init.topupAnchorNullifiers().size() >= 2",
             "new byte[32]",
             "repeat((byte) 0x34, 32)",
             "init.topupAnchorNullifiers().get(1), init.topupAnchorNullifiers().get(0)",
             "init.currentNote.noteCommitment()",
             "init.currentNote.spendNullifier()",
-            "bundle.accumulator.topup_anchor_nullifiers",
-        ),
+            "testPayload(encoder -> encoder.writeUInt(3, 64))",
+            "expectedMessage.equals(malformedTopupAnchors.getMessage())",
+        ) + topup_anchor_case_labels + topup_anchor_diagnostics + topup_anchor_precedence_labels,
         "Android Java typed recursive spend top-up anchor nullifier invariant tests",
         errors,
     )
@@ -22405,6 +24498,7 @@ def run_checks(texts):
     check_offline_doc_lineage_key_artifact_sdk_surface(texts, errors)
     check_offline_doc_instruction_transaction_sdk_surface(texts, errors)
     check_offline_doc_native_output_sdk_surface(texts, errors)
+    check_offline_doc_redeem_lineage_record_selection(texts, errors)
     check_offline_doc_native_owned_accumulator_boundary(texts, errors)
     check_offline_doc_localnet_lifecycle_release_evidence(texts, errors)
     if errors:
@@ -22733,6 +24827,11 @@ if mode == "--negative-control-native-bridge-test-workflow":
             "JS host append-boundary duplicate-output test",
         ),
         (
+            JS_HOST_APPEND_BOUNDARY_FORGED_RESULT_TEST_COMMAND,
+            "cargo test -p iroha_js_host --lib -- --skip kagemusha_recursive_spend_lineage_append_boundary_rejects_forged_result_hashes",
+            "JS host append-boundary forged-result test",
+        ),
+        (
             NATIVE_BRIDGE_OVERSIZED_LENGTH_TEST_COMMAND,
             "cargo test -p connect_norito_bridge --lib -- --skip kagemusha_compact_ffi_rejects_oversized_lengths",
             "native Kagemusha oversized-length FFI test",
@@ -22791,6 +24890,39 @@ if mode == "--negative-control-native-bridge-test-workflow":
             print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: native bridge test workflow drift was not detected")
+
+if mode == "--negative-control-native-bridge-js-host-order-workflow":
+    target = WORKFLOW_PATH
+    original = read(target)
+    duplicate_line = f"          {JS_HOST_APPEND_BOUNDARY_TEST_COMMAND}\n"
+    forged_line = f"          {JS_HOST_APPEND_BOUNDARY_FORGED_RESULT_TEST_COMMAND}\n"
+    mutated = original.replace(
+        duplicate_line + forged_line,
+        forged_line + duplicate_line,
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate JS host test workflow order")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        message = str(error)
+        expected = (
+            "Kagemusha payload workflow must run duplicate-output JS host tests "
+            "before forged-result JS host tests"
+        )
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JS host test workflow ordering drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected JS host test workflow ordering drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JS host test workflow ordering drift was not detected")
 
 if mode == "--negative-control-native-bridge-windowed-record-order-workflow":
     target = WORKFLOW_PATH
@@ -23526,58 +25658,73 @@ if mode == "--negative-control-python-block-height-vectors":
     target = "python/iroha_python/tests/kagemusha_test.py"
     old = (
         "    invalid_block_heights = (\n"
-        "        True,\n"
-        "        False,\n"
-        "        1.5,\n"
-        '        "1",\n'
-        '        "00",\n'
-        '        "01",\n'
-        '        "0007",\n'
-        '        "-0",\n'
-        '        "+7",\n'
-        '        "7 ",\n'
-        '        " 7",\n'
-        '        "18446744073709551616",\n'
-        "        -1,\n"
-        "        1 << 64,\n"
+        '        (True, TypeError, "block_height must be an integer"),\n'
+        '        (False, TypeError, "block_height must be an integer"),\n'
+        '        (1.5, TypeError, "block_height must be an integer"),\n'
+        '        ("1", TypeError, "block_height must be an integer"),\n'
+        '        ("00", TypeError, "block_height must be an integer"),\n'
+        '        ("01", TypeError, "block_height must be an integer"),\n'
+        '        ("0007", TypeError, "block_height must be an integer"),\n'
+        '        ("-0", TypeError, "block_height must be an integer"),\n'
+        '        ("+7", TypeError, "block_height must be an integer"),\n'
+        '        ("7 ", TypeError, "block_height must be an integer"),\n'
+        '        (" 7", TypeError, "block_height must be an integer"),\n'
+        '        ("18446744073709551616", TypeError, "block_height must be an integer"),\n'
+        '        (-1, ValueError, "block_height must be non-negative"),\n'
+        '        (1 << 64, ValueError, "block_height must fit in u64"),\n'
     )
     new = (
         "    invalid_block_heights = (\n"
-        "        None,\n"
-        "        None,\n"
-        "        1,\n"
-        '        "2",\n'
-        '        "0",\n'
-        '        "2",\n'
-        '        "7",\n'
-        '        "0",\n'
-        '        "7",\n'
-        '        "7",\n'
-        '        "7",\n'
-        '        "7",\n'
-        "        0,\n"
-        "        1 << 63,\n"
+        '        (None, TypeError, "block_height is optional"),\n'
+        '        (None, TypeError, "block_height is optional"),\n'
+        '        (1, TypeError, "block_height may be fractional"),\n'
+        '        ("2", TypeError, "block_height may be a string"),\n'
+        '        ("0", TypeError, "block_height may be a string"),\n'
+        '        ("2", TypeError, "block_height may be a string"),\n'
+        '        ("7", TypeError, "block_height may be a string"),\n'
+        '        ("0", TypeError, "block_height may be a string"),\n'
+        '        ("7", TypeError, "block_height may be a string"),\n'
+        '        ("7", TypeError, "block_height may be a string"),\n'
+        '        ("7", TypeError, "block_height may be a string"),\n'
+        '        ("7", TypeError, "block_height may be a string"),\n'
+        '        (0, ValueError, "block_height may be negative"),\n'
+        '        (1 << 63, ValueError, "block_height may exceed u64"),\n'
     )
     mutated = texts[target].replace(old, new, 1)
     if mutated == texts[target] or old in mutated:
         raise SystemExit(
             "negative control failed: unable to mutate Python recursive spend block_height vectors"
         )
+    loop_old = (
+        "            with pytest.raises(error_type, match=expected_error):\n"
+        "                build_request(block_height)"
+    )
+    loop_new = (
+        '            with pytest.raises((TypeError, ValueError), match="block_height"):\n'
+        "                build_request(block_height)"
+    )
+    updated = mutated.replace(loop_old, loop_new, 1)
+    if updated == mutated:
+        raise SystemExit(
+            "negative control failed: unable to mutate Python recursive spend block_height exact assertion"
+        )
+    mutated = updated
     expected_labels = (
-        "Python typed recursive spend blockHeight test vectors missing True",
-        "Python typed recursive spend blockHeight test vectors missing False",
-        "Python typed recursive spend blockHeight test vectors missing 1.5",
-        'Python typed recursive spend blockHeight test vectors missing "1"',
-        'Python typed recursive spend blockHeight test vectors missing "00"',
-        'Python typed recursive spend blockHeight test vectors missing "01"',
-        'Python typed recursive spend blockHeight test vectors missing "0007"',
-        'Python typed recursive spend blockHeight test vectors missing "-0"',
-        'Python typed recursive spend blockHeight test vectors missing "+7"',
-        'Python typed recursive spend blockHeight test vectors missing "7 "',
-        'Python typed recursive spend blockHeight test vectors missing " 7"',
-        'Python typed recursive spend blockHeight test vectors missing "18446744073709551616"',
-        "Python typed recursive spend blockHeight test vectors missing -1",
-        "Python typed recursive spend blockHeight test vectors missing 1 << 64",
+        'Python typed recursive spend blockHeight test vectors missing (True, TypeError, "block_height must be an integer")',
+        'Python typed recursive spend blockHeight test vectors missing (False, TypeError, "block_height must be an integer")',
+        'Python typed recursive spend blockHeight test vectors missing (1.5, TypeError, "block_height must be an integer")',
+        'Python typed recursive spend blockHeight test vectors missing ("1", TypeError, "block_height must be an integer")',
+        'Python typed recursive spend blockHeight test vectors missing ("00", TypeError, "block_height must be an integer")',
+        'Python typed recursive spend blockHeight test vectors missing ("01", TypeError, "block_height must be an integer")',
+        'Python typed recursive spend blockHeight test vectors missing ("0007", TypeError, "block_height must be an integer")',
+        'Python typed recursive spend blockHeight test vectors missing ("-0", TypeError, "block_height must be an integer")',
+        'Python typed recursive spend blockHeight test vectors missing ("+7", TypeError, "block_height must be an integer")',
+        'Python typed recursive spend blockHeight test vectors missing ("7 ", TypeError, "block_height must be an integer")',
+        'Python typed recursive spend blockHeight test vectors missing (" 7", TypeError, "block_height must be an integer")',
+        'Python typed recursive spend blockHeight test vectors missing ("18446744073709551616", TypeError, "block_height must be an integer")',
+        'Python typed recursive spend blockHeight test vectors missing (-1, ValueError, "block_height must be non-negative")',
+        'Python typed recursive spend blockHeight test vectors missing (1 << 64, ValueError, "block_height must fit in u64")',
+        "Python typed recursive spend blockHeight exact diagnostics missing with pytest.raises(error_type, match=expected_error):",
     )
     mutated_texts[target] = mutated
     try:
@@ -23601,69 +25748,83 @@ if mode == "--negative-control-python-block-height-vectors":
 if mode == "--negative-control-python-note-amount-vectors":
     mutated_texts = dict(texts)
     target = "python/iroha_python/tests/kagemusha_test.py"
-    old = (
-        "    invalid_amounts = (\n"
-        '        "",\n'
-        '        "0",\n'
-        '        "00",\n'
-        '        "01",\n'
-        '        "0007",\n'
-        '        "-1",\n'
-        '        "+1",\n'
-        '        "1.0",\n'
-        '        "1e3",\n'
-        '        "7 ",\n'
-        '        " 7",\n'
-        '        "\\t7",\n'
-        '        "7\\n",\n'
-        "        str(1 << 128),\n"
-        '        "9" * 40,\n'
+    replacements = (
+        (
+            '        ("", "amount must be a decimal integer"),\n',
+            'Python typed recursive spend note amount test vectors missing ("", "amount must be a decimal integer")',
+        ),
+        (
+            '        ("0", "amount must be greater than zero"),\n',
+            'Python typed recursive spend note amount test vectors missing ("0", "amount must be greater than zero")',
+        ),
+        (
+            '        ("00", "amount must be canonical"),\n',
+            'Python typed recursive spend note amount test vectors missing ("00", "amount must be canonical")',
+        ),
+        (
+            '        ("01", "amount must be canonical"),\n',
+            'Python typed recursive spend note amount test vectors missing ("01", "amount must be canonical")',
+        ),
+        (
+            '        ("0007", "amount must be canonical"),\n',
+            'Python typed recursive spend note amount test vectors missing ("0007", "amount must be canonical")',
+        ),
+        (
+            '        ("-1", "amount must be a decimal integer"),\n',
+            'Python typed recursive spend note amount test vectors missing ("-1", "amount must be a decimal integer")',
+        ),
+        (
+            '        ("+1", "amount must be a decimal integer"),\n',
+            'Python typed recursive spend note amount test vectors missing ("+1", "amount must be a decimal integer")',
+        ),
+        (
+            '        ("1.0", "amount must be a decimal integer"),\n',
+            'Python typed recursive spend note amount test vectors missing ("1.0", "amount must be a decimal integer")',
+        ),
+        (
+            '        ("1e3", "amount must be a decimal integer"),\n',
+            'Python typed recursive spend note amount test vectors missing ("1e3", "amount must be a decimal integer")',
+        ),
+        (
+            '        ("7 ", "amount must be a decimal integer"),\n',
+            'Python typed recursive spend note amount test vectors missing ("7 ", "amount must be a decimal integer")',
+        ),
+        (
+            '        (" 7", "amount must be a decimal integer"),\n',
+            'Python typed recursive spend note amount test vectors missing (" 7", "amount must be a decimal integer")',
+        ),
+        (
+            '        ("\\t7", "amount must be a decimal integer"),\n',
+            'Python typed recursive spend note amount test vectors missing ("\\t7", "amount must be a decimal integer")',
+        ),
+        (
+            '        ("7\\n", "amount must be a decimal integer"),\n',
+            'Python typed recursive spend note amount test vectors missing ("7\\n", "amount must be a decimal integer")',
+        ),
+        (
+            '        (str(1 << 128), "amount must fit in u128"),\n',
+            'Python typed recursive spend note amount test vectors missing (str(1 << 128), "amount must fit in u128")',
+        ),
+        (
+            '        ("9" * 40, "amount must fit in u128"),\n',
+            'Python typed recursive spend note amount test vectors missing ("9" * 40, "amount must fit in u128")',
+        ),
     )
-    new = (
-        "    invalid_amounts = (\n"
-        '        "ok",\n'
-        '        "2",\n'
-        '        "3",\n'
-        '        "4",\n'
-        '        "5",\n'
-        '        "6",\n'
-        '        "8",\n'
-        '        "9",\n'
-        '        "10",\n'
-        '        "11",\n'
-        '        "12",\n'
-        '        "13",\n'
-        '        "14",\n'
-        "        str(1 << 127),\n"
-        '        "15",\n'
-    )
-    mutated = texts[target].replace(old, new, 1)
-    if mutated == texts[target] or old in mutated:
-        raise SystemExit(
-            "negative control failed: unable to mutate Python recursive spend note amount vectors"
-        )
+    mutated = texts[target]
+    for needle, label in replacements:
+        updated = mutated.replace(needle, "", 1)
+        if updated == mutated:
+            raise SystemExit(
+                "negative control failed: unable to mutate Python recursive spend note amount vector "
+                + label
+            )
+        mutated = updated
+    expected_labels = tuple(label for _needle, label in replacements)
     mutated_texts[target] = mutated
     try:
         run_checks(mutated_texts)
     except ParityError as error:
         message = str(error)
-        expected_labels = (
-            'Python typed recursive spend note amount test vectors missing ""',
-            'Python typed recursive spend note amount test vectors missing "0"',
-            'Python typed recursive spend note amount test vectors missing "00"',
-            'Python typed recursive spend note amount test vectors missing "01"',
-            'Python typed recursive spend note amount test vectors missing "0007"',
-            'Python typed recursive spend note amount test vectors missing "-1"',
-            'Python typed recursive spend note amount test vectors missing "+1"',
-            'Python typed recursive spend note amount test vectors missing "1.0"',
-            'Python typed recursive spend note amount test vectors missing "1e3"',
-            'Python typed recursive spend note amount test vectors missing "7 "',
-            'Python typed recursive spend note amount test vectors missing " 7"',
-            'Python typed recursive spend note amount test vectors missing "\\t7"',
-            'Python typed recursive spend note amount test vectors missing "7\\n"',
-            "Python typed recursive spend note amount test vectors missing str(1 << 128)",
-            'Python typed recursive spend note amount test vectors missing "9" * 40',
-        )
         missing = [label for label in expected_labels if label not in message]
         if missing:
             raise SystemExit(
@@ -23681,69 +25842,83 @@ if mode == "--negative-control-python-note-amount-vectors":
 if mode == "--negative-control-python-redeem-public-amount-vectors":
     mutated_texts = dict(texts)
     target = "python/iroha_python/tests/kagemusha_test.py"
-    old = (
-        '    invalid_public_amounts = (\n'
-        '        "",\n'
-        '        "0",\n'
-        '        "00",\n'
-        '        "01",\n'
-        '        "0007",\n'
-        '        "-1",\n'
-        '        "+1",\n'
-        '        "1.0",\n'
-        '        "1e3",\n'
-        '        "7 ",\n'
-        '        " 7",\n'
-        '        "\\t7",\n'
-        '        "7\\n",\n'
-        "        str(1 << 128),\n"
-        '        "9" * 40,\n'
+    replacements = (
+        (
+            '        ("", "public_amount must be a decimal integer"),\n',
+            'Python typed recursive spend public amount test vectors missing ("", "public_amount must be a decimal integer")',
+        ),
+        (
+            '        ("0", "public_amount must be greater than zero"),\n',
+            'Python typed recursive spend public amount test vectors missing ("0", "public_amount must be greater than zero")',
+        ),
+        (
+            '        ("00", "public_amount must be canonical"),\n',
+            'Python typed recursive spend public amount test vectors missing ("00", "public_amount must be canonical")',
+        ),
+        (
+            '        ("01", "public_amount must be canonical"),\n',
+            'Python typed recursive spend public amount test vectors missing ("01", "public_amount must be canonical")',
+        ),
+        (
+            '        ("0007", "public_amount must be canonical"),\n',
+            'Python typed recursive spend public amount test vectors missing ("0007", "public_amount must be canonical")',
+        ),
+        (
+            '        ("-1", "public_amount must be a decimal integer"),\n',
+            'Python typed recursive spend public amount test vectors missing ("-1", "public_amount must be a decimal integer")',
+        ),
+        (
+            '        ("+1", "public_amount must be a decimal integer"),\n',
+            'Python typed recursive spend public amount test vectors missing ("+1", "public_amount must be a decimal integer")',
+        ),
+        (
+            '        ("1.0", "public_amount must be a decimal integer"),\n',
+            'Python typed recursive spend public amount test vectors missing ("1.0", "public_amount must be a decimal integer")',
+        ),
+        (
+            '        ("1e3", "public_amount must be a decimal integer"),\n',
+            'Python typed recursive spend public amount test vectors missing ("1e3", "public_amount must be a decimal integer")',
+        ),
+        (
+            '        ("7 ", "public_amount must be a decimal integer"),\n',
+            'Python typed recursive spend public amount test vectors missing ("7 ", "public_amount must be a decimal integer")',
+        ),
+        (
+            '        (" 7", "public_amount must be a decimal integer"),\n',
+            'Python typed recursive spend public amount test vectors missing (" 7", "public_amount must be a decimal integer")',
+        ),
+        (
+            '        ("\\t7", "public_amount must be a decimal integer"),\n',
+            'Python typed recursive spend public amount test vectors missing ("\\t7", "public_amount must be a decimal integer")',
+        ),
+        (
+            '        ("7\\n", "public_amount must be a decimal integer"),\n',
+            'Python typed recursive spend public amount test vectors missing ("7\\n", "public_amount must be a decimal integer")',
+        ),
+        (
+            '        (str(1 << 128), "public_amount must fit in u128"),\n',
+            'Python typed recursive spend public amount test vectors missing (str(1 << 128), "public_amount must fit in u128")',
+        ),
+        (
+            '        ("9" * 40, "public_amount must fit in u128"),\n',
+            'Python typed recursive spend public amount test vectors missing ("9" * 40, "public_amount must fit in u128")',
+        ),
     )
-    new = (
-        '    invalid_public_amounts = (\n'
-        '        "ok",\n'
-        '        "2",\n'
-        '        "3",\n'
-        '        "4",\n'
-        '        "5",\n'
-        '        "6",\n'
-        '        "8",\n'
-        '        "9",\n'
-        '        "10",\n'
-        '        "11",\n'
-        '        "12",\n'
-        '        "13",\n'
-        '        "14",\n'
-        "        str(1 << 127),\n"
-        '        "15",\n'
-    )
-    mutated = texts[target].replace(old, new, 1)
-    if mutated == texts[target] or old in mutated:
-        raise SystemExit(
-            "negative control failed: unable to mutate Python recursive spend public_amount vectors"
-        )
+    mutated = texts[target]
+    for needle, label in replacements:
+        updated = mutated.replace(needle, "", 1)
+        if updated == mutated:
+            raise SystemExit(
+                "negative control failed: unable to mutate Python recursive spend public_amount vector "
+                + label
+            )
+        mutated = updated
+    expected_labels = tuple(label for _needle, label in replacements)
     mutated_texts[target] = mutated
     try:
         run_checks(mutated_texts)
     except ParityError as error:
         message = str(error)
-        expected_labels = (
-            'Python typed recursive spend public amount test vectors missing ""',
-            'Python typed recursive spend public amount test vectors missing "0"',
-            'Python typed recursive spend public amount test vectors missing "00"',
-            'Python typed recursive spend public amount test vectors missing "01"',
-            'Python typed recursive spend public amount test vectors missing "0007"',
-            'Python typed recursive spend public amount test vectors missing "-1"',
-            'Python typed recursive spend public amount test vectors missing "+1"',
-            'Python typed recursive spend public amount test vectors missing "1.0"',
-            'Python typed recursive spend public amount test vectors missing "1e3"',
-            'Python typed recursive spend public amount test vectors missing "7 "',
-            'Python typed recursive spend public amount test vectors missing " 7"',
-            'Python typed recursive spend public amount test vectors missing "\\t7"',
-            'Python typed recursive spend public amount test vectors missing "7\\n"',
-            "Python typed recursive spend public amount test vectors missing str(1 << 128)",
-            'Python typed recursive spend public amount test vectors missing "9" * 40',
-        )
         missing = [label for label in expected_labels if label not in message]
         if missing:
             raise SystemExit(
@@ -23812,7 +25987,7 @@ if mode == "--negative-control-identifier-receipt-kind-exactness-guard":
     except ParityError as error:
         message = str(error)
         expected_labels = (
-            "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+            'Python Torii client must expose exact signed identifier receipt encoding and verification gates missing _require_exact_non_empty_string(record.get("kind"), "identifier receipt attestation.kind")',
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:
@@ -23855,7 +26030,8 @@ if mode == "--negative-control-identifier-receipt-proof-base64-exactness-guard":
     except ParityError as error:
         message = str(error)
         expected_labels = (
-            "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+            'Python Torii client must expose exact signed identifier receipt encoding and verification gates missing _require_exact_non_empty_string(record.get("proof_b64"), "identifier receipt attestation.proof_b64")',
+            'Python Torii client must expose exact signed identifier receipt encoding and verification gates missing _require_exact_non_empty_string(attestation.get("proof_b64"), "attestation.proof_b64")',
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:
@@ -23898,7 +26074,8 @@ if mode == "--negative-control-identifier-receipt-signature-exactness-guard":
     except ParityError as error:
         message = str(error)
         expected_labels = (
-            "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+            'Python Torii client must expose exact signed identifier receipt encoding and verification gates missing _identifier_exact_hex_bytes(record.get("signature"), "payload.opening.signature")',
+            'Python Torii client must expose exact signed identifier receipt encoding and verification gates missing _identifier_exact_hex_bytes(record.get("signature"), "identifier receipt attestation.signature")',
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:
@@ -23929,7 +26106,7 @@ if mode == "--negative-control-identifier-receipt-policy-id-exactness-guard":
     except ParityError as error:
         message = str(error)
         expected_labels = (
-            "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+            'Python Torii client must expose exact signed identifier receipt encoding and verification gates missing value = _require_exact_non_empty_string(raw, "payload.policy_id")',
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:
@@ -23961,7 +26138,8 @@ if mode == "--negative-control-identifier-receipt-policy-summary-id-exactness-gu
     except ParityError as error:
         message = str(error)
         expected_labels = (
-            "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+            'Python Torii client must expose exact signed identifier receipt encoding and verification gates missing policy_id = _require_exact_non_empty_string(policy.get("policy_id"), "policy.policy_id")',
+            "Python Torii client must expose exact signed identifier receipt encoding and verification gates missing _identifier_policy_id_payload(policy_id)",
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:
@@ -23992,7 +26170,7 @@ if mode == "--negative-control-identifier-receipt-program-id-exactness-guard":
     except ParityError as error:
         message = str(error)
         expected_labels = (
-            "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+            "Python Torii client must expose exact signed identifier receipt encoding and verification gates missing _identifier_sized_field(_identifier_exact_string(raw, context))",
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:
@@ -24023,7 +26201,7 @@ if mode == "--negative-control-identifier-receipt-account-id-exactness-guard":
     except ParityError as error:
         message = str(error)
         expected_labels = (
-            "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+            'Python Torii client must expose exact signed identifier receipt encoding and verification gates missing _require_exact_non_empty_string(account_id, "payload.account_id")',
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:
@@ -24209,7 +26387,7 @@ if mode == "--negative-control-identifier-receipt-hash-exactness-guard":
     except ParityError as error:
         message = str(error)
         expected_labels = (
-            "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+            "Python Torii client must expose exact signed identifier receipt encoding and verification gates missing def _identifier_hash_bytes(raw: Any, context: str) -> bytes:",
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:
@@ -24242,7 +26420,7 @@ if mode == "--negative-control-identifier-receipt-timestamp-exactness-guard":
     except ParityError as error:
         message = str(error)
         expected_labels = (
-            "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+            "Python Torii client must expose exact signed identifier receipt encoding and verification gates missing elif isinstance(value, str) and value.isdigit():",
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:
@@ -24480,30 +26658,77 @@ if mode == "--negative-control-python-sdk-test-workflow":
 if mode == "--negative-control-python-host-test-workflow":
     target = WORKFLOW_PATH
     original = read(target)
-    mutated = original.replace(
-        f"        run: {PYTHON_HOST_APPEND_BOUNDARY_TEST_COMMAND}",
-        f"        run: {PYTHON_HOST_APPEND_BOUNDARY_TEST_COMMAND} --skip",
-        1,
+    mutations = (
+        (
+            f"          {PYTHON_HOST_APPEND_BOUNDARY_TEST_COMMAND}\n",
+            f"          {PYTHON_HOST_APPEND_BOUNDARY_TEST_COMMAND} --skip\n",
+            "Kagemusha payload workflow must run the Python PyO3 append-boundary host test",
+        ),
+        (
+            f"          {PYTHON_HOST_APPEND_BOUNDARY_FORGED_RESULT_TEST_COMMAND}\n",
+            f"          {PYTHON_HOST_APPEND_BOUNDARY_FORGED_RESULT_TEST_COMMAND} --skip\n",
+            "Kagemusha payload workflow must run the Python PyO3 append-boundary forged-result host test",
+        ),
     )
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to mutate Python host test workflow command")
+    mutated = original
+    for old, new, label in mutations:
+        updated = mutated.replace(old, new, 1)
+        if updated == mutated:
+            raise SystemExit(
+                "negative control failed: unable to mutate Python host test workflow command: "
+                + label
+            )
+        mutated = updated
     text_overrides[target] = mutated
     try:
         run_checks(texts)
     except ParityError as error:
         message = str(error)
-        expected = "Kagemusha payload workflow must run the Python PyO3 append-boundary host test"
-        expected_labels = (expected,)
-        if expected not in message:
+        expected_labels = tuple(label for _, _, label in mutations)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: Python host test workflow drift was rejected for the wrong reason: "
-                + message.splitlines()[0]
+                "negative control failed: Python host test workflow drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected Python host test workflow drift")
         for detected_message in first_lines_for_labels(message, expected_labels):
             print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python host test workflow drift was not detected")
+
+if mode == "--negative-control-python-host-test-order-workflow":
+    target = WORKFLOW_PATH
+    original = read(target)
+    duplicate_line = f"          {PYTHON_HOST_APPEND_BOUNDARY_TEST_COMMAND}\n"
+    forged_line = f"          {PYTHON_HOST_APPEND_BOUNDARY_FORGED_RESULT_TEST_COMMAND}\n"
+    mutated = original.replace(
+        duplicate_line + forged_line,
+        forged_line + duplicate_line,
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Python host test workflow order")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        message = str(error)
+        expected = (
+            "Kagemusha payload workflow must run duplicate-output PyO3 host tests "
+            "before forged-result PyO3 host tests"
+        )
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python host test workflow ordering drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected Python host test workflow ordering drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Python host test workflow ordering drift was not detected")
 
 if mode == "--negative-control-python-sdk-needs-workflow":
     target = WORKFLOW_PATH
@@ -26375,6 +28600,30 @@ if mode == "--negative-control-mobile-confidential-witness-codecs":
             "Android Java confidential witness codecs",
         ),
         (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyConfidentialWitness.kt",
+            "copyNonEmptyProof(proof)",
+            "copyProofUnchecked(proof)",
+            "Kotlin confidential witness codecs",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyConfidentialWitness.java",
+            "copyNonEmptyProof(proof)",
+            "copyProofUnchecked(proof)",
+            "Android Java confidential witness codecs",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
+            "privacyRequestComponentBytes(",
+            "privacyRequestComponentBytesUnchecked(",
+            "Kotlin privacy proof request component validation",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
+            "privacyRequestComponentBytes(",
+            "privacyRequestComponentBytesUnchecked(",
+            "Android Java privacy proof request component validation",
+        ),
+        (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
             "typedConfidentialWitnessBuildersRejectAmbiguousShapes",
             "typedConfidentialWitnessBuildersAllowAmbiguousShapes",
@@ -26397,6 +28646,7 @@ if mode == "--negative-control-mobile-confidential-witness-codecs":
             "vkRef may be halo2-ipa-pasta:confidential_unshield_v3",
         ),
         ("proof must not be empty", "proof may be empty"),
+        ("proof must not exceed 33554432 bytes", "proof may exceed 33554432 bytes"),
         (
             "confidential transfer witness must include one or two transferOutputs",
             "confidential transfer witness may omit transferOutputs",
@@ -26526,6 +28776,14 @@ if mode == "--negative-control-mobile-offline-readiness-coverage":
                 "may be coerced",
             ),
             (
+                "must be a positive integer",
+                "may be non-positive",
+            ),
+            (
+                "must fit in signed 32-bit range",
+                "may overflow",
+            ),
+            (
                 "offline_kagemusha_recursive_compact_mode must be an exact non-empty string",
                 "offline_kagemusha_recursive_compact_mode may be padded",
             ),
@@ -26534,8 +28792,28 @@ if mode == "--negative-control-mobile-offline-readiness-coverage":
                 "offline_kagemusha_abi7_bridge_abi_version may be coerced",
             ),
             (
+                "offline_kagemusha_abi7_bridge_abi_version must be a positive integer",
+                "offline_kagemusha_abi7_bridge_abi_version may be non-positive",
+            ),
+            (
+                "offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range",
+                "offline_kagemusha_abi7_bridge_abi_version may overflow",
+            ),
+            (
+                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact integer string",
+                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version may be noncanonical",
+            ),
+            (
                 "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an integer",
                 "offline_kagemusha_recursive_compact_required_native_bridge_abi_version may be coerced",
+            ),
+            (
+                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer",
+                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version may be non-positive",
+            ),
+            (
+                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range",
+                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version may overflow",
             ),
         ):
             mutated = mutated.replace(old, new)
@@ -26562,7 +28840,27 @@ if mode == "--negative-control-mobile-offline-readiness-coverage":
         ),
         (
             "Kotlin Offline readiness client tests",
+            "offline_kagemusha_abi7_bridge_abi_version must be a positive integer",
+        ),
+        (
+            "Kotlin Offline readiness client tests",
+            "offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range",
+        ),
+        (
+            "Kotlin Offline readiness client tests",
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact integer string",
+        ),
+        (
+            "Kotlin Offline readiness client tests",
             "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an integer",
+        ),
+        (
+            "Kotlin Offline readiness client tests",
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer",
+        ),
+        (
+            "Kotlin Offline readiness client tests",
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range",
         ),
         (
             "Kotlin Offline V2 readiness client tests",
@@ -26578,7 +28876,27 @@ if mode == "--negative-control-mobile-offline-readiness-coverage":
         ),
         (
             "Kotlin Offline V2 readiness client tests",
+            "offline_kagemusha_abi7_bridge_abi_version must be a positive integer",
+        ),
+        (
+            "Kotlin Offline V2 readiness client tests",
+            "offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range",
+        ),
+        (
+            "Kotlin Offline V2 readiness client tests",
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact integer string",
+        ),
+        (
+            "Kotlin Offline V2 readiness client tests",
             "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an integer",
+        ),
+        (
+            "Kotlin Offline V2 readiness client tests",
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer",
+        ),
+        (
+            "Kotlin Offline V2 readiness client tests",
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range",
         ),
         (
             "Android Java Offline readiness parser tests",
@@ -26594,7 +28912,27 @@ if mode == "--negative-control-mobile-offline-readiness-coverage":
         ),
         (
             "Android Java Offline readiness parser tests",
+            "offline_kagemusha_abi7_bridge_abi_version must be a positive integer",
+        ),
+        (
+            "Android Java Offline readiness parser tests",
+            "offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range",
+        ),
+        (
+            "Android Java Offline readiness parser tests",
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact integer string",
+        ),
+        (
+            "Android Java Offline readiness parser tests",
             "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an integer",
+        ),
+        (
+            "Android Java Offline readiness parser tests",
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer",
+        ),
+        (
+            "Android Java Offline readiness parser tests",
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range",
         ),
     ]
     expected_labels = [
@@ -26681,32 +29019,181 @@ if mode == "--negative-control-offline-cash-issuer-key-exactness":
     mutated_texts = dict(texts)
     targets = (
         (
+            "python/iroha_python/src/iroha_python/offline_cash.py",
+            "Python offline cash ABI exactness guard",
+            ("_positive_native_bridge_abi_version",),
+            (
+                ("_positive_native_bridge_abi_version", "_coerced_native_bridge_abi_version"),
+                ("must be a positive integer", "may be non-positive"),
+            ),
+        ),
+        (
+            "javascript/iroha_js/src/offlineCashLifecycle.js",
+            "JavaScript offline cash ABI exactness guard",
+            ("positiveIntegerOfflineCashSnapshotNumber",),
+            (
+                ("positiveIntegerOfflineCashSnapshotNumber", "finiteOfflineCashSnapshotNumber"),
+                ("must be a positive integer", "may be non-positive"),
+            ),
+        ),
+        (
+            "javascript/iroha_js/dist/offlineCashLifecycle.js",
+            "JavaScript package offline cash ABI exactness guard",
+            ("positiveIntegerOfflineCashSnapshotNumber",),
+            (
+                ("positiveIntegerOfflineCashSnapshotNumber", "finiteOfflineCashSnapshotNumber"),
+                ("must be a positive integer", "may be non-positive"),
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycle.kt",
+            "Kotlin offline cash ABI exactness guard",
+            ("positiveNativeBridgeAbiVersion",),
+            (
+                ("positiveNativeBridgeAbiVersion", "coercedNativeBridgeAbiVersion"),
+                ("must be a positive integer", "may be non-positive"),
+            ),
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycle.java",
+            "Android Java offline cash ABI exactness guard",
+            ("positiveNativeBridgeAbiVersion",),
+            (
+                ("positiveNativeBridgeAbiVersion", "coercedNativeBridgeAbiVersion"),
+                ("must be a positive integer", "may be non-positive"),
+            ),
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineIssuerPublicKey.swift",
+            "Swift offline issuer-key parser exactness guard",
+            ('guard !value.contains("=") else {',),
+            (
+                ('guard !value.contains("=") else {', "guard true else {"),
+            ),
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineIssuerPublicKeyTests.swift",
+            "Swift offline issuer-key parser exactness vectors",
+            (
+                "testRejectsPaddedBase64BeforeDecoding",
+                "XCTAssertThrowsError(try OfflineIssuerPublicKey(paddedBase64))",
+                "XCTAssertThrowsError(try OfflineIssuerPublicKey(paddedBase64URL))",
+            ),
+            (
+                (
+                    "testRejectsPaddedBase64BeforeDecoding",
+                    "testAllowsPaddedBase64BeforeDecoding",
+                ),
+                (
+                    "XCTAssertThrowsError(try OfflineIssuerPublicKey(paddedBase64))",
+                    "XCTAssertNoThrow(try OfflineIssuerPublicKey(paddedBase64))",
+                ),
+                (
+                    "XCTAssertThrowsError(try OfflineIssuerPublicKey(paddedBase64URL))",
+                    "XCTAssertNoThrow(try OfflineIssuerPublicKey(paddedBase64URL))",
+                ),
+            ),
+        ),
+        (
             "python/iroha_python/tests/offline_cash_test.py",
             "Python offline cash issuer-key exactness vectors",
+            ('" issuer-key"', "for native_bridge_abi_version in (0, -1, 7.5, True)"),
+            (
+                ('" issuer-key"', '"issuer-key"'),
+                ('"issuer-key "', '"issuer-key"'),
+                ('"issuer key"', '"issuer-key"'),
+                ('"issuer-key\\n"', '"issuer-key"'),
+                ('"issuer-key\\u2603"', '"issuer-key"'),
+                (
+                    "for native_bridge_abi_version in (0, -1, 7.5, True)",
+                    "for native_bridge_abi_version in (7,)",
+                ),
+                (
+                    "for required_native_bridge_abi_version in (0, -1, 7.5, True)",
+                    "for required_native_bridge_abi_version in (7,)",
+                ),
+            ),
         ),
         (
             "javascript/iroha_js/test/offlineCashLifecycle.test.js",
             "JavaScript offline cash issuer-key exactness vectors",
+            ('" issuer-key"', "for (const nativeBridgeAbiVersion of [0, -1, 7.5])"),
+            (
+                ('" issuer-key"', '"issuer-key"'),
+                ('"issuer-key "', '"issuer-key"'),
+                ('"issuer key"', '"issuer-key"'),
+                ('"issuer-key\\n"', '"issuer-key"'),
+                ('"issuer-key\\u2603"', '"issuer-key"'),
+                (
+                    "for (const nativeBridgeAbiVersion of [0, -1, 7.5])",
+                    "for (const nativeBridgeAbiVersion of [7])",
+                ),
+                (
+                    "for (const requiredNativeBridgeAbiVersion of [0, -1, 7.5])",
+                    "for (const requiredNativeBridgeAbiVersion of [7])",
+                ),
+            ),
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "JavaScript package offline cash ABI exactness vectors",
+            (
+                '" issuer-key"',
+                "package dist offline cash lifecycle rejects malformed ABI gates",
+                "for (const nativeBridgeAbiVersion of [0, -1, 7.5])",
+            ),
+            (
+                ('" issuer-key"', '"issuer-key"'),
+                ('"issuer-key "', '"issuer-key"'),
+                ('"issuer key"', '"issuer-key"'),
+                ('"issuer-key\\n"', '"issuer-key"'),
+                ('"issuer-key\\u2603"', '"issuer-key"'),
+                (
+                    "package dist offline cash lifecycle rejects malformed ABI gates",
+                    "package dist offline cash lifecycle allows malformed ABI gates",
+                ),
+                (
+                    "for (const nativeBridgeAbiVersion of [0, -1, 7.5])",
+                    "for (const nativeBridgeAbiVersion of [7])",
+                ),
+                (
+                    "for (const requiredNativeBridgeAbiVersion of [0, -1, 7.5])",
+                    "for (const requiredNativeBridgeAbiVersion of [7])",
+                ),
+            ),
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycleTest.kt",
             "Kotlin offline cash issuer-key exactness vectors",
+            ('" issuer-key"', "nativeBridgeAbiVersion = 0"),
+            (
+                ('" issuer-key"', '"issuer-key"'),
+                ('"issuer-key "', '"issuer-key"'),
+                ('"issuer key"', '"issuer-key"'),
+                ('"issuer-key\\n"', '"issuer-key"'),
+                ('"issuer-key\\u2603"', '"issuer-key"'),
+                ("nativeBridgeAbiVersion = 0", "nativeBridgeAbiVersion = 7"),
+                ("requiredNativeBridgeAbiVersion = 0", "requiredNativeBridgeAbiVersion = 7"),
+            ),
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycleTest.java",
             "Android Java offline cash issuer-key exactness vectors",
+            ('" "', "configurationSnapshotRejectsMalformedNativeBridgeAbi"),
+            (
+                ('" issuer-key"', '"issuer-key"'),
+                ('"issuer-key "', '"issuer-key"'),
+                ('"issuer key"', '"issuer-key"'),
+                ('"issuer-key\\n"', '"issuer-key"'),
+                ('"issuer-key\\u2603"', '"issuer-key"'),
+                ('" "', '"issuer-key"'),
+                ("configurationSnapshotRejectsMalformedNativeBridgeAbi", "configurationSnapshotAllowsMalformedNativeBridgeAbi"),
+            ),
         ),
-    )
-    replacements = (
-        ('" issuer-key"', '"issuer-key"'),
-        ('"issuer-key "', '"issuer-key"'),
-        ('"issuer key"', '"issuer-key"'),
-        ('"issuer-key\\n"', '"issuer-key"'),
-        ('"issuer-key\\u2603"', '"issuer-key"'),
     )
     missing_targets = []
     expected_labels = []
-    for target, label in targets:
+    for target, label, expected_markers, replacements in targets:
         original = read(target)
         mutated = original
         for old, new in replacements:
@@ -26714,7 +29201,7 @@ if mode == "--negative-control-offline-cash-issuer-key-exactness":
         if mutated == original:
             missing_targets.append(target)
         mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing {replacements[0][0]}")
+        expected_labels.extend(f"{label} missing {marker}" for marker in expected_markers)
     if missing_targets:
         raise SystemExit(
             "negative control failed: unable to mutate offline cash issuer-key exactness for "
@@ -26953,6 +29440,41 @@ if mode == "--negative-control-mobile-account-address-canonical-coverage":
     mutated_texts = dict(texts)
     targets = (
         (
+            "python/iroha_python/src/iroha_python/address.py",
+            "Python AccountAddress signing algorithm selector",
+            "if algorithm.strip() != algorithm:",
+        ),
+        (
+            "python/iroha_python/tests/test_address_format.py",
+            "Python AccountAddress signing algorithm tests",
+            "test_account_address_rejects_blank_or_padded_signing_algorithm_aliases",
+        ),
+        (
+            "javascript/iroha_js/src/curveRegistry.js",
+            "JavaScript source curve registry signing algorithm selector",
+            'if (algorithm.trim() === "" || algorithm.trim() !== algorithm) {',
+        ),
+        (
+            "javascript/iroha_js/dist/curveRegistry.js",
+            "JavaScript package-dist curve registry signing algorithm selector",
+            'if (algorithm.trim() === "" || algorithm.trim() !== algorithm) {',
+        ),
+        (
+            "javascript/iroha_js/test/address.test.js",
+            "JavaScript AccountAddress signing algorithm tests",
+            "fromAccount rejects control and Unicode-confusable curve algorithm aliases in src and dist",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/AccountAddress.swift",
+            "Swift AccountAddress signing algorithm selector",
+            "guard !trimmed.isEmpty, trimmed == algorithm else {",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift",
+            "Swift AccountAddress signing algorithm tests",
+            "func testConfusableAlgorithmAliasesRejected()",
+        ),
+        (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/AccountAddressTest.kt",
             "Kotlin AccountAddress canonical tests",
             "mixedI105LiteralRoundTripsToOriginalCanonicalPayload",
@@ -26974,6 +29496,30 @@ if mode == "--negative-control-mobile-account-address-canonical-coverage":
         original = read(target)
         mutated = original
         for old, new in (
+            (
+                "if algorithm.strip() != algorithm:",
+                "if False and algorithm.strip() != algorithm:",
+            ),
+            (
+                "test_account_address_rejects_blank_or_padded_signing_algorithm_aliases",
+                "test_account_address_allows_blank_or_padded_signing_algorithm_aliases",
+            ),
+            (
+                'if (algorithm.trim() === "" || algorithm.trim() !== algorithm) {',
+                'if (algorithm.trim() === "") {',
+            ),
+            (
+                "fromAccount rejects control and Unicode-confusable curve algorithm aliases in src and dist",
+                "fromAccount accepts control and Unicode-confusable curve algorithm aliases in src and dist",
+            ),
+            (
+                "guard !trimmed.isEmpty, trimmed == algorithm else {",
+                "guard !trimmed.isEmpty else {",
+            ),
+            (
+                "func testConfusableAlgorithmAliasesRejected()",
+                "func testConfusableAlgorithmAliasesAllowed()",
+            ),
             (
                 "mixedI105LiteralRoundTripsToOriginalCanonicalPayload",
                 "mixedI105LiteralAllowsCanonicalDrift",
@@ -28294,26 +30840,63 @@ if mode == "--negative-control-swift-native-input-headers":
 if mode == "--negative-control-swift-kagemusha-instruction-transaction-builder":
     mutated_texts = dict(texts)
     source_target = "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift"
+    bridge_target = "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
     test_target = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift"
     mutated_source = texts[source_target].replace(
         "func buildKagemushaRecursiveRedeem(",
         "func buildKagemushaRecursiveRedeemUnchecked(",
         2,
     )
+    mutated_bridge = texts[bridge_target].replace(
+        "func validatedAuthorityChainDiscriminant(authority: String) throws -> UInt16",
+        "func uncheckedAuthorityChainDiscriminant(authority: String) throws -> UInt16",
+        1,
+    )
+    mutated_bridge = mutated_bridge.replace(
+        "validatedAuthorityChainDiscriminant(authority: authority)",
+        "uncheckedAuthorityChainDiscriminant(authority: authority)",
+        1,
+    )
     mutated_test = texts[test_target].replace(
         "testBuildKagemushaRecursiveRedeemTransactionDerivesInstructionBeforeSigning",
         "testBuildKagemushaRecursiveRedeemTransactionSkipsNativeDerivationBeforeSigning",
         1,
     )
+    mutated_test = mutated_test.replace(
+        "testKagemushaInstructionRequestsRejectPaddedIdsBeforeArchiveOrRedeem",
+        "testKagemushaInstructionRequestsAcceptPaddedIdsBeforeArchiveOrRedeem",
+        1,
+    )
+    mutated_test = mutated_test.replace(
+        'XCTAssertEqual(error as? TransactionInputError, .invalidChainId(" chain"))',
+        'XCTAssertEqual(error as? TransactionInputError, .emptyChainId)',
+    )
+    mutated_test = mutated_test.replace(
+        '.malformedAccountId(field: "authority", value: " \\(authority) ")',
+        '.malformedAccountId(field: "authority", value: authority)',
+    )
+    mutated_test = mutated_test.replace(
+        "XCTAssertEqual(redeemedRequests, [])",
+        "XCTAssertFalse(redeemedRequests.isEmpty)",
+        1,
+    )
+    mutated_test = mutated_test.replace(
+        "testNativeBridgeRejectsPaddedAuthorityBeforeChainDiscriminantInference",
+        "testNativeBridgeAcceptsPaddedAuthorityBeforeChainDiscriminantInference",
+        1,
+    )
     if (
         mutated_source == texts[source_target]
         or "func buildKagemushaRecursiveRedeem(" in mutated_source
+        or mutated_bridge == texts[bridge_target]
+        or "func validatedAuthorityChainDiscriminant(authority: String) throws -> UInt16" in mutated_bridge
         or mutated_test == texts[test_target]
     ):
         raise SystemExit(
             "negative control failed: unable to mutate Swift Kagemusha instruction transaction builder coverage"
         )
     mutated_texts[source_target] = mutated_source
+    mutated_texts[bridge_target] = mutated_bridge
     mutated_texts[test_target] = mutated_test
     try:
         run_checks(mutated_texts)
@@ -28322,6 +30905,12 @@ if mode == "--negative-control-swift-kagemusha-instruction-transaction-builder":
         expected_labels = (
             "Swift Kagemusha instruction transaction builder missing func buildKagemushaRecursiveRedeem(",
             "Swift Kagemusha instruction transaction builder tests missing testBuildKagemushaRecursiveRedeemTransactionDerivesInstructionBeforeSigning",
+            "Swift Kagemusha instruction transaction builder tests missing testKagemushaInstructionRequestsRejectPaddedIdsBeforeArchiveOrRedeem",
+            'Swift Kagemusha instruction transaction builder tests missing XCTAssertEqual(error as? TransactionInputError, .invalidChainId(" chain"))',
+            'Swift Kagemusha instruction transaction builder tests missing .malformedAccountId(field: "authority", value: " \\(authority) ")',
+            "Swift Kagemusha instruction transaction builder tests missing XCTAssertEqual(redeemedRequests, [])",
+            "Swift native bridge exact authority discriminant missing func validatedAuthorityChainDiscriminant(authority: String) throws -> UInt16",
+            "Swift Kagemusha instruction transaction builder tests missing testNativeBridgeRejectsPaddedAuthorityBeforeChainDiscriminantInference",
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:
@@ -28402,6 +30991,8 @@ if mode == "--negative-control-swift-note-amount-vectors":
             'Swift typed recursive spend note amount test vectors missing "7\\n"',
             "Swift typed recursive spend note amount test vectors missing Self.u128MaxPlusOne",
             "Swift typed recursive spend note amount test vectors missing Self.u128TooManyDigits",
+            'Swift typed recursive spend public amount test vectors missing ""',
+            'Swift typed recursive spend public amount test vectors missing "0"',
             'Swift typed recursive spend public amount test vectors missing "00"',
             'Swift typed recursive spend public amount test vectors missing "01"',
             'Swift typed recursive spend public amount test vectors missing "0007"',
@@ -28495,6 +31086,8 @@ if mode == "--negative-control-swift-redeem-public-amount-vectors":
             'Swift typed recursive spend note amount test vectors missing "7\\n"',
             "Swift typed recursive spend note amount test vectors missing Self.u128MaxPlusOne",
             "Swift typed recursive spend note amount test vectors missing Self.u128TooManyDigits",
+            'Swift typed recursive spend public amount test vectors missing ""',
+            'Swift typed recursive spend public amount test vectors missing "0"',
             'Swift typed recursive spend public amount test vectors missing "00"',
             'Swift typed recursive spend public amount test vectors missing "01"',
             'Swift typed recursive spend public amount test vectors missing "0007"',
@@ -30526,10 +33119,27 @@ if mode == "--negative-control-js-lineage-key-artifact-request-object":
 if mode == "--negative-control-js-kagemusha-instruction-transaction-builder":
     mutated = dict(texts)
     source_target = "javascript/iroha_js/src/transaction.js"
+    dist_target = "javascript/iroha_js/dist/transaction.js"
     test_target = "javascript/iroha_js/test/transactionBuilder.test.js"
+    package_target = "javascript/iroha_js/test/package_dist.test.js"
     mutated_source = texts[source_target].replace(
         "export function buildKagemushaRecursiveRedeemTransaction",
         "export function buildKagemushaRecursiveRedeemUncheckedTransaction",
+        1,
+    )
+    mutated_source = mutated_source.replace(
+        "authority must not contain surrounding whitespace",
+        "authority may contain surrounding whitespace",
+        1,
+    )
+    mutated_source = mutated_source.replace(
+        'normalizeExactMetadataString(chainId, "privateCreateKaigi.chainId")',
+        'String(chainId ?? "").trim()',
+        1,
+    )
+    mutated_dist = texts[dist_target].replace(
+        'normalizeExactMetadataString(chainId, "privateCreateKaigi.chainId")',
+        'String(chainId ?? "").trim()',
         1,
     )
     mutated_test = texts[test_target].replace(
@@ -30537,23 +33147,60 @@ if mode == "--negative-control-js-kagemusha-instruction-transaction-builder":
         "buildKagemushaRecursiveRedeemTransaction skips instruction derivation before signing",
         1,
     )
+    mutated_test = mutated_test.replace(
+        "transaction builders reject padded authority and asset definition IDs before native dispatch",
+        "transaction builders accept padded authority and asset definition IDs before native dispatch",
+        1,
+    )
+    mutated_test = mutated_test.replace(
+        "private Kaigi transaction builders reject padded identifiers before native dispatch",
+        "private Kaigi transaction builders accept padded identifiers before native dispatch",
+        1,
+    )
+    mutated_package_test = texts[package_target].replace(
+        "package dist Kagemusha transaction helpers copy mutable buffers before native calls",
+        "package dist Kagemusha transaction helpers reuse mutable buffers before native calls",
+        1,
+    )
+    mutated_package_test = mutated_package_test.replace(
+        "package dist Kagemusha transaction helpers reject padded authority before native dispatch",
+        "package dist Kagemusha transaction helpers accept padded authority before native dispatch",
+        1,
+    )
+    mutated_package_test = mutated_package_test.replace(
+        "package dist private Kaigi transaction builders reject padded identifiers before native dispatch",
+        "package dist private Kaigi transaction builders accept padded identifiers before native dispatch",
+        1,
+    )
     if (
         mutated_source == texts[source_target]
+        or mutated_dist == texts[dist_target]
         or "instruction = kagemusha_recursive_redeem_instruction(redeem_request_archive)" in mutated_source
         or mutated_test == texts[test_target]
+        or mutated_package_test == texts[package_target]
     ):
         raise SystemExit(
             "negative control failed: unable to mutate JS Kagemusha instruction transaction builder coverage"
         )
     mutated[source_target] = mutated_source
+    mutated[dist_target] = mutated_dist
     mutated[test_target] = mutated_test
+    mutated[package_target] = mutated_package_test
     try:
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
         expected_labels = (
             "javascript/iroha_js/src/transaction.js Kagemusha instruction transaction builder missing buildKagemushaRecursiveRedeemTransaction",
+            "javascript/iroha_js/src/transaction.js Kagemusha instruction transaction builder missing authority must not contain surrounding whitespace",
+            'javascript/iroha_js/src/transaction.js private Kaigi transaction exactness missing normalizeExactMetadataString(chainId, "privateCreateKaigi.chainId")',
+            'javascript/iroha_js/dist/transaction.js private Kaigi transaction exactness missing normalizeExactMetadataString(chainId, "privateCreateKaigi.chainId")',
             "JavaScript Kagemusha instruction transaction builder tests missing buildKagemushaRecursiveRedeemTransaction derives instruction before signing",
+            "JavaScript Kagemusha instruction transaction builder tests missing transaction builders reject padded authority and asset definition IDs before native dispatch",
+            "JavaScript Kagemusha instruction transaction builder tests missing private Kaigi transaction builders reject padded identifiers before native dispatch",
+            "JavaScript package dist Kagemusha instruction transaction builder tests missing package dist Kagemusha transaction helpers copy mutable buffers before native calls",
+            "JavaScript package dist Kagemusha instruction transaction builder tests missing package dist Kagemusha transaction helpers reject padded authority before native dispatch",
+            "JavaScript package dist Kagemusha instruction transaction builder tests missing package dist private Kaigi transaction builders reject padded identifiers before native dispatch",
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:
@@ -30567,6 +33214,180 @@ if mode == "--negative-control-js-kagemusha-instruction-transaction-builder":
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JS Kagemusha instruction transaction builder drift was not detected"
+    )
+
+if mode == "--negative-control-jvm-kagemusha-instruction-transaction-builder":
+    mutated = dict(texts)
+    kotlin_payload_source_target = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/TransactionPayload.kt"
+    java_payload_source_target = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/TransactionPayload.java"
+    kotlin_source_target = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchives.kt"
+    java_source_target = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaInstructionArchives.java"
+    kotlin_payload_test_target = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/TransactionPayloadTest.kt"
+    kotlin_target = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchivesTest.kt"
+    java_target = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderTests.java"
+    mutated_kotlin_payload_source = texts[kotlin_payload_source_target].replace(
+        'require(chainId.trim().isNotEmpty()) { "chainId must not be blank" }',
+        'require(chainId.isNotBlank()) { "chainId must not be blank" }',
+        1,
+    )
+    mutated_kotlin_payload_source = mutated_kotlin_payload_source.replace(
+        'require(chainId.trim() == chainId) { "chainId must not contain surrounding whitespace" }',
+        'require(chainId.isNotBlank()) { "chainId may contain surrounding whitespace" }',
+        1,
+    )
+    mutated_kotlin_payload_source = mutated_kotlin_payload_source.replace(
+        'requireCanonicalI105Address(authority, "authority")',
+        'require(authority.isNotBlank()) { "authority must not be blank" }',
+        1,
+    )
+    mutated_java_payload_source = texts[java_payload_source_target].replace(
+        'this.chainId = normalizeExact(chainId, "chainId")',
+        'this.chainId = normalize(chainId, "chainId")',
+        1,
+    )
+    mutated_java_payload_source = mutated_java_payload_source.replace(
+        "private static String normalizeExact(final String value, final String field)",
+        "private static String normalizeLoose(final String value, final String field)",
+        1,
+    )
+    mutated_kotlin_source = texts[kotlin_source_target].replace(
+        'chainId = requireNonBlankUnpadded(chainId, "chainId")',
+        "chainId = chainId",
+        1,
+    )
+    mutated_kotlin_source = mutated_kotlin_source.replace(
+        'val exactChainId = requireNonBlankUnpadded(chainId, "chainId")',
+        "val exactChainId = chainId",
+        1,
+    )
+    mutated_java_source = texts[java_source_target].replace(
+        'setChainId(requireNonBlankUnpadded(chainId, "chainId"))',
+        "setChainId(chainId)",
+        1,
+    )
+    mutated_java_source = mutated_java_source.replace(
+        'final String exactChainId = requireNonBlankUnpadded(chainId, "chainId")',
+        "final String exactChainId = chainId",
+        1,
+    )
+    mutated_kotlin = texts[kotlin_target].replace(
+        "recursiveRedeemTransactionPayload preserves redeem archive bytes after caller mutation",
+        "recursiveRedeemTransactionPayload reuses redeem archive bytes after caller mutation",
+        1,
+    )
+    mutated_kotlin = mutated_kotlin.replace(
+        "transactionPayload rejects padded ids before archive validation or native redeem",
+        "transactionPayload accepts padded ids before archive validation or native redeem",
+        1,
+    )
+    mutated_kotlin = mutated_kotlin.replace(
+        "chainId must not contain surrounding whitespace",
+        "chainId accepts surrounding whitespace",
+    )
+    mutated_kotlin = mutated_kotlin.replace(
+        "authority must not contain surrounding whitespace",
+        "authority accepts surrounding whitespace",
+    )
+    mutated_kotlin_payload_test = texts[kotlin_payload_test_target].replace(
+        "padded chainId throws before payload can be signed",
+        "padded chainId can be signed",
+        1,
+    )
+    mutated_kotlin_payload_test = mutated_kotlin_payload_test.replace(
+        "authority must be exact canonical I105 before payload can be signed",
+        "authority may be non-canonical before payload can be signed",
+        1,
+    )
+    mutated_kotlin_payload_test = mutated_kotlin_payload_test.replace(
+        "chainId must not contain surrounding whitespace",
+        "chainId accepts surrounding whitespace",
+    )
+    mutated_kotlin_payload_test = mutated_kotlin_payload_test.replace(
+        "authority must not contain surrounding whitespace",
+        "authority accepts surrounding whitespace",
+    )
+    mutated_java = texts[java_target].replace(
+        "Recursive redeem transaction archive bytes must be defensively copied",
+        "Recursive redeem transaction archive bytes may alias caller input",
+        1,
+    )
+    mutated_java = mutated_java.replace(
+        "kagemushaInstructionArchivesRejectPaddedIdsBeforeArchiveOrNativeRedeem",
+        "kagemushaInstructionArchivesAcceptPaddedIdsBeforeArchiveOrNativeRedeem",
+        2,
+    )
+    mutated_java = mutated_java.replace(
+        "chainId must not contain surrounding whitespace",
+        "chainId accepts surrounding whitespace",
+    )
+    mutated_java = mutated_java.replace(
+        "authority must not contain surrounding whitespace",
+        "authority accepts surrounding whitespace",
+    )
+    mutated_java = mutated_java.replace(
+        "transactionPayloadRejectsPaddedIdsBeforeSigning",
+        "transactionPayloadAcceptsPaddedIdsBeforeSigning",
+        2,
+    )
+    if mutated_kotlin == texts[kotlin_target] or mutated_java == texts[java_target]:
+        raise SystemExit(
+            "negative control failed: unable to mutate JVM/Android Kagemusha instruction transaction builder coverage"
+        )
+    if (
+        mutated_kotlin_payload_source == texts[kotlin_payload_source_target]
+        or mutated_java_payload_source == texts[java_payload_source_target]
+        or mutated_kotlin_payload_test == texts[kotlin_payload_test_target]
+        or mutated_kotlin_source == texts[kotlin_source_target]
+        or mutated_java_source == texts[java_source_target]
+    ):
+        raise SystemExit(
+            "negative control failed: unable to mutate JVM/Android Kagemusha instruction transaction source coverage"
+        )
+    mutated[kotlin_payload_source_target] = mutated_kotlin_payload_source
+    mutated[java_payload_source_target] = mutated_java_payload_source
+    mutated[kotlin_source_target] = mutated_kotlin_source
+    mutated[java_source_target] = mutated_java_source
+    mutated[kotlin_payload_test_target] = mutated_kotlin_payload_test
+    mutated[kotlin_target] = mutated_kotlin
+    mutated[java_target] = mutated_java
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            'Kotlin transaction payload validation missing require(chainId.trim().isNotEmpty())',
+            'Kotlin transaction payload validation missing require(chainId.trim() == chainId) { "chainId must not contain surrounding whitespace" }',
+            'Kotlin transaction payload validation missing requireCanonicalI105Address(authority, "authority")',
+            'Android Java transaction payload validation missing this.chainId = normalizeExact(chainId, "chainId")',
+            "Android Java transaction payload validation missing private static String normalizeExact(final String value, final String field)",
+            'Kotlin Kagemusha instruction archive transaction helper missing chainId = requireNonBlankUnpadded(chainId, "chainId")',
+            'Kotlin Kagemusha instruction archive transaction helper missing val exactChainId = requireNonBlankUnpadded(chainId, "chainId")',
+            'Android Java Kagemusha instruction archive transaction helper missing setChainId(requireNonBlankUnpadded(chainId, "chainId"))',
+            'Android Java Kagemusha instruction archive transaction helper missing final String exactChainId = requireNonBlankUnpadded(chainId, "chainId")',
+            "Kotlin transaction payload tests missing padded chainId throws before payload can be signed",
+            "Kotlin transaction payload tests missing authority must be exact canonical I105 before payload can be signed",
+            "Kotlin Kagemusha instruction archive transaction helper tests missing recursiveRedeemTransactionPayload preserves redeem archive bytes after caller mutation",
+            "Kotlin Kagemusha instruction archive transaction helper tests missing transactionPayload rejects padded ids before archive validation or native redeem",
+            "Kotlin Kagemusha instruction archive transaction helper tests missing chainId must not contain surrounding whitespace",
+            "Kotlin Kagemusha instruction archive transaction helper tests missing authority must not contain surrounding whitespace",
+            "Android Java Kagemusha instruction archive transaction helper tests missing Recursive redeem transaction archive bytes must be defensively copied",
+            "Android Java Kagemusha instruction archive transaction helper tests missing kagemushaInstructionArchivesRejectPaddedIdsBeforeArchiveOrNativeRedeem",
+            "Android Java transaction payload exact identifier tests missing transactionPayloadRejectsPaddedIdsBeforeSigning",
+            "Android Java Kagemusha instruction archive transaction helper tests missing chainId must not contain surrounding whitespace",
+            "Android Java Kagemusha instruction archive transaction helper tests missing authority must not contain surrounding whitespace",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JVM/Android Kagemusha instruction transaction builder drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JVM/Android Kagemusha instruction transaction builder drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JVM/Android Kagemusha instruction transaction builder drift was not detected"
     )
 
 if mode == "--negative-control-js-note-amount-vectors":
@@ -30912,7 +33733,7 @@ if mode == "--negative-control-js-block-height-vectors":
 if mode == "--negative-control-js-package-dist-pallas-opening-vectors":
     mutated = dict(texts)
     target = "javascript/iroha_js/test/package_dist.test.js"
-    replacements = (
+    opening_vector_replacements = (
         (
             "Buffer.from([1, 2, 3]),",
             "pallasOpenEnvelopes,",
@@ -30933,33 +33754,135 @@ if mode == "--negative-control-js-package-dist-pallas-opening-vectors":
             "pallasOpenEnvelopes,",
             "JavaScript dist typed recursive spend Pallas preflight tests missing syntheticPallasOpenEnvelopesArchive(1, { includeDomainTag: false })",
         ),
+        (
+            'syntheticPallasOpenEnvelopesArchive(1, { transcriptLabel: "" }),',
+            "pallasOpenEnvelopes,",
+            'JavaScript dist typed recursive spend Pallas preflight tests missing syntheticPallasOpenEnvelopesArchive(1, { transcriptLabel: "" })',
+        ),
+        (
+            'syntheticPallasOpenEnvelopesArchive(1, { transcriptLabel: "\\u00e9".repeat(65) }),',
+            "pallasOpenEnvelopes,",
+            'JavaScript dist typed recursive spend Pallas preflight tests missing syntheticPallasOpenEnvelopesArchive(1, { transcriptLabel: "\\u00e9".repeat(65) })',
+        ),
+        (
+            "syntheticPallasOpenEnvelopesArchive(1, { paramsGSequencePayload: u64LE(5) }),",
+            "pallasOpenEnvelopes,",
+            "JavaScript dist typed recursive spend Pallas preflight tests missing syntheticPallasOpenEnvelopesArchive(1, { paramsGSequencePayload: u64LE(5) })",
+        ),
+        (
+            "syntheticPallasOpenEnvelopesArchive(1, { proofLSequencePayload: u64LE(3) }),",
+            "pallasOpenEnvelopes,",
+            "JavaScript dist typed recursive spend Pallas preflight tests missing syntheticPallasOpenEnvelopesArchive(1, { proofLSequencePayload: u64LE(3) })",
+        ),
+    )
+    metadata_vector_replacements = (
+        (
+            "vkCommitmentPayload: kagemushaFixedArrayPayload(0x70, 32),",
+            "vkCommitmentPayload: syntheticFixed32(0x70),",
+            "JavaScript package dist Pallas metadata option malformed fixed-array vectors missing vkCommitmentPayload: kagemushaFixedArrayPayload(0x70, 32)",
+        ),
+        (
+            "publicInputsSchemaHashPayload: kagemushaFixedArrayPayload(0x71, 32),",
+            "publicInputsSchemaHashPayload: syntheticFixed32(0x71),",
+            "JavaScript package dist Pallas metadata option malformed fixed-array vectors missing publicInputsSchemaHashPayload: kagemushaFixedArrayPayload(0x71, 32)",
+        ),
+        (
+            "domainTagPayload: kagemushaFixedArrayPayload(0x72, 32),",
+            "domainTagPayload: syntheticFixed32(0x72),",
+            "JavaScript package dist Pallas metadata option malformed fixed-array vectors missing domainTagPayload: kagemushaFixedArrayPayload(0x72, 32)",
+        ),
+        (
+            "vkCommitmentOptionPayload: optionRawWithTrailingByte(syntheticFixed32(0x70)),",
+            "vkCommitmentOptionPayload: syntheticFixed32(0x70),",
+            "JavaScript package dist Pallas metadata option trailing-byte vectors missing vkCommitmentOptionPayload: optionRawWithTrailingByte(syntheticFixed32(0x70))",
+        ),
+        (
+            "publicInputsSchemaHashOptionPayload: optionRawWithTrailingByte(syntheticFixed32(0x71)),",
+            "publicInputsSchemaHashOptionPayload: syntheticFixed32(0x71),",
+            "JavaScript package dist Pallas metadata option trailing-byte vectors missing publicInputsSchemaHashOptionPayload: optionRawWithTrailingByte(syntheticFixed32(0x71))",
+        ),
+        (
+            "domainTagOptionPayload: optionRawWithTrailingByte(syntheticFixed32(0x72)),",
+            "domainTagOptionPayload: syntheticFixed32(0x72),",
+            "JavaScript package dist Pallas metadata option trailing-byte vectors missing domainTagOptionPayload: optionRawWithTrailingByte(syntheticFixed32(0x72))",
+        ),
+        (
+            "vkCommitmentOptionPayload: optionRawWithUnknownTag(),",
+            "vkCommitmentOptionPayload: syntheticFixed32(0x70),",
+            "JavaScript package dist Pallas metadata option unknown-tag vectors missing vkCommitmentOptionPayload: optionRawWithUnknownTag()",
+        ),
+        (
+            "publicInputsSchemaHashOptionPayload: optionRawWithUnknownTag(),",
+            "publicInputsSchemaHashOptionPayload: syntheticFixed32(0x71),",
+            "JavaScript package dist Pallas metadata option unknown-tag vectors missing publicInputsSchemaHashOptionPayload: optionRawWithUnknownTag()",
+        ),
+        (
+            "domainTagOptionPayload: optionRawWithUnknownTag(),",
+            "domainTagOptionPayload: syntheticFixed32(0x72),",
+            "JavaScript package dist Pallas metadata option unknown-tag vectors missing domainTagOptionPayload: optionRawWithUnknownTag()",
+        ),
+        (
+            "vkCommitmentOptionPayload: optionRawWithDeclaredLengthTooLong(syntheticFixed32(0x70)),",
+            "vkCommitmentOptionPayload: syntheticFixed32(0x70),",
+            "JavaScript package dist Pallas metadata option declared-length vectors missing vkCommitmentOptionPayload: optionRawWithDeclaredLengthTooLong(syntheticFixed32(0x70))",
+        ),
+        (
+            "publicInputsSchemaHashOptionPayload: optionRawWithDeclaredLengthTooLong(syntheticFixed32(0x71)),",
+            "publicInputsSchemaHashOptionPayload: syntheticFixed32(0x71),",
+            "JavaScript package dist Pallas metadata option declared-length vectors missing publicInputsSchemaHashOptionPayload: optionRawWithDeclaredLengthTooLong(syntheticFixed32(0x71))",
+        ),
+        (
+            "domainTagOptionPayload: optionRawWithDeclaredLengthTooLong(syntheticFixed32(0x72)),",
+            "domainTagOptionPayload: syntheticFixed32(0x72),",
+            "JavaScript package dist Pallas metadata option declared-length vectors missing domainTagOptionPayload: optionRawWithDeclaredLengthTooLong(syntheticFixed32(0x72))",
+        ),
     )
     updated = texts[target]
-    block_start_marker = "const malformedPallasOpenEnvelopes = ["
-    block_end_marker = "  ];"
-    block_start = updated.find(block_start_marker)
-    if block_start < 0:
-        raise SystemExit(
-            "negative control failed: unable to locate JS package-dist malformed Pallas vector block"
-        )
-    block_end = updated.find(block_end_marker, block_start + len(block_start_marker))
-    if block_end < 0:
-        raise SystemExit(
-            "negative control failed: unable to locate JS package-dist malformed Pallas vector block end"
-        )
-    block_end += len(block_end_marker)
-    block = updated[block_start:block_end]
     expected_labels = []
-    for old, new, label in replacements:
-        next_block = block.replace(old, new, 1)
-        if next_block == block:
+
+    def replace_in_package_dist_vector_block(updated, block_start_marker, replacements, block_name):
+        block_end_marker = "  ];"
+        block_start = updated.find(block_start_marker)
+        if block_start < 0:
             raise SystemExit(
-                "negative control failed: unable to mutate JS package-dist Pallas opening vector "
-                + old
+                "negative control failed: unable to locate JS package-dist "
+                + block_name
+                + " vector block"
             )
-        block = next_block
-        expected_labels.append(label)
-    updated = updated[:block_start] + block + updated[block_end:]
+        block_end = updated.find(block_end_marker, block_start + len(block_start_marker))
+        if block_end < 0:
+            raise SystemExit(
+                "negative control failed: unable to locate JS package-dist "
+                + block_name
+                + " vector block end"
+            )
+        block_end += len(block_end_marker)
+        block = updated[block_start:block_end]
+        for old, new, label in replacements:
+            next_block = block.replace(old, new, 1)
+            if next_block == block:
+                raise SystemExit(
+                    "negative control failed: unable to mutate JS package-dist "
+                    + block_name
+                    + " vector "
+                    + old
+                )
+            block = next_block
+            expected_labels.append(label)
+        return updated[:block_start] + block + updated[block_end:]
+
+    updated = replace_in_package_dist_vector_block(
+        updated,
+        "const malformedPallasMetadataArchives = [",
+        metadata_vector_replacements,
+        "malformed Pallas metadata",
+    )
+    updated = replace_in_package_dist_vector_block(
+        updated,
+        "const malformedPallasOpenEnvelopes = [",
+        opening_vector_replacements,
+        "malformed Pallas opening",
+    )
     previous_proof_old = "          previousProofOpenEnvelopes: malformedPreviousProofOpenEnvelopes,\n"
     previous_proof_new = "          previousProofOpenEnvelopes,\n"
     next_updated = updated.replace(previous_proof_old, previous_proof_new, 1)
@@ -30994,12 +33917,7 @@ if mode == "--negative-control-js-package-dist-pallas-opening-vectors":
 if mode == "--negative-control-js-package-dist-raw-lineage-key-vectors":
     mutated = dict(texts)
     target = "javascript/iroha_js/test/package_dist.test.js"
-    replacements = (
-        (
-            "package dist Kagemusha recursive spend typed requests reject malformed raw lineage key fields before native dispatch",
-            "package dist Kagemusha recursive spend typed requests skip malformed raw lineage key fields before native dispatch",
-            "JavaScript dist typed recursive spend raw lineage key request tests missing package dist Kagemusha recursive spend typed requests reject malformed raw lineage key fields before native dispatch",
-        ),
+    message_replacements = (
         (
             "package dist accepted init raw lineage proving key without verifier key",
             "package dist accepted init raw lineage proving key with verifier key",
@@ -31036,9 +33954,85 @@ if mode == "--negative-control-js-package-dist-raw-lineage-key-vectors":
             "JavaScript dist typed recursive spend raw lineage key request tests missing package dist accepted append raw lineage key profile mismatch",
         ),
     )
+    input_replacements = (
+        (
+            "      encodeKagemushaRecursiveSpendInitRequest({\n"
+            "        recordBundle,\n"
+            "        pallasOpenEnvelopes,\n"
+            "        currentNote,\n"
+            "        lineageProvingKeyArchive: initProvingKey,\n"
+            "      }),",
+            "      encodeKagemushaRecursiveSpendInitRequest({\n"
+            "        recordBundle,\n"
+            "        pallasOpenEnvelopes,\n"
+            "        currentNote,\n"
+            "        lineageVerifierKey: initVerifierKey,\n"
+            "        lineageProvingKeyArchive: initProvingKey,\n"
+            "      }),",
+            "JavaScript dist typed recursive spend raw lineage init proving-without-verifier input vector",
+        ),
+        (
+            "      encodeKagemushaRecursiveSpendInitRequest({\n"
+            "        recordBundle,\n"
+            "        pallasOpenEnvelopes,\n"
+            "        currentNote,\n"
+            "        lineageVerifierKey: initVerifierKey,\n"
+            "      }),",
+            "      encodeKagemushaRecursiveSpendInitRequest({\n"
+            "        recordBundle,\n"
+            "        pallasOpenEnvelopes,\n"
+            "        currentNote,\n"
+            "        lineageVerifierKey: initVerifierKey,\n"
+            "        lineageProvingKeyArchive: initProvingKey,\n"
+            "      }),",
+            "JavaScript dist typed recursive spend raw lineage init verifier-without-proving input vector",
+        ),
+        (
+            "        lineageVerifierKey: initVerifierKey,\n"
+            "        lineageProvingKeyArchive: appendProvingKey,\n",
+            "        lineageVerifierKey: initVerifierKey,\n"
+            "        lineageProvingKeyArchive: initProvingKey,\n",
+            "JavaScript dist typed recursive spend raw lineage init wrong-circuit proving-key input vector",
+        ),
+        (
+            "        previousLineageVerifierRecord,\n"
+            "        lineageVerifierKey: appendVerifierKey,\n"
+            "        lineageProvingKeyArchive: appendProvingKey,\n",
+            "        previousLineageVerifierRecord,\n"
+            "        previousProofOpenEnvelopes,\n"
+            "        lineageVerifierKey: appendVerifierKey,\n"
+            "        lineageProvingKeyArchive: appendProvingKey,\n",
+            "JavaScript dist typed recursive spend raw lineage append missing-previous-openings input vector",
+        ),
+        (
+            "        previousProofOpenEnvelopes,\n"
+            "        lineageProvingKeyArchive: appendProvingKey,\n",
+            "        previousProofOpenEnvelopes,\n"
+            "        lineageVerifierKey: appendVerifierKey,\n"
+            "        lineageProvingKeyArchive: appendProvingKey,\n",
+            "JavaScript dist typed recursive spend raw lineage append proving-without-verifier input vector",
+        ),
+        (
+            "        previousProofOpenEnvelopes,\n"
+            "        lineageVerifierKey: appendVerifierKey,\n"
+            "      }),",
+            "        previousProofOpenEnvelopes,\n"
+            "        lineageVerifierKey: appendVerifierKey,\n"
+            "        lineageProvingKeyArchive: appendProvingKey,\n"
+            "      }),",
+            "JavaScript dist typed recursive spend raw lineage append verifier-without-proving input vector",
+        ),
+        (
+            "        lineageVerifierKey: appendVerifierKey,\n"
+            "        lineageProvingKeyArchive: initProvingKey,\n",
+            "        lineageVerifierKey: appendVerifierKey,\n"
+            "        lineageProvingKeyArchive: appendProvingKey,\n",
+            "JavaScript dist typed recursive spend raw lineage append wrong-circuit proving-key input vector",
+        ),
+    )
     updated = texts[target]
     expected_labels = []
-    for old, new, label in replacements:
+    for old, new, label in message_replacements + input_replacements:
         next_updated = updated.replace(old, new, 1)
         if next_updated == updated:
             raise SystemExit(
@@ -31125,38 +34119,319 @@ if mode == "--negative-control-js-python-native-output-headers":
         raise SystemExit(0)
     raise SystemExit("negative control failed: JS/Python native output header drift was not detected")
 
+if mode == "--negative-control-js-confidential-v2-derivation-exactness":
+    mutated = dict(texts)
+    mutations = (
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "if (value.trim() !== value) {",
+            "if (false) {",
+            "javascript/iroha_js/src/crypto.js confidential v2 derivation exactness",
+            "if (value.trim() !== value) {",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "if (value.trim() !== value) {",
+            "if (false) {",
+            "javascript/iroha_js/dist/crypto.js confidential v2 derivation exactness",
+            "if (value.trim() !== value) {",
+        ),
+        (
+            "javascript/iroha_js/src/crypto.js",
+            """function normalizeFixed32HexInput(value, name) {
+  if (typeof value === "string") {
+    if (value.trim() !== value) {""",
+            """function normalizeFixed32HexInput(value, name) {
+  if (typeof value === "string") {
+    if (false) {""",
+            "javascript/iroha_js/src/crypto.js confidential v2 derivation fixed32 exactness",
+            "if (value.trim() !== value) {",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            """function normalizeFixed32HexInput(value, name) {
+  if (typeof value === "string") {
+    if (value.trim() !== value) {""",
+            """function normalizeFixed32HexInput(value, name) {
+  if (typeof value === "string") {
+    if (false) {""",
+            "javascript/iroha_js/dist/crypto.js confidential v2 derivation fixed32 exactness",
+            "if (value.trim() !== value) {",
+        ),
+        (
+            "javascript/iroha_js/src/transaction.js",
+            """function normalizeWholeNumberLiteral(value, context) {
+  const normalized = String(value ?? "");
+  if (normalized.trim() !== normalized) {""",
+            """function normalizeWholeNumberLiteral(value, context) {
+  const normalized = String(value ?? "");
+  if (false) {""",
+            "javascript/iroha_js/src/transaction.js confidential proof amount exactness",
+            "if (normalized.trim() !== normalized) {",
+        ),
+        (
+            "javascript/iroha_js/dist/transaction.js",
+            """function normalizeWholeNumberLiteral(value, context) {
+  const normalized = String(value ?? "");
+  if (normalized.trim() !== normalized) {""",
+            """function normalizeWholeNumberLiteral(value, context) {
+  const normalized = String(value ?? "");
+  if (false) {""",
+            "javascript/iroha_js/dist/transaction.js confidential proof amount exactness",
+            "if (normalized.trim() !== normalized) {",
+        ),
+        (
+            "javascript/iroha_js/src/transaction.js",
+            """function normalizeFixed32HexInput(value, context) {
+  if (typeof value === "string") {
+    if (value.trim() !== value) {""",
+            """function normalizeFixed32HexInput(value, context) {
+  if (typeof value === "string") {
+    if (false) {""",
+            "javascript/iroha_js/src/transaction.js confidential proof fixed32 exactness",
+            "if (value.trim() !== value) {",
+        ),
+        (
+            "javascript/iroha_js/dist/transaction.js",
+            """function normalizeFixed32HexInput(value, context) {
+  if (typeof value === "string") {
+    if (value.trim() !== value) {""",
+            """function normalizeFixed32HexInput(value, context) {
+  if (typeof value === "string") {
+    if (false) {""",
+            "javascript/iroha_js/dist/transaction.js confidential proof fixed32 exactness",
+            "if (value.trim() !== value) {",
+        ),
+        (
+            "javascript/iroha_js/test/crypto.test.js",
+            "spendKeyHex must not contain surrounding whitespace",
+            "spendKeyHex accepts surrounding whitespace",
+            "JavaScript crypto fixed32 exactness tests",
+            "spendKeyHex must not contain surrounding whitespace",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "confidential v2 derivation helpers reject padded chain and asset IDs before native dispatch",
+            "confidential v2 derivation helpers accept padded chain and asset IDs before native dispatch",
+            "JavaScript confidential v2 derivation exactness tests",
+            "confidential v2 derivation helpers reject padded chain and asset IDs before native dispatch",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "package dist confidential v2 derivation helpers reject padded chain and asset IDs before native dispatch",
+            "package dist confidential v2 derivation helpers accept padded chain and asset IDs before native dispatch",
+            "JavaScript package dist confidential v2 derivation exactness tests",
+            "package dist confidential v2 derivation helpers reject padded chain and asset IDs before native dispatch",
+        ),
+        (
+            "javascript/iroha_js/test/transactionBuilder.test.js",
+            "confidential proof builders reject padded chain IDs and hex fields before native dispatch",
+            "confidential proof builders accept padded chain IDs and hex fields before native dispatch",
+            "JavaScript confidential proof builder exactness tests",
+            "confidential proof builders reject padded chain IDs and hex fields before native dispatch",
+        ),
+        (
+            "javascript/iroha_js/test/transactionBuilder.test.js",
+            "privateKaigiFeeSpend\\.feeAmount must not contain surrounding whitespace",
+            "privateKaigiFeeSpend\\.feeAmount accepts surrounding whitespace",
+            "JavaScript confidential proof builder exactness tests",
+            "privateKaigiFeeSpend\\.feeAmount must not contain surrounding whitespace",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "package dist confidential proof builders reject padded amount literals before native dispatch",
+            "package dist confidential proof builders accept padded amount literals before native dispatch",
+            "JavaScript package dist confidential proof amount exactness tests",
+            "package dist confidential proof builders reject padded amount literals before native dispatch",
+        ),
+    )
+    expected_labels = []
+    for target, needle, replacement, label, expected_needle in mutations:
+        current = mutated[target]
+        updated = current.replace(needle, replacement, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate JS confidential v2 derivation exactness for "
+                + target
+            )
+        mutated[target] = updated
+        expected_labels.append(f"{label} missing {expected_needle}")
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JS confidential v2 derivation exactness drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JS confidential v2 derivation exactness drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JS confidential v2 derivation exactness drift was not detected"
+    )
+
 if mode == "--negative-control-python-kagemusha-instruction-transaction-builder":
     mutated = dict(texts)
     source_target = "python/iroha_python/src/iroha_python/kagemusha.py"
+    client_target = "python/iroha_python/src/iroha_python/client.py"
+    tx_target = "python/iroha_python/src/iroha_python/tx.py"
+    native_target = "python/iroha_python/iroha_python_rs/src/lib.rs"
     test_target = "python/iroha_python/tests/kagemusha_test.py"
-    mutated_source = texts[source_target].replace(
-        "def build_kagemusha_recursive_redeem_transaction(",
-        "def build_kagemusha_recursive_redeem_transaction_unchecked(",
-        1,
+    client_test_target = "python/iroha_python/tests/client_ledger_helpers_test.py"
+    mutated_source = texts[source_target]
+    mutated_source = mutated_source.replace(
+        '_kagemusha_require_non_blank_unpadded(chain_id, "chain_id")',
+        "chain_id = chain_id.strip()",
+    )
+    mutated_source = mutated_source.replace(
+        '_kagemusha_require_non_blank_unpadded(authority, "authority")',
+        "authority = authority.strip()",
     )
     mutated_source = mutated_source.replace(
         "instruction = kagemusha_recursive_redeem_instruction(redeem_request_archive)",
         "instruction = redeem_request_archive",
         1,
     )
-    mutated_test = texts[test_target].replace(
+    mutated_native = texts[native_target]
+    mutated_native = mutated_native.replace(
+        'require_non_blank_unpadded(chain_id, "chain_id")?',
+        "let _ = chain_id;",
+        1,
+    )
+    mutated_native = mutated_native.replace(
+        'require_non_blank_unpadded(authority, "authority")?',
+        "let _ = authority;",
+        1,
+    )
+    mutated_native = mutated_native.replace(
+        "transaction_builder_rejects_padded_chain_id_and_authority",
+        "transaction_builder_accepts_padded_chain_id_and_authority",
+        1,
+    )
+    mutated_client = texts[client_target]
+    mutated_client = mutated_client.replace(
+        '_require_exact_non_empty_string(chain_id, "chain_id")',
+        '_require_non_empty_string(chain_id, "chain_id")',
+        1,
+    )
+    mutated_client = mutated_client.replace(
+        '_require_exact_non_empty_string(authority, "authority")',
+        '_require_non_empty_string(authority, "authority")',
+        1,
+    )
+    mutated_tx = texts[tx_target]
+    mutated_tx = mutated_tx.replace(
+        'chain_id=_require_exact_non_empty_string(config.chain_id, "chain_id")',
+        'chain_id=_require_non_empty_string(config.chain_id, "chain_id")',
+        1,
+    )
+    mutated_tx = mutated_tx.replace(
+        'authority=_require_exact_non_empty_string(config.authority, "authority")',
+        'authority=_require_non_empty_string(config.authority, "authority")',
+        1,
+    )
+    mutated_tx = mutated_tx.replace(
+        '_require_exact_non_empty_string(chain_id, "chain_id")',
+        '_require_non_empty_string(chain_id, "chain_id")',
+        1,
+    )
+    mutated_tx = mutated_tx.replace(
+        '_require_exact_non_empty_string(authority, "authority")',
+        '_require_non_empty_string(authority, "authority")',
+        1,
+    )
+    mutated_test = texts[test_target]
+    mutated_test = mutated_test.replace(
+        "test_kagemusha_instruction_transaction_helpers_reject_padded_chain_and_authority_before_signing",
+        "test_kagemusha_instruction_transaction_helpers_accept_padded_chain_and_authority_before_signing",
+        1,
+    )
+    mutated_test = mutated_test.replace(
+        "test_python_transaction_builder_rejects_padded_chain_and_authority_before_signing",
+        "test_python_transaction_builder_accepts_padded_chain_and_authority_before_signing",
+        1,
+    )
+    mutated_test = mutated_test.replace(
+        "test_python_transaction_draft_rejects_padded_config_and_sign_overrides_before_signing",
+        "test_python_transaction_draft_accepts_padded_config_and_sign_overrides_before_signing",
+        1,
+    )
+    mutated_test = mutated_test.replace(
+        "chain_id must not contain surrounding whitespace",
+        "chain_id accepts surrounding whitespace",
+    )
+    mutated_test = mutated_test.replace(
+        "authority must not contain surrounding whitespace",
+        "authority accepts surrounding whitespace",
+    )
+    mutated_test = mutated_test.replace(
         "bad_request_flags[39] = 0x20",
         "bad_request_flags[39] = 0x06",
         1,
     )
-    if mutated_source == texts[source_target] or mutated_test == texts[test_target]:
+    mutated_client_test = texts[client_test_target]
+    mutated_client_test = mutated_client_test.replace(
+        "test_transaction_draft_rejects_padded_chain_and_authority_before_signing",
+        "test_transaction_draft_accepts_padded_chain_and_authority_before_signing",
+        1,
+    )
+    mutated_client_test = mutated_client_test.replace(
+        "chain_id must not contain surrounding whitespace",
+        "chain_id accepts surrounding whitespace",
+        1,
+    )
+    mutated_client_test = mutated_client_test.replace(
+        "authority must not contain surrounding whitespace",
+        "authority accepts surrounding whitespace",
+        1,
+    )
+    if (
+        mutated_source == texts[source_target]
+        or mutated_client == texts[client_target]
+        or mutated_tx == texts[tx_target]
+        or mutated_native == texts[native_target]
+        or mutated_test == texts[test_target]
+        or mutated_client_test == texts[client_test_target]
+    ):
         raise SystemExit(
             "negative control failed: unable to mutate Python Kagemusha instruction transaction builder coverage"
         )
     mutated[source_target] = mutated_source
+    mutated[client_target] = mutated_client
+    mutated[tx_target] = mutated_tx
+    mutated[native_target] = mutated_native
     mutated[test_target] = mutated_test
+    mutated[client_test_target] = mutated_client_test
     try:
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
         expected_labels = (
+            'Python Kagemusha instruction archive transaction builder exact identifiers missing _kagemusha_require_non_blank_unpadded(chain_id, "chain_id")',
+            'Python Kagemusha instruction archive transaction builder exact identifiers missing _kagemusha_require_non_blank_unpadded(authority, "authority")',
+            'Python Kagemusha recursive redeem transaction builder exact identifiers missing _kagemusha_require_non_blank_unpadded(chain_id, "chain_id")',
+            'Python Kagemusha recursive redeem transaction builder exact identifiers missing _kagemusha_require_non_blank_unpadded(authority, "authority")',
+            'Python PyO3 TransactionBuilder exact identifiers missing require_non_blank_unpadded(chain_id, "chain_id")?',
+            'Python PyO3 TransactionBuilder exact identifiers missing require_non_blank_unpadded(authority, "authority")?',
+            "Python PyO3 TransactionBuilder exact identifiers missing fn transaction_builder_rejects_padded_chain_id_and_authority()",
+            'Python Torii transaction draft exact identifiers missing effective_chain_id = _require_exact_non_empty_string(chain_id, "chain_id")',
+            'Python Torii transaction draft exact identifiers missing _require_exact_non_empty_string(authority, "authority")',
+            'Python TransactionDraft config exact identifiers missing chain_id=_require_exact_non_empty_string(config.chain_id, "chain_id")',
+            'Python TransactionDraft config exact identifiers missing authority=_require_exact_non_empty_string(config.authority, "authority")',
+            'Python TransactionDraft signing override exact identifiers missing _require_exact_non_empty_string(chain_id, "chain_id")',
+            'Python TransactionDraft signing override exact identifiers missing _require_exact_non_empty_string(authority, "authority")',
             "Python Kagemusha instruction transaction builder missing instruction = kagemusha_recursive_redeem_instruction(redeem_request_archive)",
+            "Python Kagemusha instruction transaction tests missing test_kagemusha_instruction_transaction_helpers_reject_padded_chain_and_authority_before_signing",
+            "Python Kagemusha instruction transaction tests missing test_python_transaction_builder_rejects_padded_chain_and_authority_before_signing",
+            "Python Kagemusha instruction transaction tests missing test_python_transaction_draft_rejects_padded_config_and_sign_overrides_before_signing",
+            "Python Kagemusha instruction transaction tests missing chain_id must not contain surrounding whitespace",
+            "Python Kagemusha instruction transaction tests missing authority must not contain surrounding whitespace",
             "Python Kagemusha instruction transaction tests missing bad_request_flags[39] = 0x20",
+            "Python Torii transaction draft exact identifier tests missing test_transaction_draft_rejects_padded_chain_and_authority_before_signing",
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:
@@ -31920,6 +35195,86 @@ if mode == "--negative-control-jvm-note-amount-vectors":
     mutated = dict(texts)
     replacements = (
         (
+            "python/iroha_python/tests/kagemusha_test.py",
+            '        ("", "amount must be a decimal integer"),\n',
+            "",
+            'Python typed recursive spend note amount test vectors missing ("", "amount must be a decimal integer")',
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            '        ("0", "amount must be greater than zero"),\n',
+            "",
+            'Python typed recursive spend note amount test vectors missing ("0", "amount must be greater than zero")',
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            '        ("00", "amount must be canonical"),\n',
+            "",
+            'Python typed recursive spend note amount test vectors missing ("00", "amount must be canonical")',
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            '        (str(1 << 128), "amount must fit in u128"),\n',
+            "",
+            'Python typed recursive spend note amount test vectors missing (str(1 << 128), "amount must fit in u128")',
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            '        with pytest.raises(ValueError, match=expected_error):\n'
+            "            _recursive_spend_note(amount=amount)",
+            '        with pytest.raises(ValueError, match="amount"):\n'
+            "            _recursive_spend_note(amount=amount)",
+            "Python typed recursive spend note amount exact diagnostics missing with pytest.raises(ValueError, match=expected_error):",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            'match="note_commitment must be exactly 32 bytes"',
+            'match="note_commitment"',
+            'Python typed recursive spend note digest diagnostics missing match="note_commitment must be exactly 32 bytes"',
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            'match="spend_nullifier must be exactly 32 bytes"',
+            'match="spend_nullifier"',
+            'Python typed recursive spend note digest diagnostics missing match="spend_nullifier must be exactly 32 bytes"',
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            'match="note_commitment must be non-zero"',
+            'match="note_commitment"',
+            'Python typed recursive spend note digest diagnostics missing match="note_commitment must be non-zero"',
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            'match="spend_nullifier must be non-zero"',
+            'match="spend_nullifier"',
+            'Python typed recursive spend note digest diagnostics missing match="spend_nullifier must be non-zero"',
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            'match="spend_nullifier must differ from note_commitment"',
+            'match="spend_nullifier"',
+            'Python typed recursive spend note digest diagnostics missing match="spend_nullifier must differ from note_commitment"',
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            '            Triple("", "amount must be a decimal integer", "publicAmount must be a decimal integer"),\n',
+            "",
+            'Kotlin typed recursive spend note amount test vectors missing Triple("", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            '            Triple("0", "amount must be greater than zero", "publicAmount must be greater than zero"),\n',
+            "",
+            'Kotlin typed recursive spend note amount test vectors missing Triple("0", "amount must be greater than zero", "publicAmount must be greater than zero")',
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            '            Triple("00", "amount must be canonical", "publicAmount must be canonical"),\n',
+            "",
+            'Kotlin typed recursive spend note amount test vectors missing Triple("00", "amount must be canonical", "publicAmount must be canonical")',
+        ),
+        (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
             '            Triple("0007", "amount must be canonical", "publicAmount must be canonical"),\n',
             "",
@@ -31930,6 +35285,12 @@ if mode == "--negative-control-jvm-note-amount-vectors":
             '            Triple("01", "amount must be canonical", "publicAmount must be canonical"),\n',
             "",
             'Kotlin typed recursive spend note amount test vectors missing Triple("01", "amount must be canonical", "publicAmount must be canonical")',
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            '            Triple("-1", "amount must be a decimal integer", "publicAmount must be a decimal integer"),\n',
+            "",
+            'Kotlin typed recursive spend note amount test vectors missing Triple("-1", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
@@ -31951,6 +35312,12 @@ if mode == "--negative-control-jvm-note-amount-vectors":
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            '            Triple("7 ", "amount must be a decimal integer", "publicAmount must be a decimal integer"),\n',
+            "",
+            'Kotlin typed recursive spend note amount test vectors missing Triple("7 ", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
             '            Triple(" 7", "amount must be a decimal integer", "publicAmount must be a decimal integer"),\n',
             "",
             'Kotlin typed recursive spend note amount test vectors missing Triple(" 7", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
@@ -31968,6 +35335,36 @@ if mode == "--negative-control-jvm-note-amount-vectors":
             'Kotlin typed recursive spend note amount test vectors missing Triple("7\\n", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
         ),
         (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            '            Triple(U128_MAX_PLUS_ONE, "amount must fit in u128", "publicAmount must fit in u128"),\n',
+            "",
+            'Kotlin typed recursive spend note amount test vectors missing Triple(U128_MAX_PLUS_ONE, "amount must fit in u128", "publicAmount must fit in u128")',
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            '            Triple(U128_TOO_MANY_DIGITS, "amount must fit in u128", "publicAmount must fit in u128"),\n',
+            "",
+            'Kotlin typed recursive spend note amount test vectors missing Triple(U128_TOO_MANY_DIGITS, "amount must fit in u128", "publicAmount must fit in u128")',
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            '          {"", "amount must be a decimal integer", "publicAmount must be a decimal integer"},\n',
+            "",
+            'Android Java typed recursive spend note amount test vectors missing {"", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            '          {"0", "amount must be greater than zero", "publicAmount must be greater than zero"},\n',
+            "",
+            'Android Java typed recursive spend note amount test vectors missing {"0", "amount must be greater than zero", "publicAmount must be greater than zero"}',
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            '          {"00", "amount must be canonical", "publicAmount must be canonical"},\n',
+            "",
+            'Android Java typed recursive spend note amount test vectors missing {"00", "amount must be canonical", "publicAmount must be canonical"}',
+        ),
+        (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
             '          {"0007", "amount must be canonical", "publicAmount must be canonical"},\n',
             "",
@@ -31978,6 +35375,12 @@ if mode == "--negative-control-jvm-note-amount-vectors":
             '          {"01", "amount must be canonical", "publicAmount must be canonical"},\n',
             "",
             'Android Java typed recursive spend note amount test vectors missing {"01", "amount must be canonical", "publicAmount must be canonical"}',
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            '          {"-1", "amount must be a decimal integer", "publicAmount must be a decimal integer"},\n',
+            "",
+            'Android Java typed recursive spend note amount test vectors missing {"-1", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
@@ -31999,6 +35402,12 @@ if mode == "--negative-control-jvm-note-amount-vectors":
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            '          {"7 ", "amount must be a decimal integer", "publicAmount must be a decimal integer"},\n',
+            "",
+            'Android Java typed recursive spend note amount test vectors missing {"7 ", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
             '          {" 7", "amount must be a decimal integer", "publicAmount must be a decimal integer"},\n',
             "",
             'Android Java typed recursive spend note amount test vectors missing {" 7", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
@@ -32016,28 +35425,44 @@ if mode == "--negative-control-jvm-note-amount-vectors":
             'Android Java typed recursive spend note amount test vectors missing {"7\\n", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
         ),
         (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            '          {"340282366920938463463374607431768211456",\n'
+            '              "amount must fit in u128",\n'
+            '              "publicAmount must fit in u128"},\n',
+            "",
+            'Android Java typed recursive spend note amount test vectors missing {"340282366920938463463374607431768211456", "amount must fit in u128", "publicAmount must fit in u128"}',
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            '          {"9999999999999999999999999999999999999999",\n'
+            '              "amount must fit in u128",\n'
+            '              "publicAmount must fit in u128"}\n',
+            "",
+            'Android Java typed recursive spend note amount test vectors missing {"9999999999999999999999999999999999999999", "amount must fit in u128", "publicAmount must fit in u128"}',
+        ),
+        (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
             "assertEquals(amountMessage, invalidAmount.message)",
             "assertEquals(publicAmountMessage, invalidAmount.message)",
-            "Kotlin typed recursive spend note amount test vectors missing assertEquals(amountMessage, invalidAmount.message)",
+            "Kotlin typed recursive spend note amount test vectors missing invalidAmount.message exact assertion",
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
             "assertEquals(publicAmountMessage, invalidPublicAmount.message)",
             "assertEquals(amountMessage, invalidPublicAmount.message)",
-            "Kotlin typed recursive spend public amount test vectors missing assertEquals(publicAmountMessage, invalidPublicAmount.message)",
+            "Kotlin typed recursive spend public amount test vectors missing invalidPublicAmount.message exact assertion",
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
             "(String) invalidAmount[1]",
             '"amount may be invalid"',
-            "Android Java typed recursive spend note amount test vectors missing (String) invalidAmount[1]",
+            "Android Java typed recursive spend note amount test vectors missing exact invalidAmount[1] diagnostic",
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
             "(String) invalidAmount[2]",
             '"publicAmount may be invalid"',
-            "Android Java typed recursive spend public amount test vectors missing (String) invalidAmount[2]",
+            "Android Java typed recursive spend public amount test vectors missing exact invalidAmount[2] diagnostic",
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
@@ -32160,6 +35585,47 @@ if mode == "--negative-control-jvm-redeem-public-amount-vectors":
     mutated = dict(texts)
     replacements = (
         (
+            "python/iroha_python/tests/kagemusha_test.py",
+            '        ("", "public_amount must be a decimal integer"),\n',
+            'Python typed recursive spend public amount test vectors missing ("", "public_amount must be a decimal integer")',
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            '        ("0", "public_amount must be greater than zero"),\n',
+            'Python typed recursive spend public amount test vectors missing ("0", "public_amount must be greater than zero")',
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            '        ("00", "public_amount must be canonical"),\n',
+            'Python typed recursive spend public amount test vectors missing ("00", "public_amount must be canonical")',
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            '        (str(1 << 128), "public_amount must fit in u128"),\n',
+            'Python typed recursive spend public amount test vectors missing (str(1 << 128), "public_amount must fit in u128")',
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            '        with pytest.raises(ValueError, match=expected_error):\n'
+            "            kagemusha.KagemushaRecursiveSpendRedeemRequest(\n",
+            "Python typed recursive spend public amount exact diagnostics missing with pytest.raises(ValueError, match=expected_error):",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            '            Triple("", "amount must be a decimal integer", "publicAmount must be a decimal integer"),\n',
+            'Kotlin typed recursive spend public amount test vectors missing Triple("", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            '            Triple("0", "amount must be greater than zero", "publicAmount must be greater than zero"),\n',
+            'Kotlin typed recursive spend public amount test vectors missing Triple("0", "amount must be greater than zero", "publicAmount must be greater than zero")',
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            '            Triple("00", "amount must be canonical", "publicAmount must be canonical"),\n',
+            'Kotlin typed recursive spend public amount test vectors missing Triple("00", "amount must be canonical", "publicAmount must be canonical")',
+        ),
+        (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
             '            Triple("0007", "amount must be canonical", "publicAmount must be canonical"),\n',
             'Kotlin typed recursive spend public amount test vectors missing Triple("0007", "amount must be canonical", "publicAmount must be canonical")',
@@ -32168,6 +35634,11 @@ if mode == "--negative-control-jvm-redeem-public-amount-vectors":
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
             '            Triple("01", "amount must be canonical", "publicAmount must be canonical"),\n',
             'Kotlin typed recursive spend public amount test vectors missing Triple("01", "amount must be canonical", "publicAmount must be canonical")',
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            '            Triple("-1", "amount must be a decimal integer", "publicAmount must be a decimal integer"),\n',
+            'Kotlin typed recursive spend public amount test vectors missing Triple("-1", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
@@ -32186,6 +35657,11 @@ if mode == "--negative-control-jvm-redeem-public-amount-vectors":
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            '            Triple("7 ", "amount must be a decimal integer", "publicAmount must be a decimal integer"),\n',
+            'Kotlin typed recursive spend public amount test vectors missing Triple("7 ", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
             '            Triple(" 7", "amount must be a decimal integer", "publicAmount must be a decimal integer"),\n',
             'Kotlin typed recursive spend public amount test vectors missing Triple(" 7", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
         ),
@@ -32200,6 +35676,31 @@ if mode == "--negative-control-jvm-redeem-public-amount-vectors":
             'Kotlin typed recursive spend public amount test vectors missing Triple("7\\n", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
         ),
         (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            '            Triple(U128_MAX_PLUS_ONE, "amount must fit in u128", "publicAmount must fit in u128"),\n',
+            'Kotlin typed recursive spend public amount test vectors missing Triple(U128_MAX_PLUS_ONE, "amount must fit in u128", "publicAmount must fit in u128")',
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            '            Triple(U128_TOO_MANY_DIGITS, "amount must fit in u128", "publicAmount must fit in u128"),\n',
+            'Kotlin typed recursive spend public amount test vectors missing Triple(U128_TOO_MANY_DIGITS, "amount must fit in u128", "publicAmount must fit in u128")',
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            '          {"", "amount must be a decimal integer", "publicAmount must be a decimal integer"},\n',
+            'Android Java typed recursive spend public amount test vectors missing {"", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            '          {"0", "amount must be greater than zero", "publicAmount must be greater than zero"},\n',
+            'Android Java typed recursive spend public amount test vectors missing {"0", "amount must be greater than zero", "publicAmount must be greater than zero"}',
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            '          {"00", "amount must be canonical", "publicAmount must be canonical"},\n',
+            'Android Java typed recursive spend public amount test vectors missing {"00", "amount must be canonical", "publicAmount must be canonical"}',
+        ),
+        (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
             '          {"0007", "amount must be canonical", "publicAmount must be canonical"},\n',
             'Android Java typed recursive spend public amount test vectors missing {"0007", "amount must be canonical", "publicAmount must be canonical"}',
@@ -32208,6 +35709,11 @@ if mode == "--negative-control-jvm-redeem-public-amount-vectors":
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
             '          {"01", "amount must be canonical", "publicAmount must be canonical"},\n',
             'Android Java typed recursive spend public amount test vectors missing {"01", "amount must be canonical", "publicAmount must be canonical"}',
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            '          {"-1", "amount must be a decimal integer", "publicAmount must be a decimal integer"},\n',
+            'Android Java typed recursive spend public amount test vectors missing {"-1", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
@@ -32226,6 +35732,11 @@ if mode == "--negative-control-jvm-redeem-public-amount-vectors":
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            '          {"7 ", "amount must be a decimal integer", "publicAmount must be a decimal integer"},\n',
+            'Android Java typed recursive spend public amount test vectors missing {"7 ", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
             '          {" 7", "amount must be a decimal integer", "publicAmount must be a decimal integer"},\n',
             'Android Java typed recursive spend public amount test vectors missing {" 7", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
         ),
@@ -32238,6 +35749,20 @@ if mode == "--negative-control-jvm-redeem-public-amount-vectors":
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
             '          {"7\\n", "amount must be a decimal integer", "publicAmount must be a decimal integer"},\n',
             'Android Java typed recursive spend public amount test vectors missing {"7\\n", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            '          {"340282366920938463463374607431768211456",\n'
+            '              "amount must fit in u128",\n'
+            '              "publicAmount must fit in u128"},\n',
+            'Android Java typed recursive spend public amount test vectors missing {"340282366920938463463374607431768211456", "amount must fit in u128", "publicAmount must fit in u128"}',
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            '          {"9999999999999999999999999999999999999999",\n'
+            '              "amount must fit in u128",\n'
+            '              "publicAmount must fit in u128"}\n',
+            'Android Java typed recursive spend public amount test vectors missing {"9999999999999999999999999999999999999999", "amount must fit in u128", "publicAmount must fit in u128"}',
         ),
     )
     for target, needle, _label in replacements:
@@ -32285,9 +35810,25 @@ if mode == "--negative-control-jvm-pallas-builder-input-guards":
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
-            "val rejectedProofResult = assertFailsWith<IllegalArgumentException>",
-            "val acceptedProofResult = assertFailsWith<IllegalArgumentException>",
-            "Kotlin typed recursive spend proof-output evidence diagnostics missing val rejectedProofResult = assertFailsWith<IllegalArgumentException>",
+            '"Pallas IPA opening envelopes, chainId, asset, or rootAfter",\n'
+            "            initError.message,",
+            '"Pallas IPA opening envelopes, chainId, asset, or rootAfter",\n'
+            "            acceptedInitError.message,",
+            "Kotlin typed recursive spend proof-output evidence diagnostics missing initError.message",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            '"Pallas IPA opening envelopes, chainId, asset, or rootAfter",\n'
+            "            appendError.message,",
+            '"Pallas IPA opening envelopes, chainId, asset, or rootAfter",\n'
+            "            acceptedAppendError.message,",
+            "Kotlin typed recursive spend proof-output evidence diagnostics missing appendError.message",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "rejectedProofResult.message",
+            "acceptedProofResult.message",
+            "Kotlin typed recursive spend proof-output evidence diagnostics missing rejectedProofResult.message",
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
@@ -32297,9 +35838,9 @@ if mode == "--negative-control-jvm-pallas-builder-input-guards":
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
-            "val inactiveUnshieldVerifierRecord = assertFailsWith<IllegalArgumentException>",
-            "val activeUnshieldVerifierRecord = assertFailsWith<IllegalArgumentException>",
-            "Kotlin typed recursive spend proof-output evidence diagnostics missing val inactiveUnshieldVerifierRecord = assertFailsWith<IllegalArgumentException>",
+            "inactiveUnshieldVerifierRecord.message",
+            "activeUnshieldVerifierRecord.message",
+            "Kotlin typed recursive spend proof-output evidence diagnostics missing inactiveUnshieldVerifierRecord.message",
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
@@ -32309,9 +35850,9 @@ if mode == "--negative-control-jvm-pallas-builder-input-guards":
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
-            "val unshieldProofAsFoldHop = assertFailsWith<IllegalArgumentException>",
-            "val transferProofAsFoldHop = assertFailsWith<IllegalArgumentException>",
-            "Kotlin typed recursive spend proof-output evidence diagnostics missing val unshieldProofAsFoldHop = assertFailsWith<IllegalArgumentException>",
+            "unshieldProofAsFoldHop.message",
+            "transferProofAsFoldHop.message",
+            "Kotlin typed recursive spend proof-output evidence diagnostics missing unshieldProofAsFoldHop.message",
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
@@ -32327,9 +35868,21 @@ if mode == "--negative-control-jvm-pallas-builder-input-guards":
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
-            "final IllegalArgumentException rejectedProofResult =",
-            "final IllegalArgumentException acceptedProofResult =",
-            "Android Java typed recursive spend proof-output evidence diagnostics missing final IllegalArgumentException rejectedProofResult =",
+            "proofOnlyRequestMessage.equals(initError.getMessage())",
+            "messageContains(initError, proofOnlyRequestMessage)",
+            "Android Java typed recursive spend proof-output evidence diagnostics missing proofOnlyRequestMessage.equals(initError.getMessage())",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "proofOnlyRequestMessage.equals(appendError.getMessage())",
+            "messageContains(appendError, proofOnlyRequestMessage)",
+            "Android Java typed recursive spend proof-output evidence diagnostics missing proofOnlyRequestMessage.equals(appendError.getMessage())",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "rejectedProofResult.getMessage()",
+            "acceptedProofResult.getMessage()",
+            "Android Java typed recursive spend proof-output evidence diagnostics missing rejectedProofResult.getMessage()",
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
@@ -32339,9 +35892,9 @@ if mode == "--negative-control-jvm-pallas-builder-input-guards":
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
-            "final IllegalArgumentException inactiveUnshieldVerifierRecord =",
-            "final IllegalArgumentException activeUnshieldVerifierRecord =",
-            "Android Java typed recursive spend proof-output evidence diagnostics missing final IllegalArgumentException inactiveUnshieldVerifierRecord =",
+            "inactiveUnshieldVerifierRecord.getMessage()",
+            "activeUnshieldVerifierRecord.getMessage()",
+            "Android Java typed recursive spend proof-output evidence diagnostics missing inactiveUnshieldVerifierRecord.getMessage()",
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
@@ -32351,9 +35904,9 @@ if mode == "--negative-control-jvm-pallas-builder-input-guards":
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
-            "final IllegalArgumentException unshieldProofAsFoldHop =",
-            "final IllegalArgumentException transferProofAsFoldHop =",
-            "Android Java typed recursive spend proof-output evidence diagnostics missing final IllegalArgumentException unshieldProofAsFoldHop =",
+            "unshieldProofAsFoldHop.getMessage()",
+            "transferProofAsFoldHop.getMessage()",
+            "Android Java typed recursive spend proof-output evidence diagnostics missing unshieldProofAsFoldHop.getMessage()",
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
@@ -32844,6 +36397,113 @@ if mode == "--negative-control-non-csharp-pallas-metadata-option-shape":
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: non-C# Pallas metadata option-shape drift was not detected"
+    )
+
+if mode == "--negative-control-non-csharp-pallas-sequence-count-prechecks":
+    mutated = dict(texts)
+    replacements = (
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "expectedCount,",
+            "ignoredExpectedCount,",
+            "JavaScript Pallas sequence count precheck decoder",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "expectedCount,",
+            "ignoredExpectedCount,",
+            "JavaScript dist Pallas sequence count precheck decoder",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "expected_count: int | None = None",
+            "count_expectation: int | None = None",
+            "Python Pallas sequence count precheck decoder",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "expectedCount: Int? = nil",
+            "ignoredExpectedCount: Int? = nil",
+            "Swift Pallas sequence count precheck decoder",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "expectedCount: Int? = null",
+            "ignoredExpectedCount: Int? = null",
+            "Kotlin Pallas sequence count precheck decoder",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "final int expectedCount,",
+            "final int ignoredExpectedCount,",
+            "Android Java Pallas sequence count precheck decoder",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "paramsGSequencePayload: u64LE(5)",
+            "paramsGSequencePayload: fixed32Sequence(4, 0x10)",
+            "JavaScript Pallas sequence count-prefix vectors",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "paramsGSequencePayload: u64LE(5)",
+            "paramsGSequencePayload: fixed32Sequence(4, 0x10)",
+            "JavaScript package dist Pallas sequence count-prefix vectors",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            '"params_g_sequence_payload": _u64_le(5)',
+            '"params_g_sequence_payload": _fixed32_sequence(4, 0x10)',
+            "Python Pallas sequence count-prefix vectors",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "paramsGSequencePayload: Self.uint64Payload(5)",
+            "paramsGSequencePayload: Self.fixed32SequencePayload(count: 4, seed: 0x10)",
+            "Swift Pallas sequence count-prefix vectors",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "it.paramsGSequencePayload = testPayload { writeUInt(5, 64) }",
+            "it.paramsGSequencePayload = fixed32SequencePayload(4, 0x10)",
+            "Kotlin Pallas sequence count-prefix vectors",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "spec.paramsGSequencePayload = testPayload(child -> child.writeUInt(5, 64))",
+            "spec.paramsGSequencePayload = fixedSequencePayload(4, (byte) 0x10)",
+            "Android Java Pallas sequence count-prefix vectors",
+        ),
+    )
+    expected_labels = []
+    for target, old, new, label in replacements:
+        replace_all = label in (
+            "Kotlin Pallas sequence count-prefix vectors",
+            "Android Java Pallas sequence count-prefix vectors",
+        )
+        updated = mutated[target].replace(old, new) if replace_all else mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate Pallas sequence-count precheck marker in {target}"
+            )
+        mutated[target] = updated
+        expected_labels.append(f"{label} missing {old.splitlines()[0].strip()}")
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: non-C# Pallas sequence-count precheck drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected non-C# Pallas sequence-count precheck drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: non-C# Pallas sequence-count precheck drift was not detected"
     )
 
 if mode == "--negative-control-jvm-android-pallas-transcript-label-byte-limit":
@@ -33830,6 +37490,17 @@ if mode == "--negative-control-sdk-readme-boundary":
         if updated == mutated[target]:
             raise SystemExit(f"negative control failed: unable to mutate SDK README boundary in {target}")
         mutated[target] = updated
+    for target in replacements:
+        updated = mutated[target].replace(
+            "multi-profile",
+            "single-profile",
+            1,
+        )
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate SDK README plural lineage-record boundary in {target}"
+            )
+        mutated[target] = updated
     try:
         run_checks(mutated)
     except ParityError as error:
@@ -34289,6 +37960,50 @@ if mode == "--negative-control-offline-doc-instruction-transaction-surface":
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: offline Kagemusha instruction transaction surface drift was not detected"
+    )
+
+if mode == "--negative-control-offline-doc-redeem-lineage-selection":
+    mutated = dict(texts)
+    target = "docs/source/offline_kagemusha.md"
+    updated = mutated[target].replace(
+        "Non-C# typed redeem request encoders use a\n"
+        "different semantic-bundle rule: they decode the lineage-witness previous-proof\n"
+        "summary, require lineage verifier records when semantic witnesses contain prior\n"
+        "Reserved-lineage proofs, and reject dangling records for init-only or absent\n"
+        "lineage witnesses.",
+        "Non-C# typed redeem request encoders reject lineage verifier records on all\n"
+        "semantic final bundles before native dispatch.",
+        1,
+    )
+    if updated == mutated[target]:
+        raise SystemExit(
+            "negative control failed: unable to mutate offline Kagemusha redeem lineage-record selection doc"
+        )
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "offline Kagemusha docs missing redeem lineage-record selection boundary: "
+            "Non-C# typed redeem request encoders use a different semantic-bundle rule",
+            "offline Kagemusha docs missing redeem lineage-record selection boundary: "
+            "require lineage verifier records when semantic witnesses contain prior Reserved-lineage proofs",
+            "offline Kagemusha docs missing redeem lineage-record selection boundary: "
+            "reject dangling records for init-only or absent lineage witnesses",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: offline Kagemusha redeem lineage-record doc drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected offline Kagemusha redeem lineage-record doc drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: offline Kagemusha redeem lineage-record doc drift was not detected"
     )
 
 if mode == "--negative-control-sdk-proof-chain-accumulator-input":
@@ -34809,23 +38524,23 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
             "javascript/iroha_js/dist/crypto.js recursive spend fixed-array decoder rejects count header",
         ),
         "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift": (
-            """    mutating func readFixedBytesFlexible(expectedCount: Int) throws -> Data {
+            """    mutating func readFixedBytesFlexible(expectedCount: Int, field: String = "fixedArray") throws -> Data {
         if remaining == expectedCount {
             return try readFixedBytes(expectedCount)
         }
-        return try readFixedArrayBytes(expectedCount: expectedCount)
+        return try readFixedArrayBytes(expectedCount: expectedCount, field: field)
     }""",
-            """    mutating func readFixedBytesFlexible(expectedCount: Int) throws -> Data {
+            """    mutating func readFixedBytesFlexible(expectedCount: Int, field: String = "fixedArray") throws -> Data {
         if remaining == expectedCount {
             return try readFixedBytes(expectedCount)
         }
         if remaining >= 8 {
             let count = try readUInt64LE()
             if count == UInt64(expectedCount) {
-                return try readFixedArrayBytes(expectedCount: expectedCount)
+                return try readFixedArrayBytes(expectedCount: expectedCount, field: field)
             }
         }
-        return try readFixedArrayBytes(expectedCount: expectedCount)
+        return try readFixedArrayBytes(expectedCount: expectedCount, field: field)
     }""",
             "Swift recursive spend fixed-array decoder rejects count header",
         ),
@@ -34892,20 +38607,20 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
-            'Triple(2, countPrefixedFixedArrayPayload(0x01, 16), "asset byte field length must be 1")',
-            'Triple(2, fixedArrayPayload(0x01, 16), "asset byte field length must be 1")',
+            'Triple(2, countPrefixedFixedArrayPayload(0x01, 16), "bundle.accumulator.asset byte field length must be 1")',
+            'Triple(2, fixedArrayPayload(0x01, 16), "bundle.accumulator.asset byte field length must be 1")',
             "Kotlin recursive spend bundle accumulator field-length guard tests",
         ),
         (
             "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
-            '(3, Self.countPrefixedFixedArrayPayload(0x02, count: 32), .invalidArchive("fixedArray"))',
-            '(3, Self.fixedArrayPayload(0x02, count: 32), .invalidArchive("fixedArray"))',
+            '(3, Self.countPrefixedFixedArrayPayload(0x02, count: 32), .invalidArchive("bundle.accumulator.initial_root"))',
+            '(3, Self.fixedArrayPayload(0x02, count: 32), .invalidArchive("bundle.accumulator.initial_root"))',
             "Swift recursive spend bundle accumulator field-length guard tests",
         ),
         (
             "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
-            '(4, Self.countPrefixedFixedArrayPayload(0x03, count: 32), .invalidArchive("fixedArray"))',
-            '(4, Self.fixedArrayPayload(0x03, count: 32), .invalidArchive("fixedArray"))',
+            '(4, Self.countPrefixedFixedArrayPayload(0x03, count: 32), .invalidArchive("bundle.accumulator.final_root"))',
+            '(4, Self.fixedArrayPayload(0x03, count: 32), .invalidArchive("bundle.accumulator.final_root"))',
             "Swift recursive spend bundle accumulator field-length guard tests",
         ),
         (
@@ -34981,6 +38696,12 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
             "Python recursive spend bundle accumulator field-length guard tests",
         ),
         (
+            "python/iroha_python/tests/kagemusha_test.py",
+            '(2, r"bundle\\.accumulator\\.asset")',
+            '(2, r"bundle\\.accumulator\\.asset_unchecked")',
+            "Python recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
             "javascript/iroha_js/test/package_dist.test.js",
             '[3, Buffer.alloc(32), "bundle.accumulator.initial_root", null]',
             '[3, Buffer.alloc(32, 1), "bundle.accumulator.initial_root", null]',
@@ -35046,26 +38767,104 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
         ),
         (
             "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
-            '(7, Self.fixedArrayPayload(0x07, count: 31), .invalidArchive("fixedArray"))',
-            '(7, Self.fixedArrayPayload(0x07, count: 32), .invalidArchive("fixedArray"))',
+            '(7, Self.fixedArrayPayload(0x07, count: 31), .invalidArchive("bundle.accumulator.lineage_digest"))',
+            '(7, Self.fixedArrayPayload(0x07, count: 32), .invalidArchive("bundle.accumulator.lineage_digest"))',
             "Swift recursive spend bundle accumulator field-length guard tests",
         ),
         (
             "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
-            '(7, Self.countPrefixedFixedArrayPayload(0x07, count: 32), .invalidArchive("fixedArray"))',
-            '(7, Self.fixedArrayPayload(0x07, count: 32), .invalidArchive("fixedArray"))',
+            '(7, Self.countPrefixedFixedArrayPayload(0x07, count: 32), .invalidArchive("bundle.accumulator.lineage_digest"))',
+            '(7, Self.fixedArrayPayload(0x07, count: 32), .invalidArchive("bundle.accumulator.lineage_digest"))',
             "Swift recursive spend bundle accumulator field-length guard tests",
         ),
         (
             "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
-            '(14, Self.countPrefixedFixedArrayPayload(0x0e, count: 32), .invalidArchive("fixedArray"))',
-            '(14, Self.fixedArrayPayload(0x0e, count: 32), .invalidArchive("fixedArray"))',
+            '(8, Self.countPrefixedFixedArrayPayload(0x08, count: 32), .invalidArchive("bundle.accumulator.aggregation_transcript_digest"))',
+            '(8, Self.fixedArrayPayload(0x08, count: 32), .invalidArchive("bundle.accumulator.aggregation_transcript_digest"))',
             "Swift recursive spend bundle accumulator field-length guard tests",
         ),
         (
             "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
-            '(20, Self.countPrefixedFixedArrayPayload(0x14, count: 32), .invalidArchive("fixedArray"))',
-            '(20, Self.fixedArrayPayload(0x14, count: 32), .invalidArchive("fixedArray"))',
+            '(9, Self.countPrefixedFixedArrayPayload(0x09, count: 32), .invalidArchive("bundle.accumulator.nullifier_digest"))',
+            '(9, Self.fixedArrayPayload(0x09, count: 32), .invalidArchive("bundle.accumulator.nullifier_digest"))',
+            "Swift recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            '(10, Self.countPrefixedFixedArrayPayload(0x0a, count: 32), .invalidArchive("bundle.accumulator.output_commitment_digest"))',
+            '(10, Self.fixedArrayPayload(0x0a, count: 32), .invalidArchive("bundle.accumulator.output_commitment_digest"))',
+            "Swift recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            '(11, Self.countPrefixedFixedArrayPayload(0x0b, count: 32), .invalidArchive("bundle.accumulator.fold_digest"))',
+            '(11, Self.fixedArrayPayload(0x0b, count: 32), .invalidArchive("bundle.accumulator.fold_digest"))',
+            "Swift recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            '(12, Self.countPrefixedFixedArrayPayload(0x0c, count: 32), .invalidArchive("bundle.accumulator.recursive_proof_chain_digest"))',
+            '(12, Self.fixedArrayPayload(0x0c, count: 32), .invalidArchive("bundle.accumulator.recursive_proof_chain_digest"))',
+            "Swift recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            '(13, Self.countPrefixedFixedArrayPayload(0x0d, count: 32), .invalidArchive("bundle.accumulator.transition_profile_binding_digest"))',
+            '(13, Self.fixedArrayPayload(0x0d, count: 32), .invalidArchive("bundle.accumulator.transition_profile_binding_digest"))',
+            "Swift recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            '(14, Self.countPrefixedFixedArrayPayload(0x0e, count: 32), .invalidArchive("bundle.accumulator.append_opening_preflight_digest"))',
+            '(14, Self.fixedArrayPayload(0x0e, count: 32), .invalidArchive("bundle.accumulator.append_opening_preflight_digest"))',
+            "Swift recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            '(15, Self.countPrefixedFixedArrayPayload(0x0f, count: 32), .invalidArchive("bundle.accumulator.append_boundary_digest"))',
+            '(15, Self.fixedArrayPayload(0x0f, count: 32), .invalidArchive("bundle.accumulator.append_boundary_digest"))',
+            "Swift recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            '(16, Self.countPrefixedFixedArrayPayload(0x10, count: 32), .invalidArchive("bundle.accumulator.verifier_params_fingerprint"))',
+            '(16, Self.fixedArrayPayload(0x10, count: 32), .invalidArchive("bundle.accumulator.verifier_params_fingerprint"))',
+            "Swift recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            '(17, Self.countPrefixedFixedArrayPayload(0x11, count: 32), .invalidArchive("bundle.accumulator.fixed_window_table_schedule_digest"))',
+            '(17, Self.fixedArrayPayload(0x11, count: 32), .invalidArchive("bundle.accumulator.fixed_window_table_schedule_digest"))',
+            "Swift recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            '(18, Self.countPrefixedFixedArrayPayload(0x12, count: 32), .invalidArchive("bundle.accumulator.fixed_window_shared_table_manifest_digest"))',
+            '(18, Self.fixedArrayPayload(0x12, count: 32), .invalidArchive("bundle.accumulator.fixed_window_shared_table_manifest_digest"))',
+            "Swift recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            '(19, Self.countPrefixedFixedArrayPayload(0x13, count: 32), .invalidArchive("bundle.accumulator.fixed_window_table_base_digest"))',
+            '(19, Self.fixedArrayPayload(0x13, count: 32), .invalidArchive("bundle.accumulator.fixed_window_table_base_digest"))',
+            "Swift recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            '(20, Self.countPrefixedFixedArrayPayload(0x14, count: 32), .invalidArchive("bundle.accumulator.verifier_witness_batch_digest"))',
+            '(20, Self.fixedArrayPayload(0x14, count: 32), .invalidArchive("bundle.accumulator.verifier_witness_batch_digest"))',
+            "Swift recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            '(21, Data([2, 0, 0, 0, 0]), .invalidArchive("bundle.accumulator.verifier_opening_len"))',
+            '(21, Data([2, 0, 0, 0]), .invalidArchive("bundle.accumulator.verifier_opening_len"))',
+            "Swift recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            '(21, Data([2, 0, 0]), .invalidArchive("bundle.accumulator.verifier_opening_len"))',
+            '(21, Data([2, 0, 0, 0]), .invalidArchive("bundle.accumulator.verifier_opening_len"))',
             "Swift recursive spend bundle accumulator field-length guard tests",
         ),
         (
@@ -35076,14 +38875,50 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
-            'Triple(7, fixedArrayPayload(0x07, 31), "lineage_digest must be exactly 32 bytes")',
-            'Triple(7, fixedArrayPayload(0x07, 32), "lineage_digest must be exactly 32 bytes")',
+            'Triple(7, fixedArrayPayload(0x07, 31), "bundle.accumulator.lineage_digest must be exactly 32 bytes")',
+            'Triple(7, fixedArrayPayload(0x07, 32), "bundle.accumulator.lineage_digest must be exactly 32 bytes")',
             "Kotlin recursive spend bundle accumulator field-length guard tests",
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
-            'Triple(7, countPrefixedFixedArrayPayload(0x07, 32), "lineage_digest byte field length must be 1")',
-            'Triple(7, fixedArrayPayload(0x07, 32), "lineage_digest byte field length must be 1")',
+            'Triple(7, countPrefixedFixedArrayPayload(0x07, 32), "bundle.accumulator.lineage_digest byte field length must be 1")',
+            'Triple(7, fixedArrayPayload(0x07, 32), "bundle.accumulator.lineage_digest byte field length must be 1")',
+            "Kotlin recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "countPrefixedFixedArrayPayload(0x08, 32)",
+            "fixedArrayPayload(0x08, 32)",
+            "Kotlin recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "countPrefixedFixedArrayPayload(0x09, 32)",
+            "fixedArrayPayload(0x09, 32)",
+            "Kotlin recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "countPrefixedFixedArrayPayload(0x0a, 32)",
+            "fixedArrayPayload(0x0a, 32)",
+            "Kotlin recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "countPrefixedFixedArrayPayload(0x0b, 32)",
+            "fixedArrayPayload(0x0b, 32)",
+            "Kotlin recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "countPrefixedFixedArrayPayload(0x0c, 32)",
+            "fixedArrayPayload(0x0c, 32)",
+            "Kotlin recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "countPrefixedFixedArrayPayload(0x0d, 32)",
+            "fixedArrayPayload(0x0d, 32)",
             "Kotlin recursive spend bundle accumulator field-length guard tests",
         ),
         (
@@ -35094,8 +38929,50 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "countPrefixedFixedArrayPayload(0x0f, 32)",
+            "fixedArrayPayload(0x0f, 32)",
+            "Kotlin recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "countPrefixedFixedArrayPayload(0x10, 32)",
+            "fixedArrayPayload(0x10, 32)",
+            "Kotlin recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "countPrefixedFixedArrayPayload(0x11, 32)",
+            "fixedArrayPayload(0x11, 32)",
+            "Kotlin recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "countPrefixedFixedArrayPayload(0x12, 32)",
+            "fixedArrayPayload(0x12, 32)",
+            "Kotlin recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "countPrefixedFixedArrayPayload(0x13, 32)",
+            "fixedArrayPayload(0x13, 32)",
+            "Kotlin recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
             "countPrefixedFixedArrayPayload(0x14, 32)",
             "fixedArrayPayload(0x14, 32)",
+            "Kotlin recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            'Triple(21, byteArrayOf(2, 0, 0, 0, 0), "bundle.accumulator.verifier_opening_len")',
+            'Triple(21, byteArrayOf(2, 0, 0, 0), "bundle.accumulator.verifier_opening_len")',
+            "Kotlin recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            'Triple(21, byteArrayOf(2, 0, 0), "bundle.accumulator.verifier_opening_len")',
+            'Triple(21, byteArrayOf(2, 0, 0, 0), "bundle.accumulator.verifier_opening_len")',
             "Kotlin recursive spend bundle accumulator field-length guard tests",
         ),
         (
@@ -35106,8 +38983,8 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
-            '{7, fixedArrayPayload((byte) 0x07, 31), "lineage_digest must be exactly 32 bytes"}',
-            '{7, fixedArrayPayload((byte) 0x07, 32), "lineage_digest must be exactly 32 bytes"}',
+            '{7, fixedArrayPayload((byte) 0x07, 31), "bundle.accumulator.lineage_digest must be exactly 32 bytes"}',
+            '{7, fixedArrayPayload((byte) 0x07, 32), "bundle.accumulator.lineage_digest must be exactly 32 bytes"}',
             "Android Java recursive spend bundle accumulator field-length guard tests",
         ),
         (
@@ -35118,14 +38995,92 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "countPrefixedFixedArrayPayload((byte) 0x08, 32)",
+            "fixedArrayPayload((byte) 0x08, 32)",
+            "Android Java recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "countPrefixedFixedArrayPayload((byte) 0x09, 32)",
+            "fixedArrayPayload((byte) 0x09, 32)",
+            "Android Java recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "countPrefixedFixedArrayPayload((byte) 0x0a, 32)",
+            "fixedArrayPayload((byte) 0x0a, 32)",
+            "Android Java recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "countPrefixedFixedArrayPayload((byte) 0x0b, 32)",
+            "fixedArrayPayload((byte) 0x0b, 32)",
+            "Android Java recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "countPrefixedFixedArrayPayload((byte) 0x0c, 32)",
+            "fixedArrayPayload((byte) 0x0c, 32)",
+            "Android Java recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "countPrefixedFixedArrayPayload((byte) 0x0d, 32)",
+            "fixedArrayPayload((byte) 0x0d, 32)",
+            "Android Java recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
             "countPrefixedFixedArrayPayload((byte) 0x0e, 32)",
             "fixedArrayPayload((byte) 0x0e, 32)",
             "Android Java recursive spend bundle accumulator field-length guard tests",
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "countPrefixedFixedArrayPayload((byte) 0x0f, 32)",
+            "fixedArrayPayload((byte) 0x0f, 32)",
+            "Android Java recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "countPrefixedFixedArrayPayload((byte) 0x10, 32)",
+            "fixedArrayPayload((byte) 0x10, 32)",
+            "Android Java recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "countPrefixedFixedArrayPayload((byte) 0x11, 32)",
+            "fixedArrayPayload((byte) 0x11, 32)",
+            "Android Java recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "countPrefixedFixedArrayPayload((byte) 0x12, 32)",
+            "fixedArrayPayload((byte) 0x12, 32)",
+            "Android Java recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "countPrefixedFixedArrayPayload((byte) 0x13, 32)",
+            "fixedArrayPayload((byte) 0x13, 32)",
+            "Android Java recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
             "countPrefixedFixedArrayPayload((byte) 0x14, 32)",
             "fixedArrayPayload((byte) 0x14, 32)",
+            "Android Java recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            '{21, new byte[] {2, 0, 0, 0, 0}, "bundle.accumulator.verifier_opening_len"}',
+            '{21, new byte[] {2, 0, 0, 0}, "bundle.accumulator.verifier_opening_len"}',
+            "Android Java recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            '{21, new byte[] {2, 0, 0}, "bundle.accumulator.verifier_opening_len"}',
+            '{21, new byte[] {2, 0, 0, 0}, "bundle.accumulator.verifier_opening_len"}',
             "Android Java recursive spend bundle accumulator field-length guard tests",
         ),
         (
@@ -35148,14 +39103,92 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
         ),
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x08, 32)",
+            "kagemushaFixedArrayPayload(0x08, 32)",
+            "JavaScript recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x09, 32)",
+            "kagemushaFixedArrayPayload(0x09, 32)",
+            "JavaScript recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x0a, 32)",
+            "kagemushaFixedArrayPayload(0x0a, 32)",
+            "JavaScript recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x0b, 32)",
+            "kagemushaFixedArrayPayload(0x0b, 32)",
+            "JavaScript recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x0c, 32)",
+            "kagemushaFixedArrayPayload(0x0c, 32)",
+            "JavaScript recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x0d, 32)",
+            "kagemushaFixedArrayPayload(0x0d, 32)",
+            "JavaScript recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
             "kagemushaCountPrefixedFixedArrayPayload(0x0e, 32)",
             "kagemushaFixedArrayPayload(0x0e, 32)",
             "JavaScript recursive spend bundle accumulator field-length guard tests",
         ),
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x0f, 32)",
+            "kagemushaFixedArrayPayload(0x0f, 32)",
+            "JavaScript recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x10, 32)",
+            "kagemushaFixedArrayPayload(0x10, 32)",
+            "JavaScript recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x11, 32)",
+            "kagemushaFixedArrayPayload(0x11, 32)",
+            "JavaScript recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x12, 32)",
+            "kagemushaFixedArrayPayload(0x12, 32)",
+            "JavaScript recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x13, 32)",
+            "kagemushaFixedArrayPayload(0x13, 32)",
+            "JavaScript recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
             "kagemushaCountPrefixedFixedArrayPayload(0x14, 32)",
             "kagemushaFixedArrayPayload(0x14, 32)",
+            "JavaScript recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            '[21, Buffer.from([2, 0, 0, 0, 0]), "bundle.accumulator.verifier_opening_len", null]',
+            '[21, kagemushaU32Payload(2), "bundle.accumulator.verifier_opening_len", null]',
+            "JavaScript recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            '[21, Buffer.from([2, 0, 0]), "bundle.accumulator.verifier_opening_len", null]',
+            '[21, kagemushaU32Payload(2), "bundle.accumulator.verifier_opening_len", null]',
             "JavaScript recursive spend bundle accumulator field-length guard tests",
         ),
         (
@@ -35178,14 +39211,92 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
         ),
         (
             "python/iroha_python/tests/kagemusha_test.py",
+            "_count_prefixed_fixed_array_payload(0x08, 32)",
+            "_fixed_array_payload(0x08, 32)",
+            "Python recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_count_prefixed_fixed_array_payload(0x09, 32)",
+            "_fixed_array_payload(0x09, 32)",
+            "Python recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_count_prefixed_fixed_array_payload(0x0A, 32)",
+            "_fixed_array_payload(0x0A, 32)",
+            "Python recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_count_prefixed_fixed_array_payload(0x0B, 32)",
+            "_fixed_array_payload(0x0B, 32)",
+            "Python recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_count_prefixed_fixed_array_payload(0x0C, 32)",
+            "_fixed_array_payload(0x0C, 32)",
+            "Python recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_count_prefixed_fixed_array_payload(0x0D, 32)",
+            "_fixed_array_payload(0x0D, 32)",
+            "Python recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
             "_count_prefixed_fixed_array_payload(0x0E, 32)",
             "_fixed_array_payload(0x0E, 32)",
             "Python recursive spend bundle accumulator field-length guard tests",
         ),
         (
             "python/iroha_python/tests/kagemusha_test.py",
+            "_count_prefixed_fixed_array_payload(0x0F, 32)",
+            "_fixed_array_payload(0x0F, 32)",
+            "Python recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_count_prefixed_fixed_array_payload(0x10, 32)",
+            "_fixed_array_payload(0x10, 32)",
+            "Python recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_count_prefixed_fixed_array_payload(0x11, 32)",
+            "_fixed_array_payload(0x11, 32)",
+            "Python recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_count_prefixed_fixed_array_payload(0x12, 32)",
+            "_fixed_array_payload(0x12, 32)",
+            "Python recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_count_prefixed_fixed_array_payload(0x13, 32)",
+            "_fixed_array_payload(0x13, 32)",
+            "Python recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
             "_count_prefixed_fixed_array_payload(0x14, 32)",
             "_fixed_array_payload(0x14, 32)",
+            "Python recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "bytes([2, 0, 0, 0, 0])",
+            '(2).to_bytes(4, "little")',
+            "Python recursive spend bundle accumulator field-length guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "bytes([2, 0, 0])",
+            '(2).to_bytes(4, "little")',
             "Python recursive spend bundle accumulator field-length guard tests",
         ),
         (
@@ -35208,14 +39319,92 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
         ),
         (
             "javascript/iroha_js/test/package_dist.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x08, 32)",
+            "kagemushaFixedArrayPayload(0x08, 32)",
+            "JavaScript package dist recursive spend bundle accumulator field-length coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x09, 32)",
+            "kagemushaFixedArrayPayload(0x09, 32)",
+            "JavaScript package dist recursive spend bundle accumulator field-length coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x0a, 32)",
+            "kagemushaFixedArrayPayload(0x0a, 32)",
+            "JavaScript package dist recursive spend bundle accumulator field-length coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x0b, 32)",
+            "kagemushaFixedArrayPayload(0x0b, 32)",
+            "JavaScript package dist recursive spend bundle accumulator field-length coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x0c, 32)",
+            "kagemushaFixedArrayPayload(0x0c, 32)",
+            "JavaScript package dist recursive spend bundle accumulator field-length coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x0d, 32)",
+            "kagemushaFixedArrayPayload(0x0d, 32)",
+            "JavaScript package dist recursive spend bundle accumulator field-length coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
             "kagemushaCountPrefixedFixedArrayPayload(0x0e, 32)",
             "kagemushaFixedArrayPayload(0x0e, 32)",
             "JavaScript package dist recursive spend bundle accumulator field-length coverage",
         ),
         (
             "javascript/iroha_js/test/package_dist.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x0f, 32)",
+            "kagemushaFixedArrayPayload(0x0f, 32)",
+            "JavaScript package dist recursive spend bundle accumulator field-length coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x10, 32)",
+            "kagemushaFixedArrayPayload(0x10, 32)",
+            "JavaScript package dist recursive spend bundle accumulator field-length coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x11, 32)",
+            "kagemushaFixedArrayPayload(0x11, 32)",
+            "JavaScript package dist recursive spend bundle accumulator field-length coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x12, 32)",
+            "kagemushaFixedArrayPayload(0x12, 32)",
+            "JavaScript package dist recursive spend bundle accumulator field-length coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "kagemushaCountPrefixedFixedArrayPayload(0x13, 32)",
+            "kagemushaFixedArrayPayload(0x13, 32)",
+            "JavaScript package dist recursive spend bundle accumulator field-length coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
             "kagemushaCountPrefixedFixedArrayPayload(0x14, 32)",
             "kagemushaFixedArrayPayload(0x14, 32)",
+            "JavaScript package dist recursive spend bundle accumulator field-length coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            '[21, Buffer.from([2, 0, 0, 0, 0]), "bundle.accumulator.verifier_opening_len", null]',
+            '[21, kagemushaU32Payload(2), "bundle.accumulator.verifier_opening_len", null]',
+            "JavaScript package dist recursive spend bundle accumulator field-length coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            '[21, Buffer.from([2, 0, 0]), "bundle.accumulator.verifier_opening_len", null]',
+            '[21, kagemushaU32Payload(2), "bundle.accumulator.verifier_opening_len", null]',
             "JavaScript package dist recursive spend bundle accumulator field-length coverage",
         ),
     )
@@ -35259,22 +39448,24 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
     )
     field_label_markers = {
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift": (
-            '.invalidArchive("fixedArray")',
+            '.invalidArchive("bundle.accumulator.asset")',
+            '.invalidArchive("bundle.accumulator.initial_root")',
+            '.invalidArchive("bundle.accumulator.final_root")',
         ),
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt": (
-            '"asset must be exactly 16 bytes"',
-            '"initial_root must be exactly 32 bytes"',
-            '"final_root must be exactly 32 bytes"',
+            '"bundle.accumulator.asset must be exactly 16 bytes"',
+            '"bundle.accumulator.initial_root must be exactly 32 bytes"',
+            '"bundle.accumulator.final_root must be exactly 32 bytes"',
         ),
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
-            '"asset must be exactly 16 bytes"',
-            '"initial_root must be exactly 32 bytes"',
-            '"final_root must be exactly 32 bytes"',
+            '"bundle.accumulator.asset must be exactly 16 bytes"',
+            '"bundle.accumulator.initial_root must be exactly 32 bytes"',
+            '"bundle.accumulator.final_root must be exactly 32 bytes"',
         ),
         "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
-            '"asset"',
-            '"initialRoot"',
-            '"finalRoot"',
+            '"bundle.accumulator.asset"',
+            '"bundle.accumulator.initial_root"',
+            '"bundle.accumulator.final_root"',
         ),
         "python/iroha_python/tests/kagemusha_test.py": (
             r"bundle\.accumulator\.asset",
@@ -35282,9 +39473,9 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
             r"bundle\.accumulator\.final_root",
         ),
         "javascript/iroha_js/test/package_dist.test.js": (
-            '"asset"',
-            '"initialRoot"',
-            '"finalRoot"',
+            '"bundle.accumulator.asset"',
+            '"bundle.accumulator.initial_root"',
+            '"bundle.accumulator.final_root"',
         ),
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs": (
             "asset",
@@ -35881,8 +40072,8 @@ if mode == "--negative-control-sdk-bundle-summary-trailing-field-vectors":
         ),
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
-            'recursiveSpendBundleWithTrailingCurrentNoteField()),\n    kagemushaRequestCodecError("archive", "bundle", /currentNote has trailing bytes/)',
-            'sharedRecursiveSpendArchive("init_bundle")),\n    kagemushaRequestCodecError("archive", "bundle", /currentNote has trailing bytes/)',
+            'recursiveSpendBundleWithTrailingCurrentNoteField()),\n    kagemushaRequestCodecError(\n      "archive",\n      "bundle.accumulator.current_note",\n      /currentNote has trailing bytes/,\n    )',
+            'sharedRecursiveSpendArchive("init_bundle")),\n    kagemushaRequestCodecError(\n      "archive",\n      "bundle.accumulator.current_note",\n      /currentNote has trailing bytes/,\n    )',
             "JavaScript recursive spend bundle summary trailing-field guard tests",
         ),
         (
@@ -35917,8 +40108,8 @@ if mode == "--negative-control-sdk-bundle-summary-trailing-field-vectors":
         ),
         (
             "javascript/iroha_js/test/package_dist.test.js",
-            'recursiveSpendBundleWithTrailingCurrentNoteField()),\n    kagemushaRequestCodecError("archive", "bundle", /currentNote has trailing bytes/)',
-            'sharedRecursiveSpendAbi6Archive("init_bundle")),\n    kagemushaRequestCodecError("archive", "bundle", /currentNote has trailing bytes/)',
+            'recursiveSpendBundleWithTrailingCurrentNoteField()),\n    kagemushaRequestCodecError(\n      "archive",\n      "bundle.accumulator.current_note",\n      /currentNote has trailing bytes/,\n    )',
+            'sharedRecursiveSpendAbi6Archive("init_bundle")),\n    kagemushaRequestCodecError(\n      "archive",\n      "bundle.accumulator.current_note",\n      /currentNote has trailing bytes/,\n    )',
             "JavaScript package dist recursive spend bundle summary trailing-field coverage",
         ),
         (
@@ -35982,9 +40173,57 @@ if mode == "--negative-control-sdk-verify-lineage-record-preflight":
                 ),
                 (
                     "python/iroha_python/tests/kagemusha_test.py",
-                    'match="lineage_verifier_record is required for reserved-lineage bundles",',
-                    'match="lineage_verifier_record is optional for reserved-lineage bundles",',
-                    "Python typed recursive spend verify lineage-record preflight tests",
+                    'with pytest.raises(\n'
+                    '        ValueError,\n'
+                    '        match="lineage_verifier_record is required for reserved-lineage bundles",\n'
+                    '    ):\n'
+                    '        kagemusha.KagemushaRecursiveSpendVerifyRequest(\n'
+                    '            bundle=_shared_recursive_spend_archive("init_bundle"),\n'
+                    '        )',
+                    'with pytest.raises(\n'
+                    '        ValueError,\n'
+                    '        match="lineage_verifier_record is optional for reserved-lineage bundles",\n'
+                    '    ):\n'
+                    '        kagemusha.KagemushaRecursiveSpendVerifyRequest(\n'
+                    '            bundle=_shared_recursive_spend_archive("init_bundle"),\n'
+                    '        )',
+                    'Python typed recursive spend verify lineage-record preflight tests missing match="lineage_verifier_record is required for reserved-lineage bundles",',
+                ),
+                (
+                    "python/iroha_python/tests/kagemusha_test.py",
+                    'with pytest.raises(\n'
+                    '        ValueError,\n'
+                    '        match="bundle must be a valid iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV1 Norito archive",\n'
+                    '    ):\n'
+                    '        kagemusha.encode_kagemusha_recursive_spend_verify_request(\n'
+                    '            kagemusha.KagemushaRecursiveSpendVerifyRequest(bundle=wrong_bundle_schema)\n'
+                    '        )',
+                    'with pytest.raises(\n'
+                    '        ValueError,\n'
+                    '        match="bundle may be any Norito archive",\n'
+                    '    ):\n'
+                    '        kagemusha.encode_kagemusha_recursive_spend_verify_request(\n'
+                    '            kagemusha.KagemushaRecursiveSpendVerifyRequest(bundle=wrong_bundle_schema)\n'
+                    '        )',
+                    "Python typed recursive spend request codec tests missing bundle must be a valid iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV1 Norito archive",
+                ),
+                (
+                    "python/iroha_python/tests/kagemusha_test.py",
+                    "pallas_open_envelopes must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive",
+                    "pallas_open_envelopes may be any Norito archive",
+                    "Python typed recursive spend Pallas preflight tests missing pallas_open_envelopes must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive",
+                ),
+                (
+                    "python/iroha_python/tests/kagemusha_test.py",
+                    "pallas_open_envelopes requires exactly 1 envelope\\(s\\)",
+                    "pallas_open_envelopes accepts extra envelopes",
+                    "Python typed recursive spend Pallas preflight tests missing pallas_open_envelopes requires exactly 1 envelope\\(s\\)",
+                ),
+                (
+                    "python/iroha_python/tests/kagemusha_test.py",
+                    "pallas_open_envelopes\\[0\\]\\.domain_tag is required",
+                    "pallas_open_envelopes\\[0\\]\\.domain_tag is optional",
+                    "Python typed recursive spend Pallas preflight tests missing pallas_open_envelopes\\[0\\]\\.domain_tag is required",
                 ),
                 (
                     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
@@ -36012,6 +40251,12 @@ if mode == "--negative-control-sdk-verify-lineage-record-preflight":
                     "corruptedPallasOpenEnvelopeArchive",
                     "acceptedPallasOpenEnvelopeArchive",
                     "Kotlin typed recursive spend Pallas archive checksum diagnostics missing val corruptedPallasOpenEnvelopeArchive = assertFailsWith<IllegalArgumentException>",
+                ),
+                (
+                    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+                    'assertTrue(corruptedPallasOpenEnvelopeArchive.message.orEmpty().startsWith("Checksum mismatch: expected 0x"))',
+                    'assertTrue(corruptedPallasOpenEnvelopeArchive.message.orEmpty().startsWith("Checksum ignored: expected 0x"))',
+                    'Kotlin typed recursive spend Pallas archive checksum diagnostics missing assertTrue(corruptedPallasOpenEnvelopeArchive.message.orEmpty().startsWith("Checksum mismatch: expected 0x"))',
                 ),
                 (
                     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
@@ -36113,7 +40358,7 @@ if mode == "--negative-control-sdk-verify-lineage-record-preflight":
                     "        \"lineageVerifierRecord is optional for reserved-lineage bundles\",\n"
                     "        () ->\n"
                     "            new KagemushaRecursiveSpendRequestCodecs.VerifySpendRequest(",
-                    "Android Java typed recursive spend verify lineage-record preflight tests missing assertThrows(",
+                    "Android Java typed recursive spend verify lineage-record preflight tests missing lineageVerifierRecord is required for reserved-lineage bundles",
                 ),
                 (
                     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
@@ -36132,6 +40377,12 @@ if mode == "--negative-control-sdk-verify-lineage-record-preflight":
                     "corruptedPallasOpenEnvelopeArchive",
                     "acceptedPallasOpenEnvelopeArchive",
                     "Android Java typed recursive spend Pallas archive checksum diagnostics missing final IllegalArgumentException corruptedPallasOpenEnvelopeArchive =",
+                ),
+                (
+                    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+                    'corruptedPallasOpenEnvelopeArchive.getMessage().startsWith("Checksum mismatch: expected 0x")',
+                    'corruptedPallasOpenEnvelopeArchive.getMessage().startsWith("Checksum ignored: expected 0x")',
+                    'Android Java typed recursive spend Pallas archive checksum diagnostics missing .startsWith("Checksum mismatch: expected 0x")',
                 ),
                 (
                     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
@@ -36292,6 +40543,12 @@ if mode == "--negative-control-sdk-verify-lineage-record-preflight":
                 ),
                 (
                     "python/iroha_python/tests/kagemusha_test.py",
+                    '"verifier_key_id": "forgedVerifyLineageRecord"',
+                    '"verifier_key_id": "typedVerifyLineageRecordAccepted"',
+                    "Python typed recursive spend verify lineage-record preflight tests missing forgedVerifyLineageRecord",
+                ),
+                (
+                    "python/iroha_python/tests/kagemusha_test.py",
                     '"verifier_key_id": "danglingVerifyLineageRecord"',
                     '"verifier_key_id": "optionalVerifyLineageRecord"',
                     "Python typed recursive spend verify lineage-record preflight tests missing danglingVerifyLineageRecord",
@@ -36314,7 +40571,7 @@ if mode == "--negative-control-sdk-verify-lineage-record-preflight":
                     "        \"lineageVerifierRecord is allowed for semantic bundles\",\n"
                     "        () ->\n"
                     "            new KagemushaRecursiveSpendRequestCodecs.VerifySpendRequest(",
-                    "Android Java typed recursive spend verify lineage-record preflight tests",
+                    "Android Java typed recursive spend verify lineage-record preflight tests missing lineageVerifierRecord is only valid for reserved-lineage bundles",
                 ),
                 (
                     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
@@ -36493,6 +40750,128 @@ if mode == "--negative-control-sdk-verify-result-trailing-field-vectors":
         "negative control failed: SDK verify-result trailing-field vector drift was not detected"
     )
 
+if mode == "--negative-control-sdk-verify-result-redeem-aliases":
+    mutated = dict(texts)
+    replacements = (
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "lineageWitnessRequiredForRedeem: lineageWitnessRequired",
+            "lineageWitnessRedeemRequired: lineageWitnessRequired",
+            "javascript/iroha_js/src/crypto.js typed recursive spend request codecs",
+            False,
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "lineageWitnessRequiredForRedeem: lineageWitnessRequired",
+            "lineageWitnessRedeemRequired: lineageWitnessRequired",
+            "javascript/iroha_js/dist/crypto.js typed recursive spend request codecs",
+            False,
+        ),
+        (
+            "javascript/iroha_js/index.d.ts",
+            "readonly lineageWitnessRequiredForRedeem: boolean",
+            "readonly lineageWitnessRedeemRequired: boolean",
+            "JavaScript typed recursive spend request codec declarations",
+            False,
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "lineageWitnessRequiredForRedeem",
+            "lineageWitnessRedeemRequired",
+            "JavaScript recursive spend verify-result trailing-field guard tests",
+            True,
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "lineageWitnessRequiredForRedeem",
+            "lineageWitnessRedeemRequired",
+            "JavaScript package dist recursive spend verify-result trailing-field coverage",
+            True,
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "def lineage_witness_required_for_redeem(self) -> bool:",
+            "def lineage_witness_required_to_redeem(self) -> bool:",
+            "Python typed recursive spend request codecs",
+            False,
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "lineage_witness_required_for_redeem is True",
+            "lineage_witness_required_to_redeem is True",
+            "Python recursive spend verify-result trailing-field guard tests",
+            True,
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "public var lineageWitnessRequiredForRedeem: Bool",
+            "public var lineageWitnessRedeemRequired: Bool",
+            "Swift typed recursive spend request codecs",
+            False,
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "lineageWitnessRequiredForRedeem",
+            "lineageWitnessRedeemRequired",
+            "Swift recursive spend verify-result trailing-field guard tests",
+            True,
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "val lineageWitnessRequiredForRedeem: Boolean",
+            "val lineageWitnessRedeemRequired: Boolean",
+            "Kotlin recursive spend bundle accumulator domain guard",
+            False,
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "lineageWitnessRequiredForRedeem",
+            "lineageWitnessRedeemRequired",
+            "Kotlin recursive spend verify-result trailing-field guard tests",
+            True,
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "public final boolean lineageWitnessRequiredForRedeem;",
+            "public final boolean lineageWitnessRedeemRequired;",
+            "Android Java recursive spend bundle accumulator domain guard",
+            False,
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "lineageWitnessRequiredForRedeem",
+            "lineageWitnessRedeemRequired",
+            "Android Java recursive spend verify-result ABI-7/trailing-field guard tests",
+            True,
+        ),
+    )
+    expected_labels = []
+    for target, old, new, label, replace_all in replacements:
+        updated = mutated[target].replace(old, new) if replace_all else mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate verify-result redeem alias in {target}"
+            )
+        mutated[target] = updated
+        expected_labels.append(f"{label} missing {old}")
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK verify-result redeem alias drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected SDK verify-result redeem alias drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: SDK verify-result redeem alias drift was not detected"
+    )
+
 if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
     mutated = dict(texts)
     replacements = (
@@ -36527,6 +40906,24 @@ if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
             "                    replacement: Data()\n"
             "                )",
             'try Self.sharedRecursiveSpendArchive(abi: .abi6, name: "lineage_witness_append_result")',
+            "Swift recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "replacement: Self.fixedArrayPayload(0x44, count: 31)",
+            "replacement: Self.fixedArrayPayload(0x44, count: 32)",
+            "Swift recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "replacement: Self.countPrefixedFixedArrayPayload(0x44, count: 32)",
+            "replacement: Self.fixedArrayPayload(0x44, count: 32)",
+            "Swift recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "replacement: Self.fixedArrayPayload(0x44, count: 33)",
+            "replacement: Self.fixedArrayPayload(0x44, count: 32)",
             "Swift recursive spend lineage-witness trailing-field guard tests",
         ),
         (
@@ -36576,6 +40973,24 @@ if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
             "recursiveSpendLineageWitnessWithPreviousProofField(1, ByteArray(0)) to",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result") to',
+            "Kotlin recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, fixedArrayPayload(0x44, 31)) to",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result") to',
+            "Kotlin recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, countPrefixedFixedArrayPayload(0x44, 32)) to",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result") to',
+            "Kotlin recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, fixedArrayPayload(0x44, 33)) to",
             'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result") to',
             "Kotlin recursive spend lineage-witness trailing-field guard tests",
         ),
@@ -36631,6 +41046,24 @@ if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
             "recursiveSpendLineageWitnessWithPreviousProofField(1, new byte[0]),\n        \"lineageWitness.previousRecursiveProofs.proof_public_inputs empty recursive proof inputs\"",
             'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),\n        "lineageWitness.previousRecursiveProofs.proof_public_inputs empty recursive proof inputs"',
+            "Android Java recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, fixedArrayPayload((byte) 0x44, 31))",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result")',
+            "Android Java recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "recursiveSpendLineageWitnessWithPreviousProofField(\n            2, countPrefixedFixedArrayPayload((byte) 0x44, 32))",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result")',
+            "Android Java recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, fixedArrayPayload((byte) 0x44, 33))",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result")',
             "Android Java recursive spend lineage-witness trailing-field guard tests",
         ),
         (
@@ -36691,6 +41124,24 @@ if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
         ),
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, kagemushaFixedArrayPayload(0x44, 31)),",
+            'sharedRecursiveSpendArchive("lineage_witness_append_result"),',
+            "JavaScript recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, kagemushaCountPrefixedFixedArrayPayload(0x44, 32)),",
+            'sharedRecursiveSpendArchive("lineage_witness_append_result"),',
+            "JavaScript recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, kagemushaFixedArrayPayload(0x44, 33)),",
+            'sharedRecursiveSpendArchive("lineage_witness_append_result"),',
+            "JavaScript recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
             'recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg"),',
             'sharedRecursiveSpendArchive("lineage_witness_append_result"),',
             "JavaScript recursive spend lineage-witness trailing-field guard tests",
@@ -36734,6 +41185,33 @@ if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
         (
             "python/iroha_python/tests/kagemusha_test.py",
             "_recursive_spend_lineage_witness_with_previous_proof_field(1, b\"\")",
+            '_shared_recursive_spend_archive("lineage_witness_append_result")',
+            "Python recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_lineage_witness_with_previous_proof_field(\n"
+            "                2,\n"
+            "                _fixed_array_payload(0x44, 31),\n"
+            "            )",
+            '_shared_recursive_spend_archive("lineage_witness_append_result")',
+            "Python recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_lineage_witness_with_previous_proof_field(\n"
+            "                2,\n"
+            "                _count_prefixed_fixed_array_payload(0x44, 32),\n"
+            "            )",
+            '_shared_recursive_spend_archive("lineage_witness_append_result")',
+            "Python recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_lineage_witness_with_previous_proof_field(\n"
+            "                2,\n"
+            "                _fixed_array_payload(0x44, 33),\n"
+            "            )",
             '_shared_recursive_spend_archive("lineage_witness_append_result")',
             "Python recursive spend lineage-witness trailing-field guard tests",
         ),
@@ -36789,6 +41267,24 @@ if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
         ),
         (
             "javascript/iroha_js/test/package_dist.test.js",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, kagemushaFixedArrayPayload(0x44, 31)),",
+            'sharedRecursiveSpendAbi6Archive("lineage_witness_append_result"),',
+            "JavaScript package dist recursive spend lineage-witness trailing-field coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, kagemushaCountPrefixedFixedArrayPayload(0x44, 32)),",
+            'sharedRecursiveSpendAbi6Archive("lineage_witness_append_result"),',
+            "JavaScript package dist recursive spend lineage-witness trailing-field coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "recursiveSpendLineageWitnessWithPreviousProofField(2, kagemushaFixedArrayPayload(0x44, 33)),",
+            'sharedRecursiveSpendAbi6Archive("lineage_witness_append_result"),',
+            "JavaScript package dist recursive spend lineage-witness trailing-field coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
             'recursiveSpendLineageWitnessWithPreviousProofBoxBackend("halo2/kzg"),',
             'sharedRecursiveSpendAbi6Archive("lineage_witness_append_result"),',
             "JavaScript package dist recursive spend lineage-witness trailing-field coverage",
@@ -36839,7 +41335,19 @@ if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
             )
         mutated[target] = updated
         expected_marker = old.splitlines()[0]
-        if "PreviousProofBoxBackendAndEmptyProofBytes" in old:
+        if any(
+            marker in old
+            for marker in (
+                "fixedArrayPayload",
+                "countPrefixedFixedArrayPayload",
+                "FixedArrayPayload",
+                "CountPrefixedFixedArrayPayload",
+                "_fixed_array_payload",
+                "_count_prefixed_fixed_array_payload",
+            )
+        ):
+            expected_marker = old
+        elif "PreviousProofBoxBackendAndEmptyProofBytes" in old:
             expected_marker = old.splitlines()[0]
         elif "previous_proof_box_backend_and_empty_proof_bytes" in old:
             expected_marker = old.splitlines()[0]
@@ -36864,6 +41372,323 @@ if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK lineage-witness trailing-field vector drift was not detected"
+    )
+
+if mode == "--negative-control-non-csharp-lineage-witness-count-prefix-prechecks":
+    mutated = dict(texts)
+    replacements = (
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "count > BigInt(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS)",
+            "count > BigInt(Number.MAX_SAFE_INTEGER)",
+            "JavaScript lineage-witness previous-proof count precheck decoder",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "count > BigInt(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS)",
+            "count > BigInt(Number.MAX_SAFE_INTEGER)",
+            "JavaScript dist lineage-witness previous-proof count precheck decoder",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "if count > KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS:\n"
+            "        raise ValueError(\n"
+            "            \"lineage_witness.previous_recursive_proofs count exceeds \"",
+            "if count > (1 << 63):\n"
+            "        raise ValueError(\n"
+            "            \"lineage_witness.previous_recursive_proofs count exceeds \"",
+            "Python lineage-witness previous-proof count precheck decoder",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "guard count <= UInt64(KagemushaRecursiveSpendProver.compactTokenMaxHops) else",
+            "guard count <= UInt64(Int.max) else",
+            "Swift lineage-witness previous-proof count precheck decoder",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "count <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS) {\n"
+            "            \"lineageWitness.previousRecursiveProofs count must not exceed ${KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS}\"",
+            "count <= Int.MAX_VALUE) {\n"
+            "            \"lineageWitness.previousRecursiveProofs count must not exceed ${KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS}\"",
+            "Kotlin lineage-witness previous-proof count precheck decoder",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "count <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS,\n"
+            "        \"lineageWitness.previousRecursiveProofs count must not exceed \"",
+            "count <= Integer.MAX_VALUE,\n"
+            "        \"lineageWitness.previousRecursiveProofs count must not exceed \"",
+            "Android Java lineage-witness previous-proof count precheck decoder",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "recursiveSpendLineageWitnessWithPreviousProofCountPrefixOnly(\n"
+            "        KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1,\n"
+            "      )",
+            'sharedRecursiveSpendArchive("lineage_witness_append_result")',
+            "JavaScript lineage-witness previous-proof count-prefix vectors",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "recursiveSpendLineageWitnessWithPreviousProofCountPrefixOnly(\n"
+            "        KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1,\n"
+            "      )",
+            'sharedRecursiveSpendAbi6Archive("lineage_witness_append_result")',
+            "JavaScript package dist lineage-witness previous-proof count-prefix vectors",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_lineage_witness_with_previous_proof_count_prefix_only(\n"
+            "                kagemusha.KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1\n"
+            "            )",
+            '_shared_recursive_spend_archive("lineage_witness_append_result")',
+            "Python lineage-witness previous-proof count-prefix vectors",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "try Self.recursiveSpendLineageWitnessWithPreviousProofCountPrefixOnly(\n"
+            "                    UInt64(KagemushaRecursiveSpendProver.compactTokenMaxHops) + 1\n"
+            "                )",
+            'try Self.sharedRecursiveSpendArchive(abi: .abi6, name: "lineage_witness_append_result")',
+            "Swift lineage-witness previous-proof count-prefix vectors",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "recursiveSpendLineageWitnessWithPreviousProofCountPrefixOnly(\n"
+            "                KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS + 1,\n"
+            "            ) to",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result") to',
+            "Kotlin lineage-witness previous-proof count-prefix vectors",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "recursiveSpendLineageWitnessWithPreviousProofCountPrefixOnly(\n"
+            "            KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS + 1),",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),',
+            "Android Java lineage-witness previous-proof count-prefix vectors",
+        ),
+    )
+    expected_labels = []
+    for target, old, new, label in replacements:
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate lineage-witness count-prefix marker in {target}"
+            )
+        mutated[target] = updated
+        expected_marker = old.splitlines()[0].strip()
+        if label in (
+            "Kotlin lineage-witness previous-proof count precheck decoder",
+            "Android Java lineage-witness previous-proof count precheck decoder",
+        ):
+            expected_marker = "count <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS"
+        expected_labels.append(f"{label} missing {expected_marker}")
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: non-C# lineage-witness count-prefix drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected non-C# lineage-witness count-prefix drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: non-C# lineage-witness count-prefix drift was not detected"
+    )
+
+if mode == "--negative-control-non-csharp-record-bundle-fold-step-count-prechecks":
+    mutated = dict(texts)
+    replacements = (
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "function kagemushaReadVerifiedFoldStepCount(payload, flags, field) {\n"
+            "  if (payload.length < 8) {\n"
+            "    throw kagemushaArchiveCodecError(field, `${field} count is truncated`);\n"
+            "  }\n"
+            "  const countBig = payload.readBigUInt64LE(0);\n"
+            "  if (countBig > BigInt(Number.MAX_SAFE_INTEGER)) {\n"
+            "    throw kagemushaArchiveCodecError(field, `${field} count is too large`);\n"
+            "  }\n"
+            "  if (countBig > BigInt(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS)) {",
+            "function kagemushaReadVerifiedFoldStepCount(payload, flags, field) {\n"
+            "  if (payload.length < 8) {\n"
+            "    throw kagemushaArchiveCodecError(field, `${field} count is truncated`);\n"
+            "  }\n"
+            "  const countBig = payload.readBigUInt64LE(0);\n"
+            "  if (countBig > BigInt(Number.MAX_SAFE_INTEGER)) {\n"
+            "    throw kagemushaArchiveCodecError(field, `${field} count is too large`);\n"
+            "  }\n"
+            "  if (countBig > BigInt(Number.MAX_SAFE_INTEGER)) {",
+            "JavaScript record-bundle fold-step count precheck decoder",
+            "countBig > BigInt(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS)",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "function kagemushaReadVerifiedFoldStepCount(payload, flags, field) {\n"
+            "  if (payload.length < 8) {\n"
+            "    throw kagemushaArchiveCodecError(field, `${field} count is truncated`);\n"
+            "  }\n"
+            "  const countBig = payload.readBigUInt64LE(0);\n"
+            "  if (countBig > BigInt(Number.MAX_SAFE_INTEGER)) {\n"
+            "    throw kagemushaArchiveCodecError(field, `${field} count is too large`);\n"
+            "  }\n"
+            "  if (countBig > BigInt(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS)) {",
+            "function kagemushaReadVerifiedFoldStepCount(payload, flags, field) {\n"
+            "  if (payload.length < 8) {\n"
+            "    throw kagemushaArchiveCodecError(field, `${field} count is truncated`);\n"
+            "  }\n"
+            "  const countBig = payload.readBigUInt64LE(0);\n"
+            "  if (countBig > BigInt(Number.MAX_SAFE_INTEGER)) {\n"
+            "    throw kagemushaArchiveCodecError(field, `${field} count is too large`);\n"
+            "  }\n"
+            "  if (countBig > BigInt(Number.MAX_SAFE_INTEGER)) {",
+            "JavaScript dist record-bundle fold-step count precheck decoder",
+            "countBig > BigInt(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS)",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "def _kagemusha_read_verified_fold_step_count(\n"
+            "    payload: bytes,\n"
+            "    flags: int,\n"
+            "    field: str,\n"
+            ") -> int:\n"
+            "    if len(payload) < 8:\n"
+            "        raise ValueError(f\"{field} count is truncated\")\n"
+            "    count = int.from_bytes(payload[:8], \"little\")\n"
+            "    if count > KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS:",
+            "def _kagemusha_read_verified_fold_step_count(\n"
+            "    payload: bytes,\n"
+            "    flags: int,\n"
+            "    field: str,\n"
+            ") -> int:\n"
+            "    if len(payload) < 8:\n"
+            "        raise ValueError(f\"{field} count is truncated\")\n"
+            "    count = int.from_bytes(payload[:8], \"little\")\n"
+            "    if count > (1 << 63):",
+            "Python record-bundle fold-step count precheck decoder",
+            "if count > KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS:",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "private static func readVerifiedFoldStepCount(\n"
+            "        _ decoder: inout CompactReader,\n"
+            "        field: String\n"
+            "    ) throws -> Int {\n"
+            "        let count64 = try decoder.readUInt64LE()\n"
+            "        guard count64 <= UInt64(Int.max) else {\n"
+            "            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)\n"
+            "        }\n"
+            "        guard count64 <= UInt64(KagemushaRecursiveSpendProver.compactTokenMaxHops) else {",
+            "private static func readVerifiedFoldStepCount(\n"
+            "        _ decoder: inout CompactReader,\n"
+            "        field: String\n"
+            "    ) throws -> Int {\n"
+            "        let count64 = try decoder.readUInt64LE()\n"
+            "        guard count64 <= UInt64(Int.max) else {\n"
+            "            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)\n"
+            "        }\n"
+            "        guard count64 <= UInt64(Int.max) else {",
+            "Swift record-bundle fold-step count precheck decoder",
+            "guard count64 <= UInt64(KagemushaRecursiveSpendProver.compactTokenMaxHops) else",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "private fun readVerifiedFoldStepCount(decoder: NoritoDecoder, field: String): Int {\n"
+            "    val count = checkedInt(decoder.readUInt(64), \"$field count\")\n"
+            "    require(count <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS) {",
+            "private fun readVerifiedFoldStepCount(decoder: NoritoDecoder, field: String): Int {\n"
+            "    val count = checkedInt(decoder.readUInt(64), \"$field count\")\n"
+            "    require(count <= Int.MAX_VALUE) {",
+            "Kotlin record-bundle fold-step count precheck decoder",
+            "count <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "private static int readVerifiedFoldStepCount(final NoritoDecoder decoder, final String field) {\n"
+            "    final int count = checkedInt(decoder.readUInt(64), field + \" count\");\n"
+            "    require(\n"
+            "        count <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS,",
+            "private static int readVerifiedFoldStepCount(final NoritoDecoder decoder, final String field) {\n"
+            "    final int count = checkedInt(decoder.readUInt(64), field + \" count\");\n"
+            "    require(\n"
+            "        count <= Integer.MAX_VALUE,",
+            "Android Java record-bundle fold-step count precheck decoder",
+            "count <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "stepsPayload: u64LE(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1)",
+            "stepsPayload: encodeFields([])",
+            "JavaScript record-bundle fold-step count-prefix vectors",
+            "stepsPayload: u64LE(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1)",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "stepsPayload: u64LE(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1)",
+            "stepsPayload: encodeFields([])",
+            "JavaScript package dist record-bundle fold-step count-prefix vectors",
+            "stepsPayload: u64LE(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1)",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "steps_payload=_u64_le(kagemusha.KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1)",
+            "steps_payload=_encode_fields([])",
+            "Python record-bundle fold-step count-prefix vectors",
+            "steps_payload=_u64_le(kagemusha.KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1)",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "Self.uint64Payload(UInt64(KagemushaRecursiveSpendProver.compactTokenMaxHops) + 1)",
+            "Self.encodeFields([])",
+            "Swift record-bundle fold-step count-prefix vectors",
+            "Self.uint64Payload(UInt64(KagemushaRecursiveSpendProver.compactTokenMaxHops) + 1)",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            '"recordBundle.steps fold step count must not exceed ${KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS}"',
+            '"recordBundle.steps fold step count may exceed ${KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS}"',
+            "Kotlin record-bundle fold-step count-prefix vectors",
+            '"recordBundle.steps fold step count must not exceed ${KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS}"',
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS + 1L",
+            "1L",
+            "Android Java record-bundle fold-step count-prefix vectors",
+            "KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS + 1L",
+        ),
+    )
+    expected_labels = []
+    for target, old, new, label, expected_marker in replacements:
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate record-bundle fold-step count-prefix marker in {target}"
+            )
+        mutated[target] = updated
+        expected_labels.append(f"{label} missing {expected_marker}")
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: non-C# record-bundle fold-step count-prefix drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected non-C# record-bundle fold-step count-prefix drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: non-C# record-bundle fold-step count-prefix drift was not detected"
     )
 
 if mode == "--negative-control-sdk-current-note-amount-trailing-field-vectors":
@@ -36897,7 +41722,10 @@ if mode == "--negative-control-sdk-current-note-amount-trailing-field-vectors":
         ),
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
-            '[2, kagemushaNumericPayloadWithTrailingField(), "archive", "amount", null]',
+            "      kagemushaNumericPayloadWithTrailingField(),\n"
+            "      \"archive\",\n"
+            "      \"bundle.accumulator.current_note.amount\",\n"
+            "      null,",
             'sharedRecursiveSpendArchive("init_bundle")',
             "JavaScript recursive spend bundle current-note amount encoding guard tests",
         ),
@@ -36912,7 +41740,10 @@ if mode == "--negative-control-sdk-current-note-amount-trailing-field-vectors":
         ),
         (
             "javascript/iroha_js/test/package_dist.test.js",
-            '[2, kagemushaNumericPayloadWithTrailingField(), "archive", "amount", null]',
+            "      kagemushaNumericPayloadWithTrailingField(),\n"
+            "      \"archive\",\n"
+            "      \"bundle.accumulator.current_note.amount\",\n"
+            "      null,",
             'sharedRecursiveSpendAbi6Archive("init_bundle")',
             "JavaScript package dist recursive spend bundle current-note amount encoding coverage",
         ),
@@ -37656,6 +42487,46 @@ if mode == "--negative-control-sdk-bundle-proof-public-input-vectors":
         ),
         (
             "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "Self.recursiveSpendBundleWithProofPublicInputsHash(replacement)",
+            'Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle")',
+            "Swift recursive spend bundle proof-public-input guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "recursiveSpendBundleWithProofPublicInputsHash(replacement),",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),',
+            "Kotlin recursive spend bundle proof-public-input guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "recursiveSpendBundleWithProofPublicInputsHash((byte[]) invalidHashPayload[0])",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle")',
+            "Android Java recursive spend bundle proof-public-input guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "decodeKagemushaRecursiveSpendBundle(\n"
+            "          recursiveSpendBundleWithProofPublicInputsHash(replacement),",
+            'decodeKagemushaRecursiveSpendBundle(sharedRecursiveSpendArchive("init_bundle")),\n'
+            '    kagemushaRequestCodecError("archive", "bundle.proof_public_inputs_hash", null),',
+            "JavaScript recursive spend bundle proof-public-input guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_fixed_array_payload(0x44, 31)",
+            "_fixed_array_payload(0x44, 32)",
+            "Python recursive spend bundle proof-public-input guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "decodeKagemushaRecursiveSpendBundle(\n"
+            "          recursiveSpendBundleWithProofPublicInputsHash(replacement),",
+            'decodeKagemushaRecursiveSpendBundle(sharedRecursiveSpendAbi6Archive("init_bundle")),\n'
+            '    kagemushaRequestCodecError("archive", "bundle.proof_public_inputs_hash", null),',
+            "JavaScript package dist recursive spend bundle proof-public-input coverage",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
             "Self.recursiveSpendBundleWithZeroProofPublicInputsHash()",
             'Self.sharedRecursiveSpendArchive(abi: .abi6, name: "append_bundle")',
             "Swift recursive spend bundle proof-public-input guard tests",
@@ -37859,9 +42730,12 @@ if mode == "--negative-control-sdk-bundle-proof-public-input-vectors":
         marker = old.splitlines()[0]
         if target == "python/iroha_python/tests/kagemusha_test.py":
             marker = next(
-                line
-                for line in old.splitlines()
-                if "_recursive_spend_bundle_with_" in line
+                (
+                    line
+                    for line in old.splitlines()
+                    if "_recursive_spend_bundle_with_" in line
+                ),
+                marker,
             )
         if target.endswith(".java") and marker.startswith("assert "):
             marker = marker.removeprefix("assert ")
@@ -38356,14 +43230,14 @@ if mode == "--negative-control-sdk-bundle-current-note-vectors":
         ),
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
-            '[0, kagemushaFixedArrayPayload(0x04, 31), "archive", "noteCommitment", null]',
-            '[0, Buffer.alloc(32, 1), "archive", "noteCommitment", null]',
+            '[0, kagemushaFixedArrayPayload(0x04, 31), "archive", "bundle.accumulator.current_note.note_commitment", null]',
+            '[0, Buffer.alloc(32, 1), "archive", "bundle.accumulator.current_note.note_commitment", null]',
             "JavaScript recursive spend bundle current-note guard tests",
         ),
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
-            '[0, kagemushaFixedArrayPayload(0x04, 33), "archive", "noteCommitment", null]',
-            '[0, Buffer.alloc(32, 2), "archive", "noteCommitment", null]',
+            '[0, kagemushaFixedArrayPayload(0x04, 33), "archive", "bundle.accumulator.current_note.note_commitment", null]',
+            '[0, Buffer.alloc(32, 2), "archive", "bundle.accumulator.current_note.note_commitment", null]',
             "JavaScript recursive spend bundle current-note guard tests",
         ),
         (
@@ -38374,14 +43248,14 @@ if mode == "--negative-control-sdk-bundle-current-note-vectors":
         ),
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
-            '[1, kagemushaFixedArrayPayload(0x05, 31), "archive", "spendNullifier", null]',
-            '[1, Buffer.alloc(32, 3), "archive", "spendNullifier", null]',
+            '[1, kagemushaFixedArrayPayload(0x05, 31), "archive", "bundle.accumulator.current_note.spend_nullifier", null]',
+            '[1, Buffer.alloc(32, 3), "archive", "bundle.accumulator.current_note.spend_nullifier", null]',
             "JavaScript recursive spend bundle current-note guard tests",
         ),
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
-            '[1, kagemushaFixedArrayPayload(0x05, 33), "archive", "spendNullifier", null]',
-            '[1, Buffer.alloc(32, 4), "archive", "spendNullifier", null]',
+            '[1, kagemushaFixedArrayPayload(0x05, 33), "archive", "bundle.accumulator.current_note.spend_nullifier", null]',
+            '[1, Buffer.alloc(32, 4), "archive", "bundle.accumulator.current_note.spend_nullifier", null]',
             "JavaScript recursive spend bundle current-note guard tests",
         ),
         (
@@ -38392,14 +43266,20 @@ if mode == "--negative-control-sdk-bundle-current-note-vectors":
         ),
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
-            '[2, kagemushaNumericPayload(Buffer.from([1]), 1), "field", "amount", /numeric scale/]',
-            '[2, kagemushaZeroNumericPayload(), "field", "amount", /numeric scale/]',
+            "      kagemushaNumericPayload(Buffer.from([1]), 1),\n"
+            "      \"field\",\n"
+            "      \"bundle.accumulator.current_note.amount\",\n"
+            "      /numeric scale/,",
+            "      kagemushaZeroNumericPayload(),\n"
+            "      \"field\",\n"
+            "      \"bundle.accumulator.current_note.amount\",\n"
+            "      /numeric scale/,",
             "JavaScript recursive spend bundle current-note amount encoding guard tests",
         ),
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
-            '      kagemushaNumericPayload(Buffer.concat([Buffer.alloc(16), Buffer.from([1])])),\n      "field",\n      "amount",\n      /fit in u128/',
-            '      kagemushaZeroNumericPayload(),\n      "field",\n      "amount",\n      /fit in u128/',
+            '      kagemushaNumericPayload(Buffer.concat([Buffer.alloc(16), Buffer.from([1])])),\n      "field",\n      "bundle.accumulator.current_note.amount",\n      /fit in u128/',
+            '      kagemushaZeroNumericPayload(),\n      "field",\n      "bundle.accumulator.current_note.amount",\n      /fit in u128/',
             "JavaScript recursive spend bundle current-note amount encoding guard tests",
         ),
         (
@@ -38539,14 +43419,14 @@ if mode == "--negative-control-sdk-bundle-current-note-vectors":
         ),
         (
             "javascript/iroha_js/test/package_dist.test.js",
-            '[0, kagemushaFixedArrayPayload(0x04, 31), "archive", "noteCommitment", null]',
-            '[0, Buffer.alloc(32, 1), "archive", "noteCommitment", null]',
+            '[0, kagemushaFixedArrayPayload(0x04, 31), "archive", "bundle.accumulator.current_note.note_commitment", null]',
+            '[0, Buffer.alloc(32, 1), "archive", "bundle.accumulator.current_note.note_commitment", null]',
             "JavaScript package dist recursive spend bundle current-note coverage",
         ),
         (
             "javascript/iroha_js/test/package_dist.test.js",
-            '[0, kagemushaFixedArrayPayload(0x04, 33), "archive", "noteCommitment", null]',
-            '[0, Buffer.alloc(32, 2), "archive", "noteCommitment", null]',
+            '[0, kagemushaFixedArrayPayload(0x04, 33), "archive", "bundle.accumulator.current_note.note_commitment", null]',
+            '[0, Buffer.alloc(32, 2), "archive", "bundle.accumulator.current_note.note_commitment", null]',
             "JavaScript package dist recursive spend bundle current-note coverage",
         ),
         (
@@ -38557,14 +43437,14 @@ if mode == "--negative-control-sdk-bundle-current-note-vectors":
         ),
         (
             "javascript/iroha_js/test/package_dist.test.js",
-            '[1, kagemushaFixedArrayPayload(0x05, 31), "archive", "spendNullifier", null]',
-            '[1, Buffer.alloc(32, 3), "archive", "spendNullifier", null]',
+            '[1, kagemushaFixedArrayPayload(0x05, 31), "archive", "bundle.accumulator.current_note.spend_nullifier", null]',
+            '[1, Buffer.alloc(32, 3), "archive", "bundle.accumulator.current_note.spend_nullifier", null]',
             "JavaScript package dist recursive spend bundle current-note coverage",
         ),
         (
             "javascript/iroha_js/test/package_dist.test.js",
-            '[1, kagemushaFixedArrayPayload(0x05, 33), "archive", "spendNullifier", null]',
-            '[1, Buffer.alloc(32, 4), "archive", "spendNullifier", null]',
+            '[1, kagemushaFixedArrayPayload(0x05, 33), "archive", "bundle.accumulator.current_note.spend_nullifier", null]',
+            '[1, Buffer.alloc(32, 4), "archive", "bundle.accumulator.current_note.spend_nullifier", null]',
             "JavaScript package dist recursive spend bundle current-note coverage",
         ),
         (
@@ -38575,14 +43455,20 @@ if mode == "--negative-control-sdk-bundle-current-note-vectors":
         ),
         (
             "javascript/iroha_js/test/package_dist.test.js",
-            '[2, kagemushaNumericPayload(Buffer.from([1]), 1), "field", "amount", /numeric scale/]',
-            '[2, kagemushaZeroNumericPayload(), "field", "amount", /numeric scale/]',
+            "      kagemushaNumericPayload(Buffer.from([1]), 1),\n"
+            "      \"field\",\n"
+            "      \"bundle.accumulator.current_note.amount\",\n"
+            "      /numeric scale/,",
+            "      kagemushaZeroNumericPayload(),\n"
+            "      \"field\",\n"
+            "      \"bundle.accumulator.current_note.amount\",\n"
+            "      /numeric scale/,",
             "JavaScript package dist recursive spend bundle current-note amount encoding coverage",
         ),
         (
             "javascript/iroha_js/test/package_dist.test.js",
-            '      kagemushaNumericPayload(Buffer.concat([Buffer.alloc(16), Buffer.from([1])])),\n      "field",\n      "amount",\n      /fit in u128/',
-            '      kagemushaZeroNumericPayload(),\n      "field",\n      "amount",\n      /fit in u128/',
+            '      kagemushaNumericPayload(Buffer.concat([Buffer.alloc(16), Buffer.from([1])])),\n      "field",\n      "bundle.accumulator.current_note.amount",\n      /fit in u128/',
+            '      kagemushaZeroNumericPayload(),\n      "field",\n      "bundle.accumulator.current_note.amount",\n      /fit in u128/',
             "JavaScript package dist recursive spend bundle current-note amount encoding coverage",
         ),
         (
@@ -38674,6 +43560,16 @@ if mode == "--negative-control-sdk-bundle-current-note-vectors":
         ),
     )
     implementation_replacements = {
+        "javascript/iroha_js/src/crypto.js": (
+            "function kagemushaDecodedNumericU128Decimal(value, field)",
+            "function kagemushaGenericNumericU128Decimal(value, field)",
+            "javascript/iroha_js/src/crypto.js typed recursive spend request codecs",
+        ),
+        "javascript/iroha_js/dist/crypto.js": (
+            "function kagemushaDecodedNumericU128Decimal(value, field)",
+            "function kagemushaGenericNumericU128Decimal(value, field)",
+            "javascript/iroha_js/dist/crypto.js typed recursive spend request codecs",
+        ),
         "python/iroha_python/src/iroha_python/kagemusha.py": (
             """def _kagemusha_read_fixed_bytes(
     payload: bytes,
@@ -38788,7 +43684,7 @@ if mode == "--negative-control-sdk-bundle-current-note-vectors":
         updated = mutated[target].replace(old, new, 1)
         if updated == mutated[target]:
             raise SystemExit(
-                f"negative control failed: unable to mutate Python current-note fixed-array decoder in {target}"
+                f"negative control failed: unable to mutate current-note implementation guard in {target}"
             )
         mutated[target] = updated
         expected_labels.append(expected_bundle_current_note_label(target, old, label))
@@ -39333,7 +44229,39 @@ if mode == "--negative-control-sdk-redeem-change-output-reserved-collisions":
 
 if mode == "--negative-control-sdk-topup-anchor-nullifier-invariants":
     mutated = dict(texts)
+    topup_anchor_case_labels = (
+        "topup anchor empty list",
+        "topup anchor zero nullifier",
+        "topup anchor count over limit",
+        "topup anchor over-limit count prefix",
+        "topup anchor duplicate nullifier",
+        "topup anchor descending order",
+        "topup anchor current note commitment reuse",
+        "topup anchor current note spend nullifier reuse",
+    )
+    topup_anchor_diagnostics = (
+        "bundle.accumulator.topup_anchor_nullifiers count is out of range",
+        "bundle.accumulator.topup_anchor_nullifiers must not contain zero values",
+        "bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique",
+        "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material",
+    )
+    topup_anchor_precedence_labels = (
+        "malformed proof cannot mask invalid top-up anchor nullifiers",
+        "trailing accumulator cannot mask invalid top-up anchor nullifiers",
+    )
     replacements = (
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "countBig > BigInt(KAGEMUSHA_FOLD_STEP_MAX_INPUTS)",
+            "countBig > BigInt(Number.MAX_SAFE_INTEGER)",
+            "javascript/iroha_js/src/crypto.js recursive spend top-up anchor nullifier invariant guard",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "countBig > BigInt(KAGEMUSHA_FOLD_STEP_MAX_INPUTS)",
+            "countBig > BigInt(Number.MAX_SAFE_INTEGER)",
+            "javascript/iroha_js/dist/crypto.js recursive spend top-up anchor nullifier invariant guard",
+        ),
         (
             "javascript/iroha_js/src/crypto.js",
             "topupAnchorNullifiers.length > KAGEMUSHA_FOLD_STEP_MAX_INPUTS",
@@ -39353,10 +44281,40 @@ if mode == "--negative-control-sdk-topup-anchor-nullifier-invariants":
             "JavaScript typed recursive spend top-up anchor nullifier invariant tests",
         ),
         (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "malformed proof cannot mask invalid top-up anchor nullifiers",
+            "malformed proof can mask invalid top-up anchor nullifiers",
+            "JavaScript typed recursive spend top-up anchor nullifier invariant tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "trailing accumulator cannot mask invalid top-up anchor nullifiers",
+            "trailing accumulator can mask invalid top-up anchor nullifiers",
+            "JavaScript typed recursive spend top-up anchor nullifier invariant tests",
+        ),
+        (
             "javascript/iroha_js/test/package_dist.test.js",
             "Buffer.alloc(32, 0x34)",
             "Buffer.alloc(32, 0x33)",
             "JavaScript package dist recursive spend top-up anchor nullifier invariant coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "malformed proof cannot mask invalid top-up anchor nullifiers",
+            "malformed proof can mask invalid top-up anchor nullifiers",
+            "JavaScript package dist recursive spend top-up anchor nullifier invariant coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "trailing accumulator cannot mask invalid top-up anchor nullifiers",
+            "trailing accumulator can mask invalid top-up anchor nullifiers",
+            "JavaScript package dist recursive spend top-up anchor nullifier invariant coverage",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "count > KAGEMUSHA_FOLD_STEP_MAX_INPUTS",
+            "count > 1_000_000",
+            "Python typed recursive spend top-up anchor nullifier invariant guard",
         ),
         (
             "python/iroha_python/src/iroha_python/kagemusha.py",
@@ -39365,10 +44323,40 @@ if mode == "--negative-control-sdk-topup-anchor-nullifier-invariants":
             "Python typed recursive spend top-up anchor nullifier invariant guard",
         ),
         (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "_kagemusha_require_recursive_spend_topup_anchor_nullifiers(\n        topup_anchor_nullifiers,\n        current_note,\n    )\n    if cursor != len(payload):\n        raise ValueError(\"Trailing bytes after accumulator\")",
+            "if cursor != len(payload):\n        raise ValueError(\"Trailing bytes after accumulator\")\n    _kagemusha_require_recursive_spend_topup_anchor_nullifiers(\n        topup_anchor_nullifiers,\n        current_note,\n    )",
+            "Python typed recursive spend top-up anchor nullifier precedence guard",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "_kagemusha_require_recursive_spend_topup_anchor_nullifiers(\n        topup_anchor_nullifiers,\n        current_note,\n    )",
+            "_kagemusha_require_recursive_spend_topup_anchor_nullifiers(\n        self.topup_anchor_nullifiers,\n        self.current_note,\n    )",
+            "Python typed recursive spend top-up anchor nullifier invariant guard",
+        ),
+        (
             "python/iroha_python/tests/kagemusha_test.py",
             "bytes([0x34]) * 32",
             "bytes([0x33]) * 32",
             "Python typed recursive spend top-up anchor nullifier invariant tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "malformed proof cannot mask invalid top-up anchor nullifiers",
+            "malformed proof can mask invalid top-up anchor nullifiers",
+            "Python typed recursive spend top-up anchor nullifier invariant tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "trailing accumulator cannot mask invalid top-up anchor nullifiers",
+            "trailing accumulator can mask invalid top-up anchor nullifiers",
+            "Python typed recursive spend top-up anchor nullifier invariant tests",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "guard count > 0, count <= maxCount else",
+            "guard count >= 0, count <= maxCount else",
+            "Swift typed recursive spend top-up anchor nullifier invariant guard",
         ),
         (
             "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
@@ -39383,6 +44371,24 @@ if mode == "--negative-control-sdk-topup-anchor-nullifier-invariants":
             "Swift typed recursive spend top-up anchor nullifier invariant tests",
         ),
         (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "malformed proof cannot mask invalid top-up anchor nullifiers",
+            "malformed proof can mask invalid top-up anchor nullifiers",
+            "Swift typed recursive spend top-up anchor nullifier invariant tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "trailing accumulator cannot mask invalid top-up anchor nullifiers",
+            "trailing accumulator can mask invalid top-up anchor nullifiers",
+            "Swift typed recursive spend top-up anchor nullifier invariant tests",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "count in 1..maxCount",
+            "count in 0..maxCount",
+            "Kotlin typed recursive spend top-up anchor nullifier invariant guard",
+        ),
+        (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
             "nullifiers.size <= KAGEMUSHA_FOLD_STEP_MAX_INPUTS",
             "nullifiers.size <= Int.MAX_VALUE",
@@ -39393,6 +44399,24 @@ if mode == "--negative-control-sdk-topup-anchor-nullifier-invariants":
             "ByteArray(32) { 0x34 }",
             "ByteArray(32) { 0x33 }",
             "Kotlin typed recursive spend top-up anchor nullifier invariant tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "malformed proof cannot mask invalid top-up anchor nullifiers",
+            "malformed proof can mask invalid top-up anchor nullifiers",
+            "Kotlin typed recursive spend top-up anchor nullifier invariant tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "trailing accumulator cannot mask invalid top-up anchor nullifiers",
+            "trailing accumulator can mask invalid top-up anchor nullifiers",
+            "Kotlin typed recursive spend top-up anchor nullifier invariant tests",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "count >= 1 && count <= maxCount",
+            "count >= 0 && count <= maxCount",
+            "Android Java typed recursive spend top-up anchor nullifier invariant guard",
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
@@ -39406,12 +44430,133 @@ if mode == "--negative-control-sdk-topup-anchor-nullifier-invariants":
             "repeat((byte) 0x33, 32)",
             "Android Java typed recursive spend top-up anchor nullifier invariant tests",
         ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "malformed proof cannot mask invalid top-up anchor nullifiers",
+            "malformed proof can mask invalid top-up anchor nullifiers",
+            "Android Java typed recursive spend top-up anchor nullifier invariant tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "trailing accumulator cannot mask invalid top-up anchor nullifiers",
+            "trailing accumulator can mask invalid top-up anchor nullifiers",
+            "Android Java typed recursive spend top-up anchor nullifier invariant tests",
+        ),
     )
     def expected_topup_anchor_nullifier_invariant_label(old, label):
         marker = old.splitlines()[0]
+        if label.endswith("precedence guard"):
+            marker = marker.replace("(", r"\(")
+            return f"{label} missing pattern {marker}"
         return f"{label} missing {marker}"
 
     expected_labels = []
+    test_label_targets = (
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "JavaScript typed recursive spend top-up anchor nullifier invariant tests",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "JavaScript package dist recursive spend top-up anchor nullifier invariant coverage",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "Python typed recursive spend top-up anchor nullifier invariant tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "Swift typed recursive spend top-up anchor nullifier invariant tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "Kotlin typed recursive spend top-up anchor nullifier invariant tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "Android Java typed recursive spend top-up anchor nullifier invariant tests",
+        ),
+    )
+    for target, label in test_label_targets:
+        for case_label in topup_anchor_case_labels:
+            replacement = case_label.replace(" ", "_") + "_removed"
+            updated = mutated[target].replace(case_label, replacement)
+            if updated == mutated[target]:
+                raise SystemExit(
+                    "negative control failed: unable to mutate top-up anchor nullifier case label in "
+                    + target
+                    + ": "
+                    + case_label
+                )
+            mutated[target] = updated
+            expected_labels.append(
+                expected_topup_anchor_nullifier_invariant_label(case_label, label)
+            )
+    message_targets = (
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "javascript/iroha_js/src/crypto.js recursive spend top-up anchor nullifier invariant guard",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "javascript/iroha_js/dist/crypto.js recursive spend top-up anchor nullifier invariant guard",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "JavaScript typed recursive spend top-up anchor nullifier invariant tests",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "JavaScript package dist recursive spend top-up anchor nullifier invariant coverage",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "Python typed recursive spend top-up anchor nullifier invariant guard",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "Python typed recursive spend top-up anchor nullifier invariant tests",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "Swift typed recursive spend top-up anchor nullifier invariant guard",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "Swift typed recursive spend top-up anchor nullifier invariant tests",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "Kotlin typed recursive spend top-up anchor nullifier invariant guard",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "Kotlin typed recursive spend top-up anchor nullifier invariant tests",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "Android Java typed recursive spend top-up anchor nullifier invariant guard",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "Android Java typed recursive spend top-up anchor nullifier invariant tests",
+        ),
+    )
+    for target, label in message_targets:
+        for diagnostic in topup_anchor_diagnostics:
+            replacement = diagnostic.replace("topup_anchor_nullifiers", "topup_anchor_nullifiers_drifted")
+            updated = mutated[target].replace(diagnostic, replacement)
+            if updated == mutated[target]:
+                raise SystemExit(
+                    "negative control failed: unable to mutate top-up anchor nullifier diagnostic in "
+                    + target
+                    + ": "
+                    + diagnostic
+                )
+            mutated[target] = updated
+            expected_labels.append(
+                expected_topup_anchor_nullifier_invariant_label(diagnostic, label)
+            )
     for target, old, new, label in replacements:
         updated = mutated[target].replace(old, new, 1)
         if updated == mutated[target]:
@@ -39449,15 +44594,39 @@ if mode == "--negative-control-sdk-redeem-lineage-preflight":
             "javascript/iroha_js/src/crypto.js typed recursive spend request codecs",
         ),
         (
+            "javascript/iroha_js/src/crypto.js",
+            "lineageVerifierRecords.length > 0;",
+            "false;",
+            "javascript/iroha_js/src/crypto.js typed recursive spend redeem lineage-record selection before witness parse missing pattern",
+        ),
+        (
             "javascript/iroha_js/dist/crypto.js",
             "const redeemLineageVerifierRecordSupplied =",
             "const redeemLineageVerifierRecordOptional =",
             "javascript/iroha_js/dist/crypto.js typed recursive spend request codecs",
         ),
         (
+            "javascript/iroha_js/dist/crypto.js",
+            "lineageVerifierRecords.length > 0;",
+            "false;",
+            "javascript/iroha_js/dist/crypto.js typed recursive spend redeem lineage-record selection before witness parse missing pattern",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "let hasLineageVerifierRecord = lineageVerifierRecord != nil || !lineageVerifierRecords.isEmpty",
+            "let hasLineageVerifierRecord = lineageVerifierRecord != nil",
+            "Swift redeem request constructor reserved-lineage record preflight before witness parse missing pattern",
+        ),
+        (
             "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
             '        assertRedeemRequestInvalidField("lineageWitness")',
             '        assertRedeemRequestInvalidField("lineageWitnessOptional")',
+            "Swift typed recursive spend redeem lineage preflight tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "let reservedMissingRecordMasksMalformedWitness = Data([0])",
+            "let reservedMissingRecordAllowsMalformedWitness = Data([0])",
             "Swift typed recursive spend redeem lineage preflight tests",
         ),
         (
@@ -39467,24 +44636,110 @@ if mode == "--negative-control-sdk-redeem-lineage-preflight":
             "JavaScript typed recursive spend redeem lineage preflight tests",
         ),
         (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "const reservedMissingRecordMasksMalformedWitness = Buffer.from([0]);",
+            "const reservedMissingRecordAllowsMalformedWitness = Buffer.from([0]);",
+            "JavaScript typed recursive spend redeem lineage preflight tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            'verifierKeyId: "forgedRedeemLineageRecordBeforeWitness"',
+            'verifierKeyId: "typedRedeemLineageRecordBeforeWitnessAccepted"',
+            "JavaScript typed recursive spend redeem lineage preflight tests",
+        ),
+        (
             "python/iroha_python/src/iroha_python/kagemusha.py",
             "not witness_has_reserved_previous\n"
-            "                and self.lineage_verifier_record is not None",
+            "                and lineage_verifier_record_supplied",
             "False\n"
-            "                and self.lineage_verifier_record is not None",
-            "Python typed recursive spend redeem lineage-record selection before parse",
+            "                and lineage_verifier_record_supplied",
+            "Python typed recursive spend redeem lineage-record selection before parse missing pattern",
         ),
         (
             "python/iroha_python/tests/kagemusha_test.py",
-            'semantic_missing_witness_redeem_proof = b""',
-            'semantic_missing_witness_redeem_proof = b"proof"',
+            'with pytest.raises(ValueError, match="lineage_witness is required for this bundle"):\n'
+            '        kagemusha.KagemushaRecursiveSpendRedeemRequest(\n'
+            '            bundle=_shared_recursive_spend_abi7_archive("append_bundle"),',
+            'with pytest.raises(ValueError, match="lineage_witness is optional for this bundle"):\n'
+            '        kagemusha.KagemushaRecursiveSpendRedeemRequest(\n'
+            '            bundle=_shared_recursive_spend_abi7_archive("append_bundle"),',
             "Python typed recursive spend redeem lineage preflight tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            'semantic_missing_witness_redeem_proof = b""\n'
+            '    with pytest.raises(ValueError, match="lineage_witness is required for this bundle"):',
+            'semantic_missing_witness_redeem_proof = b"proof"\n'
+            '    with pytest.raises(ValueError, match="lineage_witness is optional for this bundle"):',
+            "Python typed recursive spend redeem lineage preflight tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            'with pytest.raises(\n'
+            '        ValueError,\n'
+            '        match="lineage_verifier_record is required for reserved-lineage bundles",\n'
+            '    ):\n'
+            '        kagemusha.KagemushaRecursiveSpendRedeemRequest(\n'
+            '            bundle=_shared_recursive_spend_archive("init_bundle"),',
+            'with pytest.raises(\n'
+            '        ValueError,\n'
+            '        match="lineage_verifier_record is optional for reserved-lineage bundles",\n'
+            '    ):\n'
+            '        kagemusha.KagemushaRecursiveSpendRedeemRequest(\n'
+            '            bundle=_shared_recursive_spend_archive("init_bundle"),',
+            "Python typed recursive spend redeem lineage preflight tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            'reserved_missing_record_redeem_proof = b""\n'
+            '    with pytest.raises(\n'
+            '        ValueError,\n'
+            '        match="lineage_verifier_record is required for reserved-lineage bundles",\n'
+            '    ):',
+            'reserved_missing_record_redeem_proof = b"proof"\n'
+            '    with pytest.raises(\n'
+            '        ValueError,\n'
+            '        match="lineage_verifier_record is optional for reserved-lineage bundles",\n'
+            '    ):',
+            "Python typed recursive spend redeem lineage preflight tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            'reserved_missing_record_masks_malformed_witness = b"\\x00"\n'
+            '    with pytest.raises(\n'
+            '        ValueError,\n'
+            '        match="lineage_verifier_record is required for reserved-lineage bundles",\n'
+            '    ):',
+            'reserved_missing_record_allows_malformed_witness = b"\\x00"\n'
+            '    with pytest.raises(\n'
+            '        ValueError,\n'
+            '        match="lineage_verifier_record is optional for reserved-lineage bundles",\n'
+            '    ):',
+            "Python typed recursive spend redeem lineage preflight tests missing reserved_missing_record_masks_malformed_witness",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            '"verifier_key_id": "forgedRedeemLineageRecord"',
+            '"verifier_key_id": "typedRedeemLineageRecordAccepted"',
+            "Python typed recursive spend redeem lineage-record preflight tests missing forgedRedeemLineageRecord",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            '"verifier_key_id": "forgedRedeemLineageRecordBeforeWitness"',
+            '"verifier_key_id": "typedRedeemLineageRecordBeforeWitnessAccepted"',
+            "Python typed recursive spend redeem lineage-record preflight tests missing forgedRedeemLineageRecordBeforeWitness",
         ),
         (
             "python/iroha_python/tests/kagemusha_test.py",
             '"verifier_key_id": "danglingRedeemLineageRecord"',
             '"verifier_key_id": "optionalRedeemLineageRecord"',
-            "Python typed recursive spend verify lineage-record preflight tests missing danglingRedeemLineageRecord",
+            "Python typed recursive spend redeem lineage-record preflight tests missing danglingRedeemLineageRecord",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            '"verifier_key_id": "danglingRedeemLineageRecords"',
+            '"verifier_key_id": "optionalRedeemLineageRecords"',
+            "Python typed recursive spend redeem lineage-record preflight tests missing danglingRedeemLineageRecords",
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
@@ -39493,10 +44748,34 @@ if mode == "--negative-control-sdk-redeem-lineage-preflight":
             "Kotlin typed recursive spend redeem lineage preflight tests missing lineageWitness is required for this bundle",
         ),
         (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "val hasLineageVerifierRecord = lineageVerifierRecord != null || this.lineageVerifierRecords.isNotEmpty()",
+            "val hasLineageVerifierRecord = lineageVerifierRecord != null",
+            "Kotlin redeem request constructor reserved-lineage record preflight before witness parse missing pattern",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "val reservedMissingRecordMasksMalformedWitness = byteArrayOf(0)",
+            "val reservedMissingRecordAllowsMalformedWitness = byteArrayOf(0)",
+            "Kotlin typed recursive spend redeem lineage preflight tests",
+        ),
+        (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
             "lineageWitness is required for this bundle",
             "lineageWitness optional for this bundle",
             "Android Java typed recursive spend redeem lineage preflight tests missing lineageWitness is required for this bundle",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "this.lineageVerifierRecord != null || !this.lineageVerifierRecords.isEmpty();",
+            "this.lineageVerifierRecord != null;",
+            "Android Java redeem request constructor reserved-lineage record preflight before witness parse missing pattern",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "final byte[] reservedMissingRecordMasksMalformedWitness = new byte[] {0};",
+            "final byte[] reservedMissingRecordAllowsMalformedWitness = new byte[] {0};",
+            "Android Java typed recursive spend redeem lineage preflight tests",
         ),
         (
             "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
@@ -39510,25 +44789,58 @@ if mode == "--negative-control-sdk-redeem-lineage-preflight":
             'verifierKeyId: "danglingRedeemLineageRecordOptional"',
             "JavaScript package dist recursive spend redeem lineage preflight coverage",
         ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "const reservedMissingRecordMasksMalformedWitnessPackageDist = Buffer.from([0]);",
+            "const reservedMissingRecordAllowsMalformedWitnessPackageDist = Buffer.from([0]);",
+            "JavaScript package dist recursive spend redeem lineage preflight coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            'verifierKeyId: "forgedRedeemLineageRecordBeforeWitnessPackageDist"',
+            'verifierKeyId: "typedRedeemLineageRecordBeforeWitnessPackageDistAccepted"',
+            "JavaScript package dist recursive spend redeem lineage preflight coverage",
+        ),
     )
     def expected_redeem_lineage_preflight_label(target, old, label):
         if " missing " in label:
             return label
         if target == "python/iroha_python/src/iroha_python/kagemusha.py":
             marker = (
-                r"pattern if not final_is_lineage:[\s\S]*?"
-                r"not witness_has_reserved_previous\s*and self\.lineage_verifier_record is not None"
-                r"[\s\S]*?lineage_verifier_record is only valid for reserved-lineage bundles or lineage witnesses"
-                r"[\s\S]*?is_kagemusha_recursive_spend_lineage_proof_circuit_id\("
-                r"[\s\S]*?self\.lineage_verifier_record is None"
-                r"[\s\S]*?lineage_verifier_record is required for reserved-lineage bundles"
-                r"[\s\S]*?self\.lineage_verifier_record is not None"
+                r"pattern bundle_summary = decode_kagemusha_recursive_spend_bundle\(bundle\)[\s\S]*?"
+                r"final_is_lineage = is_kagemusha_recursive_spend_lineage_proof_circuit_id\("
+                r"[\s\S]*?lineage_verifier_record_supplied = \("
+                r"[\s\S]*?def validate_lineage_verifier_records\(\) -> None:"
                 r"[\s\S]*?KagemushaRecursiveSpendVerifierRecordRef"
+                r"[\s\S]*?if final_is_lineage:"
+                r"[\s\S]*?not lineage_verifier_record_supplied"
+                r"[\s\S]*?lineage_verifier_record is required for reserved-lineage bundles"
+                r"[\s\S]*?validate_lineage_verifier_records\(\)"
+                r"[\s\S]*?lineage_witness = None"
+                r"[\s\S]*?if self\.lineage_witness is not None:"
+                r"[\s\S]*?if not final_is_lineage:"
+                r"[\s\S]*?not witness_has_reserved_previous\s*and lineage_verifier_record_supplied"
+                r"[\s\S]*?lineage_verifier_record is only valid for reserved-lineage bundles or lineage witnesses"
+                r"[\s\S]*?if lineage_verifier_record_supplied:"
+                r"[\s\S]*?validate_lineage_verifier_records\(\)"
                 r"[\s\S]*?redeem_proof = _kagemusha_archive_bytes_named"
             )
         else:
             marker = old.splitlines()[0]
-            if target == "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift":
+            if target == "python/iroha_python/tests/kagemusha_test.py":
+                if 'match="lineage_witness is required for this bundle"' in old:
+                    marker = 'match="lineage_witness is required for this bundle"'
+                elif (
+                    'match="lineage_verifier_record is required for reserved-lineage bundles"'
+                    in old
+                ):
+                    marker = (
+                        'match="lineage_verifier_record is required for reserved-lineage bundles"'
+                    )
+            if (
+                target == "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift"
+                and 'assertRedeemRequestInvalidField("lineageWitness")' in marker
+            ):
                 marker = f"block start {marker}"
         return f"{label} missing {marker}"
 
@@ -39624,9 +44936,9 @@ if mode == "--negative-control-sdk-redeem-lineage-witness-shape":
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
-            "reserved lineage witness malformed",
-            "reserved lineage witness optional",
-            "Kotlin typed recursive spend redeem lineage preflight tests",
+            "reservedMalformedLineageWitness",
+            "reservedMalformedLineageWitnessOptional",
+            "Kotlin typed recursive spend redeem lineage preflight tests missing val reservedMalformedLineageWitness = assertFailsWith<IllegalArgumentException>",
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
@@ -39745,6 +45057,12 @@ if mode == "--negative-control-sdk-init-lineage-key-auto-preflight":
             "autoInitPallasWrongProfile",
             "generatedInitPallasWrongProfile",
             "Kotlin typed recursive spend append lineage-key selection tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "lineage_verifier_key is required for recursive spend lineage proving",
+            "lineage_verifier_key is optional for recursive spend lineage proving",
+            "Python typed recursive spend request codec tests",
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
@@ -40275,10 +45593,22 @@ if mode == "--negative-control-sdk-append-previous-proof-opening-selection":
             "javascript/iroha_js/src/crypto.js append previous lineage-record and proof-opening selection",
         ),
         (
+            "javascript/iroha_js/src/crypto.js",
+            "appendNeedsPreviousProofOpenEnvelopes &&\n    previousProofOpenEnvelopes === null",
+            "false &&\n    previousProofOpenEnvelopes === null",
+            "JavaScript typed recursive spend Pallas preflight",
+        ),
+        (
             "javascript/iroha_js/dist/crypto.js",
             "previousProofOpenEnvelopes are only valid for lineage append output",
             "previousProofOpenEnvelopes are optional for lineage append output",
             "javascript/iroha_js/dist/crypto.js append previous lineage-record and proof-opening selection",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "appendNeedsPreviousProofOpenEnvelopes &&\n    previousProofOpenEnvelopes === null",
+            "false &&\n    previousProofOpenEnvelopes === null",
+            "JavaScript dist typed recursive spend Pallas preflight",
         ),
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
@@ -40295,6 +45625,12 @@ if mode == "--negative-control-sdk-append-previous-proof-opening-selection":
             "JavaScript source lineage key artifact copy tests",
         ),
         (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            'kagemushaRequestCodecError("field", "previousProofOpenEnvelopes", null)',
+            'kagemushaRequestCodecError("field", "previousProofOpenEnvelopesOptional", null)',
+            "JavaScript typed recursive spend request codec tests",
+        ),
+        (
             "javascript/iroha_js/test/package_dist.test.js",
             'kagemushaRequestCodecError(\n'
             '      "field",\n'
@@ -40309,15 +45645,39 @@ if mode == "--negative-control-sdk-append-previous-proof-opening-selection":
             "JavaScript package dist recursive spend lineage key artifact request coverage",
         ),
         (
+            "javascript/iroha_js/test/package_dist.test.js",
+            'kagemushaRequestCodecError("field", "previousProofOpenEnvelopes", null)',
+            'kagemushaRequestCodecError("field", "previousProofOpenEnvelopesOptional", null)',
+            "JavaScript package dist recursive spend lineage key artifact request coverage",
+        ),
+        (
             "python/iroha_python/src/iroha_python/kagemusha.py",
             "previous_proof_open_envelopes are only valid for lineage append output",
             "previous_proof_open_envelopes are optional for lineage append output",
             "Python typed recursive spend append previous-lineage record and proof-opening selection",
         ),
         (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "previous_proof_open_envelopes is required for lineage append output",
+            "previous_proof_open_envelopes are optional for lineage append output",
+            "Python typed recursive spend request codecs",
+        ),
+        (
             "python/iroha_python/tests/kagemusha_test.py",
             "previous_proof_open_envelopes are only valid for lineage append output",
             "previous_proof_open_envelopes are optional for lineage append output",
+            "Python typed recursive spend request codec tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            'match="previous_proof_open_envelopes is required for lineage append output"',
+            'match="previous_proof_open_envelopes are optional for lineage append output"',
+            "Python typed recursive spend Pallas preflight tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            'previous_proof_open_envelopes requires exactly 1 envelope\\(s\\)',
+            'previous_proof_open_envelopes accepts extra envelopes',
             "Python typed recursive spend request codec tests",
         ),
         (
@@ -40327,15 +45687,33 @@ if mode == "--negative-control-sdk-append-previous-proof-opening-selection":
             "Swift typed recursive spend append previous-lineage record and proof-opening selection",
         ),
         (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "if appendNeedsPreviousProofOpenEnvelopes, previousProofOpenEnvelopes == nil",
+            "if false, previousProofOpenEnvelopes == nil",
+            "Swift typed recursive spend Pallas preflight",
+        ),
+        (
             "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
-            '.invalidField("previousProofOpenEnvelopes")',
-            '.invalidField("previousProofOpenEnvelopesOptional")',
-            "Swift typed recursive spend request codec tests",
+            "previousProofOpenEnvelopes: Self.syntheticPallasOpenEnvelopesArchive(count: 2)",
+            "previousProofOpenEnvelopes: Self.syntheticPallasOpenEnvelopesArchive()",
+            "Swift typed recursive spend Pallas preflight tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "previousProofOpenEnvelopes: nil",
+            "previousProofOpenEnvelopes: Self.syntheticPallasOpenEnvelopesArchive()",
+            "Swift typed recursive spend Pallas preflight tests",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
             "previousProofOpenEnvelopesArchive == null || appendNeedsPreviousProofOpenEnvelopes",
             "true",
+            "Kotlin typed recursive spend append previous-lineage record and proof-opening selection",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "previousProofOpenEnvelopes is required for lineage append output",
+            "previousProofOpenEnvelopes are optional for lineage append output",
             "Kotlin typed recursive spend append previous-lineage record and proof-opening selection",
         ),
         (
@@ -40345,9 +45723,21 @@ if mode == "--negative-control-sdk-append-previous-proof-opening-selection":
             "Kotlin typed recursive spend append previous-lineage record and proof-opening selection tests",
         ),
         (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            'assertEquals("previousProofOpenEnvelopes is required for lineage append output", error.message)',
+            'assertTrue(error.message.orEmpty().contains("previousProofOpenEnvelopes"))',
+            "Kotlin typed recursive spend lineage-key exact diagnostics",
+        ),
+        (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
             "this.previousProofOpenEnvelopes == null || appendNeedsPreviousProofOpenEnvelopes",
             "true",
+            "Android Java typed recursive spend append previous-lineage record and proof-opening selection",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "previousProofOpenEnvelopes is required for lineage append output",
+            "previousProofOpenEnvelopes are optional for lineage append output",
             "Android Java typed recursive spend append previous-lineage record and proof-opening selection",
         ),
         (
@@ -40355,6 +45745,12 @@ if mode == "--negative-control-sdk-append-previous-proof-opening-selection":
             "previousProofOpenEnvelopes are only valid for lineage append output",
             "previousProofOpenEnvelopes are optional for lineage append output",
             "Android Java typed recursive spend append previous-lineage record and proof-opening selection tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            '"previousProofOpenEnvelopes is required for lineage append output"\n        .equals(error.getMessage())',
+            'messageContains(error, "previousProofOpenEnvelopes")',
+            "Android Java typed recursive spend lineage-key exact diagnostics",
         ),
     )
     def expected_append_previous_proof_opening_selection_label(old, label):
@@ -40623,6 +46019,16 @@ if mode == "--negative-control-sdk-append-previous-proof-opening-selection":
                 f"negative control failed: unable to find previous-proof Pallas block start in {target}"
             )
         block_end = original.find(block_end_marker, block_start + len(block_start_marker))
+        if block_end < 0 and target.endswith("KagemushaRecursiveSpendRequestCodecsTest.kt"):
+            block_end = original.find(
+                "        for ((archive, expectedMessage) in malformedPreviousOpenArchives) {",
+                block_start + len(block_start_marker),
+            )
+        if block_end < 0 and target.endswith("KagemushaRecursiveSpendProverTest.java"):
+            block_end = original.find(
+                "    for (final Object[] malformed : malformedPreviousOpenArchives) {",
+                block_start + len(block_start_marker),
+            )
         if block_end < 0:
             raise SystemExit(
                 f"negative control failed: unable to find previous-proof Pallas block end in {target}"
@@ -45528,6 +50934,12 @@ if mode == "--negative-control-js-package-dist-recursive-spend-partial-abi6":
         ),
         (
             "javascript/iroha_js/test/package_dist.test.js",
+            "() => kagemushaRecursiveSpendRedeem(request)",
+            "() => kagemushaRecursiveSpendVerify(request)",
+            "JavaScript package dist recursive spend unsafe native output coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
             "[Buffer.alloc(0), \"must not be empty\"]",
             "[Buffer.from([0]), \"must not be empty\"]",
             "JavaScript package dist recursive spend invalid request archive coverage",
@@ -45542,6 +50954,30 @@ if mode == "--negative-control-js-package-dist-recursive-spend-partial-abi6":
             "javascript/iroha_js/test/package_dist.test.js",
             "[Buffer.from([0x01]), \"must be a valid Norito archive\"]",
             "[validArchive, \"must be a valid Norito archive\"]",
+            "JavaScript package dist recursive spend invalid request archive coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "[\"requestArchive\", \"bundleArchive\"]",
+            "[\"requestArchive\", \"requestArchive\"]",
+            "JavaScript package dist recursive spend invalid request archive coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "[\"previousWitnessArchive\", \"requestArchive\", \"bundleArchive\"]",
+            "[\"previousWitnessArchive\", \"requestArchive\", \"requestArchive\"]",
+            "JavaScript package dist recursive spend invalid request archive coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "for (let fieldIndex = 0; fieldIndex < archiveNames.length; fieldIndex += 1)",
+            "for (let fieldIndex = 0; fieldIndex < 1; fieldIndex += 1)",
+            "JavaScript package dist recursive spend invalid request archive coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "(args) => kagemushaRecursiveSpendRedeem(args[0])",
+            "(args) => kagemushaRecursiveSpendVerify(args[0])",
             "JavaScript package dist recursive spend invalid request archive coverage",
         ),
         (
@@ -45728,6 +51164,18 @@ if mode == "--negative-control-js-package-dist-record-backed-pallas-builders":
             "javascript/iroha_js/test/package_dist.test.js",
             "package dist Kagemusha record-backed and Pallas builders fail closed on invalid archives",
             "package dist Kagemusha record-backed and Pallas builders accept invalid archives",
+            "JavaScript package record-backed Kagemusha and Pallas builder fail-closed coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "pallasOpenEnvelopesArchive ${expectedMessage}",
+            "recordBundleArchive ${expectedMessage}",
+            "JavaScript package record-backed Kagemusha and Pallas builder fail-closed coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "native kagemushaBuildPreviousProofOpenEnvelopesArchive returned empty Norito payload",
+            "native kagemushaBuildPallasOpenEnvelopesArchive returned empty Norito payload",
             "JavaScript package record-backed Kagemusha and Pallas builder fail-closed coverage",
         ),
         (

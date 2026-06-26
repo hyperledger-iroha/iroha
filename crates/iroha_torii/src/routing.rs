@@ -39826,13 +39826,20 @@ fn contract_event_index_cache_key(state: &CoreState) -> ContractEventIndexCacheK
 #[cfg(feature = "app_api")]
 fn account_history_index_cache_key(state: &CoreState) -> AccountHistoryIndexCacheKey {
     let committed_height = state.committed_height();
-    let tip_block_hash = std::num::NonZeroUsize::new(committed_height)
-        .and_then(|height| state.block_by_height(height))
-        .map(|block| format!("{}", block.hash()));
+    let tip_block_hash = committed_block_hash_string_at_height(state, committed_height);
     AccountHistoryIndexCacheKey {
         committed_height,
         tip_block_hash,
     }
+}
+
+#[cfg(feature = "app_api")]
+fn committed_block_hash_string_at_height(state: &CoreState, height: usize) -> Option<String> {
+    let index = height.checked_sub(1)?;
+    state
+        .committed_block_hashes_snapshot()
+        .get(index)
+        .map(|hash| format!("{hash}"))
 }
 
 #[cfg(feature = "app_api")]
@@ -40293,13 +40300,12 @@ fn account_history_cache_extends_append_only(
     if existing.cache_key.committed_height == 0 {
         return true;
     }
-    let Some(height_nz) = std::num::NonZeroUsize::new(existing.cache_key.committed_height) else {
+    let Some(previous_tip_block_hash) =
+        committed_block_hash_string_at_height(state, existing.cache_key.committed_height)
+    else {
         return false;
     };
-    let Some(block) = state.block_by_height(height_nz) else {
-        return false;
-    };
-    Some(format!("{}", block.hash())) == existing.cache_key.tip_block_hash
+    Some(previous_tip_block_hash) == existing.cache_key.tip_block_hash
 }
 
 #[cfg(feature = "app_api")]
@@ -47155,6 +47161,74 @@ mod tx_query_filter_tests {
         };
 
         assert!(!account_history_cache_extends_append_only(
+            &existing, &state, &next_key
+        ));
+    }
+
+    #[test]
+    fn account_history_cache_key_uses_committed_hash_journal_without_block_body() {
+        let state = iroha_core::state::State::new_for_testing(
+            iroha_core::state::World::default(),
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
+        let first = GenericHashOf::<dm::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0x11; Hash::LENGTH],
+        ));
+        let second = GenericHashOf::<dm::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0x22; Hash::LENGTH],
+        ));
+        let second_hash = second.to_string();
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push_for_tests(first);
+            block_hashes.push_for_tests(second);
+            block_hashes.commit_for_tests();
+        }
+
+        let cache_key = account_history_index_cache_key(&state);
+
+        assert_eq!(cache_key.committed_height, 2);
+        assert_eq!(
+            cache_key.tip_block_hash.as_deref(),
+            Some(second_hash.as_str())
+        );
+    }
+
+    #[test]
+    fn account_history_cache_extension_accepts_journal_previous_tip_without_block_body() {
+        let state = iroha_core::state::State::new_for_testing(
+            iroha_core::state::World::default(),
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
+        let first = GenericHashOf::<dm::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0x31; Hash::LENGTH],
+        ));
+        let second = GenericHashOf::<dm::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0x32; Hash::LENGTH],
+        ));
+        let first_hash = first.to_string();
+        let second_hash = second.to_string();
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push_for_tests(first);
+            block_hashes.push_for_tests(second);
+            block_hashes.commit_for_tests();
+        }
+        let existing = AccountHistoryIndex {
+            cache_key: AccountHistoryIndexCacheKey {
+                committed_height: 1,
+                tip_block_hash: Some(first_hash),
+            },
+            ..Default::default()
+        };
+        let next_key = AccountHistoryIndexCacheKey {
+            committed_height: 2,
+            tip_block_hash: Some(second_hash),
+        };
+
+        assert!(account_history_cache_extends_append_only(
             &existing, &state, &next_key
         ));
     }

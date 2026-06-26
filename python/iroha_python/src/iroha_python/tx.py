@@ -45,6 +45,13 @@ def _require_non_empty_string(value: Any, context: str) -> str:
     return text
 
 
+def _require_exact_non_empty_string(value: Any, context: str) -> str:
+    text = _require_non_empty_string(value, context)
+    if text != value:
+        raise ValueError(f"{context} must not contain surrounding whitespace")
+    return value
+
+
 @dataclass(frozen=True)
 class TransactionConfig:
     """Configuration shared across transactions signed by :class:`TransactionDraft`."""
@@ -151,7 +158,14 @@ class TransactionDraft:
     """Collect instructions and sign transactions with ergonomic helpers."""
 
     def __init__(self, config: TransactionConfig):
-        self._config = config
+        self._config = TransactionConfig(
+            chain_id=_require_exact_non_empty_string(config.chain_id, "chain_id"),
+            authority=_require_exact_non_empty_string(config.authority, "authority"),
+            creation_time_ms=config.creation_time_ms,
+            ttl_ms=config.ttl_ms,
+            nonce=config.nonce,
+            metadata=config.metadata,
+        )
         self._instructions: List[Instruction] = []
         self._lane_privacy_attachments: List[Mapping[str, Any]] = []
 
@@ -1102,8 +1116,16 @@ class TransactionDraft:
         """Sign the draft with ``private_key`` and return a :class:`SignedTransactionEnvelope`."""
 
         payload_instructions = list(instructions or self._instructions)
-        effective_chain = chain_id or self._config.chain_id
-        effective_authority = authority or self._config.authority
+        effective_chain = (
+            _require_exact_non_empty_string(chain_id, "chain_id")
+            if chain_id is not None
+            else self._config.chain_id
+        )
+        effective_authority = (
+            _require_exact_non_empty_string(authority, "authority")
+            if authority is not None
+            else self._config.authority
+        )
         effective_creation = (
             int(creation_time_ms)
             if creation_time_ms is not None

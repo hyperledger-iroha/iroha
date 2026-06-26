@@ -118,6 +118,33 @@ assert SLOT_HELPER_SPEC and SLOT_HELPER_SPEC.loader  # pragma: no cover - import
 slot_helpers = importlib.util.module_from_spec(SLOT_HELPER_SPEC)
 SLOT_HELPER_SPEC.loader.exec_module(slot_helpers)  # type: ignore[misc]
 
+ANDROID_SLOT_ASSEMBLER_PATH = SCRIPT_DIR / "kagemusha_android_device_lab_slot.py"
+ANDROID_SLOT_ASSEMBLER_SPEC = importlib.util.spec_from_file_location(
+    "kagemusha_android_device_lab_slot",
+    ANDROID_SLOT_ASSEMBLER_PATH,
+)
+assert ANDROID_SLOT_ASSEMBLER_SPEC and ANDROID_SLOT_ASSEMBLER_SPEC.loader
+android_slot_assembler = importlib.util.module_from_spec(ANDROID_SLOT_ASSEMBLER_SPEC)
+ANDROID_SLOT_ASSEMBLER_SPEC.loader.exec_module(android_slot_assembler)  # type: ignore[misc]
+
+ANDROID_CAPTURE_HELPER_PATH = SCRIPT_DIR / "kagemusha_android_device_lab_capture.py"
+ANDROID_CAPTURE_HELPER_SPEC = importlib.util.spec_from_file_location(
+    "kagemusha_android_device_lab_capture",
+    ANDROID_CAPTURE_HELPER_PATH,
+)
+assert ANDROID_CAPTURE_HELPER_SPEC and ANDROID_CAPTURE_HELPER_SPEC.loader
+android_capture_helper = importlib.util.module_from_spec(ANDROID_CAPTURE_HELPER_SPEC)
+ANDROID_CAPTURE_HELPER_SPEC.loader.exec_module(android_capture_helper)  # type: ignore[misc]
+
+ANDROID_RAW_PULLER_PATH = SCRIPT_DIR / "kagemusha_pull_android_device_lab_raw_slot.py"
+ANDROID_RAW_PULLER_SPEC = importlib.util.spec_from_file_location(
+    "kagemusha_pull_android_device_lab_raw_slot",
+    ANDROID_RAW_PULLER_PATH,
+)
+assert ANDROID_RAW_PULLER_SPEC and ANDROID_RAW_PULLER_SPEC.loader
+android_raw_puller = importlib.util.module_from_spec(ANDROID_RAW_PULLER_SPEC)
+ANDROID_RAW_PULLER_SPEC.loader.exec_module(android_raw_puller)  # type: ignore[misc]
+
 
 _MISSING_PATH_METHOD = object()
 _PATH_TYPE = type(Path("."))
@@ -1267,6 +1294,507 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     ],
                 )
                 self.assertNotIn(constant, rendered)
+
+    def test_android_capture_command_gate_rejects_process_management(self) -> None:
+        cases = (
+            ("kill executable", ["kill", "1234"]),
+            ("reboot executable path", ["/sbin/reboot"]),
+            ("adb server reset", ["adb", "kill-server"]),
+            ("adb reconnect", ["adb", "reconnect"]),
+            ("adb reboot", ["adb", "reboot"]),
+            ("adb root", ["adb", "root"]),
+            (
+                "adb power shutdown",
+                ["adb", "-s", "SERIAL-123", "shell", "svc", "power", "shutdown"],
+            ),
+            (
+                "adb setprop ctl.stop",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-123",
+                    "shell",
+                    "setprop",
+                    "ctl.stop",
+                    "zygote",
+                ],
+            ),
+            (
+                "adb am kill",
+                ["adb", "-s", "SERIAL-123", "shell", "am", "kill", "pkg"],
+            ),
+            (
+                "adb am kill-all",
+                ["adb", "-s", "SERIAL-123", "shell", "am", "kill-all"],
+            ),
+            (
+                "adb force-stop",
+                ["adb", "-s", "SERIAL-123", "shell", "am", "force-stop", "pkg"],
+            ),
+            (
+                "adb cmd activity force-stop",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-123",
+                    "shell",
+                    "cmd",
+                    "activity",
+                    "force-stop",
+                    "pkg",
+                ],
+            ),
+            (
+                "adb cmd activity stop-app",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-123",
+                    "shell",
+                    "cmd",
+                    "activity",
+                    "stop-app",
+                    "pkg",
+                ],
+            ),
+            (
+                "adb pm clear",
+                ["adb", "-s", "SERIAL-123", "shell", "pm", "clear", "pkg"],
+            ),
+            (
+                "adb cmd package clear",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-123",
+                    "shell",
+                    "cmd",
+                    "package",
+                    "clear",
+                    "pkg",
+                ],
+            ),
+            (
+                "adb uninstall",
+                ["adb", "-s", "SERIAL-123", "uninstall", "pkg"],
+            ),
+            (
+                "adb pm disable-user",
+                ["adb", "-s", "SERIAL-123", "shell", "pm", "disable-user", "pkg"],
+            ),
+            (
+                "adb cmd package suspend",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-123",
+                    "shell",
+                    "cmd",
+                    "package",
+                    "suspend",
+                    "pkg",
+                ],
+            ),
+            (
+                "adb pm revoke",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-123",
+                    "shell",
+                    "pm",
+                    "revoke",
+                    "pkg",
+                    "android.permission.POST_NOTIFICATIONS",
+                ],
+            ),
+            (
+                "adb appops set",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-123",
+                    "shell",
+                    "appops",
+                    "set",
+                    "pkg",
+                    "RUN_IN_BACKGROUND",
+                    "deny",
+                ],
+            ),
+        )
+        for label, command in cases:
+            with self.subTest(label=label):
+                errors = android_capture_helper._command_disruption_errors(
+                    command,
+                    "capture command",
+                )
+                rendered = "\n".join(errors)
+
+                self.assertEqual(len(errors), 1)
+                self.assertIn("must not manage other running jobs", rendered)
+                self.assertNotIn("SERIAL-123", rendered)
+
+        self.assertEqual(
+            android_capture_helper._command_disruption_errors(
+                ["adb", "-s", "SERIAL-123", "devices", "-l"],
+                "capture command",
+            ),
+            [],
+        )
+
+    def test_android_slot_command_gate_rejects_process_management(self) -> None:
+        cases = (
+            ("pkill executable", ["pkill", "adb"]),
+            ("killall executable", ["killall", "adb"]),
+            ("shutdown executable path", ["/sbin/shutdown", "now"]),
+            ("adb disconnect", ["adb", "disconnect"]),
+            ("adb unroot", ["adb", "unroot"]),
+            ("adb remount", ["adb", "remount"]),
+            ("adb shell stop", ["adb", "-s", "SERIAL-456", "shell", "stop"]),
+            ("adb shell start", ["adb", "-s", "SERIAL-456", "shell", "start"]),
+            (
+                "adb setprop ctl.restart",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-456",
+                    "shell",
+                    "setprop",
+                    "ctl.restart",
+                    "zygote",
+                ],
+            ),
+            (
+                "adb cmd activity kill",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-456",
+                    "shell",
+                    "cmd",
+                    "activity",
+                    "kill",
+                    "pkg",
+                ],
+            ),
+            (
+                "adb force-stop",
+                ["adb", "-s", "SERIAL-456", "shell", "am", "force-stop", "pkg"],
+            ),
+            (
+                "adb cmd activity force-stop",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-456",
+                    "shell",
+                    "cmd",
+                    "activity",
+                    "force-stop",
+                    "pkg",
+                ],
+            ),
+            (
+                "adb cmd activity stop-app",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-456",
+                    "shell",
+                    "cmd",
+                    "activity",
+                    "stop-app",
+                    "pkg",
+                ],
+            ),
+            (
+                "adb pm clear",
+                ["adb", "-s", "SERIAL-456", "shell", "pm", "clear", "pkg"],
+            ),
+            (
+                "adb cmd package clear",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-456",
+                    "shell",
+                    "cmd",
+                    "package",
+                    "clear",
+                    "pkg",
+                ],
+            ),
+            (
+                "adb uninstall",
+                ["adb", "-s", "SERIAL-456", "uninstall", "pkg"],
+            ),
+            (
+                "adb pm disable-user",
+                ["adb", "-s", "SERIAL-456", "shell", "pm", "disable-user", "pkg"],
+            ),
+            (
+                "adb cmd package suspend",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-456",
+                    "shell",
+                    "cmd",
+                    "package",
+                    "suspend",
+                    "pkg",
+                ],
+            ),
+            (
+                "adb pm reset-permissions",
+                ["adb", "-s", "SERIAL-456", "shell", "pm", "reset-permissions"],
+            ),
+            (
+                "adb cmd appops reset",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-456",
+                    "shell",
+                    "cmd",
+                    "appops",
+                    "reset",
+                    "pkg",
+                ],
+            ),
+        )
+        for label, command in cases:
+            with self.subTest(label=label):
+                errors = android_slot_assembler._command_disruption_errors(
+                    command,
+                    "slot command",
+                )
+                rendered = "\n".join(errors)
+
+                self.assertEqual(len(errors), 1)
+                self.assertIn("must not manage other running jobs", rendered)
+                self.assertNotIn("SERIAL-456", rendered)
+
+        self.assertEqual(
+            android_slot_assembler._command_disruption_errors(
+                ["adb", "-s", "SERIAL-456", "shell", "getprop", "ro.product.model"],
+                "slot command",
+            ),
+            [],
+        )
+
+    def test_android_raw_puller_command_gate_rejects_process_management(self) -> None:
+        cases = (
+            ("kill executable", ["kill", "1234"]),
+            ("poweroff executable path", ["/sbin/poweroff"]),
+            ("adb kill-server", ["adb", "kill-server"]),
+            ("adb reconnect", ["adb", "reconnect"]),
+            ("adb disconnect", ["adb", "disconnect"]),
+            ("adb reboot", ["adb", "reboot"]),
+            ("adb emu kill", ["adb", "emu", "kill"]),
+            (
+                "adb powerctl",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-789",
+                    "shell",
+                    "setprop",
+                    "sys.powerctl",
+                    "reboot,recovery",
+                ],
+            ),
+            (
+                "adb setprop ctl.start",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-789",
+                    "shell",
+                    "setprop",
+                    "ctl.start",
+                    "zygote",
+                ],
+            ),
+            (
+                "adb cmd activity kill-all",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-789",
+                    "shell",
+                    "cmd",
+                    "activity",
+                    "kill-all",
+                ],
+            ),
+            (
+                "adb force-stop",
+                ["adb", "-s", "SERIAL-789", "shell", "am", "force-stop", "pkg"],
+            ),
+            (
+                "adb cmd activity force-stop",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-789",
+                    "shell",
+                    "cmd",
+                    "activity",
+                    "force-stop",
+                    "pkg",
+                ],
+            ),
+            (
+                "adb cmd activity stop-app",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-789",
+                    "shell",
+                    "cmd",
+                    "activity",
+                    "stop-app",
+                    "pkg",
+                ],
+            ),
+            (
+                "adb pm clear",
+                ["adb", "-s", "SERIAL-789", "shell", "pm", "clear", "pkg"],
+            ),
+            (
+                "adb cmd package clear",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-789",
+                    "shell",
+                    "cmd",
+                    "package",
+                    "clear",
+                    "pkg",
+                ],
+            ),
+            (
+                "adb uninstall",
+                ["adb", "-s", "SERIAL-789", "uninstall", "pkg"],
+            ),
+            (
+                "adb pm disable-user",
+                ["adb", "-s", "SERIAL-789", "shell", "pm", "disable-user", "pkg"],
+            ),
+            (
+                "adb cmd package suspend",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-789",
+                    "shell",
+                    "cmd",
+                    "package",
+                    "suspend",
+                    "pkg",
+                ],
+            ),
+            (
+                "adb cmd package grant",
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-789",
+                    "shell",
+                    "cmd",
+                    "package",
+                    "grant",
+                    "pkg",
+                    "android.permission.NFC",
+                ],
+            ),
+            (
+                "adb pm unsuspend",
+                ["adb", "-s", "SERIAL-789", "shell", "pm", "unsuspend", "pkg"],
+            ),
+        )
+        for label, command in cases:
+            with self.subTest(label=label):
+                errors = android_raw_puller._command_disruption_errors(
+                    command,
+                    "raw pull command",
+                )
+                rendered = "\n".join(errors)
+
+                self.assertEqual(len(errors), 1)
+                self.assertIn("must not manage other running jobs", rendered)
+                self.assertNotIn("SERIAL-789", rendered)
+
+        self.assertEqual(
+            android_raw_puller._command_disruption_errors(
+                ["adb", "-s", "SERIAL-789", "shell", "run-as", "pkg", "cat", "slot"],
+                "raw pull command",
+            ),
+            [],
+        )
+
+    def test_android_command_gates_reject_package_state_mutations(self) -> None:
+        helpers = (
+            (android_capture_helper._command_disruption_errors, "capture command", "SERIAL-123"),
+            (android_slot_assembler._command_disruption_errors, "slot command", "SERIAL-456"),
+            (android_raw_puller._command_disruption_errors, "raw pull command", "SERIAL-789"),
+        )
+        cases = (
+            ("pm enable", ("shell", "pm", "enable", "pkg")),
+            ("pm suspend", ("shell", "pm", "suspend", "pkg")),
+            ("pm unsuspend", ("shell", "pm", "unsuspend", "pkg")),
+            ("cmd package suspend", ("shell", "cmd", "package", "suspend", "pkg")),
+            ("cmd package unsuspend", ("shell", "cmd", "package", "unsuspend", "pkg")),
+            ("cmd package enable", ("shell", "cmd", "package", "enable", "pkg")),
+            ("setprop sys.powerctl", ("shell", "setprop", "sys.powerctl", "reboot,recovery")),
+            ("svc power shutdown", ("shell", "svc", "power", "shutdown")),
+            ("appops reset", ("shell", "appops", "reset", "pkg")),
+            ("cmd appops reset", ("shell", "cmd", "appops", "reset", "pkg")),
+        )
+        for validator, label, serial in helpers:
+            for case_label, suffix in cases:
+                with self.subTest(label=label, case=case_label):
+                    command = ["adb", "-s", serial, *suffix]
+                    errors = validator(command, label)
+                    rendered = "\n".join(errors)
+
+                    self.assertEqual(len(errors), 1)
+                    self.assertIn("must not manage other running jobs", rendered)
+                    self.assertNotIn(serial, rendered)
+
+        self.assertEqual(
+            android_capture_helper._command_disruption_errors(
+                ["adb", "-s", "SERIAL-123", "shell", "cmd", "package", "list", "packages"],
+                "capture command",
+            ),
+            [],
+        )
+        self.assertEqual(
+            android_slot_assembler._command_disruption_errors(
+                ["adb", "-s", "SERIAL-456", "shell", "pm", "path", "pkg"],
+                "slot command",
+            ),
+            [],
+        )
+        self.assertEqual(
+            android_raw_puller._command_disruption_errors(
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL-789",
+                    "shell",
+                    "cmd",
+                    "package",
+                    "resolve-activity",
+                    "pkg",
+                ],
+                "raw pull command",
+            ),
+            [],
+        )
 
     def test_lineage_verifier_witness_profile_matches_data_model_constant(self) -> None:
         data_model = (
@@ -26400,6 +26928,30 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("compact_key_evidence_artifact_sizes", codes)
         self.assertIn("compact_key_evidence_artifact_size", codes)
 
+    def test_compact_key_evidence_rejects_boolean_artifact_size(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifact_size_bytes"]["recursive-compact-len4.pk"] = True
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        blockers = result["blockers"]
+        self.assertIn(
+            "compact_key_evidence_artifact_size",
+            {item["code"] for item in blockers},
+        )
+        self.assertIn(
+            "recursive-compact-len4.pk",
+            {item.get("artifact") for item in blockers},
+        )
+        self.assertNotIn(
+            "recursive-compact-len4.pk",
+            result["artifact_size_bytes"],
+        )
+
     def test_compact_key_evidence_rejects_artifact_size_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             evidence_path = create_compact_key_evidence(Path(temp) / "compact")
@@ -38622,6 +39174,30 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         codes = {item["code"] for item in result["blockers"]}
         self.assertIn("lineage_proof_evidence_artifact_sizes", codes)
         self.assertIn("lineage_proof_evidence_artifact_size", codes)
+
+    def test_lineage_proof_evidence_rejects_boolean_artifact_size(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifact_size_bytes"]["lineage-init-len128.pk"] = True
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_lineage_proof_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        blockers = result["blockers"]
+        self.assertIn(
+            "lineage_proof_evidence_artifact_size",
+            {item["code"] for item in blockers},
+        )
+        self.assertIn(
+            "lineage-init-len128.pk",
+            {item.get("artifact") for item in blockers},
+        )
+        self.assertNotIn(
+            "lineage-init-len128.pk",
+            result["artifact_size_bytes"],
+        )
 
     def test_lineage_proof_evidence_rejects_artifact_size_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -32,10 +32,61 @@ MAX_CAPTURE_SIGNING_KEY_BYTES = 64 * 1024
 MAX_ADB_PREFLIGHT_OUTPUT_CHARS = 240
 ADB_SERIAL_REDACTION = "<redacted-adb-serial>"
 ADB_DEVICES_NO_VISIBLE_ROWS = "no_visible_devices"
-DISRUPTIVE_EXECUTABLE_NAMES = frozenset(("kill", "pkill", "killall"))
-DISRUPTIVE_COMMAND_TOKENS = frozenset(("kill-server", "reconnect", "disconnect"))
+DISRUPTIVE_EXECUTABLE_NAMES = frozenset(
+    ("halt", "kill", "killall", "pkill", "poweroff", "reboot", "shutdown")
+)
+DISRUPTIVE_COMMAND_TOKENS = frozenset(
+    (
+        "kill-server",
+        "reconnect",
+        "disconnect",
+        "reboot",
+        "root",
+        "unroot",
+        "remount",
+        "shutdown",
+        "poweroff",
+        "halt",
+        "uninstall",
+    )
+)
 DISRUPTIVE_TOKEN_SEQUENCES: tuple[tuple[str, ...], ...] = (
+    ("am", "kill"),
+    ("am", "kill-all"),
     ("am", "force-stop"),
+    ("cmd", "activity", "kill"),
+    ("cmd", "activity", "kill-all"),
+    ("cmd", "activity", "force-stop"),
+    ("cmd", "activity", "stop-app"),
+    ("pm", "clear"),
+    ("pm", "disable"),
+    ("pm", "disable-user"),
+    ("pm", "enable"),
+    ("pm", "grant"),
+    ("pm", "revoke"),
+    ("pm", "reset-permissions"),
+    ("pm", "suspend"),
+    ("pm", "unsuspend"),
+    ("cmd", "package", "clear"),
+    ("cmd", "package", "disable"),
+    ("cmd", "package", "disable-user"),
+    ("cmd", "package", "enable"),
+    ("cmd", "package", "grant"),
+    ("cmd", "package", "revoke"),
+    ("cmd", "package", "reset-permissions"),
+    ("cmd", "package", "suspend"),
+    ("cmd", "package", "unsuspend"),
+    ("appops", "set"),
+    ("appops", "reset"),
+    ("cmd", "appops", "set"),
+    ("cmd", "appops", "reset"),
+    ("emu", "kill"),
+    ("shell", "stop"),
+    ("shell", "start"),
+    ("setprop", "ctl.stop"),
+    ("setprop", "ctl.restart"),
+    ("setprop", "ctl.start"),
+    ("setprop", "sys.powerctl"),
 )
 DEFAULT_APP_PACKAGE_NAME = raw_puller.DEFAULT_RUN_AS_PACKAGE
 DEFAULT_INSTRUMENTATION_RUNNER = (
@@ -68,6 +119,13 @@ def _timeout_arg(timeout_seconds: int) -> int | None:
     return None if timeout_seconds == 0 else timeout_seconds
 
 
+def _is_adb_executable(command: Sequence[str]) -> bool:
+    if not command:
+        return False
+    executable = str(command[0]).replace("\\", "/").rsplit("/", 1)[-1].lower()
+    return executable in {"adb", "adb.exe"}
+
+
 def _timeout_error(label: str, timeout_seconds: int) -> str:
     if timeout_seconds == 0:
         return f"{label} timed out"
@@ -85,9 +143,10 @@ def _safe_command_display(
 ) -> str:
     tokens = [str(token) for token in command]
     display_tokens = list(tokens)
-    for index, token in enumerate(display_tokens[:-1]):
-        if token == "-s":
-            display_tokens[index + 1] = ADB_SERIAL_REDACTION
+    if _is_adb_executable(display_tokens):
+        for index, token in enumerate(display_tokens[:-1]):
+            if token == "-s":
+                display_tokens[index + 1] = ADB_SERIAL_REDACTION
     for token in redact_tokens:
         if token:
             display_tokens = [

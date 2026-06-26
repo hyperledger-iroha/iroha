@@ -221,9 +221,17 @@ PyO3 host returns a `KagemushaRecursiveSpendVerifyResultV1`: Reserved-lineage
 bundles require a matching active `lineage_verifier_record`, semantic bundles
 must omit it, and unsupported proof attachments are rejected as malformed
 requests rather than soft invalid proof results.
+Decoded verify results expose both
+`lineage_witness_required_for_redeem` and the earlier
+`lineage_witness_required` alias for the same redeem decision.
 Reserved-lineage append output is valid only when the previous bundle is
 already Reserved-lineage; semantic previous bundles keep using semantic append
 plus a record-backed lineage witness.
+Typed redeem request builders accept the legacy single
+`lineage_verifier_record` path plus `lineage_verifier_records` for additional
+Reserved-lineage verifier records. Use the plural field for multi-profile
+record-backed lineage witnesses, or place every Reserved-lineage verifier
+record there for vector-only callers.
 
 Python callers can build the ABI-6 init/append/verify/redeem request archives
 with frozen typed dataclasses such as

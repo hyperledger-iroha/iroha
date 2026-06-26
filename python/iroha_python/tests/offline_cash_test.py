@@ -185,6 +185,29 @@ def test_offline_cash_snapshot_requires_cached_issuer_key() -> None:
         stale_abi.require_usable_for_offline_exchange(now_ms=200, required_native_bridge_abi_version=7)
     assert error.value.code == "unsupported_native_bridge_abi"
 
+    for native_bridge_abi_version in (0, -1, 7.5, True):
+        malformed_native_abi = OfflineCashConfigurationSnapshot(
+            chain_id="00000042",
+            asset_definition_id="pkr#sbp",
+            offline_payments_enabled=True,
+            issuer_public_key_base64="issuer-key",
+            native_bridge_abi_version=native_bridge_abi_version,  # type: ignore[arg-type]
+        )
+        with pytest.raises(OfflineCashConfigurationSnapshotError) as error:
+            malformed_native_abi.require_usable_for_offline_exchange(
+                now_ms=200,
+                required_native_bridge_abi_version=7,
+            )
+        assert error.value.code == "malformed_snapshot"
+
+    for required_native_bridge_abi_version in (0, -1, 7.5, True):
+        with pytest.raises(OfflineCashConfigurationSnapshotError) as error:
+            snapshot.require_usable_for_offline_exchange(
+                now_ms=999,
+                required_native_bridge_abi_version=required_native_bridge_abi_version,  # type: ignore[arg-type]
+            )
+        assert error.value.code == "malformed_snapshot"
+
     expired = snapshot
     with pytest.raises(OfflineCashConfigurationSnapshotError) as error:
         expired.require_usable_for_offline_exchange(now_ms=1000, required_native_bridge_abi_version=7)

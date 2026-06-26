@@ -1,4 +1,5 @@
 import argparse
+import array
 import base64
 import contextlib
 import importlib.util
@@ -199,6 +200,37 @@ def run_verify(argv):
 
 
 class IsoXsdFixtureVerifyTest(unittest.TestCase):
+    def test_os_error_detail_redacts_unsafe_strerror_without_echo(self):
+        self.assertEqual(
+            VERIFIER._safe_os_error_detail(OSError(5, "Permission denied")),
+            "Permission denied",
+        )
+        unsafe_values = (
+            "token=/tmp/xsd-hidden-secret",
+            "open /tmp/xsd-hidden-path",
+            "bad\ncontrol",
+            "nonascii-\u2603",
+            "x" * 129,
+        )
+        for value in unsafe_values:
+            with self.subTest(value=value):
+                detail = VERIFIER._safe_os_error_detail(OSError(5, value))
+                self.assertEqual(detail, "I/O error")
+                self.assertNotIn("xsd-hidden", detail)
+
+    def test_canonical_json_bytes_rejects_non_finite_numbers(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    VERIFIER._canonical_json_bytes({"value": value})
+
+    def test_json_float_parser_rejects_overflow_and_negative_zero(self):
+        for value in ("1e9999", "-1e9999", "-0.0", "-0e0"):
+            with self.subTest(value=value):
+                with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                    VERIFIER._parse_canonical_json_float(value)
+                self.assertNotIn(value, str(caught.exception))
+
     def test_checked_in_pending_schema_sources_are_exact_metadata_pinned(self):
         manifest = json.loads(VERIFIER.DEFAULT_MANIFEST.read_text(encoding="utf-8"))
         pending_entries = manifest["pending_schema_sources"]
@@ -1048,6 +1080,29 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 self.assertEqual(rc, 2)
                 self.assertIn("must use printable ASCII", stderr)
                 self.assertNotIn(hidden, stderr)
+
+    def test_numeric_cli_flags_reject_noncanonical_decimal_spellings_before_loading(self):
+        cases = (
+            ["--xmllint-timeout-secs", ".5"],
+            ["--xmllint-timeout-secs", "01"],
+            ["--xmllint-timeout-secs", "1e01"],
+            ["--xmllint-timeout-secs", "1."],
+            ["--xmllint-timeout-secs", "+1"],
+            ["--xmllint-timeout-secs", "-0"],
+            ["--xmllint-timeout-secs", "-0.0"],
+            ["--xmllint-timeout-secs", "-0e0"],
+            ["--xmllint-timeout-secs", "1e9999"],
+            ["--xmllint-timeout-secs", "-1e9999"],
+            ["--xmllint-timeout-secs=-0e0"],
+            ["--xmllint-timeout-secs=1e9999"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, stdout, stderr = run_verify(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn("numeric value", stderr)
 
     def test_raw_cli_secret_like_values_rejected_without_echo(self):
         cases = (
@@ -2899,6 +2954,31 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertIn("non-finite numeric constant", stderr)
             self.assertNotIn("NaN", stderr)
 
+    def test_profile_catalog_loader_rejects_noncanonical_json_numbers(self):
+        for value in ("1e01", "-0", "-0.0", "-0e0"):
+            with self.subTest(value=value):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    manifest_path = write_minimal_tree(root, minimal_manifest())
+                    profile_catalog = root / "profiles.rs"
+                    profile_catalog.write_text(
+                        f'const DEFAULT_PROFILES_JSON: &str = r#"\n[{value}]\n"#;\n',
+                        encoding="utf-8",
+                    )
+
+                    rc, _stdout, stderr = run_verify(
+                        [
+                            "--manifest",
+                            str(manifest_path),
+                            "--profile-catalog",
+                            str(profile_catalog),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("non-canonical numeric value", stderr)
+                    self.assertNotIn(value, stderr)
+
     def test_profile_catalog_loader_rejects_json_surrogate_strings(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -4212,6 +4292,38 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     self.assertNotIn("bidi-warning", stderr)
                     self.assertNotIn("schema validator", stderr)
 
+    def test_xmllint_diagnostics_fold_multiline_output_without_log_injection(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            original_which = VERIFIER.shutil.which
+            original_run = VERIFIER._run_command_bounded
+            VERIFIER.shutil.which = lambda command: "/usr/bin/xmllint"
+            VERIFIER._run_command_bounded = lambda *_args, **_kwargs: (
+                1,
+                "",
+                False,
+                "schema validator failed\nerror: forged diagnostic\tcontinued",
+                False,
+                False,
+            )
+            try:
+                rc, stdout, stderr = run_verify(
+                    ["--manifest", str(manifest_path), "--validate-xml-schema"]
+                )
+            finally:
+                VERIFIER.shutil.which = original_which
+                VERIFIER._run_command_bounded = original_run
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "schema validator failed error: forged diagnostic continued",
+                stderr,
+            )
+            self.assertNotIn("\nerror: forged", stderr)
+            self.assertNotIn("\tcontinued", stderr)
+
     def test_xmllint_success_output_must_be_expected_validation_line(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -4360,6 +4472,45 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         self.assertNotIn(hidden, message)
         self.assertIsNone(caught.exception.__cause__)
         self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_xmllint_pipe_reader_clamps_bytes_like_chunks_by_byte_length(self):
+        class FakePipe:
+            def __init__(self, chunks):
+                self.chunks = list(chunks)
+
+            def read(self, _size):
+                return self.chunks.pop(0) if self.chunks else b""
+
+        wide = memoryview(array.array("H", [0x4142] * 8))
+        cases = (
+            ("bytes", b"abcdefgh", b"abcdef"),
+            ("bytearray", bytearray(b"abcdefgh"), b"abcdef"),
+            ("memoryview", memoryview(b"abcdefgh"), b"abcdef"),
+            ("wide-memoryview", wide, wide.cast("B")[:6].tobytes()),
+        )
+        for name, chunk, expected in cases:
+            with self.subTest(name=name):
+                captured, truncated = VERIFIER._read_limited_pipe(
+                    FakePipe([chunk]),
+                    6,
+                )
+                self.assertEqual(captured, expected)
+                self.assertTrue(truncated)
+
+    def test_xmllint_pipe_reader_rejects_non_byte_chunks_without_echo(self):
+        hidden = "token=xmllint-pipe-secret"
+
+        class FakePipe:
+            def __init__(self, chunks):
+                self.chunks = list(chunks)
+
+            def read(self, _size):
+                return self.chunks.pop(0) if self.chunks else b""
+
+        with self.assertRaises(OSError) as caught:
+            VERIFIER._read_limited_pipe(FakePipe([hidden]), 6)
+        self.assertIn("non-byte data", str(caught.exception))
+        self.assertNotIn(hidden, str(caught.exception))
 
     def test_xml_schema_validation_bounds_xmllint_runtime(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -6919,6 +7070,24 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertIn("non-finite numeric constant", stderr)
             self.assertNotIn("NaN", stderr)
 
+    def test_noncanonical_manifest_json_numbers_are_rejected(self):
+        for value in ("1e01", "-0", "-0.0", "-0e0"):
+            with self.subTest(value=value):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    manifest_path = root / "xsd" / "fixture_manifest.json"
+                    manifest_path.parent.mkdir(parents=True)
+                    manifest_path.write_text(
+                        f'{{"version":{value},"schemas":[],"fixtures":[]}}\n',
+                        encoding="utf-8",
+                    )
+
+                    rc, _stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("non-canonical numeric value", stderr)
+                    self.assertNotIn(value, stderr)
+
     def test_boolean_manifest_version_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -7010,6 +7179,8 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                         self.assertEqual(stdout, "")
                         self.assertIn(expected, stderr)
                         self.assertIn(label, stderr)
+                        self.assertNotIn("line 1 column", stderr)
+                        self.assertNotIn("(char ", stderr)
                         self.assertNotIn(str(hidden_path), stderr)
                         self.assertNotIn(hidden_dir.name, stderr)
 
@@ -7129,6 +7300,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     self.assertEqual(stdout, "")
                     self.assertIn(expected, stderr)
                     self.assertIn(label, stderr)
+                    self.assertNotIn("line 1, column", stderr)
                     self.assertNotIn(str(target_path), stderr)
                     self.assertNotIn(tree.name, stderr)
 

@@ -200,6 +200,25 @@ test("offline cash configuration snapshot requires cached issuer key and ABI", (
       error instanceof OfflineCashConfigurationSnapshotError && error.code === "malformed_snapshot",
   );
 
+  for (const nativeBridgeAbiVersion of [0, -1, 7.5]) {
+    assert.throws(
+      () =>
+        assertOfflineCashConfigurationSnapshotUsable(
+          {
+            chainId: "00000042",
+            assetDefinitionId: "pkr#sbp",
+            offlinePaymentsEnabled: true,
+            issuerPublicKeyBase64: "issuer-key",
+            nativeBridgeAbiVersion,
+          },
+          { nowMs: 200, requiredNativeBridgeAbiVersion: 7 },
+        ),
+      error =>
+        error instanceof OfflineCashConfigurationSnapshotError &&
+        error.code === "malformed_snapshot",
+    );
+  }
+
   assert.throws(
     () =>
       assertOfflineCashConfigurationSnapshotUsable(
@@ -215,6 +234,25 @@ test("offline cash configuration snapshot requires cached issuer key and ABI", (
     error =>
       error instanceof OfflineCashConfigurationSnapshotError && error.code === "malformed_snapshot",
   );
+
+  for (const requiredNativeBridgeAbiVersion of [0, -1, 7.5]) {
+    assert.throws(
+      () =>
+        assertOfflineCashConfigurationSnapshotUsable(
+          {
+            chainId: "00000042",
+            assetDefinitionId: "pkr#sbp",
+            offlinePaymentsEnabled: true,
+            issuerPublicKeyBase64: "issuer-key",
+            nativeBridgeAbiVersion: 7,
+          },
+          { nowMs: 200, requiredNativeBridgeAbiVersion },
+        ),
+      error =>
+        error instanceof OfflineCashConfigurationSnapshotError &&
+        error.code === "malformed_snapshot",
+    );
+  }
 
   assert.throws(
     () =>

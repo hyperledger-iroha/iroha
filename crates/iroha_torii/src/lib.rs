@@ -281,7 +281,10 @@ use iroha_data_model::sorafs::capacity::ProviderId;
 use iroha_data_model::sorafs::deal::DealUsageReport;
 use iroha_data_model::{
     ChainId,
-    account::{AccountAddress, AccountId},
+    account::{
+        AccountAddress, AccountId,
+        rekey::{AccountAlias, AccountAliasDomain},
+    },
     alias::AliasIndex,
     asset::{
         AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetDefinitionId, AssetId,
@@ -306,6 +309,10 @@ use iroha_data_model::{
         SignedTransaction, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
         signed::TransactionEntrypoint,
     },
+};
+#[cfg(feature = "app_api")]
+use iroha_executor_data_model::permission::account::{
+    AccountAliasPermissionScope, CanResolveAccountAlias,
 };
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
 use iroha_futures::supervisor::ShutdownSignal;
@@ -13416,6 +13423,155 @@ fn torii_partition_routes_by_visibility(
 }
 
 #[cfg(feature = "app_api")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ToriiAliasLookupRouteAccess {
+    route: RoutingDecision,
+    filter_by_permission: bool,
+}
+
+#[cfg(feature = "app_api")]
+fn torii_account_has_permission(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    target: &Permission,
+) -> bool {
+    match world.account_permissions_iter(authority) {
+        Ok(permissions) => {
+            if permissions
+                .into_iter()
+                .any(|permission| permission == target)
+            {
+                return true;
+            }
+        }
+        Err(error) => {
+            iroha_logger::warn!(
+                authority = %authority,
+                target_name = %target.name(),
+                target_payload = %target.payload().get(),
+                ?error,
+                "Torii alias lookup permission check could not load authority permissions"
+            );
+        }
+    }
+
+    world.account_roles_iter(authority).any(|role_id| {
+        world
+            .roles()
+            .get(role_id)
+            .is_some_and(|role| role.permissions().any(|permission| permission == target))
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn torii_authority_can_resolve_account_alias(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    alias: &AccountAlias,
+) -> bool {
+    let dataspace_permission: Permission = CanResolveAccountAlias {
+        scope: AccountAliasPermissionScope::Dataspace(alias.dataspace),
+    }
+    .into();
+    if !torii_account_has_permission(world, authority, &dataspace_permission) {
+        return false;
+    }
+
+    match alias.domain_id(world.dataspace_catalog()) {
+        Ok(Some(domain_id)) => {
+            let domain_permission: Permission = CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(domain_id),
+            }
+            .into();
+            torii_account_has_permission(world, authority, &domain_permission)
+        }
+        Ok(None) => true,
+        Err(error) => {
+            iroha_logger::warn!(
+                authority = %authority,
+                alias = ?alias,
+                ?error,
+                "Torii alias lookup permission check rejected malformed alias scope"
+            );
+            false
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn torii_alias_lookup_permission_probe_alias(
+    _app: &AppState,
+    route: RoutingDecision,
+    request: &routing::AliasLookupByAccountRequestDto,
+) -> Option<AccountAlias> {
+    let label = "lookup".parse().ok()?;
+    let domain = request
+        .domain
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::parse::<AccountAliasDomain>)
+        .transpose()
+        .ok()?;
+    Some(AccountAlias::new(label, domain, route.dataspace_id))
+}
+
+#[cfg(feature = "app_api")]
+fn torii_alias_lookup_route_allowed_by_permission(
+    app: &AppState,
+    route: RoutingDecision,
+    caller: Option<&AccountId>,
+    request: &routing::AliasLookupByAccountRequestDto,
+) -> bool {
+    let Some(caller) = caller else {
+        return false;
+    };
+    let Some(alias) = torii_alias_lookup_permission_probe_alias(app, route, request) else {
+        return false;
+    };
+    let state_view = app.state.view();
+    torii_authority_can_resolve_account_alias(state_view.world(), caller, &alias)
+}
+
+#[cfg(feature = "app_api")]
+fn torii_partition_alias_lookup_routes(
+    app: &SharedAppState,
+    routes: Vec<RoutingDecision>,
+    visibility: &ToriiAccountReadVisibility,
+    request: &routing::AliasLookupByAccountRequestDto,
+) -> (Vec<ToriiAliasLookupRouteAccess>, usize) {
+    let visible_dataspaces = torii_visible_account_read_routes(app.as_ref(), visibility.caller())
+        .into_iter()
+        .map(|route| route.dataspace_id)
+        .collect::<BTreeSet<_>>();
+    let mut allowed_routes = Vec::new();
+    let mut denied_routes = 0usize;
+
+    for route in routes {
+        if visible_dataspaces.contains(&route.dataspace_id) {
+            allowed_routes.push(ToriiAliasLookupRouteAccess {
+                route,
+                filter_by_permission: false,
+            });
+        } else if torii_alias_lookup_route_allowed_by_permission(
+            app.as_ref(),
+            route,
+            visibility.caller(),
+            request,
+        ) {
+            allowed_routes.push(ToriiAliasLookupRouteAccess {
+                route,
+                filter_by_permission: true,
+            });
+        } else {
+            denied_routes = denied_routes.saturating_add(1);
+        }
+    }
+
+    (allowed_routes, denied_routes)
+}
+
+#[cfg(feature = "app_api")]
 fn torii_account_read_routes(
     app: &AppState,
     target_account: &AccountId,
@@ -14502,6 +14658,152 @@ where
         }
         match torii_json_body_value(response).await {
             Ok(payload) => {
+                diagnostics.record_success();
+                payloads.push(payload);
+            }
+            Err(response) => {
+                diagnostics.record_skipped_response(&response);
+                return Err(with_torii_fanout_headers(response, diagnostics));
+            }
+        }
+    }
+
+    if payloads.is_empty() {
+        let response = last_permission_denied.unwrap_or_else(|| {
+            if diagnostics.denied_routes > 0 {
+                torii_alias_permission_denied_response(permission_denied_message)
+            } else {
+                last_not_found.unwrap_or_else(|| {
+                    last_route_unavailable.unwrap_or_else(|| {
+                        torii_proxy_error_response(
+                            StatusCode::NOT_FOUND,
+                            "not_found",
+                            "no dataspace returned a matching result",
+                        )
+                    })
+                })
+            }
+        });
+        return Err(with_torii_fanout_headers(response, diagnostics));
+    }
+
+    Ok(ToriiFanoutJsonPayloads {
+        payloads,
+        diagnostics,
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn filter_permission_opened_alias_lookup_payload(
+    app: &SharedAppState,
+    caller: &AccountId,
+    payload: Value,
+) -> Result<Value, Response> {
+    let mut dto = decode_alias_lookup_by_account_payload(payload)?;
+    let catalog = app.state.nexus_snapshot().dataspace_catalog.clone();
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let mut items = Vec::with_capacity(dto.items.len());
+
+    for item in dto.items {
+        match AccountAlias::from_literal(&item.alias, &catalog) {
+            Ok(alias) if torii_authority_can_resolve_account_alias(world, caller, &alias) => {
+                items.push(item);
+            }
+            Ok(_) => {}
+            Err(error) => {
+                iroha_logger::warn!(
+                    alias = %item.alias,
+                    ?error,
+                    "Torii alias-by-account permission filter dropped malformed alias literal"
+                );
+            }
+        }
+    }
+
+    dto.total = u64::try_from(items.len()).map_err(|_| {
+        torii_internal_json_error(
+            "permission-filtered alias lookup result count does not fit in u64",
+        )
+    })?;
+    dto.items = items;
+    norito::json::to_value(&dto).map_err(|error| {
+        torii_internal_json_error(format!(
+            "failed to encode permission-filtered alias by-account payload: {error}"
+        ))
+    })
+}
+
+#[cfg(feature = "app_api")]
+async fn collect_torii_alias_lookup_json_payloads<F, Fut>(
+    app: &SharedAppState,
+    routes: &[ToriiAliasLookupRouteAccess],
+    denied_routes: usize,
+    permission_denied_message: &'static str,
+    caller: Option<&AccountId>,
+    mut fetch: F,
+) -> Result<ToriiFanoutJsonPayloads, Response>
+where
+    F: FnMut(RoutingDecision) -> Fut,
+    Fut: std::future::Future<Output = Response>,
+{
+    let mut payloads = Vec::with_capacity(routes.len());
+    let mut diagnostics = ToriiFanoutDiagnostics::default();
+    let mut last_not_found = None;
+    let mut last_route_unavailable = None;
+    let mut last_permission_denied = None;
+
+    for _ in 0..denied_routes {
+        diagnostics.record_denied();
+    }
+
+    if routes.is_empty() {
+        let response = if diagnostics.denied_routes > 0 {
+            torii_alias_permission_denied_response(permission_denied_message)
+        } else {
+            torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "no Nexus dataspace routes are configured",
+            )
+        };
+        return Err(with_torii_fanout_headers(response, diagnostics));
+    }
+
+    for _ in routes {
+        diagnostics.record_attempt();
+    }
+    let responses =
+        futures_util::future::join_all(routes.iter().map(|route| fetch(route.route))).await;
+
+    for (route, response) in routes.iter().zip(responses) {
+        if torii_response_has_reject_code(&response, "permission_denied") {
+            diagnostics.record_denied();
+            last_permission_denied = Some(response);
+            continue;
+        }
+        if response.status() == StatusCode::NOT_FOUND {
+            diagnostics.record_skipped_response(&response);
+            last_not_found = Some(response);
+            continue;
+        }
+        if torii_response_has_reject_code(&response, "route_unavailable") {
+            diagnostics.record_skipped_response(&response);
+            last_route_unavailable = Some(response);
+            continue;
+        }
+        match torii_json_body_value(response).await {
+            Ok(payload) => {
+                let payload = if route.filter_by_permission {
+                    match caller {
+                        Some(caller) => {
+                            filter_permission_opened_alias_lookup_payload(app, caller, payload)?
+                        }
+                        None => payload,
+                    }
+                } else {
+                    payload
+                };
                 diagnostics.record_success();
                 payloads.push(payload);
             }
@@ -17349,6 +17651,116 @@ mod torii_routed_read_tests {
                 .and_then(|value| value.to_str().ok()),
             Some("2")
         );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn collect_torii_account_history_json_payloads_fails_on_mid_route_unavailable() {
+        let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
+        let params = routing::AccountHistoryGetParams {
+            limit: Some(10),
+            count_mode: Some("bounded".to_owned()),
+            ..Default::default()
+        };
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let response =
+            collect_torii_account_history_json_payloads(&[route], &params, 10, "bounded", {
+                let calls = std::sync::Arc::clone(&calls);
+                move |_route, _query| {
+                    let calls = std::sync::Arc::clone(&calls);
+                    async move {
+                        match calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                            0 => crate::utils::respond_value_with_format(
+                                norito::json!({
+                                    "items": [{"id": "first", "timestamp_ms": 100}],
+                                    "has_more": true
+                                }),
+                                ResponseFormat::Json,
+                            ),
+                            _ => torii_proxy_error_response(
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                "route_unavailable",
+                                "authoritative peers offline",
+                            ),
+                        }
+                    }
+                }
+            })
+            .await
+            .expect_err("mid-route pagination failure must fail the fanout");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("route_unavailable")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-fanout-routes-succeeded")
+                .and_then(|value| value.to_str().ok()),
+            Some("0")
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn collect_torii_account_history_json_payloads_fails_on_mid_route_not_found() {
+        let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
+        let params = routing::AccountHistoryGetParams {
+            limit: Some(10),
+            count_mode: Some("bounded".to_owned()),
+            ..Default::default()
+        };
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let response =
+            collect_torii_account_history_json_payloads(&[route], &params, 10, "bounded", {
+                let calls = std::sync::Arc::clone(&calls);
+                move |_route, _query| {
+                    let calls = std::sync::Arc::clone(&calls);
+                    async move {
+                        match calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                            0 => crate::utils::respond_value_with_format(
+                                norito::json!({
+                                    "items": [{"id": "first", "timestamp_ms": 100}],
+                                    "has_more": true
+                                }),
+                                ResponseFormat::Json,
+                            ),
+                            _ => torii_proxy_error_response(
+                                StatusCode::NOT_FOUND,
+                                "not_found",
+                                "account history page missing",
+                            ),
+                        }
+                    }
+                }
+            })
+            .await
+            .expect_err("mid-route not_found must not merge partial history");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("not_found")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-fanout-routes-succeeded")
+                .and_then(|value| value.to_str().ok()),
+            Some("0")
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
     #[cfg(feature = "app_api")]
@@ -21435,16 +21847,66 @@ async fn execute_torii_account_history_read_for_resolved_routes(
     };
     params.limit = Some(page_limit);
     let count_mode_label = account_history_count_mode_label(params.count_mode.as_deref());
+    let routed_by = routed_by_for_routes(app, &routes);
+    let (payloads, diagnostics) = match collect_torii_account_history_json_payloads(
+        &routes,
+        &params,
+        page_limit,
+        count_mode_label,
+        |route, page_query_string| {
+            let account_id = account_id.clone();
+            async move {
+                execute_torii_single_route_read(
+                    app,
+                    route,
+                    ToriiReadEndpointV1::AccountHistoryGet,
+                    vec![account_id],
+                    page_query_string,
+                    Vec::new(),
+                )
+                .await
+            }
+        },
+    )
+    .await
+    {
+        Ok(collected) => collected,
+        Err(response) => return response,
+    };
+
+    merge_with_torii_fanout_headers(diagnostics, || {
+        merged_account_history_response(
+            payloads,
+            params.offset,
+            page_limit,
+            count_mode_label,
+            routed_by,
+        )
+    })
+}
+
+#[cfg(feature = "app_api")]
+async fn collect_torii_account_history_json_payloads<F, Fut>(
+    routes: &[RoutingDecision],
+    params: &routing::AccountHistoryGetParams,
+    page_limit: u64,
+    count_mode_label: &'static str,
+    mut fetch: F,
+) -> Result<(Vec<Value>, ToriiFanoutDiagnostics), Response>
+where
+    F: FnMut(RoutingDecision, Option<String>) -> Fut,
+    Fut: core::future::Future<Output = Response>,
+{
     let per_route_target = (count_mode_label == "bounded")
         .then(|| params.offset.saturating_add(page_limit).saturating_add(1));
+    let limits = routing::app_query_limits();
     let chunk_limit = limits.max_page_limit.max(1);
-    let routed_by = routed_by_for_routes(app, &routes);
     let mut payloads = Vec::new();
     let mut diagnostics = ToriiFanoutDiagnostics::default();
     let mut last_not_found = None;
     let mut last_route_unavailable = None;
 
-    for route in &routes {
+    for route in routes {
         diagnostics.record_attempt();
         let mut route_offset = 0_u64;
         let mut route_items_seen = 0_u64;
@@ -21464,28 +21926,24 @@ async fn execute_torii_account_history_read_for_resolved_routes(
             page_params.limit = Some(next_limit);
             let page_query_string = match encode_torii_proxy_query(&page_params) {
                 Ok(query_string) => query_string,
-                Err(error) => return error.into_response(),
+                Err(error) => return Err(error.into_response()),
             };
-            let response = execute_torii_single_route_read(
-                app,
-                *route,
-                ToriiReadEndpointV1::AccountHistoryGet,
-                vec![account_id.clone()],
-                page_query_string,
-                Vec::new(),
-            )
-            .await;
+            let response = fetch(*route, page_query_string).await;
 
             if response.status() == StatusCode::NOT_FOUND {
                 diagnostics.record_skipped_response(&response);
-                if !route_succeeded {
+                if route_succeeded {
+                    return Err(with_torii_fanout_headers(response, diagnostics));
+                } else {
                     last_not_found = Some(response);
                 }
                 break;
             }
             if torii_response_has_reject_code(&response, "route_unavailable") {
                 diagnostics.record_skipped_response(&response);
-                if !route_succeeded {
+                if route_succeeded {
+                    return Err(with_torii_fanout_headers(response, diagnostics));
+                } else {
                     last_route_unavailable = Some(response);
                 }
                 break;
@@ -21495,7 +21953,7 @@ async fn execute_torii_account_history_read_for_resolved_routes(
                 Ok(payload) => payload,
                 Err(response) => {
                     diagnostics.record_skipped_response(&response);
-                    return with_torii_fanout_headers(response, diagnostics);
+                    return Err(with_torii_fanout_headers(response, diagnostics));
                 }
             };
             let item_count = match list_items_from_payload(
@@ -21505,7 +21963,7 @@ async fn execute_torii_account_history_read_for_resolved_routes(
                 Ok(items) => items.len(),
                 Err(response) => {
                     diagnostics.record_skipped_response(&response);
-                    return with_torii_fanout_headers(response, diagnostics);
+                    return Err(with_torii_fanout_headers(response, diagnostics));
                 }
             };
             let has_more = account_history_payload_has_more(&payload, item_count, next_limit);
@@ -21538,18 +21996,10 @@ async fn execute_torii_account_history_read_for_resolved_routes(
                 )
             })
         });
-        return with_torii_fanout_headers(response, diagnostics);
+        return Err(with_torii_fanout_headers(response, diagnostics));
     }
 
-    merge_with_torii_fanout_headers(diagnostics, || {
-        merged_account_history_response(
-            payloads,
-            params.offset,
-            page_limit,
-            count_mode_label,
-            routed_by,
-        )
-    })
+    Ok((payloads, diagnostics))
 }
 
 #[cfg(feature = "app_api")]
@@ -34753,12 +35203,13 @@ async fn handler_alias_lookup_by_account(
         Err(response) => return Ok(response),
     };
     let (allowed_routes, denied_routes) =
-        torii_partition_routes_by_visibility(&app, candidate_routes, &visibility);
+        torii_partition_alias_lookup_routes(&app, candidate_routes, &visibility, &request);
 
-    if allowed_routes.len() == 1 && denied_routes == 0 {
+    if allowed_routes.len() == 1 && denied_routes == 0 && !allowed_routes[0].filter_by_permission {
+        let route = allowed_routes[0].route;
         return Ok(execute_torii_single_route_read(
             &app,
-            allowed_routes[0],
+            route,
             ToriiReadEndpointV1::AliasLookupByAccount,
             Vec::new(),
             None,
@@ -34767,10 +35218,12 @@ async fn handler_alias_lookup_by_account(
         .await);
     }
 
-    let collected = match collect_torii_alias_json_payloads(
+    let collected = match collect_torii_alias_lookup_json_payloads(
+        &app,
         &allowed_routes,
         denied_routes,
         "one or more dataspace routes denied the alias-by-account lookup and no allowed route returned aliases",
+        visibility.caller(),
         |route| {
             execute_torii_read_for_route(
                 &app,
@@ -34791,10 +35244,14 @@ async fn handler_alias_lookup_by_account(
         Err(response) => return Ok(response),
     };
     let diagnostics = collected.diagnostics;
+    let routed_routes = allowed_routes
+        .iter()
+        .map(|route| route.route)
+        .collect::<Vec<_>>();
     Ok(merge_with_torii_fanout_headers(diagnostics, || {
         merged_alias_lookup_by_account_response(
             collected.payloads,
-            routed_by_for_routes(&app, &allowed_routes),
+            routed_by_for_routes(&app, &routed_routes),
             "fanout",
             diagnostics.denied_routes,
         )
@@ -42851,18 +43308,11 @@ pub(crate) mod tests_runtime_handlers {
         World::with([domain], [account], [])
     }
 
-    pub(crate) fn world_with_account_bound_to_dataspace(
-        account_id: &AccountId,
+    fn bind_uaid_to_dataspace_manifest_for_test(
+        world: &mut World,
         uaid: UniversalAccountId,
         dataspace: DataSpaceId,
-    ) -> World {
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let domain = Domain::new(domain_id.clone()).build(account_id);
-        let account = Account::new(account_id.clone())
-            .with_uaid(Some(uaid))
-            .build(account_id);
-        let mut world = World::with([domain], [account], []);
-
+    ) {
         let manifest = iroha_data_model::nexus::AssetPermissionManifest {
             version: iroha_data_model::nexus::ManifestVersion::default(),
             uaid,
@@ -42880,6 +43330,39 @@ pub(crate) mod tests_runtime_handlers {
         world
             .space_directory_manifests_mut_for_testing()
             .insert(uaid, set);
+    }
+
+    pub(crate) fn world_with_account_bound_to_dataspace(
+        account_id: &AccountId,
+        uaid: UniversalAccountId,
+        dataspace: DataSpaceId,
+    ) -> World {
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(account_id);
+        let account = Account::new(account_id.clone())
+            .with_uaid(Some(uaid))
+            .build(account_id);
+        let mut world = World::with([domain], [account], []);
+
+        bind_uaid_to_dataspace_manifest_for_test(&mut world, uaid, dataspace);
+        world
+    }
+
+    pub(crate) fn world_with_target_and_caller_bound_to_dataspace(
+        target: &AccountId,
+        caller: &AccountId,
+        uaid: UniversalAccountId,
+        dataspace: DataSpaceId,
+    ) -> World {
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(target);
+        let target_account = Account::new(target.clone())
+            .with_uaid(Some(uaid))
+            .build(target);
+        let caller_account = Account::new(caller.clone()).build(caller);
+        let mut world = World::with([domain], [target_account, caller_account], []);
+
+        bind_uaid_to_dataspace_manifest_for_test(&mut world, uaid, dataspace);
         world
     }
 
@@ -61915,7 +62398,7 @@ mod tests {
     use crate::tests_runtime_handlers::{
         bind_account_alias_for_test, bind_contract_alias_for_test,
         configure_multiple_dataspace_routes_for_test, configure_private_ingress_routes_for_test,
-        world_with_account_bound_to_dataspace,
+        world_with_account_bound_to_dataspace, world_with_target_and_caller_bound_to_dataspace,
     };
     use crate::{
         limits,
@@ -62936,6 +63419,38 @@ mod tests {
         block
             .commit()
             .expect("commit should persist alias resolve permission");
+    }
+
+    fn grant_alias_resolve_dataspace_permission(
+        app: &SharedAppState,
+        account_id: &AccountId,
+        dataspace: DataSpaceId,
+    ) {
+        let height = next_block_height(app);
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("height>0"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut stx = block.transaction();
+        stx.world_mut_for_testing().add_account_permission(
+            account_id,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(dataspace),
+            }),
+        );
+        stx.apply();
+        block.transactions.insert_block(
+            HashSet::new(),
+            NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
+        );
+        block
+            .commit()
+            .expect("commit should persist alias dataspace resolve permission");
     }
 
     #[tokio::test]
@@ -64091,6 +64606,148 @@ mod tests {
                 .get("x-iroha-fanout-routes-denied")
                 .and_then(|value| value.to_str().ok()),
             Some("1")
+        );
+    }
+
+    #[tokio::test]
+    async fn alias_lookup_by_account_allows_permission_granted_hidden_route_for_signed_caller() {
+        let caller_keypair = checked_torii_test_ed25519_keypair(
+            0x35,
+            "derive alias lookup permission caller fixture key",
+        );
+        let caller = AccountId::new(caller_keypair.public_key().clone());
+        let target = checked_torii_test_account_id(
+            0x36,
+            "derive alias lookup permission target fixture key",
+        );
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-permission-fanout"));
+        let mut app =
+            mk_app_state_for_tests_with_world(world_with_target_and_caller_bound_to_dataspace(
+                &target,
+                &caller,
+                uaid,
+                DataSpaceId::new(10),
+            ));
+        configure_private_ingress_routes_for_test(&mut app);
+        bind_account_alias_for_test(&app, &target, "merchant@restricted");
+        let alias = AccountAlias::from_literal(
+            "merchant@restricted",
+            &app.state.nexus_snapshot().dataspace_catalog,
+        )
+        .expect("restricted alias should parse");
+        grant_alias_resolve_permissions(&app, &caller, &alias);
+
+        let request = routing::AliasLookupByAccountRequestDto {
+            account_id: target.to_string(),
+            dataspace: None,
+            domain: None,
+        };
+        let body = norito::json::to_vec(&request).expect("encode request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/aliases/by_account"
+            .parse()
+            .expect("alias by-account uri");
+        let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &body);
+        let response = handler_alias_lookup_by_account(
+            State(app),
+            method,
+            uri,
+            headers,
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-fanout-routes-attempted")
+                .and_then(|value| value.to_str().ok()),
+            Some("3")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-fanout-routes-denied")
+                .and_then(|value| value.to_str().ok()),
+            Some("0")
+        );
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        let dto: routing::AliasLookupByAccountResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.account_id, target.to_string());
+        assert_eq!(dto.total, 1);
+        assert_eq!(dto.items[0].alias, "merchant@restricted");
+        assert_eq!(dto.source.as_deref(), Some("fanout"));
+    }
+
+    #[tokio::test]
+    async fn alias_lookup_by_account_filters_permission_opened_routes_by_domain_grant() {
+        let caller_keypair = checked_torii_test_ed25519_keypair(
+            0x37,
+            "derive alias lookup permission filter caller fixture key",
+        );
+        let caller = AccountId::new(caller_keypair.public_key().clone());
+        let target = checked_torii_test_account_id(
+            0x38,
+            "derive alias lookup permission filter target fixture key",
+        );
+        let restricted_dataspace = DataSpaceId::new(10);
+        let uaid =
+            UniversalAccountId::from_hash(Hash::new(b"torii::alias-permission-filter-fanout"));
+        let mut app =
+            mk_app_state_for_tests_with_world(world_with_target_and_caller_bound_to_dataspace(
+                &target,
+                &caller,
+                uaid,
+                restricted_dataspace,
+            ));
+        configure_private_ingress_routes_for_test(&mut app);
+        bind_account_alias_for_test(&app, &target, "merchant@restricted");
+        bind_account_alias_for_test(&app, &target, "merchant@bank.restricted");
+        grant_alias_resolve_dataspace_permission(&app, &caller, restricted_dataspace);
+
+        let request = routing::AliasLookupByAccountRequestDto {
+            account_id: target.to_string(),
+            dataspace: None,
+            domain: None,
+        };
+        let body = norito::json::to_vec(&request).expect("encode request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/aliases/by_account"
+            .parse()
+            .expect("alias by-account uri");
+        let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &body);
+        let response = handler_alias_lookup_by_account(
+            State(app),
+            method,
+            uri,
+            headers,
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        let dto: routing::AliasLookupByAccountResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.total, 1);
+        assert_eq!(dto.items[0].alias, "merchant@restricted");
+        assert!(
+            dto.items
+                .iter()
+                .all(|item| item.alias != "merchant@bank.restricted"),
+            "permission-opened routes must not leak domain aliases without the domain grant"
         );
     }
 

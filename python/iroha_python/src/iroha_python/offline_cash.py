@@ -61,18 +61,38 @@ class OfflineCashConfigurationSnapshot:
                 "expired",
                 f"Offline cash configuration snapshot expired at {self.expires_at_ms}.",
             )
+        native_bridge_abi_version = _positive_native_bridge_abi_version(
+            self.native_bridge_abi_version,
+            "native_bridge_abi_version",
+        )
+        checked_required_native_bridge_abi_version = _positive_native_bridge_abi_version(
+            required_native_bridge_abi_version,
+            "required_native_bridge_abi_version",
+        )
         if (
-            required_native_bridge_abi_version is not None
-            and (self.native_bridge_abi_version or -1) < required_native_bridge_abi_version
+            checked_required_native_bridge_abi_version is not None
+            and (native_bridge_abi_version is None
+                 or native_bridge_abi_version < checked_required_native_bridge_abi_version)
         ):
             raise OfflineCashConfigurationSnapshotError(
                 "unsupported_native_bridge_abi",
-                f"Offline cash requires native bridge ABI {required_native_bridge_abi_version}.",
+                f"Offline cash requires native bridge ABI {checked_required_native_bridge_abi_version}.",
             )
 
 
 def _is_canonical_offline_cash_snapshot_text(value: Optional[str]) -> bool:
     return value is not None and value != "" and all(0x20 < ord(ch) <= 0x7E for ch in value)
+
+
+def _positive_native_bridge_abi_version(value: Optional[int], field_name: str) -> Optional[int]:
+    if value is None:
+        return None
+    if type(value) is not int or value <= 0:
+        raise OfflineCashConfigurationSnapshotError(
+            "malformed_snapshot",
+            f"Offline cash configuration snapshot field {field_name} must be a positive integer.",
+        )
+    return value
 
 
 @dataclass(frozen=True)

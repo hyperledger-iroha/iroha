@@ -146,7 +146,7 @@ KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV = (
     "IROHA_KAGEMUSHA_ALLOW_RUNTIME_LINEAGE_KEYGEN"
 )
 EXPECTED_LINEAGE_VERIFIER_WITNESS_PROFILE = (
-    "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4"
+    "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1"
 )
 EXPECTED_LINEAGE_CIRCUIT_IDS = {
     "one_hop": "kagemusha-recursive-spend-lineage-onehop-v1",

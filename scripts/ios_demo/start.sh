@@ -75,6 +75,25 @@ command -v python3 >/dev/null 2>&1 || {
     exit 1
 }
 
+pid_is_running() {
+    local pid="$1"
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    if ! command -v ps >/dev/null 2>&1; then
+        return 0
+    fi
+    ps -p "$pid" -o pid= >/dev/null 2>&1
+}
+
+pid_is_own_background_job() {
+    local pid="$1"
+    local job_pid
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    while IFS= read -r job_pid; do
+        [[ "${job_pid}" == "${pid}" ]] && return 0
+    done < <(jobs -pr 2>/dev/null || true)
+    return 1
+}
+
 mkdir -p "${ARTIFACTS_DIR}"
 rm -f "${STATE_FILE}" "${TORII_LOG}" "${METRICS_FILE}" "${JWT_FILE}" "${RUN_LOG}"
 
@@ -91,7 +110,7 @@ fi
 PID=$!
 
 cleanup() {
-    if [[ -n "${PID:-}" ]] && kill -0 "${PID}" 2>/dev/null; then
+    if [[ -n "${PID:-}" ]] && pid_is_own_background_job "${PID}" && pid_is_running "${PID}"; then
         kill "${PID}" >/dev/null 2>&1 || true
         wait "${PID}" >/dev/null 2>&1 || true
     fi
@@ -104,7 +123,7 @@ for _ in {1..60}; do
     if [[ -f "${STATE_FILE}" ]]; then
         break
     fi
-    if ! kill -0 "${PID}" 2>/dev/null; then
+    if ! pid_is_own_background_job "${PID}" || ! pid_is_running "${PID}"; then
         echo "[ios-demo] Demo process exited early. See ${RUN_LOG} for details." >&2
         cleanup
         exit 1

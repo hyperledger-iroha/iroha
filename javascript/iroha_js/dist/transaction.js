@@ -54,9 +54,12 @@ import {
 } from "./instructionBuilders.js";
 
 function normalizeAuthority(authority) {
-  const raw = String(authority ?? "").trim();
-  if (!raw) {
+  const raw = String(authority ?? "");
+  if (raw.length === 0) {
     return normalizeAccountId(authority, "authority");
+  }
+  if (raw.trim() !== raw) {
+    throw new TypeError("authority must not contain surrounding whitespace");
   }
   return normalizeAccountId(raw, "authority");
 }
@@ -67,9 +70,19 @@ function resolveNativeBinding() {
 }
 
 function composeAssetHoldingIdFromDefinitionAndAccount(assetDefinitionId, accountId, context) {
-  const definition = String(assetDefinitionId ?? "").trim();
+  const definition = normalizeTransactionAssetDefinitionId(assetDefinitionId, `${context}.assetDefinitionId`);
+  const normalizedAccountId = normalizeAccountId(accountId, `${context}.accountId`);
+  return `${definition}#${normalizedAccountId}`;
+}
+
+function normalizeTransactionAssetDefinitionId(assetDefinitionId, context) {
+  const rawDefinition = String(assetDefinitionId ?? "");
+  const definition = rawDefinition.trim();
   if (!definition) {
-    throw new TypeError(`${context}.assetDefinitionId must be a non-empty string`);
+    throw new TypeError(`${context} must be a non-empty string`);
+  }
+  if (definition !== rawDefinition) {
+    throw new TypeError(`${context} must not contain surrounding whitespace`);
   }
   if (
     /\s/.test(definition) ||
@@ -79,11 +92,10 @@ function composeAssetHoldingIdFromDefinitionAndAccount(assetDefinitionId, accoun
     definition.includes(":")
   ) {
     throw new TypeError(
-      `${context}.assetDefinitionId must be a canonical unprefixed Base58 asset definition id`,
+      `${context} must be a canonical unprefixed Base58 asset definition id`,
     );
   }
-  const normalizedAccountId = normalizeAccountId(accountId, `${context}.accountId`);
-  return `${definition}#${normalizedAccountId}`;
+  return definition;
 }
 
 function serializeInstructionPayloads(instructions, context) {
@@ -992,6 +1004,10 @@ export function buildRegisterMultisigTransaction({
  */
 function buildRegisterAssetDefinitionInstructions({ assetDefinition, mints = [] }) {
   const instructions = [];
+  const assetDefinitionId = normalizeTransactionAssetDefinitionId(
+    assetDefinition.assetDefinitionId,
+    "assetDefinition.assetDefinitionId",
+  );
   const defaultConfidentialPolicy = {
     mode: "TransparentOnly",
     vk_set_hash: null,
@@ -1006,7 +1022,7 @@ function buildRegisterAssetDefinitionInstructions({ assetDefinition, mints = [] 
   instructions.push({
     Register: {
       AssetDefinition: {
-        id: assetDefinition.assetDefinitionId,
+        id: assetDefinitionId,
         logo: assetDefinition.logo ?? null,
         metadata: assetDefinition.metadata ?? {},
         mintable: assetDefinition.mintable ?? "Infinitely",
@@ -2003,7 +2019,10 @@ function normalizeExactMetadataString(value, context) {
 }
 
 function normalizeWholeNumberLiteral(value, context) {
-  const normalized = String(value ?? "").trim();
+  const normalized = String(value ?? "");
+  if (normalized.trim() !== normalized) {
+    throw new TypeError(`${context} must not contain surrounding whitespace`);
+  }
   if (!/^\d+$/.test(normalized)) {
     throw new TypeError(`${context} must be a whole-number string`);
   }
@@ -2012,7 +2031,10 @@ function normalizeWholeNumberLiteral(value, context) {
 
 function normalizeFixed32HexInput(value, context) {
   if (typeof value === "string") {
-    const normalized = value.trim().replace(/^0x/i, "").toLowerCase();
+    if (value.trim() !== value) {
+      throw new TypeError(`${context} must not contain surrounding whitespace`);
+    }
+    const normalized = value.replace(/^0x/i, "").toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(normalized)) {
       throw new TypeError(`${context} must be a 32-byte hex string`);
     }
@@ -2060,11 +2082,14 @@ export function buildPrivateKaigiFeeSpend({
     "privateKaigiFeeSpend",
   );
   const result = native.buildPrivateKaigiFeeSpend(
-    String(chainId ?? "").trim(),
-    String(assetDefinitionId ?? "").trim(),
+    normalizeExactMetadataString(chainId, "privateKaigiFeeSpend.chainId"),
+    normalizeExactMetadataString(
+      assetDefinitionId,
+      "privateKaigiFeeSpend.assetDefinitionId",
+    ),
     toBuffer(actionHash),
-    String(anchorRootHex ?? "").trim(),
-    String(feeAmount ?? "").trim(),
+    normalizeFixed32HexInput(anchorRootHex, "privateKaigiFeeSpend.anchorRootHex"),
+    normalizeWholeNumberLiteral(feeAmount, "privateKaigiFeeSpend.feeAmount"),
     vk.backend,
     vk.circuitId,
     vk.bytes,
@@ -2154,8 +2179,11 @@ export function buildConfidentialTransferProofV2({
       )
     : [];
   const result = native.buildConfidentialTransferProofV2(
-    String(chainId ?? "").trim(),
-    String(assetDefinitionId ?? "").trim(),
+    normalizeExactMetadataString(chainId, "confidentialTransferProofV2.chainId"),
+    normalizeExactMetadataString(
+      assetDefinitionId,
+      "confidentialTransferProofV2.assetDefinitionId",
+    ),
     spendKeyBuffer,
     normalizedTreeCommitments,
     normalizedInputs,
@@ -2210,8 +2238,8 @@ export function buildConfidentialAssetHiddenTransferProofV1({
       ? values.map((entry, index) => normalizeFixed32HexInput(entry, `${context}[${index}]`))
       : [];
   const result = native.buildConfidentialAssetHiddenTransferProofV1(
-    String(chainId ?? "").trim(),
-    String(poolId ?? "").trim(),
+    normalizeExactMetadataString(chainId, "confidentialAssetHiddenTransferProofV1.chainId"),
+    normalizeExactMetadataString(poolId, "confidentialAssetHiddenTransferProofV1.poolId"),
     normalizeFixed32HexInput(assetSetRootHex ?? assetSetRoot, "assetSetRoot"),
     normalizeList(inputCommitmentsHex ?? inputCommitments, "inputCommitments"),
     normalizeList(nullifiersHex ?? nullifiers, "nullifiers"),
@@ -2288,8 +2316,11 @@ export function buildConfidentialUnshieldProofV2({
       )
     : [];
   const result = native.buildConfidentialUnshieldProofV2(
-    String(chainId ?? "").trim(),
-    String(assetDefinitionId ?? "").trim(),
+    normalizeExactMetadataString(chainId, "confidentialUnshieldProofV2.chainId"),
+    normalizeExactMetadataString(
+      assetDefinitionId,
+      "confidentialUnshieldProofV2.assetDefinitionId",
+    ),
     spendKeyBuffer,
     normalizedTreeCommitments,
     normalizedInputs,
@@ -2370,8 +2401,11 @@ export function buildConfidentialUnshieldProofV3({
       )
     : [];
   const result = native.buildConfidentialUnshieldProofV3(
-    String(chainId ?? "").trim(),
-    String(assetDefinitionId ?? "").trim(),
+    normalizeExactMetadataString(chainId, "confidentialUnshieldProofV3.chainId"),
+    normalizeExactMetadataString(
+      assetDefinitionId,
+      "confidentialUnshieldProofV3.assetDefinitionId",
+    ),
     spendKeyBuffer,
     normalizedTreeCommitments,
     normalizedInputs,
@@ -2413,7 +2447,7 @@ export function buildPrivateCreateKaigiTransaction({
     );
   }
   const result = native.buildPrivateCreateKaigiTransaction(
-    String(chainId ?? "").trim(),
+    normalizeExactMetadataString(chainId, "privateCreateKaigi.chainId"),
     JSON.stringify(call ?? {}),
     JSON.stringify(artifacts ?? {}),
     JSON.stringify(feeSpend ?? {}),
@@ -2447,8 +2481,8 @@ export function buildPrivateJoinKaigiTransaction({
     );
   }
   const result = native.buildPrivateJoinKaigiTransaction(
-    String(chainId ?? "").trim(),
-    String(callId ?? "").trim(),
+    normalizeExactMetadataString(chainId, "privateJoinKaigi.chainId"),
+    normalizeExactMetadataString(callId, "privateJoinKaigi.callId"),
     JSON.stringify(artifacts ?? {}),
     JSON.stringify(feeSpend ?? {}),
     normalizeMetadataPayload(metadata, "privateJoinKaigi.metadata"),
@@ -2482,8 +2516,8 @@ export function buildPrivateEndKaigiTransaction({
     );
   }
   const result = native.buildPrivateEndKaigiTransaction(
-    String(chainId ?? "").trim(),
-    String(callId ?? "").trim(),
+    normalizeExactMetadataString(chainId, "privateEndKaigi.chainId"),
+    normalizeExactMetadataString(callId, "privateEndKaigi.callId"),
     endedAtMs,
     JSON.stringify(artifacts ?? {}),
     JSON.stringify(feeSpend ?? {}),
@@ -3241,13 +3275,13 @@ function isTerminalStatus(status) {
 
 function toBuffer(value, context = "signedTransaction") {
   if (Buffer.isBuffer(value)) {
-    return value;
+    return Buffer.from(value);
   }
   if (ArrayBuffer.isView(value)) {
-    return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+    return Buffer.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
   }
   if (value instanceof ArrayBuffer) {
-    return Buffer.from(value);
+    return Buffer.from(new Uint8Array(value));
   }
   throw new TypeError(`${context} must be a Buffer or ArrayBuffer view`);
 }

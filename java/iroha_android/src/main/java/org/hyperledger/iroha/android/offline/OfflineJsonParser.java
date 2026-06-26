@@ -221,33 +221,52 @@ public final class OfflineJsonParser {
       if (string.isEmpty() || !string.equals(string.trim())) {
         throw new IllegalStateException(path + " must be an exact integer string");
       }
+      if (!string.matches("[1-9][0-9]*")) {
+        throw new IllegalStateException(path + " must be an exact integer string");
+      }
       try {
-        return Integer.parseInt(string);
+        return asPositiveAliasInteger(new BigInteger(string), path);
       } catch (final NumberFormatException ex) {
         throw new IllegalStateException(path + " must be an integer", ex);
       }
-    }
-    if (value instanceof BigInteger bigInteger) {
+    } else if (value instanceof BigInteger bigInteger) {
+      return asPositiveAliasInteger(bigInteger, path);
+    } else if (value instanceof BigDecimal bigDecimal) {
       try {
-        return bigInteger.intValueExact();
-      } catch (final ArithmeticException ex) {
-        throw new IllegalStateException(path + " must fit in signed 32-bit range", ex);
-      }
-    }
-    if (value instanceof BigDecimal bigDecimal) {
-      try {
-        return bigDecimal.toBigIntegerExact().intValueExact();
+        return asPositiveAliasInteger(bigDecimal.toBigIntegerExact(), path);
       } catch (final ArithmeticException ex) {
         throw new IllegalStateException(path + " must be an integer", ex);
       }
-    }
-    if (value instanceof Byte
+    } else if (value instanceof Byte
         || value instanceof Short
         || value instanceof Integer
         || value instanceof Long) {
-      return Math.toIntExact(((Number) value).longValue());
+      return asPositiveAliasInteger(((Number) value).longValue(), path);
+    } else {
+      throw new IllegalStateException(path + " must be an integer");
     }
-    throw new IllegalStateException(path + " must be an integer");
+  }
+
+  private static int asPositiveAliasInteger(final BigInteger value, final String path) {
+    if (value.signum() <= 0) {
+      throw new IllegalStateException(path + " must be a positive integer");
+    }
+    try {
+      return value.intValueExact();
+    } catch (final ArithmeticException ex) {
+      throw new IllegalStateException(path + " must fit in signed 32-bit range", ex);
+    }
+  }
+
+  private static int asPositiveAliasInteger(final long value, final String path) {
+    if (value <= 0) {
+      throw new IllegalStateException(path + " must be a positive integer");
+    }
+    try {
+      return Math.toIntExact(value);
+    } catch (final ArithmeticException ex) {
+      throw new IllegalStateException(path + " must fit in signed 32-bit range", ex);
+    }
   }
 
   private static boolean valuesEqual(final Object left, final Object right) {

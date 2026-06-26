@@ -145,8 +145,20 @@ class OfflineToriiClientV2ReadinessTest {
             "offline_kagemusha_recursive_compact_mode must be an exact non-empty string",
         aliasReadinessBody(abi7Bridge = "\" 7\"") to
             "offline_kagemusha_abi7_bridge_abi_version must be an exact integer string",
+        aliasReadinessBody(abi7Bridge = "\"+7\"") to
+            "offline_kagemusha_abi7_bridge_abi_version must be an exact integer string",
+        aliasReadinessBody(compactBridge = "\"007\"") to
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact integer string",
+        aliasReadinessBody(abi7Bridge = "-1", compactBridge = "-1") to
+            "offline_kagemusha_abi7_bridge_abi_version must be a positive integer",
+        aliasReadinessBody(abi7Bridge = "\"2147483648\"", compactBridge = "\"2147483648\"") to
+            "offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range",
         aliasReadinessBody(compactBridge = "7.5") to
             "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an integer",
+        aliasReadinessBody(abi7Bridge = "7", compactBridge = "0") to
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer",
+        aliasReadinessBody(abi7Bridge = "7", compactBridge = "2147483648") to
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range",
         aliasReadinessBody(compactCircuit = "\"\"") to
             "offline_kagemusha_recursive_compact_circuit_id must be an exact non-empty string",
         aliasReadinessBody(abi7Circuit = "7") to

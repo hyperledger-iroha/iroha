@@ -8,10 +8,17 @@ import {
   buildKagemushaInstructionArchiveInstruction,
   buildKagemushaInstructionTransaction,
   buildKagemushaRecursiveRedeemTransaction,
+  buildConfidentialTransferProofV2,
+  buildConfidentialUnshieldProofV2,
+  buildConfidentialUnshieldProofV3,
+  buildPrivateCreateKaigiTransaction,
+  buildPrivateJoinKaigiTransaction,
+  buildPrivateEndKaigiTransaction,
   buildPrivateKaigiFeeSpend,
   buildMintAssetTransaction,
   buildMintAndTransferTransaction,
   buildRegisterDomainAndMintTransaction,
+  buildRegisterAssetDefinitionAndMintTransaction,
   buildRegisterAssetDefinitionMintAndTransferTransaction,
   buildTransferAssetTransaction,
   buildRegisterRwaTransaction,
@@ -672,6 +679,104 @@ baseTest("buildKagemushaRecursiveRedeemTransaction derives instruction before si
   assert.equal(signCalls.length, 0);
 });
 
+baseTest("buildKagemusha transaction helpers copy mutable buffers before native calls", () => {
+  const calls = [];
+  const transferArchive = frameKagemushaInstructionArchive("KagemushaTransfer", [
+    0x31, 0x32, 0x33,
+  ]);
+  const redeemInstructionArchive = frameKagemushaInstructionArchive(
+    "RedeemKagemushaRecursive",
+    [0x41, 0x42, 0x43],
+  );
+  const redeemRequestArchive = Buffer.from([0x51, 0x52, 0x53]);
+  const privateKey = Buffer.alloc(32, 0x61);
+  const mutableTransferArchive = new Uint8Array(transferArchive);
+  const mutableRedeemInstructionArchive = new Uint8Array(redeemInstructionArchive);
+  const mutableRedeemRequestArchive = new Uint8Array(redeemRequestArchive);
+  const mutablePrivateKey = new Uint8Array(privateKey);
+  const fakeResult = {
+    signed_transaction: Buffer.from([0x71, 0x72]),
+    hash: Buffer.alloc(32, 0x73),
+  };
+
+  withNativeBinding(
+    {
+      kagemushaRecursiveSpendRedeem: (requestArchive) => {
+        calls.push({
+          type: "redeem",
+          requestArchive,
+        });
+        return mutableRedeemInstructionArchive;
+      },
+      buildTransaction: (
+        chainId,
+        authority,
+        instructions,
+        metadataPayload,
+        creationTimeMs,
+        ttlMs,
+        nonce,
+        secret,
+      ) => {
+        calls.push({
+          type: "sign",
+          chainId,
+          authority,
+          instructions,
+          metadataPayload,
+          creationTimeMs,
+          ttlMs,
+          nonce,
+          secret,
+        });
+        return fakeResult;
+      },
+    },
+    () => {
+      buildKagemushaInstructionTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        instruction_type: "KagemushaTransfer",
+        instructionArchive: mutableTransferArchive,
+        privateKey: mutablePrivateKey,
+      });
+      buildKagemushaRecursiveRedeemTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        redeemRequestArchive: mutableRedeemRequestArchive,
+        privateKey: mutablePrivateKey,
+      });
+    },
+  );
+
+  mutableTransferArchive.fill(0xa5);
+  mutableRedeemInstructionArchive.fill(0xa5);
+  mutableRedeemRequestArchive.fill(0xa5);
+  mutablePrivateKey.fill(0xa5);
+
+  assert.deepEqual(
+    JSON.parse(calls[0].instructions[0]),
+    {
+      KagemushaInstructionArchive: {
+        type: "KagemushaTransfer",
+        bytes_base64: transferArchive.toString("base64"),
+      },
+    },
+  );
+  assert.deepEqual(Buffer.from(calls[0].secret), privateKey);
+  assert.deepEqual(Buffer.from(calls[1].requestArchive), redeemRequestArchive);
+  assert.deepEqual(
+    JSON.parse(calls[2].instructions[0]),
+    {
+      KagemushaInstructionArchive: {
+        type: "RedeemKagemushaRecursive",
+        bytes_base64: redeemInstructionArchive.toString("base64"),
+      },
+    },
+  );
+  assert.deepEqual(Buffer.from(calls[2].secret), privateKey);
+});
+
 test("buildIvmProvedTransaction normalizes proved executable and attachment", () => {
   const captures = [];
   const fakeResult = {
@@ -821,6 +926,47 @@ test("buildTransferRwaTransaction returns canonical hash", () => {
     encoding: "buffer",
   });
   assert.deepEqual(recomputed, built.hash);
+});
+
+baseTest("transaction builders reject padded authority and asset definition IDs before native dispatch", () => {
+  const calls = [];
+  withNativeBinding(
+    {
+      buildTransaction: () => {
+        calls.push("buildTransaction");
+        return {
+          signed_transaction: Buffer.from([0x47]),
+          hash: Buffer.alloc(32, 0x47),
+        };
+      },
+    },
+    () => {
+      assert.throws(
+        () =>
+          buildTransaction({
+            chainId: "test-chain",
+            authority: ` ${AUTHORITY_ID_INPUT}`,
+            instructions: [{ RegisterDomain: { id: "wonderland" } }],
+            privateKey: PRIVATE_KEY,
+          }),
+        /authority must not contain surrounding whitespace/u,
+      );
+      assert.throws(
+        () =>
+          buildRegisterAssetDefinitionAndMintTransaction({
+            chainId: "test-chain",
+            authority: AUTHORITY_ID_INPUT,
+            assetDefinition: {
+              assetDefinitionId: `${ASSET_DEFINITION_ID} `,
+              spec: { scale: 0 },
+            },
+            privateKey: PRIVATE_KEY,
+          }),
+        /assetDefinition\.assetDefinitionId must not contain surrounding whitespace/u,
+      );
+    },
+  );
+  assert.deepEqual(calls, []);
 });
 
 test("buildRegisterRwaTransaction forwards canonical instruction payload", () => {
@@ -1629,7 +1775,7 @@ test("buildRemoveSmartContractBytesTransaction wraps removal payload", () => {
   assert.equal(parsed.RemoveSmartContractBytes.reason, "cleanup");
 });
 
-test("proof builders reject padded inline verifier-key metadata", () => {
+baseTest("proof builders reject padded inline verifier-key metadata", () => {
   const captures = [];
   const verifyingKey = {
     id: { backend: "halo2/ipa" },
@@ -1673,7 +1819,7 @@ test("proof builders reject padded inline verifier-key metadata", () => {
         chainId: "test-chain",
         assetDefinitionId: ASSET_DEFINITION_ID,
         actionHash: Buffer.alloc(32, 0xaa),
-        anchorRootHex: normalizedHashHex(Buffer.alloc(32, 0xbb)),
+        anchorRootHex: Buffer.alloc(32, 0xbb).toString("hex"),
         feeAmount: "7",
         verifyingKey,
       });
@@ -1708,13 +1854,328 @@ test("proof builders reject padded inline verifier-key metadata", () => {
               chainId: "test-chain",
               assetDefinitionId: ASSET_DEFINITION_ID,
               actionHash: Buffer.alloc(32, 0xaa),
-              anchorRootHex: normalizedHashHex(Buffer.alloc(32, 0xbb)),
+              anchorRootHex: Buffer.alloc(32, 0xbb).toString("hex"),
               feeAmount: "7",
               verifyingKey: { ...verifyingKey, ...patch },
             }),
         ),
       message,
     );
+  }
+
+  for (const [label, patch, message] of [
+    [
+      "chainId",
+      { chainId: " test-chain" },
+      /privateKaigiFeeSpend\.chainId must not contain surrounding whitespace/u,
+    ],
+    [
+      "assetDefinitionId",
+      { assetDefinitionId: `${ASSET_DEFINITION_ID} ` },
+      /privateKaigiFeeSpend\.assetDefinitionId must not contain surrounding whitespace/u,
+    ],
+    [
+      "anchorRootHex",
+      { anchorRootHex: `${Buffer.alloc(32, 0xbb).toString("hex")}\n` },
+      /privateKaigiFeeSpend\.anchorRootHex must not contain surrounding whitespace/u,
+    ],
+    [
+      "feeAmount",
+      { feeAmount: " 7" },
+      /privateKaigiFeeSpend\.feeAmount must not contain surrounding whitespace/u,
+    ],
+  ]) {
+    assert.throws(
+      () =>
+        withNativeBinding(
+          {
+            buildPrivateKaigiFeeSpend: () => {
+              throw new Error(`${label} should fail before native call`);
+            },
+          },
+          () =>
+            buildPrivateKaigiFeeSpend({
+              chainId: "test-chain",
+              assetDefinitionId: ASSET_DEFINITION_ID,
+              actionHash: Buffer.alloc(32, 0xaa),
+              anchorRootHex: Buffer.alloc(32, 0xbb).toString("hex"),
+              feeAmount: "7",
+              verifyingKey,
+              ...patch,
+            }),
+        ),
+      message,
+    );
+  }
+});
+
+baseTest("confidential proof builders reject padded chain IDs and hex fields before native dispatch", () => {
+  const calls = [];
+  const verifyingKey = {
+    id: { backend: "halo2/ipa" },
+    record: { circuit_id: "confidential-transfer-v2" },
+    inlineKey: { bytesBase64: Buffer.from([1, 2, 3]).toString("base64") },
+  };
+  const spendKey = Buffer.alloc(32, 0x42);
+  const rho = Buffer.alloc(32, 0x51).toString("hex");
+  const diversifier = Buffer.alloc(32, 0x52).toString("hex");
+  const ownerTag = Buffer.alloc(32, 0x53).toString("hex");
+  const rootHint = Buffer.alloc(32, 0x54).toString("hex");
+  const treeCommitment = Buffer.alloc(32, 0x55).toString("hex");
+  const baseRequest = {
+    chainId: "test-chain",
+    assetDefinitionId: ASSET_DEFINITION_ID,
+    spendKey,
+    treeCommitments: [treeCommitment],
+    inputs: [{ amount: "7", rhoHex: rho, diversifierHex: diversifier, leafIndex: 0 }],
+    outputs: [{ amount: "7", rhoHex: rho, ownerTagHex: ownerTag }],
+    rootHintHex: rootHint,
+    verifyingKey,
+  };
+  withNativeBinding(
+    {
+      buildConfidentialTransferProofV2: (...args) => {
+        calls.push(args);
+        return {
+          nullifiers: [],
+          outputCommitments: [],
+          root: Buffer.alloc(32, 0x61),
+          proof: Buffer.from([0x62]),
+        };
+      },
+      buildConfidentialUnshieldProofV2: () => {
+        throw new Error("unshield v2 publicAmount should fail before native call");
+      },
+      buildConfidentialUnshieldProofV3: () => {
+        throw new Error("unshield v3 publicAmount should fail before native call");
+      },
+    },
+    () => {
+      buildConfidentialTransferProofV2(baseRequest);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0][0], "test-chain");
+      assert.equal(calls[0][1], ASSET_DEFINITION_ID);
+      assert.deepEqual(calls[0][3], [treeCommitment]);
+      assert.equal(calls[0][4][0].rhoHex, rho);
+      assert.equal(calls[0][4][0].diversifierHex, diversifier);
+      assert.equal(calls[0][5][0].ownerTagHex, ownerTag);
+
+      calls.length = 0;
+      for (const [label, patch, message] of [
+        [
+          "chainId",
+          { chainId: " test-chain" },
+          /confidentialTransferProofV2\.chainId must not contain surrounding whitespace/u,
+        ],
+        [
+          "assetDefinitionId",
+          { assetDefinitionId: `${ASSET_DEFINITION_ID} ` },
+          /confidentialTransferProofV2\.assetDefinitionId must not contain surrounding whitespace/u,
+        ],
+        [
+          "input amount",
+          { inputs: [{ amount: " 7", rhoHex: rho, diversifierHex: diversifier }] },
+          /inputs\[0\]\.amount must not contain surrounding whitespace/u,
+        ],
+        [
+          "inputs rho",
+          { inputs: [{ amount: "7", rhoHex: `${rho} `, diversifierHex: diversifier }] },
+          /inputs\[0\]\.rho must not contain surrounding whitespace/u,
+        ],
+        [
+          "input diversifier",
+          { inputs: [{ amount: "7", rhoHex: rho, diversifierHex: ` ${diversifier}` }] },
+          /inputs\[0\]\.diversifier must not contain surrounding whitespace/u,
+        ],
+        [
+          "output amount",
+          { outputs: [{ amount: "7\n", rhoHex: rho, ownerTagHex: ownerTag }] },
+          /outputs\[0\]\.amount must not contain surrounding whitespace/u,
+        ],
+        [
+          "output ownerTag",
+          { outputs: [{ amount: "7", rhoHex: rho, ownerTagHex: `${ownerTag}\n` }] },
+          /outputs\[0\]\.ownerTag must not contain surrounding whitespace/u,
+        ],
+        [
+          "treeCommitments",
+          { treeCommitments: [` ${treeCommitment}`] },
+          /treeCommitments\[0\] must not contain surrounding whitespace/u,
+        ],
+        [
+          "rootHintHex",
+          { rootHintHex: `${rootHint} ` },
+          /rootHintHex must not contain surrounding whitespace/u,
+        ],
+      ]) {
+        assert.throws(
+          () => buildConfidentialTransferProofV2({ ...baseRequest, ...patch }),
+          message,
+          label,
+        );
+      }
+
+      assert.throws(
+        () =>
+          buildConfidentialUnshieldProofV2({
+            chainId: "test-chain",
+            assetDefinitionId: ASSET_DEFINITION_ID,
+            spendKey,
+            treeCommitments: [treeCommitment],
+            inputs: [{ amount: "7", rhoHex: rho, diversifierHex: diversifier }],
+            publicAmount: " 7",
+            rootHintHex: rootHint,
+            verifyingKey,
+          }),
+        /publicAmount must not contain surrounding whitespace/u,
+      );
+      assert.throws(
+        () =>
+          buildConfidentialUnshieldProofV3({
+            chainId: "test-chain",
+            assetDefinitionId: ASSET_DEFINITION_ID,
+            spendKey,
+            treeCommitments: [treeCommitment],
+            inputs: [{ amount: "7", rhoHex: rho, diversifierHex: diversifier }],
+            outputs: [{ amount: "7", rhoHex: rho }],
+            publicAmount: "7\n",
+            rootHintHex: rootHint,
+            verifyingKey,
+          }),
+        /publicAmount must not contain surrounding whitespace/u,
+      );
+    },
+  );
+
+  assert.deepEqual(calls, []);
+});
+
+baseTest("private Kaigi transaction builders reject padded identifiers before native dispatch", () => {
+  const calls = [];
+  const nativeResult = (tag) => ({
+    transactionEntrypoint: Buffer.from(`${tag}-entrypoint`),
+    hash: Buffer.alloc(32, tag.charCodeAt(0)),
+    actionHash: Buffer.alloc(32, tag.charCodeAt(0) + 1),
+  });
+  const binding = {
+    buildPrivateCreateKaigiTransaction: (chainId, call, artifacts, feeSpend) => {
+      calls.push(["create", chainId, call, artifacts, feeSpend]);
+      return nativeResult("c");
+    },
+    buildPrivateJoinKaigiTransaction: (chainId, callId, artifacts, feeSpend) => {
+      calls.push(["join", chainId, callId, artifacts, feeSpend]);
+      return nativeResult("j");
+    },
+    buildPrivateEndKaigiTransaction: (chainId, callId, endedAtMs, artifacts, feeSpend) => {
+      calls.push(["end", chainId, callId, endedAtMs, artifacts, feeSpend]);
+      return nativeResult("e");
+    },
+  };
+  withNativeBinding(binding, () => {
+    buildPrivateCreateKaigiTransaction({
+      chainId: "test-chain",
+      call: { callId: "call-1" },
+      artifacts: { proof: "proof" },
+      feeSpend: { amount: "7" },
+    });
+    buildPrivateJoinKaigiTransaction({
+      chainId: "test-chain",
+      callId: "call-1",
+      artifacts: { proof: "proof" },
+      feeSpend: { amount: "7" },
+    });
+    buildPrivateEndKaigiTransaction({
+      chainId: "test-chain",
+      callId: "call-1",
+      endedAtMs: 42,
+      artifacts: { proof: "proof" },
+      feeSpend: { amount: "7" },
+    });
+  });
+  assert.deepEqual(calls.map((entry) => entry.slice(0, 3)), [
+    ["create", "test-chain", '{"callId":"call-1"}'],
+    ["join", "test-chain", "call-1"],
+    ["end", "test-chain", "call-1"],
+  ]);
+
+  for (const [label, build, message] of [
+    [
+      "create chainId",
+      () =>
+        buildPrivateCreateKaigiTransaction({
+          chainId: " test-chain",
+          call: { callId: "call-1" },
+          artifacts: {},
+          feeSpend: {},
+        }),
+      /privateCreateKaigi\.chainId must not contain surrounding whitespace/u,
+    ],
+    [
+      "join chainId",
+      () =>
+        buildPrivateJoinKaigiTransaction({
+          chainId: "test-chain\n",
+          callId: "call-1",
+          artifacts: {},
+          feeSpend: {},
+        }),
+      /privateJoinKaigi\.chainId must not contain surrounding whitespace/u,
+    ],
+    [
+      "join callId",
+      () =>
+        buildPrivateJoinKaigiTransaction({
+          chainId: "test-chain",
+          callId: " call-1",
+          artifacts: {},
+          feeSpend: {},
+        }),
+      /privateJoinKaigi\.callId must not contain surrounding whitespace/u,
+    ],
+    [
+      "end chainId",
+      () =>
+        buildPrivateEndKaigiTransaction({
+          chainId: " test-chain",
+          callId: "call-1",
+          artifacts: {},
+          feeSpend: {},
+        }),
+      /privateEndKaigi\.chainId must not contain surrounding whitespace/u,
+    ],
+    [
+      "end callId",
+      () =>
+        buildPrivateEndKaigiTransaction({
+          chainId: "test-chain",
+          callId: "call-1 ",
+          artifacts: {},
+          feeSpend: {},
+        }),
+      /privateEndKaigi\.callId must not contain surrounding whitespace/u,
+    ],
+  ]) {
+    const before = calls.length;
+    assert.throws(
+      () =>
+        withNativeBinding(
+          {
+            buildPrivateCreateKaigiTransaction: () => {
+              throw new Error(`${label} should fail before native call`);
+            },
+            buildPrivateJoinKaigiTransaction: () => {
+              throw new Error(`${label} should fail before native call`);
+            },
+            buildPrivateEndKaigiTransaction: () => {
+              throw new Error(`${label} should fail before native call`);
+            },
+          },
+          build,
+        ),
+      message,
+      label,
+    );
+    assert.equal(calls.length, before, label);
   }
 });
 
