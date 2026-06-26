@@ -1,4 +1,5 @@
 import argparse
+import array
 import contextlib
 import copy
 import importlib.util
@@ -41,6 +42,37 @@ def load_summary(stdout):
 
 
 class IsoOperatorCanaryTest(unittest.TestCase):
+    def test_os_error_detail_redacts_unsafe_strerror_without_echo(self):
+        self.assertEqual(
+            CANARY._safe_os_error_detail(OSError(5, "Permission denied")),
+            "Permission denied",
+        )
+        unsafe_values = (
+            "token=/tmp/canary-hidden-secret",
+            "open /tmp/canary-hidden-path",
+            "bad\ncontrol",
+            "nonascii-\u2603",
+            "x" * 129,
+        )
+        for value in unsafe_values:
+            with self.subTest(value=value):
+                detail = CANARY._safe_os_error_detail(OSError(5, value))
+                self.assertEqual(detail, "I/O error")
+                self.assertNotIn("canary-hidden", detail)
+
+    def test_canonical_json_bytes_rejects_non_finite_numbers(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    CANARY._canonical_json_bytes({"value": value})
+
+    def test_json_float_parser_rejects_overflow_and_negative_zero(self):
+        for value in ("1e9999", "-1e9999", "-0.0", "-0e0"):
+            with self.subTest(value=value):
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    CANARY._parse_canonical_json_float(value)
+                self.assertNotIn(value, str(caught.exception))
+
     def test_text_output_symlink_ancestor_diagnostic_does_not_echo_path(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -853,6 +885,33 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 self.assertIn("must use printable ASCII", stderr)
                 self.assertNotIn(hidden, stderr)
 
+    def test_numeric_cli_flags_reject_noncanonical_decimal_spellings_before_stage_planning(self):
+        cases = (
+            ["--output-limit-bytes", "000512"],
+            ["--output-limit-bytes", "+512"],
+            ["--output-limit-bytes=001024"],
+            ["--output-limit-bytes", "-0"],
+            ["--stage-timeout-secs", ".5"],
+            ["--stage-timeout-secs", "01"],
+            ["--stage-timeout-secs", "1e01"],
+            ["--stage-timeout-secs", "1."],
+            ["--stage-timeout-secs", "+1"],
+            ["--stage-timeout-secs", "-0"],
+            ["--stage-timeout-secs", "-0.0"],
+            ["--stage-timeout-secs", "-0e0"],
+            ["--stage-timeout-secs", "1e9999"],
+            ["--stage-timeout-secs", "-1e9999"],
+            ["--stage-timeout-secs=-0e0"],
+            ["--stage-timeout-secs=1e9999"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, stdout, stderr = run_canary(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn("numeric value", stderr)
+
     def test_raw_cli_secret_like_values_rejected_without_echo(self):
         cases = (
             ["--private-key=canary-secret"],
@@ -1280,6 +1339,42 @@ class IsoOperatorCanaryTest(unittest.TestCase):
         self.assertIsNone(caught.exception.__cause__)
         self.assertTrue(caught.exception.__suppress_context__)
 
+    def test_child_stage_pipe_reader_clamps_bytes_like_chunks_by_byte_length(self):
+        class FakePipe:
+            def __init__(self, chunks):
+                self.chunks = list(chunks)
+
+            def read(self, _size):
+                return self.chunks.pop(0) if self.chunks else b""
+
+        wide = memoryview(array.array("H", [0x4142] * 8))
+        cases = (
+            ("bytes", b"abcdefgh", b"abcdef"),
+            ("bytearray", bytearray(b"abcdefgh"), b"abcdef"),
+            ("memoryview", memoryview(b"abcdefgh"), b"abcdef"),
+            ("wide-memoryview", wide, wide.cast("B")[:6].tobytes()),
+        )
+        for name, chunk, expected in cases:
+            with self.subTest(name=name):
+                captured, truncated = CANARY._read_limited_pipe(FakePipe([chunk]), 6)
+                self.assertEqual(captured, expected)
+                self.assertTrue(truncated)
+
+    def test_child_stage_pipe_reader_rejects_non_byte_chunks_without_echo(self):
+        hidden = "token=canary-pipe-secret"
+
+        class FakePipe:
+            def __init__(self, chunks):
+                self.chunks = list(chunks)
+
+            def read(self, _size):
+                return self.chunks.pop(0) if self.chunks else b""
+
+        with self.assertRaises(OSError) as caught:
+            CANARY._read_limited_pipe(FakePipe([hidden]), 6)
+        self.assertIn("non-byte data", str(caught.exception))
+        self.assertNotIn(hidden, str(caught.exception))
+
     def test_direct_run_numeric_limits_must_exist_before_execution(self):
         cases = (
             ("output_limit_bytes", "--output-limit-bytes must be positive"),
@@ -1562,6 +1657,8 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     self.assertEqual(stdout, "")
                     self.assertIn(expected, stderr)
                     self.assertIn("config", stderr)
+                    self.assertNotIn("line 1 column", stderr)
+                    self.assertNotIn("(char ", stderr)
                     self.assertNotIn(str(config), stderr)
                     self.assertNotIn(hidden_dir.name, stderr)
 
@@ -3320,6 +3417,29 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("non-finite numeric constant", stderr)
             self.assertNotIn("Infinity", stderr)
+
+    def test_noncanonical_runbook_json_numbers_are_rejected_before_planning(self):
+        for value in ("1e01", "-0", "-0.0", "-0e0"):
+            with self.subTest(value=value):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    config = root / "canary.json"
+                    config.write_text(
+                        (
+                            '{"provider":"local-bank","environment":"ci",'
+                            '"rail":{"inbox_dir":"inbox",'
+                            '"torii_base_url":"https://torii.local-bank.bank",'
+                            f'"timeout_secs":{value}}}\n'
+                        ),
+                        encoding="utf-8",
+                    )
+
+                    rc, stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("non-canonical numeric value", stderr)
+                    self.assertNotIn(value, stderr)
 
     def test_runbook_json_surrogate_strings_are_rejected_before_planning(self):
         with tempfile.TemporaryDirectory() as raw_root:

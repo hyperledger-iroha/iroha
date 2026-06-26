@@ -146,7 +146,7 @@ KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV = (
     "IROHA_KAGEMUSHA_ALLOW_RUNTIME_LINEAGE_KEYGEN"
 )
 EXPECTED_LINEAGE_VERIFIER_WITNESS_PROFILE = (
-    "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4"
+    "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1"
 )
 EXPECTED_LINEAGE_CIRCUIT_IDS = {
     "one_hop": "kagemusha-recursive-spend-lineage-onehop-v1",
@@ -775,6 +775,15 @@ LINEAGE_KEY_RELEASE_TOOLING_REQUIREMENTS = {
     ),
 }
 SUMMARY_OUT_PATH_INVALID_CODE = "kagemusha_summary_out_path_invalid"
+READINESS_SECTION_LABELS: dict[str, str] = {
+    "abi6_reserved_lineage": "ABI-6 Reserved-lineage fixture",
+    "abi7_recursive_compact": "ABI-7 recursive compact fixture",
+    "lineage_key_release_tooling": "lineage key release tooling",
+    "lineage_proof_evidence": "Reserved-lineage proof evidence",
+    "compact_key_evidence": "ABI-7 recursive compact key evidence",
+    "localnet_lifecycle_evidence": "Kagemusha localnet lifecycle evidence",
+    "android_device_lab": "Android device-lab evidence",
+}
 
 
 def utc_now() -> str:
@@ -792,6 +801,41 @@ def blocker(code: str, message: str, **extra: Any) -> dict[str, Any]:
     item: dict[str, Any] = {"code": code, "message": message}
     item.update(extra)
     return item
+
+
+def _section_readiness_blockers(
+    section_key: str,
+    section: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Fail closed when an internal readiness checker reports an unusable section."""
+
+    label = READINESS_SECTION_LABELS[section_key]
+    section_blockers = section.get("blockers")
+    if not isinstance(section_blockers, list):
+        return [
+            blocker(
+                "kagemusha_readiness_section_blockers_shape",
+                f"{label} blockers must be a JSON array",
+                section=section_key,
+            )
+        ]
+    if section.get("ok") is not True and not section_blockers:
+        return [
+            blocker(
+                "kagemusha_readiness_section_inconsistent",
+                f"{label} is not ready but did not report blockers",
+                section=section_key,
+            )
+        ]
+    if section.get("ok") is True and section_blockers:
+        return [
+            blocker(
+                "kagemusha_readiness_section_inconsistent",
+                f"{label} reported blockers while marked ready",
+                section=section_key,
+            )
+        ]
+    return []
 
 
 def _secret_looking_path_blocker(
@@ -6024,21 +6068,7 @@ def build_summary(
         min_signed_at=min_signed_at,
         max_signed_at=max_signed_at,
     )
-    all_blockers = [
-        *abi6["blockers"],
-        *abi7["blockers"],
-        *lineage["blockers"],
-        *lineage_proof["blockers"],
-        *compact_key["blockers"],
-        *localnet_lifecycle["blockers"],
-        *android["blockers"],
-    ]
-    return {
-        "schema": SUMMARY_SCHEMA,
-        "generated_at": utc_now(),
-        "status": "ready" if not all_blockers else "blocked",
-        "ready": not all_blockers,
-        "blockers": all_blockers,
+    sections = {
         "abi6_reserved_lineage": abi6,
         "abi7_recursive_compact": abi7,
         "lineage_key_release_tooling": lineage,
@@ -6046,6 +6076,20 @@ def build_summary(
         "compact_key_evidence": compact_key,
         "localnet_lifecycle_evidence": localnet_lifecycle,
         "android_device_lab": android,
+    }
+    all_blockers: list[dict[str, Any]] = []
+    for section_key, section in sections.items():
+        section_blockers = section.get("blockers")
+        if isinstance(section_blockers, list):
+            all_blockers.extend(section_blockers)
+        all_blockers.extend(_section_readiness_blockers(section_key, section))
+    return {
+        "schema": SUMMARY_SCHEMA,
+        "generated_at": utc_now(),
+        "status": "ready" if not all_blockers else "blocked",
+        "ready": not all_blockers,
+        "blockers": all_blockers,
+        **sections,
     }
 
 

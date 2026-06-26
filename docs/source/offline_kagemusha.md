@@ -135,7 +135,14 @@ Append validation rejects additional carried-state collisions: the next note
 spend nullifier cannot reuse the previous spendable note commitment, and no
 new output commitment, including a sibling output that is not selected as the
 current spendable note, may reuse the previous spendable note commitment or any
-carried top-up anchor nullifier.
+carried top-up anchor nullifier. Append transition profiles carry the previous
+accumulator's top-up anchor nullifiers explicitly, so detached append evidence
+cannot omit, reorder, zero, or reuse those anchors in the next hop's outputs or
+current spendable note material before append-boundary derivation.
+Transition profile validation also re-derives the resulting accumulator digest
+and append-boundary-free recursive public-input hash from the profile's own
+transition fields, so a self-consistent profile cannot refresh its outer digest
+around forged non-zero result hashes.
 The accumulator's streaming nullifier, output, and fold-transcript digests use
 recursive-spend domain tags, separate from the folded-token list/transcript
 digest tags, so a one-hop recursive spend state cannot be replayed as a plain
@@ -1963,6 +1970,12 @@ does not prove the private-hop lineage in-circuit. The
 record-backed lineage gate runs before final semantic recursive proof backend
 verification, while still preserving the cheaper bundle, verifier-record, and
 final redeem public-input checks that produce more specific diagnostics.
+Redeem requests retain the legacy single `lineage_verifier_record` field and
+add the trailing defaulted `lineage_verifier_records` vector for additional
+Reserved-lineage verifier profiles. Multi-profile record-backed lineage
+witnesses must provide records for every Reserved-lineage previous proof; newer
+SDK typed builders may place all Reserved-lineage records in the plural field,
+while older single-record callers remain valid for one-profile cases.
 Torii offline-v2 redeem ingress routes `/v1/offline/v2/notes/redeem` requests
 that carry `redeem_request_norito_base64`,
 `compact_payment_token_norito_base64`, or
@@ -2477,7 +2490,9 @@ Verify
 results also expose `witnessless_redeem_supported` and
 `lineage_witness_required_for_redeem`, so wallets that do not decode bundle
 internals can still decide whether to keep or attach the record-backed lineage
-witness before going online. The
+witness before going online. SDKs also keep shortened
+`lineage_witness_required` / `lineageWitnessRequired` aliases for compatibility.
+The
 native bridge and SDK `redeem` entry points are fail-closed on the
 chain-admission gate:
 semantic v1 bundles serialize redeem instructions only when the request carries
@@ -2580,6 +2595,7 @@ transition-profile helpers, as the canonical Reserved-lineage accumulator
 transition contract. The profile is a Norito object and digest that binds the
 previous accumulator digest, previous recursive proof artifact digest, previous
 accumulator public-input hash, previous recursive proof public-input hash,
+previous top-up anchor nullifiers for append profiles,
 previous proof opening-archive digest when raw request bytes are supplied,
 normalized hop index, current hop statement, current note, verifier-witness
 batch digest, fixed-window table-base digest, resulting
@@ -2601,7 +2617,14 @@ the exact previous bundle before hashing it. Append profiles require the
 previous accumulator public-input hash to equal the previous recursive proof
 public-input hash before the profile can be digested. Append profiles normalize
 a one-hop transport fragment to the accumulated hop index before hashing; for
-example, the second offline spend hashes as hop `1`. SDK fixtures should compare
+example, the second offline spend hashes as hop `1`. They also validate the
+previous top-up anchor vector before hashing and reject append outputs or
+current-note fields that reuse any carried previous anchor. Before returning a
+profile digest, validators reconstruct the resulting accumulator with the
+profile's non-circular binding digest and compare both
+`resulting_accumulator_digest` and `resulting_public_inputs_hash`; detached
+profiles with refreshed but forged result hashes fail before append-boundary
+derivation. SDK fixtures should compare
 against this profile with
 `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64`; matching the
 profile is required circuit preflight, and chain admission also verifies the
@@ -2947,12 +2970,13 @@ lineage-record gaps, and append-output transition compatibility before native
 dispatch. Typed verify request encoders and C# metadata-bound verify preflight
 additionally enforce final bundle/lineage-record selection before native calls:
 missing records are invalid for Reserved-lineage bundles, and extra records are
-invalid for semantic bundles. Non-C# typed redeem request encoders also decode the
-lineage-witness previous-proof summary for semantic final bundles, requiring a
-lineage verifier record for witnesses with prior Reserved-lineage proofs and
-rejecting dangling records for init-only or absent lineage witnesses; full
-record-backed lineage-witness validation remains enforced by native/core. Their
-request-layout regressions decode the emitted archives and pin
+invalid for semantic bundles. Non-C# typed redeem request encoders use a
+different semantic-bundle rule: they decode the lineage-witness previous-proof
+summary, require lineage verifier records when semantic witnesses contain prior
+Reserved-lineage proofs, and reject dangling records for init-only or absent
+lineage witnesses. Full record-backed lineage-witness validation remains
+enforced by native/core. Their request-layout regressions decode the emitted
+archives and pin
 raw embedded record/bundle/proof payloads, Norito `Option` child-length framing,
 and Rust `[u8; N]` fixed-array encoding as per-element compact
 length-prefixed bytes without an extra sequence-length header. C# exposes a
@@ -3454,7 +3478,7 @@ That batch summary is the host-side evidence surface feeding the private-hop
 recursive compact proof path. The data model now also has a recursive
 aggregation evidence statement that Norito/Poseidon-binds that batch digest and parameter
 fingerprint to the same ordered hop transcript and to the canonical
-`pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4` verifier-witness
+`pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1` verifier-witness
 profile. It validates mode `2` evidence shape, hop continuity, witness count,
 profile, verifier opening length, fixed-window table schedule/base digests, and
 non-zero batch fields before reserved compact-token projection checks. The Poseidon2
@@ -3502,7 +3526,7 @@ hop: verifier-key commitment, the confidential transfer v2 schema hash, and a
 Poseidon2 hop-domain tag over chain, asset, hop index, roots, nullifiers, output
 commitments, proof hash, public-input digest, and verifier-key binding. The
 helper accepts at most 64 witnesses, matching the compact-token hop cap, and
-uses the 64-by-4 fixed-window Vesta verifier witness profile that covers the
+uses the 255-by-1 fixed-window Vesta verifier witness profile that covers the
 255-bit Pasta scalar width without a trusted setup. Its aggregate digest is
 Poseidon2-backed rather than a generic hash transcript, so the host-side
 reserved evidence path stays aligned with the field-friendly no-trusted-setup

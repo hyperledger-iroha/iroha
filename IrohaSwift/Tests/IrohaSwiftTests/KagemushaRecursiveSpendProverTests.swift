@@ -725,7 +725,8 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
                 "lineage_witness",
                 "change_output",
                 "lineage_verifier_record",
-                "block_height"
+                "block_height",
+                "lineage_verifier_records"
             ]
         )
         for requestType in fieldsByType.keys {

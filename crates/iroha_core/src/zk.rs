@@ -376,10 +376,10 @@ pub const KAGEMUSHA_HOP_MAX_PROOF_BYTES: u32 = confidential_v2::CONFIDENTIAL_V2_
 pub const KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN: usize = 128;
 /// Number of fixed windows used by the production recursive Vesta IPA verifier witness profile.
 #[cfg(feature = "zk-halo2-ipa")]
-pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS: usize = 64;
+pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS: usize = 255;
 /// Bits per fixed window used by the production recursive Vesta IPA verifier witness profile.
 #[cfg(feature = "zk-halo2-ipa")]
-pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS: usize = 4;
+pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS: usize = 1;
 /// Canonical verifier-witness profile name bound into reserved Kagemusha recursive evidence.
 #[cfg(feature = "zk-halo2-ipa")]
 pub const KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1: &str =
@@ -31398,6 +31398,31 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_witnessless_matches_direct_mode_shape()
+     {
+        run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
+            type DirectCircuit =
+                pasta_tiny::NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar<2, 1>;
+            let circuit = DirectCircuit::default();
+            let witnessless =
+                <DirectCircuit as halo2_proofs::plonk::Circuit<Scalar>>::without_witnesses(
+                    &circuit,
+                );
+
+            assert!(witnessless.tables.is_empty());
+            assert!(witnessless.selections.is_empty());
+            assert_eq!(witnessless.window_base_doubles.len(), 1);
+            assert_eq!(witnessless.window_base_doubles[0].len(), 1);
+            assert_eq!(witnessless.sum_adds.len(), 2);
+
+            let instances =
+                vesta_affine_windowed_scalar_mul_shared_table_native_scalar_instances(&witnessless);
+            MockProver::run(8, &witnessless, instances)
+                .expect("direct-mode witnessless shared-table scalar-mul synthesis");
+        });
+    }
+
+    #[test]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_synthesis_rejects_extra_direct_duplicate_witnesses()
      {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
@@ -42514,6 +42539,37 @@ mod kagemusha_folded_real_prover_tests {
             &bundle,
             &witness,
             "initial root does not match redeem bundle",
+        );
+
+        let (bundle, mut witness) = sample_context();
+        witness.record_bundle.bundle.steps[1].root_after =
+            fixed_bytes(b"kagemusha-lineage-context-spliced-final-root");
+        assert_context_rejects_with(&bundle, &witness, "final root does not match redeem bundle");
+
+        let (bundle, mut witness) = sample_context();
+        witness.current_notes[1].note_commitment =
+            fixed_bytes(b"kagemusha-lineage-context-spliced-final-note");
+        assert_context_rejects_with(
+            &bundle,
+            &witness,
+            "final current note does not match redeem bundle",
+        );
+
+        let (bundle, mut witness) = sample_context();
+        witness.current_notes[1].spend_nullifier =
+            fixed_bytes(b"kagemusha-lineage-context-spliced-final-nullifier");
+        assert_context_rejects_with(
+            &bundle,
+            &witness,
+            "final current note does not match redeem bundle",
+        );
+
+        let (bundle, mut witness) = sample_context();
+        witness.current_notes[1].amount = Numeric::new(8, 0);
+        assert_context_rejects_with(
+            &bundle,
+            &witness,
+            "final current note does not match redeem bundle",
         );
     }
 
@@ -63774,13 +63830,21 @@ mod pasta_tiny {
         for NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar<WINDOWS, WINDOW_BITS>
     {
         fn default() -> Self {
+            let one_bit_direct_select = WINDOW_BITS == 1 && WINDOWS > 1;
+            let tables = if one_bit_direct_select {
+                Vec::new()
+            } else {
+                vec![NonNativeVestaAffineFixedWindowTable::default(); WINDOWS]
+            };
+            let selections = if one_bit_direct_select {
+                Vec::new()
+            } else {
+                vec![NonNativeVestaAffineFixedWindowSelectFromTable::default(); WINDOWS]
+            };
             Self {
                 scalar: Box::new(NativePastaFpFixedWindowDecomposition::default()),
-                tables: vec![NonNativeVestaAffineFixedWindowTable::default(); WINDOWS],
-                selections: vec![
-                    NonNativeVestaAffineFixedWindowSelectFromTable::default();
-                    WINDOWS
-                ],
+                tables,
+                selections,
                 window_base_doubles: vec![
                     vec![
                         NonNativeVestaAffineCompleteAdd::default();

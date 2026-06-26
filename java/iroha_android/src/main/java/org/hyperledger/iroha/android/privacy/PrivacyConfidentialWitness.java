@@ -35,6 +35,7 @@ public final class PrivacyConfidentialWitness {
   public static final int CONFIDENTIAL_MAX_TRANSFER_OUTPUTS_V2 = 2;
   public static final int CONFIDENTIAL_MAX_UNSHIELD_CHANGE_OUTPUTS_V3 = 1;
 
+  private static final int CONFIDENTIAL_PROOF_MAX_BYTES = 32 * 1024 * 1024;
   private static final int NORITO_HEADER_BYTES = 40;
   private static final int REQUEST_FLAGS = NoritoHeader.COMPACT_LEN;
   private static final int PRIVACY_REQUEST_SCHEMA_BYTE = 0x52;
@@ -121,7 +122,7 @@ public final class PrivacyConfidentialWitness {
   public static byte[] buildConfidentialTransferVerifyRequestV1(
       final byte[] proof, final String vkRef) {
     validateVkRef(vkRef, CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF);
-    final byte[] proofBytes = copyNonEmpty(proof, "proof");
+    final byte[] proofBytes = copyNonEmptyProof(proof);
     return encodePrivacyProofRequest(
         CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID,
         CONFIDENTIAL_TRANSFER_V2_ENTRYPOINT,
@@ -138,7 +139,7 @@ public final class PrivacyConfidentialWitness {
   public static byte[] buildConfidentialUnshieldVerifyRequestV1(
       final byte[] proof, final String vkRef) {
     validateVkRef(vkRef, CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF);
-    final byte[] proofBytes = copyNonEmpty(proof, "proof");
+    final byte[] proofBytes = copyNonEmptyProof(proof);
     return encodePrivacyProofRequest(
         CONFIDENTIAL_UNSHIELD_V3_ALGORITHM_ID,
         CONFIDENTIAL_UNSHIELD_V3_ENTRYPOINT,
@@ -558,9 +559,13 @@ public final class PrivacyConfidentialWitness {
     return value.clone();
   }
 
-  private static byte[] copyNonEmpty(final byte[] value, final String name) {
+  private static byte[] copyNonEmptyProof(final byte[] value) {
     if (value == null || value.length == 0) {
-      throw new IllegalArgumentException(name + " must not be empty");
+      throw new IllegalArgumentException("proof must not be empty");
+    }
+    if (value.length > CONFIDENTIAL_PROOF_MAX_BYTES) {
+      throw new IllegalArgumentException(
+          "proof must not exceed " + CONFIDENTIAL_PROOF_MAX_BYTES + " bytes");
     }
     return value.clone();
   }

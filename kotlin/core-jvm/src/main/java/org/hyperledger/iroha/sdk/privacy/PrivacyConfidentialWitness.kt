@@ -166,6 +166,7 @@ object PrivacyConfidentialWitnessCodecs {
     const val CONFIDENTIAL_MAX_TRANSFER_OUTPUTS_V2: Int = 2
     const val CONFIDENTIAL_MAX_UNSHIELD_CHANGE_OUTPUTS_V3: Int = 1
 
+    private const val CONFIDENTIAL_PROOF_MAX_BYTES: Int = 32 * 1024 * 1024
     private const val NORITO_HEADER_BYTES: Int = 40
     private const val REQUEST_FLAGS: Int = NoritoHeader.COMPACT_LEN
     private const val PRIVACY_REQUEST_SCHEMA_BYTE: Int = 0x52
@@ -254,8 +255,7 @@ object PrivacyConfidentialWitnessCodecs {
         vkRef: String = CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF,
     ): ByteArray {
         validateVkRef(vkRef, CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF)
-        val proofBytes = proof.copyOf()
-        require(proofBytes.isNotEmpty()) { "proof must not be empty" }
+        val proofBytes = copyNonEmptyProof(proof)
         return encodePrivacyProofRequest(
             algorithmId = CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID,
             entrypoint = CONFIDENTIAL_TRANSFER_V2_ENTRYPOINT,
@@ -273,8 +273,7 @@ object PrivacyConfidentialWitnessCodecs {
         vkRef: String = CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF,
     ): ByteArray {
         validateVkRef(vkRef, CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF)
-        val proofBytes = proof.copyOf()
-        require(proofBytes.isNotEmpty()) { "proof must not be empty" }
+        val proofBytes = copyNonEmptyProof(proof)
         return encodePrivacyProofRequest(
             algorithmId = CONFIDENTIAL_UNSHIELD_V3_ALGORITHM_ID,
             entrypoint = CONFIDENTIAL_UNSHIELD_V3_ENTRYPOINT,
@@ -304,6 +303,15 @@ object PrivacyConfidentialWitnessCodecs {
         require(witness.unshieldChange.size <= CONFIDENTIAL_MAX_UNSHIELD_CHANGE_OUTPUTS_V3) {
             "confidential unshield witness supports at most one unshieldChange output"
         }
+    }
+
+    private fun copyNonEmptyProof(value: ByteArray): ByteArray {
+        val bytes = value.copyOf()
+        require(bytes.isNotEmpty()) { "proof must not be empty" }
+        require(bytes.size <= CONFIDENTIAL_PROOF_MAX_BYTES) {
+            "proof must not exceed $CONFIDENTIAL_PROOF_MAX_BYTES bytes"
+        }
+        return bytes
     }
 
     private fun encodePrivacyProofRequest(

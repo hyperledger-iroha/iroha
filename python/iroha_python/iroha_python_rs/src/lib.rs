@@ -385,6 +385,19 @@ fn parse_chain_id(value: &str) -> PyResult<ChainId> {
         .map_err(|err| PyValueError::new_err(format!("invalid chain id: {err}")))
 }
 
+fn require_non_blank_unpadded(value: &str, field: &str) -> PyResult<()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(PyValueError::new_err(format!("{field} must not be blank")));
+    }
+    if trimmed != value {
+        return Err(PyValueError::new_err(format!(
+            "{field} must not contain surrounding whitespace"
+        )));
+    }
+    Ok(())
+}
+
 fn parse_account_id(value: &str) -> PyResult<AccountId> {
     AccountId::parse_encoded(value)
         .map(|parsed| parsed.into_account_id())
@@ -5722,6 +5735,45 @@ fn kagemusha_recursive_spend_verify_py(
     )
 }
 
+fn kagemusha_recursive_spend_request_lineage_record_for<'request>(
+    request: &'request iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1,
+    id: &iroha_data_model::proof::VerifyingKeyId,
+) -> Option<&'request iroha_data_model::proof::VerifyingKeyRecord> {
+    if id.backend != iroha_core::zk::ZK_BACKEND_HALO2_IPA {
+        return None;
+    }
+    request
+        .lineage_verifier_record
+        .as_ref()
+        .filter(|record| record.circuit_id == id.name)
+        .or_else(|| {
+            request
+                .lineage_verifier_records
+                .iter()
+                .find(|record| record.circuit_id == id.name)
+        })
+}
+
+fn kagemusha_recursive_spend_request_required_lineage_record<'request>(
+    request: &'request iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1,
+    circuit_id: &str,
+) -> Result<&'request iroha_data_model::proof::VerifyingKeyRecord, String> {
+    request
+        .lineage_verifier_record
+        .as_ref()
+        .filter(|record| record.circuit_id == circuit_id)
+        .or_else(|| {
+            request
+                .lineage_verifier_records
+                .iter()
+                .find(|record| record.circuit_id == circuit_id)
+        })
+        .ok_or_else(|| {
+            "reserved-lineage Kagemusha recursive spend redeem requires a lineage verifier record"
+                .to_owned()
+        })
+}
+
 fn kagemusha_recursive_spend_redeem_instruction_from_request(
     request: iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1,
 ) -> Result<iroha_data_model::isi::offline::RedeemKagemushaRecursive, String> {
@@ -5732,15 +5784,11 @@ fn kagemusha_recursive_spend_redeem_instruction_from_request(
         match request.bundle.recursive_proof.verifier_key_id.name.as_str() {
             iroha_core::zk::KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID => {
                 let vk_box = iroha_core::zk::kagemusha_recursive_aggregation_proof_vk_box()?;
-                if let Some(record) = request.lineage_verifier_record.as_ref() {
+                if request.lineage_verifier_record.is_some()
+                    || !request.lineage_verifier_records.is_empty()
+                {
                     let resolver = |id: &iroha_data_model::proof::VerifyingKeyId| {
-                        if id.backend == iroha_core::zk::ZK_BACKEND_HALO2_IPA
-                            && id.name == record.circuit_id
-                        {
-                            Some(record)
-                        } else {
-                            None
-                        }
+                        kagemusha_recursive_spend_request_lineage_record_for(&request, id)
                     };
                     match request.block_height {
                         Some(block_height) => {
@@ -5781,18 +5829,10 @@ fn kagemusha_recursive_spend_redeem_instruction_from_request(
                     circuit_id,
                 ) =>
             {
-                let record = request.lineage_verifier_record.as_ref().ok_or_else(|| {
-                    "reserved-lineage Kagemusha recursive spend redeem requires a lineage verifier record"
-                        .to_owned()
-                })?;
+                let record =
+                    kagemusha_recursive_spend_request_required_lineage_record(&request, circuit_id)?;
                 let resolver = |id: &iroha_data_model::proof::VerifyingKeyId| {
-                    if id.backend == iroha_core::zk::ZK_BACKEND_HALO2_IPA
-                        && id.name == record.circuit_id
-                    {
-                        Some(record)
-                    } else {
-                        None
-                    }
+                    kagemusha_recursive_spend_request_lineage_record_for(&request, id)
                 };
                 match request.block_height {
                     Some(block_height) => {
@@ -5827,10 +5867,10 @@ fn kagemusha_recursive_spend_redeem_instruction_from_request(
         if iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_proof_circuit_id(
             &request.bundle.recursive_proof.verifier_key_id.name,
         ) {
-            let record = request.lineage_verifier_record.as_ref().ok_or_else(|| {
-                "reserved-lineage Kagemusha recursive spend redeem requires a lineage verifier record"
-                    .to_owned()
-            })?;
+            let record = kagemusha_recursive_spend_request_required_lineage_record(
+                &request,
+                &request.bundle.recursive_proof.verifier_key_id.name,
+            )?;
             match request.block_height {
                 Some(block_height) => {
                     iroha_core::zk::preverify_kagemusha_recursive_spend_bundle_with_record_at_height(
@@ -10402,6 +10442,7 @@ mod tests {
             change_output: None,
             lineage_verifier_record: None,
             block_height: None,
+            lineage_verifier_records: Vec::new(),
         }
     }
 
@@ -13258,6 +13299,57 @@ mod tests {
     }
 
     #[test]
+    fn kagemusha_recursive_spend_lineage_append_boundary_python_rejects_forged_result_hashes() {
+        ensure_python();
+        Python::attach(|py| {
+            let request = sample_recursive_spend_transition_profile_append_request();
+            let profile_archive = kagemusha_recursive_spend_transition_profile_append_py(
+                py,
+                &to_bytes(&request).expect("encode Python append transition-profile request"),
+            )
+            .expect("Python append transition profile should build");
+            let profile: KagemushaRecursiveSpendTransitionProfileV1 =
+                decode_from_bytes(profile_archive.bind(py).as_bytes())
+                    .expect("decode Python append transition profile");
+
+            let mut forged_accumulator = profile.clone();
+            forged_accumulator.resulting_accumulator_digest[0] ^= 0x01;
+            let forged_accumulator_archive = to_bytes(&forged_accumulator)
+                .expect("encode Python profile with forged resulting accumulator digest");
+            let err = kagemusha_recursive_spend_lineage_append_boundary_py(
+                py,
+                &forged_accumulator_archive,
+            )
+            .expect_err(
+                "Python append-boundary helper must reject forged resulting accumulator digest",
+            )
+            .to_string();
+            assert!(
+                err.contains("resulting_accumulator_digest"),
+                "Python forged accumulator append-boundary error lost context: {err}"
+            );
+
+            let mut forged_public_inputs = profile;
+            forged_public_inputs.resulting_public_inputs_hash =
+                Hash::new(b"python-forged-resulting-public-inputs-hash");
+            let forged_public_inputs_archive = to_bytes(&forged_public_inputs)
+                .expect("encode Python profile with forged resulting public-input hash");
+            let err = kagemusha_recursive_spend_lineage_append_boundary_py(
+                py,
+                &forged_public_inputs_archive,
+            )
+            .expect_err(
+                "Python append-boundary helper must reject forged resulting public-input hash",
+            )
+            .to_string();
+            assert!(
+                err.contains("resulting_public_inputs_hash"),
+                "Python forged public-input append-boundary error lost context: {err}"
+            );
+        });
+    }
+
+    #[test]
     fn kagemusha_recursive_spend_append_python_rejects_forged_previous_proof_opening_metadata() {
         ensure_python();
         Python::attach(|py| {
@@ -14344,6 +14436,38 @@ mod tests {
             .attachments_json()
             .expect("attachments decode succeeds");
         assert!(attachments.is_none());
+    }
+
+    #[test]
+    fn transaction_builder_rejects_padded_chain_id_and_authority() {
+        ensure_python();
+        let signing = SigningKey::from_bytes(&[0x12u8; 32]);
+        let public_key = PublicKey::from(parse_private_key(signing.as_bytes()).expect("private"));
+        let authority = AccountId::new(public_key)
+            .canonical_i105()
+            .expect("canonical I105 authority");
+
+        for chain_id in [" test-chain", "test-chain "] {
+            let err = match TransactionBuilder::new(chain_id, &authority) {
+                Ok(_) => panic!("padded chain_id must reject before parsing"),
+                Err(err) => err,
+            };
+            assert_eq!(
+                err.to_string(),
+                "ValueError: chain_id must not contain surrounding whitespace"
+            );
+        }
+
+        for padded_authority in [format!(" {authority}"), format!("{authority} ")] {
+            let err = match TransactionBuilder::new("test-chain", &padded_authority) {
+                Ok(_) => panic!("padded authority must reject before account parsing"),
+                Err(err) => err,
+            };
+            assert_eq!(
+                err.to_string(),
+                "ValueError: authority must not contain surrounding whitespace"
+            );
+        }
     }
 
     #[test]
@@ -18664,6 +18788,8 @@ impl TransactionBuilder {
 impl TransactionBuilder {
     #[new]
     fn new(chain_id: &str, authority: &str) -> PyResult<Self> {
+        require_non_blank_unpadded(chain_id, "chain_id")?;
+        require_non_blank_unpadded(authority, "authority")?;
         let chain_id = parse_chain_id(chain_id)?;
         let authority = parse_account_id(authority)?;
         ensure_ed25519_account(&authority)?;

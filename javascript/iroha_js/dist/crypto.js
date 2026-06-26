@@ -672,7 +672,10 @@ export function deriveConfidentialKeysetFromHex(spendKeyHex) {
   if (typeof spendKeyHex !== "string") {
     throw new TypeError("spendKeyHex must be a string");
   }
-  const cleaned = spendKeyHex.trim();
+  if (spendKeyHex.trim() !== spendKeyHex) {
+    throw new Error("spendKeyHex must not contain surrounding whitespace");
+  }
+  const cleaned = spendKeyHex;
   if (cleaned.length !== 64) {
     throw new Error("confidential spend key must be 64 hex characters (32 bytes)");
   }
@@ -748,8 +751,8 @@ export function deriveConfidentialReceiveAddressV2(input) {
     throw new Error("diversifierSeed must not be empty");
   }
   const raw = native.deriveConfidentialReceiveAddressV2(spendKeyBuffer, diversifierSeed);
-  const ownerTagHex = String(raw.ownerTagHex ?? raw.owner_tag_hex ?? "").trim();
-  const diversifierHex = String(raw.diversifierHex ?? raw.diversifier_hex ?? "").trim();
+  const ownerTagHex = String(raw.ownerTagHex ?? raw.owner_tag_hex ?? "");
+  const diversifierHex = String(raw.diversifierHex ?? raw.diversifier_hex ?? "");
   return {
     ownerTag: Buffer.from(normalizeFixed32HexInput(ownerTagHex, "ownerTag"), "hex"),
     ownerTagHex: normalizeFixed32HexInput(ownerTagHex, "ownerTag"),
@@ -768,10 +771,10 @@ export function deriveConfidentialNoteV2(input) {
     resolveNativeBinding(),
     "deriveConfidentialNoteV2",
   );
-  const assetDefinitionId = String(input?.assetDefinitionId ?? "").trim();
-  if (!assetDefinitionId) {
-    throw new Error("assetDefinitionId is required");
-  }
+  const assetDefinitionId = normalizeConfidentialV2ExactString(
+    input?.assetDefinitionId,
+    "assetDefinitionId",
+  );
   const amount = normalizeWholeNumberLiteral(input?.amount, "amount");
   const rhoHex = normalizeFixed32HexInput(input?.rhoHex ?? input?.rho, "rho");
   const ownerTagHex = normalizeFixed32HexInput(
@@ -802,15 +805,12 @@ export function deriveConfidentialNullifierV2(input) {
     resolveNativeBinding(),
     "deriveConfidentialNullifierV2",
   );
-  const chainId = String(input?.chainId ?? "").trim();
-  const assetDefinitionId = String(input?.assetDefinitionId ?? "").trim();
+  const chainId = normalizeConfidentialV2ExactString(input?.chainId, "chainId");
+  const assetDefinitionId = normalizeConfidentialV2ExactString(
+    input?.assetDefinitionId,
+    "assetDefinitionId",
+  );
   const spendKey = toBuffer(input?.spendKey, "spendKey");
-  if (!chainId) {
-    throw new Error("chainId is required");
-  }
-  if (!assetDefinitionId) {
-    throw new Error("assetDefinitionId is required");
-  }
   if (spendKey.length !== 32) {
     throw new Error("confidential spend key must be 32 bytes");
   }
@@ -2139,6 +2139,13 @@ export function encodeKagemushaRecursiveSpendRedeemRequest(request) {
           KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME,
           "lineageVerifierRecord",
         );
+  const lineageRecordPayloads = normalized.lineageVerifierRecords.map((record) =>
+    kagemushaCompactPayloadForRequest(
+      record.recordBytes,
+      KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME,
+      "lineageVerifierRecords",
+    ),
+  );
   const payload = Buffer.concat([
     kagemushaRawField(
       kagemushaCompactPayloadForRequest(
@@ -2160,6 +2167,7 @@ export function encodeKagemushaRecursiveSpendRedeemRequest(request) {
     kagemushaField(kagemushaOptionFixed32(normalized.changeOutput, "changeOutput")),
     kagemushaField(kagemushaOptionRaw(lineageRecordPayload)),
     kagemushaField(kagemushaOptionU64(normalized.blockHeight)),
+    kagemushaField(kagemushaRawVec(lineageRecordPayloads)),
   ]);
   return kagemushaNoritoArchiveForType(
     KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_WIRE_NAME,
@@ -2265,6 +2273,8 @@ export function decodeKagemushaRecursiveSpendVerifyResult(archive) {
     witnessless_redeem_supported: witnesslessRedeemSupported,
     lineageWitnessRequired,
     lineage_witness_required: lineageWitnessRequired,
+    lineageWitnessRequiredForRedeem: lineageWitnessRequired,
+    lineage_witness_required_for_redeem: lineageWitnessRequired,
   });
 }
 
@@ -3450,8 +3460,13 @@ function kagemushaNormalizeRedeemRequest(request) {
     "lineageVerifierRecord",
     "lineage_verifier_record",
   ]);
+  const lineageVerifierRecords = kagemushaNormalizeVerifierRecordRefs(
+    kagemushaObjectValue(request, ["lineageVerifierRecords", "lineage_verifier_records"]),
+    "lineageVerifierRecords",
+  );
   const redeemLineageVerifierRecordSupplied =
-    lineageVerifierRecordValue !== undefined && lineageVerifierRecordValue !== null;
+    (lineageVerifierRecordValue !== undefined && lineageVerifierRecordValue !== null) ||
+    lineageVerifierRecords.length > 0;
   const changeOutput =
     changeOutputValue === undefined || changeOutputValue === null
       ? null
@@ -3465,13 +3480,28 @@ function kagemushaNormalizeRedeemRequest(request) {
   if (changeOutput !== null) {
     kagemushaRequireRedeemChangeOutputNotReserved(changeOutput, bundleSummary);
   }
+  const finalIsLineage = isKagemushaRecursiveSpendLineageProofCircuitId(
+    bundleSummary.proofCircuitId,
+  );
+  let lineageVerifierRecord = null;
+  if (finalIsLineage) {
+    if (!redeemLineageVerifierRecordSupplied) {
+      throw kagemushaFieldCodecError(
+        "lineageVerifierRecord",
+        "lineageVerifierRecord is required for reserved-lineage bundles",
+      );
+    }
+    if (lineageVerifierRecordValue !== undefined && lineageVerifierRecordValue !== null) {
+      lineageVerifierRecord = kagemushaNormalizeVerifierRecordRef(
+        lineageVerifierRecordValue,
+        "lineageVerifierRecord",
+      );
+    }
+  }
   const lineageWitness =
     lineageWitnessValue === undefined || lineageWitnessValue === null
       ? null
       : kagemushaRequireNestedArchive(lineageWitnessValue, "lineageWitness");
-  const finalIsLineage = isKagemushaRecursiveSpendLineageProofCircuitId(
-    bundleSummary.proofCircuitId,
-  );
   let witnessHasReservedPrevious = false;
   if (lineageWitness !== null) {
     try {
@@ -3511,20 +3541,15 @@ function kagemushaNormalizeRedeemRequest(request) {
     );
   }
   if (
-    isKagemushaRecursiveSpendLineageProofCircuitId(bundleSummary.proofCircuitId) &&
-    !redeemLineageVerifierRecordSupplied
+    !finalIsLineage &&
+    lineageVerifierRecordValue !== undefined &&
+    lineageVerifierRecordValue !== null
   ) {
-    throw kagemushaFieldCodecError(
+    lineageVerifierRecord = kagemushaNormalizeVerifierRecordRef(
+      lineageVerifierRecordValue,
       "lineageVerifierRecord",
-      "lineageVerifierRecord is required for reserved-lineage bundles",
     );
   }
-  const lineageVerifierRecord = redeemLineageVerifierRecordSupplied
-    ? kagemushaNormalizeVerifierRecordRef(
-        lineageVerifierRecordValue,
-        "lineageVerifierRecord",
-      )
-    : null;
   return Object.freeze({
     bundle,
     recipient,
@@ -3537,6 +3562,7 @@ function kagemushaNormalizeRedeemRequest(request) {
     lineageWitness,
     changeOutput,
     lineageVerifierRecord,
+    lineageVerifierRecords,
     blockHeight: kagemushaNormalizeBlockHeight(
       kagemushaObjectValue(request, ["blockHeight", "block_height"]),
       "blockHeight",
@@ -3623,6 +3649,20 @@ function kagemushaNormalizeVerifierRecordRef(input, field) {
       return Buffer.from(storedRecord);
     },
   });
+}
+
+function kagemushaNormalizeVerifierRecordRefs(input, field) {
+  if (input === undefined || input === null) {
+    return Object.freeze([]);
+  }
+  if (!Array.isArray(input)) {
+    throw kagemushaFieldCodecError(field, `${field} must be an array`);
+  }
+  return Object.freeze(
+    input.map((record, index) =>
+      kagemushaNormalizeVerifierRecordRef(record, `${field}[${index}]`),
+    ),
+  );
 }
 
 function kagemushaNoritoArchiveForType(typeName, payload) {
@@ -3723,6 +3763,9 @@ function kagemushaReadVerifiedFoldStepCount(payload, flags, field) {
   const countBig = payload.readBigUInt64LE(0);
   if (countBig > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw kagemushaArchiveCodecError(field, `${field} count is too large`);
+  }
+  if (countBig > BigInt(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS)) {
+    throw kagemushaArchiveCodecError(field, `${field} fold step count is out of range`);
   }
   const count = Number(countBig);
   let cursor = 8;
@@ -3911,7 +3954,15 @@ function kagemushaReadPallasIpaParams(payload, flags, field) {
     cursor,
     flags,
     `${field}.g`,
-    (child) => kagemushaReadFixed32SequenceCount(child, flags, `${field}.g`),
+    (child) =>
+      kagemushaReadFixed32SequenceCount(
+        child,
+        flags,
+        `${field}.g`,
+        n,
+        field,
+        `${field} generator count mismatch`,
+      ),
   ));
   let hCount;
   ({ value: hCount, offset: cursor } = kagemushaReadDecodedField(
@@ -3919,7 +3970,15 @@ function kagemushaReadPallasIpaParams(payload, flags, field) {
     cursor,
     flags,
     `${field}.h`,
-    (child) => kagemushaReadFixed32SequenceCount(child, flags, `${field}.h`),
+    (child) =>
+      kagemushaReadFixed32SequenceCount(
+        child,
+        flags,
+        `${field}.h`,
+        n,
+        field,
+        `${field} generator count mismatch`,
+      ),
   ));
   if (gCount !== n || hCount !== n) {
     throw kagemushaArchiveCodecError(field, `${field} generator count mismatch`);
@@ -3991,13 +4050,22 @@ function kagemushaReadPallasIpaProof(payload, flags, n, field) {
     `${field}.version`,
     kagemushaReadU16Payload,
   ));
+  const expectedRounds = Math.trunc(Math.log2(n));
   let lCount;
   ({ value: lCount, offset: cursor } = kagemushaReadDecodedField(
     payload,
     cursor,
     flags,
     `${field}.l`,
-    (child) => kagemushaReadFixed32SequenceCount(child, flags, `${field}.l`),
+    (child) =>
+      kagemushaReadFixed32SequenceCount(
+        child,
+        flags,
+        `${field}.l`,
+        expectedRounds,
+        field,
+        `${field} round count mismatch`,
+      ),
   ));
   let rCount;
   ({ value: rCount, offset: cursor } = kagemushaReadDecodedField(
@@ -4005,9 +4073,16 @@ function kagemushaReadPallasIpaProof(payload, flags, n, field) {
     cursor,
     flags,
     `${field}.r`,
-    (child) => kagemushaReadFixed32SequenceCount(child, flags, `${field}.r`),
+    (child) =>
+      kagemushaReadFixed32SequenceCount(
+        child,
+        flags,
+        `${field}.r`,
+        expectedRounds,
+        field,
+        `${field} round count mismatch`,
+      ),
   ));
-  const expectedRounds = Math.trunc(Math.log2(n));
   if (version !== 1 || lCount !== rCount || lCount !== expectedRounds) {
     throw kagemushaArchiveCodecError(field, `${field} round count mismatch`);
   }
@@ -4025,7 +4100,24 @@ function kagemushaReadPallasIpaProof(payload, flags, n, field) {
   }
 }
 
-function kagemushaReadFixed32SequenceCount(payload, flags, field) {
+function kagemushaReadFixed32SequenceCount(
+  payload,
+  flags,
+  field,
+  expectedCount,
+  mismatchField = field,
+  mismatchMessage = `${field} count mismatch`,
+) {
+  if (payload.length < 8) {
+    throw kagemushaArchiveCodecError(field, `${field} count is truncated`);
+  }
+  const countBig = payload.readBigUInt64LE(0);
+  if (countBig > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw kagemushaArchiveCodecError(field, `${field} count is too large`);
+  }
+  if (expectedCount !== undefined && countBig !== BigInt(expectedCount)) {
+    throw kagemushaArchiveCodecError(mismatchField, mismatchMessage);
+  }
   return kagemushaReadFixed32Sequence(payload, flags, field).length;
 }
 
@@ -4049,6 +4141,18 @@ function kagemushaReadFixed32Sequence(payload, flags, field) {
     throw kagemushaArchiveCodecError(field, `${field} has trailing bytes`);
   }
   return values;
+}
+
+function kagemushaReadTopupAnchorNullifiers(payload, flags) {
+  const field = "bundle.accumulator.topup_anchor_nullifiers";
+  if (payload.length < 8) {
+    throw kagemushaArchiveCodecError(field, `${field} count is truncated`);
+  }
+  const countBig = payload.readBigUInt64LE(0);
+  if (countBig === 0n || countBig > BigInt(KAGEMUSHA_FOLD_STEP_MAX_INPUTS)) {
+    throw kagemushaArchiveCodecError(field, `${field} count is out of range`);
+  }
+  return kagemushaReadFixed32Sequence(payload, flags, field);
 }
 
 function kagemushaReadRequiredMetadataOption(payload, flags, field) {
@@ -4211,7 +4315,7 @@ function kagemushaPublicKeyPayload(curveId, publicKey) {
 
 function kagemushaReadAccumulatorSummary(payload, flags) {
   let offset = 0;
-  let field = kagemushaReadNoritoField(payload, offset, flags, "accumulator.domain");
+  let field = kagemushaReadNoritoField(payload, offset, flags, "bundle.accumulator.domain");
   const domain = kagemushaReadStringPayload(
     field.payload,
     flags,
@@ -4224,33 +4328,47 @@ function kagemushaReadAccumulatorSummary(payload, flags) {
     );
   }
   offset = field.offset;
-  field = kagemushaReadNoritoField(payload, offset, flags, "accumulator.chainId");
+  field = kagemushaReadNoritoField(payload, offset, flags, "bundle.accumulator.chain_id");
   const chainId = kagemushaReadChainIdPayload(field.payload, flags);
   offset = field.offset;
-  field = kagemushaReadNoritoField(payload, offset, flags, "accumulator.asset");
-  const assetBytes = kagemushaReadFixedBytesFlexible(field.payload, flags, 16, "asset");
+  field = kagemushaReadNoritoField(payload, offset, flags, "bundle.accumulator.asset");
+  const assetBytes = kagemushaReadFixedBytesFlexible(
+    field.payload,
+    flags,
+    16,
+    "bundle.accumulator.asset",
+  );
   const asset = kagemushaAssetDefinitionFromBytes(assetBytes);
   offset = field.offset;
-  field = kagemushaReadNoritoField(payload, offset, flags, "accumulator.initialRoot");
-  const initialRoot = kagemushaReadFixedBytesFlexible(field.payload, flags, 32, "initialRoot");
+  field = kagemushaReadNoritoField(payload, offset, flags, "bundle.accumulator.initial_root");
+  const initialRoot = kagemushaReadFixedBytesFlexible(
+    field.payload,
+    flags,
+    32,
+    "bundle.accumulator.initial_root",
+  );
   offset = field.offset;
-  field = kagemushaReadNoritoField(payload, offset, flags, "accumulator.finalRoot");
-  const finalRoot = kagemushaReadFixedBytesFlexible(field.payload, flags, 32, "finalRoot");
+  field = kagemushaReadNoritoField(payload, offset, flags, "bundle.accumulator.final_root");
+  const finalRoot = kagemushaReadFixedBytesFlexible(
+    field.payload,
+    flags,
+    32,
+    "bundle.accumulator.final_root",
+  );
   kagemushaRequireRecursiveSpendAccumulatorRoots(initialRoot, finalRoot);
   offset = field.offset;
   field = kagemushaReadNoritoField(
     payload,
     offset,
     flags,
-    "accumulator.topupAnchorNullifiers",
-  );
-  const topupAnchorNullifiers = kagemushaReadFixed32Sequence(
-    field.payload,
-    flags,
     "bundle.accumulator.topup_anchor_nullifiers",
   );
+  const topupAnchorNullifiers = kagemushaReadTopupAnchorNullifiers(
+    field.payload,
+    flags,
+  );
   offset = field.offset;
-  field = kagemushaReadNoritoField(payload, offset, flags, "accumulator.hopCount");
+  field = kagemushaReadNoritoField(payload, offset, flags, "bundle.accumulator.hop_count");
   const hopCount = kagemushaReadU32Payload(
     field.payload,
     "bundle.accumulator.hop_count",
@@ -4271,7 +4389,7 @@ function kagemushaReadAccumulatorSummary(payload, flags) {
     flags,
     hopCount,
   );
-  field = kagemushaReadNoritoField(payload, offset, flags, "accumulator.currentNote");
+  field = kagemushaReadNoritoField(payload, offset, flags, "bundle.accumulator.current_note");
   const currentNote = kagemushaReadSpendableNotePayload(field.payload, flags);
   kagemushaRequireRecursiveSpendTopupAnchorNullifiers(topupAnchorNullifiers, currentNote);
   offset = field.offset;
@@ -4505,6 +4623,12 @@ function kagemushaLineageWitnessHasReservedPreviousProof(archive) {
   if (count > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw kagemushaArchiveCodecError("lineageWitness.previousRecursiveProofs");
   }
+  if (count > BigInt(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS)) {
+    throw kagemushaArchiveCodecError(
+      "lineageWitness.previousRecursiveProofs",
+      `lineageWitness.previousRecursiveProofs count exceeds ${KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS}`,
+    );
+  }
   let proofOffset = 8;
   let hasReserved = false;
   for (let index = 0; index < Number(count); index += 1) {
@@ -4595,27 +4719,49 @@ function kagemushaReadBytesVecPayload(payload, field) {
 
 function kagemushaReadSpendableNotePayload(payload, flags) {
   let offset = 0;
-  let field = kagemushaReadNoritoField(payload, offset, flags, "currentNote.noteCommitment");
+  let field = kagemushaReadNoritoField(
+    payload,
+    offset,
+    flags,
+    "bundle.accumulator.current_note.note_commitment",
+  );
   const noteCommitment = kagemushaReadFixedBytesFlexible(
     field.payload,
     flags,
     32,
-    "noteCommitment",
+    "bundle.accumulator.current_note.note_commitment",
   );
   offset = field.offset;
-  field = kagemushaReadNoritoField(payload, offset, flags, "currentNote.spendNullifier");
+  field = kagemushaReadNoritoField(
+    payload,
+    offset,
+    flags,
+    "bundle.accumulator.current_note.spend_nullifier",
+  );
   const spendNullifier = kagemushaReadFixedBytesFlexible(
     field.payload,
     flags,
     32,
-    "spendNullifier",
+    "bundle.accumulator.current_note.spend_nullifier",
   );
   offset = field.offset;
-  field = kagemushaReadNoritoField(payload, offset, flags, "currentNote.amount");
-  const amount = kagemushaReadNumericPayload(field.payload, flags);
+  field = kagemushaReadNoritoField(
+    payload,
+    offset,
+    flags,
+    "bundle.accumulator.current_note.amount",
+  );
+  const amount = kagemushaReadNumericPayload(
+    field.payload,
+    flags,
+    "bundle.accumulator.current_note.amount",
+  );
   offset = field.offset;
   if (offset !== payload.length) {
-    throw kagemushaArchiveCodecError("bundle", "currentNote has trailing bytes");
+    throw kagemushaArchiveCodecError(
+      "bundle.accumulator.current_note",
+      "currentNote has trailing bytes",
+    );
   }
   return kagemushaNormalizeSpendableNote({
     noteCommitment,
@@ -4648,26 +4794,26 @@ function kagemushaReadConstVecPayload(payload, flags, start, expectedSize, field
   return Buffer.from(bytes);
 }
 
-function kagemushaReadNumericPayload(payload, flags) {
+function kagemushaReadNumericPayload(payload, flags, fieldName = "amount") {
   let offset = 0;
-  let field = kagemushaReadNoritoField(payload, offset, flags, "amount.mantissa");
+  let field = kagemushaReadNoritoField(payload, offset, flags, `${fieldName}.mantissa`);
   const mantissaPayload = field.payload;
   offset = field.offset;
-  field = kagemushaReadNoritoField(payload, offset, flags, "amount.scale");
+  field = kagemushaReadNoritoField(payload, offset, flags, `${fieldName}.scale`);
   const scalePayload = field.payload;
   offset = field.offset;
   if (offset !== payload.length || mantissaPayload.length < 4) {
-    throw kagemushaArchiveCodecError("amount");
+    throw kagemushaArchiveCodecError(fieldName);
   }
   const mantissaLength = mantissaPayload.readUInt32LE(0);
   if (4 + mantissaLength !== mantissaPayload.length) {
-    throw kagemushaArchiveCodecError("amount");
+    throw kagemushaArchiveCodecError(fieldName);
   }
   if (scalePayload.length !== 4 || scalePayload.readUInt32LE(0) !== 0) {
-    throw kagemushaFieldCodecError("amount", "numeric scale must be zero");
+    throw kagemushaFieldCodecError(fieldName, "numeric scale must be zero");
   }
   const integer = kagemushaBigIntFromLittleTwosComplement(mantissaPayload.subarray(4));
-  return kagemushaCanonicalU128Decimal(integer, "amount");
+  return kagemushaDecodedNumericU128Decimal(integer, fieldName);
 }
 
 function kagemushaBigIntFromLittleTwosComplement(payload) {
@@ -4743,6 +4889,15 @@ function kagemushaBytesVec(value) {
   return Buffer.concat([length, bytes]);
 }
 
+function kagemushaRawVec(payloads) {
+  const length = Buffer.alloc(8);
+  length.writeBigUInt64LE(BigInt(payloads.length), 0);
+  return Buffer.concat([
+    length,
+    ...payloads.map((payload) => kagemushaRawField(payload)),
+  ]);
+}
+
 function kagemushaOptionRaw(payload) {
   if (payload === undefined || payload === null) {
     return Buffer.from([0]);
@@ -4790,6 +4945,16 @@ function kagemushaCompactLength(value) {
 
 function kagemushaCanonicalU128Decimal(value, field) {
   return kagemushaCanonicalU128BigInt(value, field).toString(10);
+}
+
+function kagemushaDecodedNumericU128Decimal(value, field) {
+  if (value <= 0n) {
+    throw kagemushaFieldCodecError(field, `${field} numeric amount must be greater than zero`);
+  }
+  if (value > U128_MAX) {
+    throw kagemushaFieldCodecError(field, `${field} numeric amount must fit in u128`);
+  }
+  return value.toString(10);
 }
 
 function kagemushaCanonicalU128BigInt(value, field) {
@@ -4958,6 +5123,16 @@ function requiredString(value, name) {
     throw new Error(`${name} must be a non-empty string`);
   }
   return text;
+}
+
+function normalizeConfidentialV2ExactString(value, name) {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${name} is required`);
+  }
+  if (value.trim() !== value) {
+    throw new Error(`${name} must not contain surrounding whitespace`);
+  }
+  return value;
 }
 
 function fixed32Buffer(value, name) {
@@ -5232,7 +5407,10 @@ function normalizeZkAceAuthorizationResult(result) {
 
 function normalizeFixed32HexInput(value, name) {
   if (typeof value === "string") {
-    const normalized = value.trim().replace(/^0x/i, "").toLowerCase();
+    if (value.trim() !== value) {
+      throw new Error(`${name} must not contain surrounding whitespace`);
+    }
+    const normalized = value.replace(/^0x/i, "").toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(normalized)) {
       throw new Error(`${name} must be a 32-byte hex string`);
     }

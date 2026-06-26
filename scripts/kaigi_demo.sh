@@ -21,11 +21,34 @@ ensure_cmd() {
   fi
 }
 
+pid_is_running() {
+  local pid="$1"
+  if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+  if ! command -v ps >/dev/null 2>&1; then
+    return 0
+  fi
+  ps -p "$pid" -o pid= >/dev/null 2>&1
+}
+
+pid_is_own_background_job() {
+  local pid="$1"
+  local job_pid
+  while IFS= read -r job_pid; do
+    [[ "$job_pid" == "$pid" ]] && return 0
+  done < <(jobs -pr 2>/dev/null || true)
+  return 1
+}
+
 cleanup() {
   if [[ -n "${NODE_PID:-}" ]]; then
-    log "stopping irohad (pid $NODE_PID)"
-    kill "$NODE_PID" >/dev/null 2>&1 || true
-    wait "$NODE_PID" >/dev/null 2>&1 || true
+    if pid_is_own_background_job "$NODE_PID" && pid_is_running "$NODE_PID"; then
+      log "stopping irohad (pid $NODE_PID)"
+      kill "$NODE_PID" >/dev/null 2>&1 || true
+      wait "$NODE_PID" >/dev/null 2>&1 || true
+    fi
+    NODE_PID=""
   fi
 }
 
@@ -86,6 +109,10 @@ NODE_PID=$!
 
 log "waiting for Torii at $TORII_URL/status"
 for _ in $(seq 1 120); do
+  if ! pid_is_own_background_job "$NODE_PID" || ! pid_is_running "$NODE_PID"; then
+    log "irohad exited before Torii became ready (see $NODE_LOG)"
+    exit 1
+  fi
   if curl -sf "$TORII_URL/status" >/dev/null 2>&1; then
     READY=1
     break

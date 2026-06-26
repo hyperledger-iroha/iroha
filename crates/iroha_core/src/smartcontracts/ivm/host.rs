@@ -8554,7 +8554,7 @@ mod pointer_abi_tests {
             max_cycles: 1,
             abi_version: 1,
         };
-        let mut vm = ivm::IVM::new(1_000_000);
+        let mut vm = ivm::IVM::new(50_000_000);
         vm.load_program(&meta.encode()).expect("load meta");
         // DomainId TLV payload
         let did: DomainId = DomainId::try_new("wonder", "universal").unwrap();
@@ -8572,7 +8572,7 @@ mod pointer_abi_tests {
     #[test]
     fn tlv_decode_valid_account_id() {
         crate::test_alias::ensure();
-        let mut vm = ivm::IVM::new(1_000_000);
+        let mut vm = ivm::IVM::new(50_000_000);
         // Prepare a valid TLV for a canonical encoded AccountId at INPUT_START.
         let acc: AccountId = fixture_account("alice");
         let payload = norito::to_bytes(&acc).expect("encode account id");
@@ -13558,6 +13558,77 @@ seiyaku AliasPayout {{
 
         assert_eq!(gas, crate::gas::meter_instruction(&instruction));
         assert_eq!(host.queued, vec![instruction]);
+    }
+
+    #[test]
+    fn by_call_bytes_param_can_execute_sccp_record_message() {
+        crate::test_alias::ensure();
+        let authority = (*ALICE_ID).clone();
+        let source = r#"
+seiyaku RecordFromPayload {
+  kotoage fn record(
+    sender: AccountId,
+    settlement_asset: AssetDefinitionId,
+    amount: Amount,
+    record_instruction: bytes
+  ) permission(AssetTransferRole) {
+    burn_asset(sender, settlement_asset, amount);
+    execute_instruction(record_instruction);
+  }
+}
+"#;
+        let compiler =
+            ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
+                force_zk: true,
+                mode: ivm::kotodama::compiler::CompilerMode::Test,
+                ..ivm::kotodama::compiler::CompilerOptions::default()
+            });
+        let (code, _manifest) = compiler
+            .compile_source_with_manifest(source)
+            .expect("compile by-call contract");
+        let parsed = ivm::ProgramMetadata::parse(&code).expect("parse contract metadata");
+        let descriptor = parsed
+            .contract_interface
+            .as_ref()
+            .expect("contract interface")
+            .entrypoints
+            .iter()
+            .find(|candidate| candidate.name == "record")
+            .expect("record entrypoint");
+        let entry_pc = parsed.prefix_len() as u64 + descriptor.entry_pc;
+
+        let instruction =
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(vec![
+                1, 2, 3, 4,
+            ]));
+        let settlement_asset_def = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let payload = norito::to_bytes(&instruction).expect("encode instruction");
+        let payload_hex = hex::encode(&payload);
+        let args = Json::from_str_norito(&format!(
+            r#"{{"sender":"{authority}","settlement_asset":"{settlement_asset_def}","amount":"1","record_instruction":"{payload_hex}"}}"#,
+        ))
+        .expect("record payload JSON");
+        let mut host: CoreHost = CoreHostImpl::with_accounts_and_args(
+            authority.clone(),
+            Arc::new(vec![authority.clone()]),
+            args,
+        );
+        let mut vm = ivm::IVM::new(50_000_000);
+        vm.load_program(&code).expect("load contract");
+        vm.set_register(1, vm.memory.code_len());
+        vm.set_program_counter(entry_pc).expect("seek entrypoint");
+
+        vm.run_with_host(&mut host)
+            .expect("record entrypoint should execute instruction payload");
+
+        let burn = InstructionBox::from(BurnBox::from(Burn::asset_numeric(
+            Numeric::new(1_u32, 0),
+            AssetId::of(settlement_asset_def, authority),
+        )));
+        assert_eq!(host.queued, vec![burn, instruction]);
     }
 
     #[test]

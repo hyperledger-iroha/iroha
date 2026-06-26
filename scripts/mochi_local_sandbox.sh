@@ -138,8 +138,26 @@ pid_from_file() {
 
 pid_running() {
   local pid="$1"
-  [[ -n "$pid" ]] || return 1
-  kill -0 "$pid" 2>/dev/null
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  if ! command -v ps >/dev/null 2>&1; then
+    return 0
+  fi
+  ps -p "$pid" -o pid= >/dev/null 2>&1
+}
+
+pid_matches_sandbox_command() {
+  local pid="$1"
+  local workspace_root="$2"
+  local command_line
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  if ! command -v ps >/dev/null 2>&1; then
+    return 1
+  fi
+  command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  [[ -n "$command_line" ]] || return 1
+  [[ "$command_line" == *"sandbox serve"* ]] || return 1
+  [[ "$command_line" == *"$workspace_root"* ]] || return 1
+  return 0
 }
 
 cleanup_stale_pid() {
@@ -168,7 +186,9 @@ print_status() {
   local pid=""
   local status="stopped"
   if pid="$(pid_from_file "$pid_file" 2>/dev/null)" && pid_running "$pid"; then
-    if session_ready "$session_file"; then
+    if ! pid_matches_sandbox_command "$pid" "$workspace_root"; then
+      status="mismatched-pid"
+    elif session_ready "$session_file"; then
       status="ready"
     else
       status="starting"
@@ -218,6 +238,10 @@ cmd_up() {
 
   local pid=""
   if pid="$(pid_from_file "$pid_file" 2>/dev/null)" && pid_running "$pid"; then
+    if ! pid_matches_sandbox_command "$pid" "$workspace_root"; then
+      printf 'Refusing to reuse live pid %s from %s; it does not match this Mochi workspace.\n' "$pid" "$pid_file" >&2
+      return 1
+    fi
     printf 'MOCHI sandbox already running.\n'
     print_status
     return 0
@@ -258,7 +282,9 @@ PY
   while true; do
     if session_ready "$session_file"; then
       local session_pid
-      if session_pid="$(json_field "$session_file" pid 2>/dev/null)" && pid_running "$session_pid"; then
+      if session_pid="$(json_field "$session_file" pid 2>/dev/null)" \
+        && pid_running "$session_pid" \
+        && pid_matches_sandbox_command "$session_pid" "$workspace_root"; then
         pid="$session_pid"
         printf '%s\n' "$pid" >"$pid_file"
       fi
@@ -297,6 +323,10 @@ cmd_down() {
     rm -f "$pid_file" "$session_file"
     printf 'MOCHI sandbox is not running.\n'
     return 0
+  fi
+  if ! pid_matches_sandbox_command "$pid" "$workspace_root"; then
+    printf 'Refusing to stop live pid %s from %s; it does not match this Mochi workspace.\n' "$pid" "$pid_file" >&2
+    return 1
   fi
 
   kill -TERM "$pid" 2>/dev/null || true

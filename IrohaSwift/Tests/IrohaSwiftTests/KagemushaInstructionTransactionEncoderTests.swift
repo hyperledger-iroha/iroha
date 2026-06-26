@@ -120,6 +120,162 @@ final class KagemushaInstructionTransactionEncoderTests: XCTestCase {
         XCTAssertEqual(parsed.instructionArchive, instructionArchive)
     }
 
+    func testKagemushaInstructionRequestsPreserveDataAfterCallerMutation() throws {
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x48, count: 32))
+        let authority = try Self.canonicalAuthorityLiteral(from: signingKey)
+        var instructionArchive = Self.instructionArchive(
+            type: .transfer,
+            payload: Data([0x31, 0x32, 0x33])
+        )
+        let expectedInstructionArchive = instructionArchive
+        let instructionRequest = KagemushaInstructionTransactionRequest(
+            chainId: "chain",
+            authority: authority,
+            instructionArchive: instructionArchive
+        )
+        instructionArchive[0] = 0
+
+        let instructionEnvelope = try SwiftTransactionEncoder.encodeKagemushaInstruction(
+            request: instructionRequest,
+            signingKey: signingKey,
+            creationTimeMs: 50
+        )
+        let parsedInstruction = try Self.parseSingleInstructionEnvelope(instructionEnvelope)
+        XCTAssertEqual(parsedInstruction.instructionArchive, expectedInstructionArchive)
+
+        var redeemRequestArchive = Self.redeemRequestArchive(payload: Data([0x41, 0x42, 0x43]))
+        let expectedRedeemRequestArchive = redeemRequestArchive
+        var nativeInstructionArchive = Self.instructionArchive(
+            type: .redeemRecursive,
+            payload: Data([0x51, 0x52, 0x53])
+        )
+        let expectedNativeInstructionArchive = nativeInstructionArchive
+        let redeemRequest = KagemushaRecursiveRedeemTransactionRequest(
+            chainId: "chain",
+            authority: authority,
+            redeemRequestArchive: redeemRequestArchive
+        )
+        redeemRequestArchive[0] = 0
+        var redeemedRequests: [Data] = []
+
+        let redeemEnvelope = try SwiftTransactionEncoder.encodeKagemushaRecursiveRedeem(
+            request: redeemRequest,
+            signingKey: signingKey,
+            creationTimeMs: 51,
+            redeem: { archive in
+                redeemedRequests.append(archive)
+                return nativeInstructionArchive
+            }
+        )
+        nativeInstructionArchive[0] = 0
+
+        XCTAssertEqual(redeemedRequests, [expectedRedeemRequestArchive])
+        let parsedRedeem = try Self.parseSingleInstructionEnvelope(redeemEnvelope)
+        XCTAssertEqual(parsedRedeem.instructionArchive, expectedNativeInstructionArchive)
+    }
+
+    func testKagemushaInstructionRequestsRejectPaddedIdsBeforeArchiveOrRedeem() throws {
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x49, count: 32))
+        let authority = try Self.canonicalAuthorityLiteral(from: signingKey)
+
+        XCTAssertThrowsError(
+            try SwiftTransactionEncoder.encodeKagemushaInstruction(
+                request: KagemushaInstructionTransactionRequest(
+                    chainId: " chain",
+                    authority: authority,
+                    instructionArchive: Data()
+                ),
+                signingKey: signingKey,
+                creationTimeMs: 60
+            )
+        ) { error in
+            XCTAssertEqual(error as? TransactionInputError, .invalidChainId(" chain"))
+        }
+
+        XCTAssertThrowsError(
+            try SwiftTransactionEncoder.encodeKagemushaInstruction(
+                request: KagemushaInstructionTransactionRequest(
+                    chainId: "chain",
+                    authority: " \(authority) ",
+                    instructionArchive: Data()
+                ),
+                signingKey: signingKey,
+                creationTimeMs: 61
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? TransactionInputError,
+                .malformedAccountId(field: "authority", value: " \(authority) ")
+            )
+        }
+
+        var redeemedRequests: [Data] = []
+        XCTAssertThrowsError(
+            try SwiftTransactionEncoder.encodeKagemushaRecursiveRedeem(
+                request: KagemushaRecursiveRedeemTransactionRequest(
+                    chainId: " chain",
+                    authority: authority,
+                    redeemRequestArchive: Data()
+                ),
+                signingKey: signingKey,
+                creationTimeMs: 62,
+                redeem: { archive in
+                    redeemedRequests.append(archive)
+                    return archive
+                }
+            )
+        ) { error in
+            XCTAssertEqual(error as? TransactionInputError, .invalidChainId(" chain"))
+        }
+
+        XCTAssertThrowsError(
+            try SwiftTransactionEncoder.encodeKagemushaRecursiveRedeem(
+                request: KagemushaRecursiveRedeemTransactionRequest(
+                    chainId: "chain",
+                    authority: " \(authority) ",
+                    redeemRequestArchive: Data()
+                ),
+                signingKey: signingKey,
+                creationTimeMs: 63,
+                redeem: { archive in
+                    redeemedRequests.append(archive)
+                    return archive
+                }
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? TransactionInputError,
+                .malformedAccountId(field: "authority", value: " \(authority) ")
+            )
+        }
+        XCTAssertEqual(redeemedRequests, [])
+    }
+
+    func testNativeBridgeRejectsPaddedAuthorityBeforeChainDiscriminantInference() throws {
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x4A, count: 32))
+        let authority = try Self.canonicalAuthorityLiteral(from: signingKey)
+
+        XCTAssertEqual(
+            try NoritoNativeBridge.shared.validatedAuthorityChainDiscriminant(authority: authority),
+            AccountId.defaultNetworkPrefix
+        )
+
+        for invalidAuthority in [
+            " \(authority)",
+            "\(authority) ",
+            "\t\(authority)",
+            "\(authority)\n",
+            "\(authority)@banka.dataspace",
+            "not an account",
+        ] {
+            XCTAssertThrowsError(
+                try NoritoNativeBridge.shared.validatedAuthorityChainDiscriminant(authority: invalidAuthority)
+            ) { error in
+                XCTAssertEqual(error as? NativeBridgeError, .authority)
+            }
+        }
+    }
+
     func testKagemushaInstructionTransactionRejectsAdversarialArchives() throws {
         XCTAssertThrowsError(try KagemushaInstructionTransactionEncoder.validateInstructionArchive(Data())) { error in
             XCTAssertEqual(error as? KagemushaInstructionTransactionError, .emptyInstructionArchive)

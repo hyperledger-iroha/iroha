@@ -38,6 +38,31 @@ class TransactionPayloadTest {
     }
 
     @Test
+    fun `padded chainId throws before payload can be signed`() {
+        val error = assertFailsWith<IllegalArgumentException> {
+            TransactionPayload(chainId = " chain", creationTimeMs = 1000L)
+        }
+        assertEquals("chainId must not contain surrounding whitespace", error.message)
+    }
+
+    @Test
+    fun `authority must be exact canonical I105 before payload can be signed`() {
+        val authority = sampleAuthority(0x01)
+        val padded = assertFailsWith<IllegalArgumentException> {
+            TransactionPayload(authority = " $authority", creationTimeMs = 1000L)
+        }
+        assertEquals("authority must not contain surrounding whitespace", padded.message)
+
+        val alias = assertFailsWith<IllegalArgumentException> {
+            TransactionPayload(authority = "alice@wonderland", creationTimeMs = 1000L)
+        }
+        assertEquals(
+            "authority must use canonical I105 encoded account without @domain",
+            alias.message,
+        )
+    }
+
+    @Test
     fun `negative creationTimeMs throws`() {
         assertFailsWith<IllegalArgumentException> {
             TransactionPayload(creationTimeMs = -1)

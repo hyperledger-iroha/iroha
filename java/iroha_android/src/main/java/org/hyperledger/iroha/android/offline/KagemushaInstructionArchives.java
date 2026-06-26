@@ -71,8 +71,8 @@ public final class KagemushaInstructionArchives {
       final Integer nonce,
       final Map<String, ?> metadata) {
     return TransactionPayload.builder()
-        .setChainId(chainId)
-        .setAuthority(authority)
+        .setChainId(requireNonBlankUnpadded(chainId, "chainId"))
+        .setAuthority(requireNonBlankUnpadded(authority, "authority"))
         .setCreationTimeMs(creationTimeMs)
         .setExecutable(Executable.instructions(List.of(instructionBox(instructionType, instructionArchive))))
         .setTimeToLiveMs(timeToLiveMs)
@@ -108,10 +108,12 @@ public final class KagemushaInstructionArchives {
       final Long timeToLiveMs,
       final Integer nonce,
       final Map<String, ?> metadata) {
+    final String exactChainId = requireNonBlankUnpadded(chainId, "chainId");
+    final String exactAuthority = requireNonBlankUnpadded(authority, "authority");
     return recursiveRedeemTransactionPayload(
         KagemushaRecursiveSpendProver.redeemSpend(redeemRequestArchive),
-        chainId,
-        authority,
+        exactChainId,
+        exactAuthority,
         creationTimeMs,
         timeToLiveMs,
         nonce,
@@ -157,5 +159,15 @@ public final class KagemushaInstructionArchives {
       throw new IllegalArgumentException("Kagemusha instruction archive checksum is invalid.", ex);
     }
     return archive;
+  }
+
+  private static String requireNonBlankUnpadded(final String value, final String field) {
+    if (value == null || value.trim().isEmpty()) {
+      throw new IllegalArgumentException(field + " must not be blank");
+    }
+    if (!value.trim().equals(value)) {
+      throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
+    }
+    return value;
   }
 }
